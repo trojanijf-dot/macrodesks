@@ -1,1 +1,330 @@
-=
+=<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta http-equiv="refresh" content="900">
+<title>MacroDesk - </title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@700;800&display=swap");
+:root{--bg:#020409;--bg1:#060c18;--bg2:#080e1c;--bg3:#0c1424;--border:rgba(255,255,255,0.06);--text:#e2e8f0;--muted:#64748b;--red:#f43f5e;--green:#10b981;--amber:#fbbf24;--blue:#38bdf8;--purple:#a78bfa;--teal:#2dd4bf;--orange:#f97316;--mono:"JetBrains Mono",monospace;--display:"Syne",sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:12px;line-height:1.6;}
+body::before{content:"";position:fixed;inset:0;background-image:linear-gradient(rgba(56,189,248,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(56,189,248,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0;}
+.w{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:20px 16px;}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;background:var(--bg1);border:1px solid rgba(255,255,255,0.12);border-radius:12px;margin-bottom:16px;flex-wrap:wrap;gap:10px;}
+.logo{font-family:var(--display);font-size:20px;font-weight:800;color:#fff;}
+.logo span{color:var(--teal);}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px;}
+.ctitle{font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+.g8{display:grid;grid-template-columns:repeat(8,1fr);gap:8px;margin-bottom:12px;}
+.pi{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center;}
+.plbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px;}
+.pval{font-size:14px;font-weight:700;color:#fff;}
+.pchg{font-size:10px;margin-top:2px;}
+.up{color:var(--green);}.down{color:var(--red);}.flat{color:var(--amber);}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;}
+.br{background:rgba(244,63,94,0.15);border:1px solid rgba(244,63,94,0.35);color:var(--red);}
+.bg{background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.35);color:var(--green);}
+.ba{background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.35);color:var(--amber);}
+.sbar{height:5px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden;margin:4px 0;}
+.sfill{height:100%;border-radius:2px;}
+.pair-card{background:var(--bg2);border-radius:10px;padding:14px;margin-bottom:10px;border-top:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);}
+.slbl{font-size:9px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px;display:flex;align-items:center;gap:10px;}
+.slbl::after{content:"";flex:1;height:1px;background:var(--border);}
+.crowd{height:8px;border-radius:4px;background:var(--bg3);overflow:hidden;margin:5px 0;}
+.live{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+table{width:100%;border-collapse:collapse;}
+th{font-size:9px;color:var(--muted);text-align:left;padding:5px 8px;text-transform:uppercase;border-bottom:1px solid var(--border);}
+td{padding:5px 8px;border-bottom:1px solid var(--border);font-size:11px;}
+tr:last-child td{border-bottom:none;}
+.slider-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.slider-row label{font-size:10px;color:var(--muted);min-width:100px;}
+.slider-row input{flex:1;accent-color:var(--teal);}
+.slider-row span{font-size:11px;font-weight:700;color:var(--teal);min-width:44px;text-align:right;}
+.chart-wrap{position:relative;height:140px;}
+@media(max-width:768px){.g2,.g3{grid-template-columns:1fr}.g4,.g8{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="w">
+<div class="topbar">
+<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+<div class="logo">MACRO<span>DESK</span></div>
+<span class="badge" style="background:#1d9e7525;border:1px solid #1d9e7560;color:#1d9e75;padding:4px 12px">🌅 ROUTINE MATIN</span>
+<span style="font-size:11px;color:var(--muted)"></span>
+</div>
+<div style="display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted)">
+<span class="live"></span><span></span>
+<span class="badge br">▼ RISK-OFF 78/100</span>
+<span style="font-size:10px;color:var(--muted)">Auto-refresh 15min</span>
+</div>
+</div>
+<div class="slbl">Prix Temps Réel · US Treasuries · Marchés</div>
+<div class="card"><div class="ctitle">Prix Live</div>
+<div class="g8" id="price-grid"></div></div>
+<div class="g2">
+<div class="card"><div class="ctitle">Banques Centrales · Différentiels</div>
+<div class="g4">
+<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px"><div class="plbl">RBA</div><div class="pval" style="color:var(--green)">4.10%</div><div style="font-size:9px;color:var(--green)">▲ HAWKISH</div></div>
+<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px"><div class="plbl">RBNZ</div><div class="pval" style="color:var(--amber)">2.25%</div><div style="font-size:9px;color:var(--amber)">→ DOVISH</div></div>
+<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px"><div class="plbl">BoJ</div><div class="pval" style="color:var(--red)">~0.50%</div><div style="font-size:9px;color:var(--red)">▲ NORMALISE</div></div>
+<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px"><div class="plbl">Fed</div><div class="pval" style="color:var(--amber)">3.625%</div><div style="font-size:9px;color:var(--amber)">→ HOLD</div></div>
+</div>
+<div style="margin-top:10px;font-size:10px;color:var(--muted)">RBA-BoJ <span class="badge" style="background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.35);color:var(--purple)">+360bps</span> carry désactivé · RBNZ-BoJ <span class="badge" style="background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.35);color:var(--purple)">+175bps</span> · BoJ <span class="badge ba">27-28 AVRIL ⚡</span></div>
+</div>
+<div class="card"><div class="ctitle">FOMC Forward Pricing Engine</div>
+<div class="g3" style="margin-bottom:12px">
+<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px"><div class="plbl">Score Hawkish</div><div id="fomc-s" style="font-family:var(--display);font-size:24px;font-weight:800;color:var(--red)">+2.4</div></div>
+<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px"><div class="plbl">DXY Biais</div><div id="dxy-b" style="font-family:var(--display);font-size:18px;font-weight:800;color:var(--red)">HAUSSIER</div></div>
+<div style="text-align:center;background:var(--bg3);border-radius:8px;padding:10px"><div class="plbl">Renversement</div><div id="rev-r" style="font-family:var(--display);font-size:24px;font-weight:800;color:var(--amber)">68%</div></div>
+</div>
+<div class="slider-row"><label>NFP (K emplois)</label><input type="range" min="-200" max="400" value="178" id="sl-nfp" oninput="updateFOMC()"><span id="v-nfp">+178</span></div>
+<div class="slider-row"><label>CPI YoY (%)</label><input type="range" min="0" max="8" value="3.4" step="0.1" id="sl-cpi" oninput="updateFOMC()"><span id="v-cpi">3.4</span></div>
+<div class="slider-row"><label>Core PCE (%)</label><input type="range" min="0" max="6" value="3.0" step="0.1" id="sl-pce" oninput="updateFOMC()"><span id="v-pce">3.0</span></div>
+</div></div>
+<div class="g2">
+<div class="card"><div class="ctitle">US10Y · Courbe des Taux</div>
+<div class="g4" style="margin-bottom:10px">
+<div style="text-align:center"><div class="plbl">US10Y</div><div style="font-size:18px;font-weight:700;color:var(--red)" id="us10y-v">4.313%</div></div>
+<div style="text-align:center"><div class="plbl">US2Y</div><div style="font-size:18px;font-weight:700;color:var(--amber)" id="us2y-v">4.280%</div></div>
+<div style="text-align:center"><div class="plbl">Spread</div><div style="font-size:18px;font-weight:700;color:var(--green)" id="spread-v">+0.033%</div></div>
+<div style="text-align:center"><div class="plbl">US30Y</div><div style="font-size:18px;font-weight:700;color:var(--red)">4.580%</div></div>
+</div>
+<div class="chart-wrap"><canvas id="yieldChart"></canvas></div>
+</div>
+<div class="card"><div class="ctitle">Corrélations US10Y → Forex</div>
+<table><tr><th>Indicateur</th><th>AUD/JPY</th><th>NZD/JPY</th><th>AUD/USD</th></tr>
+<tr><td style="color:#fff">US10Y ↑</td><td style="color:var(--red)">-0.72</td><td style="color:var(--red)">-0.78</td><td style="color:var(--amber)">-0.45</td></tr>
+<tr><td style="color:#fff">Spread ↑</td><td style="color:var(--green)">+0.58</td><td style="color:var(--green)">+0.52</td><td style="color:var(--green)">+0.61</td></tr>
+<tr><td style="color:#fff">JGB BoJ ↑</td><td style="color:var(--red)">-0.88</td><td style="color:var(--red)">-0.91</td><td style="color:var(--amber)">-0.41</td></tr>
+</table>
+<div class="slider-row" style="margin-top:12px"><label>US10Y simulateur</label><input type="range" min="3.5" max="5.5" value="4.31" step="0.01" id="sl-10y" oninput="updateYield()"><span id="v-10y">4.31%</span></div>
+<div class="g3"><div style="background:var(--bg3);border-radius:6px;padding:8px;text-align:center"><div class="plbl">AUD/JPY</div><div id="yi-aj" style="font-weight:700;color:var(--red)">0 pips</div></div><div style="background:var(--bg3);border-radius:6px;padding:8px;text-align:center"><div class="plbl">NZD/JPY</div><div id="yi-nj" style="font-weight:700;color:var(--red)">0 pips</div></div><div style="background:var(--bg3);border-radius:6px;padding:8px;text-align:center"><div class="plbl">AUD/USD</div><div id="yi-au" style="font-weight:700;color:var(--amber)">0 pips</div></div></div>
+</div></div>
+<div class="slbl">Sentiment Overcrowded · Fibo Liquidity Hunt</div>
+<div class="g3">
+<div class="card" style="border-top:2px solid var(--red)">
+<div class="ctitle" style="color:var(--red)">NZD/JPY · 71% SHORT</div>
+<div class="crowd"><div style="height:100%;width:71%;background:var(--red);border-radius:4px"></div></div>
+<div style="background:rgba(244,63,94,0.08);border:1px solid rgba(244,63,94,0.2);color:var(--red);border-radius:6px;padding:8px;font-size:10px;font-weight:600;margin:8px 0">🚨 Sweep OBLIGATOIRE · 88.94-89.60</div>
+<div class="g2" style="gap:6px"><div style="background:rgba(244,63,94,0.08);border-radius:6px;padding:8px;font-size:10px"><div style="color:var(--muted)">Sweep zone</div><div style="color:var(--red);font-weight:700">88.94-89.60</div><div style="color:var(--muted)">Prob: 78%</div></div><div style="background:rgba(16,185,129,0.08);border-radius:6px;padding:8px;font-size:10px"><div style="color:var(--muted)">Post-sweep</div><div style="color:var(--green);font-weight:700">85.48 → 83.84</div><div style="color:var(--muted)">R/R 1:3.4</div></div></div>
+</div>
+<div class="card" style="border-top:2px solid var(--amber)">
+<div class="ctitle" style="color:var(--amber)">AUD/JPY · 64% SHORT</div>
+<div class="crowd"><div style="height:100%;width:64%;background:var(--amber);border-radius:4px"></div></div>
+<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);color:var(--amber);border-radius:6px;padding:8px;font-size:10px;font-weight:600;margin:8px 0">⚠ Sweep probable · 96.10-96.44</div>
+<div class="g2" style="gap:6px"><div style="background:rgba(244,63,94,0.08);border-radius:6px;padding:8px;font-size:10px"><div style="color:var(--muted)">Sweep zone</div><div style="color:var(--amber);font-weight:700">96.10-96.44</div><div style="color:var(--muted)">Prob: 55%</div></div><div style="background:rgba(16,185,129,0.08);border-radius:6px;padding:8px;font-size:10px"><div style="color:var(--muted)">Post-sweep</div><div style="color:var(--green);font-weight:700">94.20 → 93.61</div><div style="color:var(--muted)">R/R 1:2.9</div></div></div>
+</div>
+<div class="card" style="border-top:2px solid var(--blue)">
+<div class="ctitle" style="color:var(--blue)">AUD/USD · 58% SHORT</div>
+<div class="crowd"><div style="height:100%;width:58%;background:var(--blue);border-radius:4px"></div></div>
+<div style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);color:var(--blue);border-radius:6px;padding:8px;font-size:10px;font-weight:600;margin:8px 0">⏳ Attente CPI vendredi 10 avril 00h30 AEDT</div>
+<div class="g2" style="gap:6px"><div style="background:rgba(244,63,94,0.08);border-radius:6px;padding:8px;font-size:10px"><div style="color:var(--red);font-weight:700">CPI &gt; 3.5%</div><div style="color:var(--muted)">Break 0.6150 → 0.6080 → 0.5950</div></div><div style="background:rgba(16,185,129,0.08);border-radius:6px;padding:8px;font-size:10px"><div style="color:var(--green);font-weight:700">CPI &lt; 3.0%</div><div style="color:var(--muted)">Rebond → 0.6280 → 0.6350</div></div></div>
+</div>
+</div>
+<div class="slbl">Biais Directionnels · Confluences Validées</div>
+<div class="pair-card" style="border-left:3px solid var(--red)">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-family:var(--display);font-size:16px;font-weight:800;color:#fff">NZD/JPY</span><span class="badge br">▼ SELL</span><span class="badge br">TRÈS ÉLEVÉE</span></div>
+<div style="font-family:var(--display);font-size:26px;font-weight:800;color:var(--red)">87<span style="font-size:12px;color:var(--muted)">/100</span></div>
+</div>
+<div class="sbar"><div class="sfill" style="width:87%;background:var(--red)"></div></div>
+<div class="g2" style="margin-top:10px;gap:12px">
+<div style="font-size:11px;color:#94a3b8">
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• US10Y 4.313% → risk-off → JPY safe-haven bid (corr. -0.78)</div>
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• RBNZ 2.25% dovish → spread NZ-JP se compresse → carry baissier</div>
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• COT JPY +85K (88e pct) — accumulation institutionnelle record</div>
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• BoJ normalisation 27 avril → JGB ↑ → crosses baissières</div>
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• Double Top 1D confirmé + Bear Flag 4H + RSI div. bearish</div>
+<div style="padding:3px 0">• CTL 88.20 · CHoCH 4H validé · VWAP résistance ~88.10</div>
+</div>
+<div style="background:var(--bg3);border-radius:8px;padding:12px;font-size:11px">
+<div style="font-weight:700;color:#fff;margin-bottom:6px">Plan d'entrée</div>
+<div style="margin-bottom:3px">Zone : <span style="color:var(--red);font-weight:700">87.80–88.10</span></div>
+<div style="margin-bottom:3px">SL : <span style="color:var(--red)">89.05</span></div>
+<div style="margin-bottom:3px">TP1 : <span style="color:var(--green)">85.48</span> (Fibo 1.272)</div>
+<div style="margin-bottom:3px">TP2 : <span style="color:var(--green)">83.84</span> (Fibo 1.618)</div>
+<div style="color:var(--blue);font-weight:700">R/R : 1:3.4</div>
+<div style="color:var(--amber);margin-top:6px;font-size:10px">⚠ Réduire 50% avant RBNZ Mer 8 02h00 AEDT</div>
+</div></div></div>
+<div class="pair-card" style="border-left:3px solid var(--red)">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-family:var(--display);font-size:16px;font-weight:800;color:#fff">AUD/JPY</span><span class="badge br">▼ SELL</span><span class="badge br">ÉLEVÉE</span></div>
+<div style="font-family:var(--display);font-size:26px;font-weight:800;color:var(--red)">78<span style="font-size:12px;color:var(--muted)">/100</span></div>
+</div>
+<div class="sbar"><div class="sfill" style="width:78%;background:var(--red)"></div></div>
+<div class="g2" style="margin-top:10px;gap:12px">
+<div style="font-size:11px;color:#94a3b8">
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• Risk-off Hormuz WTI $110 → carry trade désactivé</div>
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• COT AUD -45K shorts (28e pct) · institutionnels alignés bearish</div>
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• BoJ hawkish 27 avril → spread +360bps se compresse</div>
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• H&S 1D en formation · CHoCH 4H validé · Div. RSI bearish</div>
+<div style="padding:3px 0">• RBA 4.10% HAWKISH = facteur atténuant (score 78 vs 87)</div>
+</div>
+<div style="background:var(--bg3);border-radius:8px;padding:12px;font-size:11px">
+<div style="font-weight:700;color:#fff;margin-bottom:6px">Plan d'entrée</div>
+<div style="margin-bottom:3px">Zone : <span style="color:var(--red);font-weight:700">95.40–95.60</span></div>
+<div style="margin-bottom:3px">SL : <span style="color:var(--red)">96.85</span></div>
+<div style="margin-bottom:3px">TP1 : <span style="color:var(--green)">94.20</span> (Fibo 1.272)</div>
+<div style="margin-bottom:3px">TP2 : <span style="color:var(--green)">93.61</span> (Fibo 1.618)</div>
+<div style="color:var(--blue);font-weight:700">R/R : 1:2.9</div>
+<div style="color:var(--amber);margin-top:6px;font-size:10px">RBA amortit — stop plus large que NZD/JPY</div>
+</div></div></div>
+<div class="pair-card" style="border-left:3px solid var(--amber)">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+<div style="display:flex;align-items:center;gap:8px"><span style="font-family:var(--display);font-size:16px;font-weight:800;color:#fff">AUD/USD</span><span class="badge ba">⏳ ATTENTE</span><span class="badge ba">MODÉRÉE</span></div>
+<div style="font-family:var(--display);font-size:26px;font-weight:800;color:var(--amber)">62<span style="font-size:12px;color:var(--muted)">/100</span></div>
+</div>
+<div class="sbar"><div class="sfill" style="width:62%;background:var(--amber)"></div></div>
+<div style="margin-top:8px;font-size:11px;color:#94a3b8">
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• USD safe-haven → pression AUD (corr. -0.45) · Attendre CPI US vendredi</div>
+<div style="padding:3px 0;border-bottom:1px solid var(--border)">• AU-US spread positif → RBA 4.10% soutient structurellement AUD</div>
+<div style="padding:3px 0">• Si CPI &gt; 3.5% → SELL vers 0.6080 · Si CPI &lt; 3.0% → BUY vers 0.6350</div>
+</div></div>
+<div class="slbl">Calendrier Économique Semaine</div>
+<div class="card"><div class="ctitle">Catalyseurs · Horaires AEDT</div>
+<table><tr><th>Date</th><th>Heure</th><th>Événement</th><th>Impact</th></tr>
+<tr><td style="color:var(--red);font-weight:700">Mer 8</td><td>02h00</td><td style="color:#fff;font-weight:600">RBNZ OCR ⚡</td><td><span class="badge br">CRITIQUE</span></td></tr>
+<tr><td>Mer 8</td><td>11h00</td><td>FOMC Minutes</td><td><span class="badge ba">ÉLEVÉ</span></td></tr>
+<tr><td>Jeu 9</td><td>00h30</td><td>Core PCE + GDP</td><td><span class="badge ba">ÉLEVÉ</span></td></tr>
+<tr><td style="color:var(--red);font-weight:700">Ven 10</td><td>00h30</td><td style="color:var(--red);font-weight:700">CPI US Mars ⚡⚡</td><td><span class="badge br">CRITIQUE</span></td></tr>
+</table></div>
+<div class="slbl">Analyse Claude AI · 🌅 ROUTINE MATIN</div>
+<div class="card"><div class="ctitle">Analyse Macro Institutionnelle</div>
+<div id="claude-content" style="color:#94a3b8;font-size:12px;line-height:1.8"></div>
+</div>
+<div style="text-align:center;font-size:10px;color:var(--muted);padding:16px 0">
+MacroDesk v4 ·  ·  · Yahoo Finance + FRED API + Claude AI
+</div>
+</div>
+<script>
+const PRICES = {};
+const SENTIMENT = {};
+const SCORES = {};
+const FOMC = {};
+
+const PAIRS = [["AUD/JPY","AUD/JPY"],["NZD/JPY","NZD/JPY"],["AUD/USD","AUD/USD"],["DXY","DXY"],["Gold","Gold XAU"],["WTI","WTI Crude"],["US10Y","US10Y"],["VIX","VIX"]];
+document.getElementById("price-grid").innerHTML = PAIRS.map(function(p){
+  var d = PRICES[p[1]] || {price:"N/A",change:"—"};
+  var unit = p[1]==="US10Y" ? "%" : "";
+  var cls = d.change && d.change[0]==="+": "up" ? d.change && d.change[0]==="-" ? "down" : "flat";
+  return "<div class=\"pi\"><div class=\"plbl\">"+p[0]+"</div><div class=\"pval\">"+d.price+unit+"</div><div class=\"pchg "+cls+"\">"+d.change+"</div></div>";
+}).join("");
+
+document.getElementById("claude-content").innerHTML = "'''html
+&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset=\"UTF-8\"&gt;
+&lt;style&gt;
+body { background-color: #020409; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; line-height: 1.4; }
+.container { max-width: 1000px; margin: 0 auto; }
+h1 { color: #f1f5f9; font-size: 24px; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 10px; }
+h2 { color: #f9fafb; font-size: 18px; margin: 25px 0 15px 0; background-color: #080e1c; padding: 12px 15px; border-left: 4px solid #3b82f6; border-radius: 4px; }
+.section { background-color: #080e1c; padding: 15px; margin-bottom: 15px; border-radius: 6px; border: 1px solid #1e293b; }
+.badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; margin: 0 4px; }
+.bear { background-color: #f43f5e; color: white; }
+.bull { background-color: #10b981; color: white; }
+.neutral { background-color: #fbbf24; color: #1f2937; }
+.price { font-family: 'Monaco', 'Menlo', monospace; background-color: #1e293b; padding: 2px 6px; border-radius: 3px; }
+.setup { background-color: #0f172a; padding: 12px; margin: 8px 0; border-left: 3px solid #6366f1; border-radius: 4px; }
+ul, ol { margin: 8px 0; padding-left: 20px; }
+li { margin: 4px 0; }
+.highlight { color: #fbbf24; font-weight: 600; }
+.critical { color: #f43f5e; font-weight: 600; }
+.confluence { font-size: 13px; color: #94a3b8; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div class=\"container\"&gt;
+
+&lt;h1&gt;🦘 SESSION AUSTRALIE/TOKYO — Mardi 7 Avril 2026 — 18:05 AEDT&lt;/h1&gt;
+
+&lt;h2 style=\"color:#f9fafb\"&gt;1. VERDICT MACRO GLOBAL&lt;/h2&gt;
+&lt;div class=\"section\"&gt;
+&lt;strong&gt;Régime :&lt;/strong&gt; &lt;span class=\"badge bear\"&gt;STAGFLATION OFFRE&lt;/span&gt; + &lt;span class=\"badge bear\"&gt;RISK-OFF GÉOPOLITIQUE&lt;/span&gt; - Guerre Iran/Détroit d'Hormuz propulse WTI à &lt;span class=\"price\"&gt;$110&lt;/span&gt;, while Fed maintains restrictive stance.&lt;br&gt;
+&lt;strong&gt;Score Risk-Off :&lt;/strong&gt; &lt;span class=\"highlight\"&gt;78/100&lt;/span&gt; - Pondération : Géopolitique 35% + Inflation 25% + BC hawkish 20% = JPY safe-haven dominant, carry trades désactivés.&lt;br&gt;
+&lt;strong&gt;Misprice #1 :&lt;/strong&gt; &lt;span class=\"critical\"&gt;NZD/JPY overcrowded 71% short&lt;/span&gt; → SWEEP probable &lt;span class=\"price\"&gt;88.94-89.60&lt;/span&gt; avant continuation bearish vers &lt;span class=\"price\"&gt;85.48&lt;/span&gt;
+&lt;/div&gt;
+
+&lt;h2 style=\"color:#f9fafb\"&gt;2. FOMC FORWARD PRICING — Logique de renversement&lt;/h2&gt;
+&lt;div class=\"section\"&gt;
+&lt;strong&gt;Données récentes pricées :&lt;/strong&gt; NFP +178K (below trend), ISM Prices 78.3 (extrême), PCE core restant autour 3% - marché avait anticipé pause Fed&lt;br&gt;
+&lt;strong&gt;Renversement détecté :&lt;/strong&gt; FOMC mars ton &lt;span class=\"critical\"&gt;hawkish surprise&lt;/span&gt; vs attentes dovish → DXY rally + courbes US plates → score FOMC Engine +3.6&lt;br&gt;
+&lt;strong&gt;DXY biais :&lt;/strong&gt; &lt;span class=\"badge bear\"&gt;HAUSSIER&lt;/span&gt; (score 3.6/5) - Catalyseur : CPI vendredi +3.4% YoY confirmerait posture restrictive prolongée&lt;br&gt;
+&lt;strong&gt;Dot Plot projeté FOMC 28-29 avril :&lt;/strong&gt; Hold 3.50-3.75% mais guidance moins dovish si guerre Iran persiste (inflation importée)
+&lt;/div&gt;
+
+&lt;h2 style=\"color:#f9fafb\"&gt;3. US10Y & COURBE DES TAUX → IMPACT FOREX&lt;/h2&gt;
+&lt;div class=\"section\"&gt;
+&lt;strong&gt;US10Y 4.313% :&lt;/strong&gt; Niveau critique pour crosses JPY - au-dessus de 4.30% = pression baissière AUD/JPY et NZD/JPY (carry unwind continues)&lt;br&gt;
+&lt;strong&gt;Spread 10Y-2Y 0.033% :&lt;/strong&gt; Courbe quasi-plate = &lt;span class=\"highlight\"&gt;stagflation pricing&lt;/span&gt; - croissance faible + inflation persistante = bearish risk assets&lt;br&gt;
+&lt;strong&gt;Corrélations directes :&lt;/strong&gt; US10Y ↑ → AUD/JPY ↓ (corr -0.72) | NZD/JPY ↓ (corr -0.78) - mécanisme carry unwind intact&lt;br&gt;
+&lt;strong&gt;JGB impact BoJ 27 avril :&lt;/strong&gt; Si hausse 0.50% → 0.75%, renforce JPY davantage vs commodity currencies
+&lt;/div&gt;
+
+&lt;h2 style=\"color:#f9fafb\"&gt;4. SENTIMENT OVERCROWDED → FIBO TARGETING&lt;/h2&gt;
+&lt;div class=\"section\"&gt;
+&lt;strong&gt;NZD/JPY :&lt;/strong&gt; &lt;span class=\"critical\"&gt;71% retail SHORT (ÉLEVÉ ⚠)&lt;/span&gt;&lt;br&gt;
+• Zone SWEEP : &lt;span class=\"price\"&gt;88.94-89.60&lt;/span&gt; (50%-61.8% Fibo retracement)&lt;br&gt;
+• Probabilité sweep : &lt;span class=\"highlight\"&gt;78%&lt;/span&gt; - MMs chasseront stops avant continuation&lt;br&gt;
+• Stratégie : &lt;span class=\"badge neutral\"&gt;ATTENDRE SWEEP&lt;/span&gt; puis short sur rejet 89.30-89.60&lt;br&gt;
+• Cible POST-SWEEP : TP1 &lt;span class=\"price\"&gt;86.20&lt;/span&gt; | TP2 &lt;span class=\"price\"&gt;85.48&lt;/span&gt;&lt;br&gt;&lt;br&gt;
+
+&lt;strong&gt;AUD/JPY :&lt;/strong&gt; &lt;span class=\"highlight\"&gt;64% retail SHORT (MODÉRÉ)&lt;/span&gt;&lt;br&gt;
+• Zone SWEEP : &lt;span class=\"price\"&gt;96.10-96.44&lt;/span&gt; (38.2%-50% Fibo)&lt;br&gt;
+• Probabilité sweep : &lt;span class=\"highlight\"&gt;55%&lt;/span&gt; - moins probable, RBA hawkish amortit&lt;br&gt;
+• Stratégie : &lt;span class=\"badge bear\"&gt;ENTRER MAINTENANT&lt;/span&gt; sur neckline H&S 96.20&lt;br&gt;
+• Cible POST-SWEEP : TP1 &lt;span class=\"price\"&gt;94.80&lt;/span&gt; | TP2 &lt;span class=\"price\"&gt;94.20&lt;/span&gt;&lt;br&gt;&lt;br&gt;
+
+&lt;strong&gt;AUD/USD :&lt;/strong&gt; &lt;span class=\"highlight\"&gt;58% retail SHORT (FAIBLE)&lt;/span&gt;&lt;br&gt;
+• Zone SWEEP : Post-CPI vendredi (attendre volatilité)&lt;br&gt;
+• Probabilité sweep : &lt;span class=\"highlight\"&gt;35%&lt;/span&gt; - RBA hawkish = facteur support&lt;br&gt;
+• Stratégie : &lt;span class=\"badge neutral\"&gt;HOLD&lt;/span&gt; jusqu'à CPI US&lt;br&gt;
+• Cible POST-CPI : TP1 &lt;span class=\"price\"&gt;0.6120";
+
+function updateFOMC(){
+  var nfp=parseFloat(document.getElementById("sl-nfp").value);
+  var cpi=parseFloat(document.getElementById("sl-cpi").value);
+  var pce=parseFloat(document.getElementById("sl-pce").value);
+  document.getElementById("v-nfp").textContent=(nfp>0?"+":"")+nfp;
+  document.getElementById("v-cpi").textContent=cpi.toFixed(1);
+  document.getElementById("v-pce").textContent=pce.toFixed(1);
+  var s=0;
+  if(nfp>150)s+=2;else if(nfp<0)s-=2;
+  if(cpi>3.5)s+=2.5;else if(cpi<2)s-=2;
+  if(pce>3)s+=2;else if(pce<2)s-=2;
+  s=Math.round(s*10)/10;
+  var c=s>1?"var(--red)":s<-1?"var(--green)":"var(--amber)";
+  document.getElementById("fomc-s").textContent=(s>0?"+":"")+s;
+  document.getElementById("fomc-s").style.color=c;
+  document.getElementById("dxy-b").textContent=s>1?"HAUSSIER":s<-1?"BAISSIER":"RANGE";
+  document.getElementById("rev-r").textContent=Math.round(Math.min(90,Math.abs(s)*8+20))+"%";
+}
+
+function updateYield(){
+  var y=parseFloat(document.getElementById("sl-10y").value);
+  document.getElementById("v-10y").textContent=y.toFixed(2)+"%";
+  var d=y-4.313;
+  var aj=Math.round(d*-105),nj=Math.round(d*-120),au=Math.round(d*-42);
+  var fmt=function(v){return(v>0?"+":"")+v+" pips";};
+  var col=function(v){return v<0?"var(--red)":v>0?"var(--green)":"var(--amber)";};
+  document.getElementById("yi-aj").textContent=fmt(aj);
+  document.getElementById("yi-aj").style.color=col(aj);
+  document.getElementById("yi-nj").textContent=fmt(nj);
+  document.getElementById("yi-nj").style.color=col(nj);
+  document.getElementById("yi-au").textContent=fmt(au);
+  document.getElementById("yi-au").style.color=col(au);
+}
+
+var ctx2=document.getElementById("yieldChart").getContext("2d");
+new Chart(ctx2,{type:"line",data:{labels:["3M","6M","1Y","2Y","3Y","5Y","7Y","10Y","20Y","30Y"],datasets:[{label:"Actuelle",data:[4.45,4.42,4.38,4.28,4.25,4.22,4.28,4.31,4.48,4.58],borderColor:"#f43f5e",backgroundColor:"rgba(244,63,94,0.05)",borderWidth:2,pointRadius:3,tension:0.4,fill:true},{label:"Normale",data:[3.2,3.4,3.6,3.8,4.0,4.2,4.35,4.5,4.6,4.65],borderColor:"#38bdf8",borderWidth:1.5,borderDash:[4,4],pointRadius:2,tension:0.4,fill:false}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{min:3.0,max:5.0,ticks:{callback:function(v){return v.toFixed(1)+"%"},color:"#64748b",font:{size:10}},grid:{color:"rgba(100,116,139,0.15)"}},x:{ticks:{color:"#64748b",font:{size:10}},grid:{display:false}}}}});
+</script>
+</body>
+</html>
