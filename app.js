@@ -181,8 +181,50 @@ window.addEventListener('DOMContentLoaded', function() {
     }).join('');
   }
 
+  // Claude content — strip markdown fences
   var cc = document.getElementById('claude-content');
-  if (cc && window.MACRODESK_CLAUDE) cc.innerHTML = window.MACRODESK_CLAUDE;
+  if (cc && window.MACRODESK_CLAUDE) {
+    var txt = window.MACRODESK_CLAUDE.replace(/^```html\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'');
+    cc.innerHTML = txt;
+  }
+
+  // Dot Plot Fed Funds Rate
+  var dp = document.getElementById('dotPlotChart');
+  if (dp && window.Chart) {
+    var fedRate = 3.625;
+    var us10yPrice = parseFloat(((window.MACRODESK_PRICES || {})['US10Y'] || {}).price || 4.313);
+    new Chart(dp.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: ['Fed Funds\nActuel', 'US10Y\nMarché', 'Dot Plot\n2025 fin', 'Dot Plot\n2026', 'Dot Plot\n2027', 'Neutre LT'],
+        datasets: [{
+          data: [fedRate, us10yPrice, 3.625, 3.125, 2.875, 2.5],
+          backgroundColor: ['#f43f5e','#38bdf8','#fbbf24','#10b981','#10b981','#2dd4bf'],
+          borderRadius: 4,
+          borderSkipped: false
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function(c) { return c.parsed.y.toFixed(3) + '%'; } } }
+        },
+        scales: {
+          y: {
+            min: 0, max: 5.5,
+            ticks: { callback: function(v) { return v.toFixed(1) + '%'; }, color: '#64748b', font: { size: 10 } },
+            grid: { color: 'rgba(100,116,139,0.12)' }
+          },
+          x: {
+            ticks: { color: '#64748b', font: { size: 9 }, maxRotation: 0 },
+            grid: { display: false }
+          }
+        }
+      }
+    });
+  }
 
   // Init charts
   var yc = document.getElementById('yieldChart');
