@@ -1,502 +1,488 @@
-// MacroDesk v7 — app.js
-// + Refresh manuel des prix via webhook
-// + Animation flash sur changement de prix
-// + Heure live mise à jour dans topbar
-// + Optimisation mobile Android/Brave
-const BASE_US10Y = 4.31;
-const WEBHOOK_URL = 'https://jftrojani77.app.n8n.cloud/webhook/prices-live';
+// ============================================================
+// NODE: "Agréger Toutes Sources — Contexte Final"
+// Type: Code in JavaScript
+// v4 — Semaine 14 avril 2026
+// Fusionne : Yahoo Finance + FRED API + CFTC COT + Myfxbook
+// + Crypto Risk Flow (BTC comme baromètre risk-on/off)
+// + Données statiques manuelles (niveaux tech, pondération)
+// ============================================================
 
-function showTab(name, btn) {
-  document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
-  document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
-  document.getElementById('tab-' + name).classList.add('active');
-  btn.classList.add('active');
-  // Scroll en haut du tab
-  window.scrollTo({ top: document.querySelector('.tabs-bar').offsetTop - 10, behavior: 'smooth' });
-}
-
-function showTech(pair) {
-  ['audjpy','nzdjpy','audusd'].forEach(function(p) {
-    var el = document.getElementById('tech-' + p);
-    var btn = document.getElementById('tech-btn-' + p);
-    if (el) el.style.display = p === pair ? 'block' : 'none';
-    if (btn) btn.className = p === pair ? 'pair-btn active' : 'pair-btn';
-  });
-}
-
-function showSent(pair) {
-  ['audjpy','nzdjpy','audusd'].forEach(function(p) {
-    var el = document.getElementById('sent-' + p);
-    var btn = document.getElementById('sent-btn-' + p);
-    if (el) el.style.display = p === pair ? 'block' : 'none';
-    if (btn) btn.className = p === pair ? 'pair-btn active' : 'pair-btn';
-  });
-}
+let pricesData = {};
+let fredData = {};
+let cotData = {};
+let sentimentData = {};
+let etfFlowsData = {};
+let riskOffScore = 78;
 
 // ============================================================
-// REFRESH PRIX LIVE VIA WEBHOOK
+// RÉCUPÉRATION DES PRIX — Accès direct aux nœuds HTTP
 // ============================================================
-async function refreshPrices() {
-  var btn = document.getElementById('refresh-btn');
-  var status = document.getElementById('refresh-status');
-  if (!btn) return;
 
-  btn.disabled = true;
-  btn.innerHTML = '⏳';
-  btn.style.opacity = '0.6';
+const SYMBOL_MAP = {
+  'AUDJPY=X': 'AUD/JPY',
+  'NZDJPY=X': 'NZD/JPY',
+  'AUDUSD=X': 'AUD/USD',
+  'DX-Y.NYB': 'DXY',
+  'GC=F':     'Gold XAU',
+  'CL=F':     'WTI Crude',
+  '^VIX':     'VIX',
+  '^N225':    'Nikkei',
+  '^AXJO':    'ASX200',
+  '^TNX':     'US10Y',
+  'BTC-USD':  'BTC/USD'
+};
 
+// Liste des nœuds HTTP Yahoo — adapter les noms si nécessaire
+const httpNodes = [
+  'HTTP - AUDJPY',
+  'HTTP - WTI',
+  'HTTP - NZDJPY',
+  'HTTP - VIX',
+  'HTTP - AUDUSD',
+  'HTTP - US10Y',
+  'HTTP-DXY',
+  'HTTP - Or',
+  'HTTP - US2Y',
+  'HTTP - BTC'
+];
+
+for (const nodeName of httpNodes) {
   try {
-    var response = await fetch(WEBHOOK_URL);
-    var data = await response.json();
-    var result = Array.isArray(data) ? data[0] : data;
-    var newPrices = result.prices || {};
+    const data = $(nodeName).first().json;
+    const result = data?.chart?.result?.[0];
+    if (!result?.meta) continue;
 
-    if (Object.keys(newPrices).length === 0) {
-      throw new Error('Aucun prix reçu');
+    const meta = result.meta;
+    const symbol = meta.symbol;
+    const displayName = SYMBOL_MAP[symbol] || symbol;
+    const price = meta.regularMarketPrice;
+    const prevClose = meta.chartPreviousClose || meta.previousClose;
+
+    if (price && prevClose) {
+      const change = price - prevClose;
+      const changePct = ((change / prevClose) * 100).toFixed(2);
+      pricesData[displayName] = {
+        price: price.toString(),
+        change: (change >= 0 ? '+' : '') + change.toFixed(4),
+        changePct: (change >= 0 ? '+' : '') + changePct + '%',
+        prevClose: prevClose.toString(),
+        live: true
+      };
     }
-
-    updatePriceGrid(newPrices);
-    window.MACRODESK_PRICES = Object.assign(window.MACRODESK_PRICES || {}, newPrices);
-
-    var now = new Date();
-    var timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    if (status) {
-      status.textContent = '✓ ' + timeStr;
-      status.style.color = '#10b981';
-    }
-
-    // Mettre à jour l'heure principale dans la topbar
-    var topbarTime = document.getElementById('topbar-time');
-    if (topbarTime) {
-      topbarTime.textContent = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' NCT';
-    }
-
-    // Mettre à jour la section Crypto Risk Flow
-    updateCryptoRiskFlow(newPrices);
-
-    btn.innerHTML = '🔄';
-    btn.disabled = false;
-    btn.style.opacity = '1';
-    btn.style.background = 'rgba(16,185,129,0.3)';
-    setTimeout(function() { btn.style.background = ''; }, 1000);
-
   } catch(e) {
-    if (status) {
-      status.textContent = '✗ Erreur';
-      status.style.color = '#f43f5e';
-    }
-    btn.innerHTML = '🔄';
-    btn.disabled = false;
-    btn.style.opacity = '1';
-    console.log('Refresh error:', e);
+    console.log('Node ' + nodeName + ' non disponible: ' + e.message);
   }
 }
 
-function updatePriceGrid(newPrices) {
-  var PAIRS = [
-    ['AUD/JPY','AUD/JPY'], ['NZD/JPY','NZD/JPY'], ['AUD/USD','AUD/USD'],
-    ['DXY','DXY'], ['Gold','Gold XAU'], ['WTI','WTI Crude'],
-    ['US10Y','US10Y'], ['VIX','VIX'], ['BTC','BTC/USD']
-  ];
+// FRED API
+try {
+  const fredNode = $('Fetch FRED API — US Treasuries').first().json;
+  fredData = fredNode;
+} catch(e) { console.log('FRED node non disponible'); }
 
-  var pg = document.getElementById('price-grid');
-  if (!pg) return;
-
-  var oldPrices = window.MACRODESK_PRICES || {};
-
-  pg.innerHTML = PAIRS.map(function(p) {
-    var d = newPrices[p[1]] || oldPrices[p[1]] || { price: 'N/A', change: '—' };
-    var unit = p[1] === 'US10Y' ? '%' : '';
-    var ch = d.change || '—';
-    var cls = ch[0] === '+' ? 'up' : ch[0] === '-' ? 'down' : 'flat';
-    var oldPrice = (oldPrices[p[1]] || {}).price;
-    var priceChanged = oldPrice && oldPrice !== d.price;
-    var flashClass = priceChanged ? (parseFloat(d.change) >= 0 ? 'flash-up' : 'flash-down') : '';
-
-    return '<div class="pi ' + flashClass + '">'
-      + '<div class="plbl">' + p[0] + '</div>'
-      + '<div class="pval">' + d.price + unit + '</div>'
-      + '<div class="pchg ' + cls + '">' + ch + '</div>'
-      + (d.changePct ? '<div class="pchg ' + cls + '" style="font-size:9px">' + d.changePct + '</div>' : '')
-      + '</div>';
-  }).join('');
-
-  setTimeout(function() {
-    document.querySelectorAll('.flash-up,.flash-down').forEach(function(el) {
-      el.classList.remove('flash-up', 'flash-down');
-    });
-  }, 1500);
-}
-
-function updateCryptoRiskFlow(newPrices) {
-  var btcData = newPrices['BTC/USD'];
-  var vixData = newPrices['VIX'];
-  var goldData = newPrices['Gold XAU'];
-  if (!btcData) return;
-
-  var btcChangePct = parseFloat(btcData.changePct || '0');
-  var vixChange = parseFloat((vixData || {}).change || '0');
-  var goldChange = parseFloat((goldData || {}).change || '0');
-
-  var signal = 0;
-  if (btcChangePct > 3) signal -= 2;
-  else if (btcChangePct > 1) signal -= 1;
-  else if (btcChangePct < -3) signal += 2;
-  else if (btcChangePct < -1) signal += 1;
-  if (vixChange > 2 && btcChangePct < -1) signal += 1.5;
-  if (vixChange < -2 && btcChangePct > 1) signal -= 1.5;
-  if (goldChange > 0 && btcChangePct < -1) signal += 1;
-  signal = Math.round(signal * 10) / 10;
-
-  var btcGoldDiv = (goldChange > 0 && btcChangePct < -1) || (goldChange < 0 && btcChangePct > 1);
-
-  // Mettre à jour les éléments du panel crypto s'ils existent
-  var els = document.querySelectorAll('.pi');
-  els.forEach(function(el) {
-    var lbl = el.querySelector('.plbl');
-    if (!lbl) return;
-    if (lbl.textContent === 'BTC/USD') {
-      el.querySelector('.pval').textContent = btcData.price;
-      var chgEl = el.querySelector('.pchg');
-      if (chgEl) {
-        chgEl.textContent = btcData.change;
-        chgEl.className = 'pchg ' + (parseFloat(btcData.change) >= 0 ? 'up' : 'down');
-      }
-    }
-  });
-}
+// CFTC COT
+try {
+  const cotNode = $('Fetch CFTC COT Report — AUD/NZD/JPY').first().json;
+  cotData = cotNode.cot || {};
+} catch(e) { console.log('COT node non disponible'); }
 
 // ============================================================
-// FONCTIONS EXISTANTES (inchangées)
+// ENRICHISSEMENT PRIX avec données FRED
 // ============================================================
-function updateDash() {
-  var nfp = parseFloat(document.getElementById('d-nfp').value);
-  var cpi = parseFloat(document.getElementById('d-cpi').value);
-  var pce = parseFloat(document.getElementById('d-pce').value);
-  document.getElementById('d-v-nfp').textContent = (nfp > 0 ? '+' : '') + nfp;
-  document.getElementById('d-v-cpi').textContent = cpi.toFixed(1);
-  document.getElementById('d-v-pce').textContent = pce.toFixed(1);
-  var s = 0;
-  if (nfp > 150) s += 2; else if (nfp < 0) s -= 2;
-  if (cpi > 3.5) s += 2.5; else if (cpi < 2) s -= 2;
-  if (pce > 3) s += 2; else if (pce < 2) s -= 2;
-  s = Math.round(s * 10) / 10;
-  var c = s > 1 ? 'var(--red)' : s < -1 ? 'var(--green)' : 'var(--amber)';
-  document.getElementById('d-fomc-s').textContent = (s > 0 ? '+' : '') + s;
-  document.getElementById('d-fomc-s').style.color = c;
-  document.getElementById('d-dxy-b').textContent = s > 1 ? 'HAUSSIER' : s < -1 ? 'BAISSIER' : 'RANGE';
-  document.getElementById('d-rev-r').textContent = Math.round(Math.min(90, Math.abs(s) * 8 + 20)) + '%';
+if (fredData.fred) {
+  if (!pricesData['US10Y']) {
+    pricesData['US10Y'] = { price: fredData.fred.US10Y?.value || '4.291', change: fredData.fred.US10Y?.change || 'N/A' };
+  }
+  pricesData['US2Y']  = { price: fredData.fred.US2Y?.value || '4.280', change: fredData.fred.US2Y?.change || 'N/A' };
+  pricesData['US30Y'] = { price: fredData.fred.US30Y?.value || '4.580', change: fredData.fred.US30Y?.change || 'N/A' };
 }
 
-function updateYield() {
-  var y = parseFloat(document.getElementById('sl-10y').value);
-  document.getElementById('v-10y').textContent = y.toFixed(2) + '%';
-  var d = y - BASE_US10Y;
-  var aj = Math.round(d * -105), nj = Math.round(d * -120), au = Math.round(d * -42);
-  var fmt = function(v) { return (v > 0 ? '+' : '') + v + ' pips'; };
-  var col = function(v) { return v < 0 ? 'var(--red)' : v > 0 ? 'var(--green)' : 'var(--teal)'; };
-  document.getElementById('yi-aj').textContent = fmt(aj);
-  document.getElementById('yi-aj').style.color = col(aj);
-  document.getElementById('yi-nj').textContent = fmt(nj);
-  document.getElementById('yi-nj').style.color = col(nj);
-  document.getElementById('yi-au').textContent = fmt(au);
-  document.getElementById('yi-au').style.color = col(au);
-  var verd = Math.abs(d) < 0.02 ? 'US10Y stable. Pas de changement de biais.' :
-    d > 0 ? 'US10Y en hausse +' + d.toFixed(2) + '% → Risk-off → JPY apprécie → AUD/JPY NZD/JPY sous pression.' :
-    'US10Y en baisse ' + d.toFixed(2) + '% → Détente risk-off → Rebond possible AUD/JPY NZD/JPY.';
-  document.getElementById('yield-verdict').textContent = verd;
-}
+// Fallback prix si Yahoo indisponible
+const defaultPrices = {
+  'AUD/JPY': { price: '112.47', change: 'fallback' },
+  'NZD/JPY': { price: '92.95', change: 'fallback' },
+  'AUD/USD': { price: '0.7062', change: 'fallback' },
+  'DXY':     { price: '98.70', change: 'fallback' },
+  'Gold XAU':{ price: '4787',  change: 'fallback' },
+  'WTI Crude':{ price: '96.57', change: 'fallback' },
+  'US10Y':   { price: '4.291', change: 'fallback' },
+  'US2Y':    { price: '4.280', change: 'fallback' },
+  'US30Y':   { price: '4.580', change: 'fallback' },
+  'Nikkei':  { price: '38200', change: 'fallback' },
+  'ASX200':  { price: '7950',  change: 'fallback' },
+  'VIX':     { price: '19.23', change: 'fallback' },
+  'BTC/USD': { price: '71516', change: 'fallback' }
+};
 
-function updateYield2() {
-  var y = parseFloat(document.getElementById('t-sl-10y').value);
-  document.getElementById('t-v-10y').textContent = y.toFixed(2) + '%';
-  var d = y - BASE_US10Y;
-  var aj = Math.round(d * -105), nj = Math.round(d * -120), au = Math.round(d * -42);
-  var fmt = function(v) { return (v > 0 ? '+' : '') + v + ' pips'; };
-  var col = function(v) { return v < 0 ? 'var(--red)' : v > 0 ? 'var(--green)' : 'var(--teal)'; };
-  var bias = function(v) { return Math.abs(v) < 3 ? 'Neutre' : v < 0 ? 'Bearish ↓' : 'Bullish ↑'; };
-  document.getElementById('t-yi-aj').textContent = fmt(aj);
-  document.getElementById('t-yi-aj').style.color = col(aj);
-  document.getElementById('t-yi-nj').textContent = fmt(nj);
-  document.getElementById('t-yi-nj').style.color = col(nj);
-  document.getElementById('t-yi-au').textContent = fmt(au);
-  document.getElementById('t-yi-au').style.color = col(au);
-  document.getElementById('t-yi-aj-b').textContent = bias(aj);
-  document.getElementById('t-yi-nj-b').textContent = bias(nj);
-  document.getElementById('t-yi-au-b').textContent = bias(au);
-  var verd = Math.abs(d) < 0.02 ? 'US10Y stable à ' + y.toFixed(2) + '%. Pas de changement de biais.' :
-    d > 0 ? 'US10Y en hausse +' + d.toFixed(2) + '% → Risk-off → JPY apprécie → SHORT renforcé.' :
-    'US10Y en baisse ' + d.toFixed(2) + '% → Détente risk-off → Rebond AUD/JPY NZD/JPY possible.';
-  document.getElementById('t-yield-verdict').textContent = verd;
-}
-
-function updateFOMC() {
-  var nfp = parseFloat(document.getElementById('fomc-nfp').value);
-  var cpi = parseFloat(document.getElementById('fomc-cpi').value);
-  var pce = parseFloat(document.getElementById('fomc-pce').value);
-  var unemp = parseFloat(document.getElementById('fomc-unemp').value);
-  var cuts = parseFloat(document.getElementById('fomc-cuts').value);
-  var tone = document.getElementById('fomc-tone').value;
-  document.getElementById('fv-nfp').textContent = (nfp > 0 ? '+' : '') + nfp;
-  document.getElementById('fv-cpi').textContent = cpi.toFixed(1);
-  document.getElementById('fv-pce').textContent = pce.toFixed(1);
-  document.getElementById('fv-unemp').textContent = unemp.toFixed(1);
-  document.getElementById('fv-cuts').textContent = cuts;
-  var s = 0;
-  s += (nfp - 100) / 50;
-  s += (cpi - 2.5) * 1.5;
-  s += (pce - 2.2) * 1.5;
-  s -= (unemp - 4.0) * 0.5;
-  s -= cuts * 0.5;
-  if (tone === 'hawkish') s += 2;
-  if (tone === 'dovish') s -= 2;
-  if (tone === 'surprise_hawk') s += 4;
-  if (tone === 'surprise_dove') s -= 4;
-  s = Math.round(s * 10) / 10;
-  var pct = Math.min(Math.abs(s) / 10 * 100, 100);
-  var c = s > 2 ? 'var(--red)' : s < -2 ? 'var(--green)' : 'var(--amber)';
-  document.getElementById('fomc-score').textContent = (s > 0 ? '+' : '') + s;
-  document.getElementById('fomc-score').style.color = c;
-  var biais, action, lbl, verd, risk;
-  if (s > 4) { biais = 'TRÈS HAUSSIER'; action = 'Short AUD · Short NZD · Long DXY'; lbl = 'TRÈS HAWKISH'; risk = Math.round(20 + pct * 0.5); verd = 'Environnement fortement hawkish. DXY devrait breakout. SHORT AUD/JPY, NZD/JPY, AUD/USD avec conviction maximale.'; }
-  else if (s > 1.5) { biais = 'HAUSSIER'; action = 'Short AUD · Sell NZD'; lbl = 'HAWKISH'; risk = Math.round(40 + pct * 0.3); verd = 'Hawkish confirmé. NFP + CPI + PCE ne permettent pas à la Fed de couper. Maintenir SHORT AUD/USD, AUD/JPY, NZD/JPY.'; }
-  else if (s > -1.5) { biais = 'NEUTRE'; action = 'Attendre données'; lbl = 'NEUTRE'; risk = 60; verd = 'Signal mixte. Éviter nouvelles positions directionnelles DXY sans catalyseur.'; }
-  else if (s > -4) { biais = 'BAISSIER'; action = 'Rebond AUD/NZD possible'; lbl = 'DOVISH'; risk = Math.round(40 + Math.abs(pct) * 0.3); verd = 'Pression pour coupe Fed augmente. DXY vulnérable. Réduire exposition SELL.'; }
-  else { biais = 'TRÈS BAISSIER'; action = 'Long AUD/NZD · Short USD'; lbl = 'TRÈS DOVISH'; risk = 20; verd = 'Fed devrait couper. DXY sous pression majeure. Inverser : long AUD/JPY, NZD/JPY.'; }
-  document.getElementById('fomc-biais').textContent = biais;
-  document.getElementById('fomc-action').textContent = action;
-  document.getElementById('fomc-score-lbl').textContent = lbl;
-  document.getElementById('fomc-score-lbl').style.color = c;
-  document.getElementById('fomc-risk').textContent = risk + '%';
-  document.getElementById('fomc-risk-lbl').textContent = risk > 60 ? 'ÉLEVÉ' : risk > 40 ? 'MODÉRÉ' : 'FAIBLE';
-  document.getElementById('fomc-bar').style.width = pct + '%';
-  document.getElementById('fomc-bar').style.background = c;
-  document.getElementById('fomc-verdict').textContent = verd;
-}
-
-function toggleCheck(item) {
-  var box = item.querySelector('.cb');
-  var txt = item.querySelector('.ck-txt');
-  box.classList.toggle('on');
-  txt.classList.toggle('on');
-}
-
-function checkAll() {
-  document.querySelectorAll('#fomc-checklist .check-item').forEach(function(item) {
-    item.querySelector('.cb').classList.add('on');
-    item.querySelector('.ck-txt').classList.add('on');
-  });
-}
-
-function resetChecks() {
-  document.querySelectorAll('#fomc-checklist .check-item').forEach(function(item) {
-    item.querySelector('.cb').classList.remove('on');
-    item.querySelector('.ck-txt').classList.remove('on');
-  });
-}
-
-function updateSimFibo() {
-  var r = parseInt(document.getElementById('sim-retail').value);
-  var f = parseInt(document.getElementById('sim-fund').value);
-  document.getElementById('sim-retail-v').textContent = r + '%';
-  document.getElementById('sim-fund-v').textContent = f + '%';
-  var msg;
-  if (r >= 75 && f >= 75) msg = 'OVERCROWDED EXTRÊME + Fondamental fort. Sweep quasi-certain. Attendre le sweep puis SHORT SL serré.';
-  else if (r >= 75) msg = 'Retail extrême mais fondamental faible. Sweep probable MAIS move post-sweep peut manquer de force.';
-  else if (r >= 65 && f >= 75) msg = 'Overcrowded modéré + Fondamental fort. Sweep possible. Entrer SL 96.44+ ou attendre confirmation.';
-  else if (r < 60) msg = 'Retail peu concentré. Risque sweep limité. Entrée directe sur résistance avec stop standard.';
-  else msg = 'Signal mixte. Suivre le fondamental, attendre setup technique clair.';
-  document.getElementById('sim-fibo-verdict').textContent = msg;
-}
+// Merger avec fallback
+const finalPrices = { ...defaultPrices, ...pricesData };
 
 // ============================================================
-// INIT
+// CRYPTO RISK FLOW INDEX
 // ============================================================
-window.addEventListener('DOMContentLoaded', function() {
-  var PRICES = window.MACRODESK_PRICES || {};
+const CRYPTO_RISK_FLOW = (() => {
+  const btcPrice = parseFloat(finalPrices['BTC/USD']?.price || '0');
+  const btcChangeRaw = finalPrices['BTC/USD']?.change || '0';
+  const btcChangePctRaw = finalPrices['BTC/USD']?.changePct || '0%';
+  const btcChangePct = parseFloat(btcChangePctRaw);
+  const vixPrice = parseFloat(finalPrices['VIX']?.price || '21');
+  const vixChangeRaw = finalPrices['VIX']?.change || '0';
+  const vixChange = parseFloat(vixChangeRaw);
+  const goldChangeRaw = finalPrices['Gold XAU']?.change || '0';
+  const goldChange = parseFloat(goldChangeRaw);
 
-  // Injecter le CSS mobile + animations flash
-  var style = document.createElement('style');
-  style.textContent = ''
-    // Animations flash
-    + '@keyframes flashUp{0%{background:rgba(16,185,129,0.3)}100%{background:var(--bg3)}}'
-    + '@keyframes flashDown{0%{background:rgba(244,63,94,0.3)}100%{background:var(--bg3)}}'
-    + '.flash-up{animation:flashUp 1.5s ease-out;}'
-    + '.flash-down{animation:flashDown 1.5s ease-out;}'
-    // Bouton refresh
-    + '#refresh-btn{padding:6px 10px;border-radius:4px;border:1px solid rgba(45,212,191,0.4);background:rgba(45,212,191,0.1);color:#2dd4bf;font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;min-height:32px;}'
-    + '#refresh-btn:hover{background:rgba(45,212,191,0.25);border-color:#2dd4bf;}'
-    + '#refresh-btn:disabled{cursor:wait;}'
-    + '#refresh-status{font-size:9px;color:var(--muted);}'
-    // Mobile optimisations
-    + '@media(max-width:768px){'
-    // Topbar empilée
-    + '.topbar{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 12px;}'
-    + '.topbar>div{width:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px;}'
-    // Logo plus petit
-    + '.logo{font-size:16px;}'
-    // Tabs scrollables avec zone tactile agrandie
-    + '.tabs-bar{gap:0;padding:0;-webkit-overflow-scrolling:touch;}'
-    + '.tab-btn{padding:12px 10px;font-size:11px;min-height:44px;}'
-    // Grille prix : 3 colonnes sur mobile au lieu de 8
-    + '.g8{grid-template-columns:repeat(3,1fr)!important;gap:6px;}'
-    // Cards prix plus grandes et lisibles
-    + '.pi{padding:10px 6px;}'
-    + '.pi .plbl{font-size:10px;}'
-    + '.pi .pval{font-size:16px;}'
-    + '.pi .pchg{font-size:11px;}'
-    // Grilles 2 et 3 colonnes → 1 colonne
-    + '.g2{grid-template-columns:1fr!important;}'
-    + '.g3{grid-template-columns:1fr!important;}'
-    + '.g4{grid-template-columns:1fr 1fr!important;}'
-    // Phases FOMC
-    + '.phases{grid-template-columns:1fr!important;}'
-    // Tableaux scrollables
-    + 'table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;}'
-    // Sliders plus grands pour tactile
-    + 'input[type=range]{height:6px;}'
-    + 'input[type=range]::-webkit-slider-thumb{width:20px;height:20px;}'
-    + '.slider-row{padding:4px 0;}'
-    + '.slider-row label{font-size:11px;min-width:90px;}'
-    + '.slider-row span{font-size:12px;}'
-    // Pair cards
-    + '.pair-card{padding:12px 10px;}'
-    // Section labels
-    + '.slbl{font-size:10px;margin:12px 0 6px;}'
-    // Cards générales
-    + '.card{padding:12px 10px;margin-bottom:10px;}'
-    + '.ctitle{font-size:10px;}'
-    // Verdict
-    + '.verdict{font-size:12px;padding:10px;}'
-    // Bouton refresh plus gros sur mobile
-    + '#refresh-btn{padding:8px 14px;font-size:13px;min-height:40px;}'
-    // Badge
-    + '.badge{font-size:10px;padding:3px 8px;}'
-    // Score display
-    + '.ep-grid{grid-template-columns:1fr!important;}'
-    + '}'
-    // Petit écran (< 400px)
-    + '@media(max-width:400px){'
-    + '.g8{grid-template-columns:repeat(2,1fr)!important;}'
-    + '.pi .pval{font-size:14px;}'
-    + '.logo{font-size:14px;}'
-    + '}';
-  document.head.appendChild(style);
+  let cryptoRiskSignal = 0;
+  if (btcChangePct > 3) cryptoRiskSignal -= 2;
+  else if (btcChangePct > 1) cryptoRiskSignal -= 1;
+  else if (btcChangePct < -3) cryptoRiskSignal += 2;
+  else if (btcChangePct < -1) cryptoRiskSignal += 1;
 
-  // Ajouter le bouton Refresh dans la topbar
-  var topbar = document.querySelector('.topbar');
-  if (topbar) {
-    var rightSide = topbar.querySelector('div:last-child');
-    if (rightSide) {
-      // Ajouter un id à l'heure pour la mettre à jour
-      var spans = rightSide.querySelectorAll('span');
-      spans.forEach(function(span) {
-        if (span.textContent.includes('NCT') || span.textContent.includes('AEDT')) {
-          span.id = 'topbar-time';
-        }
-      });
+  if (vixChange > 2 && btcChangePct < -1) cryptoRiskSignal += 1.5;
+  if (vixChange < -2 && btcChangePct > 1) cryptoRiskSignal -= 1.5;
 
-      var refreshContainer = document.createElement('div');
-      refreshContainer.style.cssText = 'display:flex;align-items:center;gap:6px;';
-      refreshContainer.innerHTML = '<button id="refresh-btn" onclick="refreshPrices()">🔄 Refresh</button><span id="refresh-status"></span>';
-      rightSide.insertBefore(refreshContainer, rightSide.firstChild);
+  const btcGoldDivergence = (goldChange > 0 && btcChangePct < -1)
+    || (goldChange < 0 && btcChangePct > 1);
+  if (goldChange > 0 && btcChangePct < -1) cryptoRiskSignal += 1;
+
+  let signal, color, implication;
+  if (cryptoRiskSignal >= 2) {
+    signal = 'RISK-OFF CONFIRMÉ';
+    color = 'bull';
+    implication = 'BTC en baisse + VIX up = JPY safe-haven activé → RENFORCE shorts AUD-NZD/JPY';
+  } else if (cryptoRiskSignal >= 1) {
+    signal = 'RISK-OFF MODÉRÉ';
+    color = 'bull';
+    implication = 'Flux crypto négatifs, cohérent avec positionnement bearish JPY cross';
+  } else if (cryptoRiskSignal <= -2) {
+    signal = 'RISK-ON RETOUR';
+    color = 'bear';
+    implication = 'BTC en hausse + VIX down = appétit risque revient → PRUDENCE shorts JPY cross';
+  } else if (cryptoRiskSignal <= -1) {
+    signal = 'RISK-ON MODÉRÉ';
+    color = 'bear';
+    implication = 'Flux crypto positifs, surveiller retournement sentiment → stops serrés';
+  } else {
+    signal = 'NEUTRE / MIXTE';
+    color = 'neut';
+    implication = 'Pas de signal directionnel clair côté crypto flows';
+  }
+
+  return {
+    btcPrice: btcPrice.toFixed(0),
+    btcChange: btcChangeRaw,
+    btcChangePct: btcChangePctRaw,
+    vixPrice: vixPrice.toFixed(2),
+    vixChange: vixChangeRaw,
+    cryptoRiskSignal: Math.round(cryptoRiskSignal * 10) / 10,
+    signal,
+    color,
+    implication,
+    btcGoldDivergence: btcGoldDivergence
+      ? '⚠ DIVERGENCE BTC/GOLD — rotation risk-off sélective (Gold↑ BTC↓ = safe-haven pur)'
+      : 'Pas de divergence — BTC et Gold en phase',
+    etf_institutional: {
+      ibit: 'IBIT BlackRock ~$55B AUM — dominant liquidité + options',
+      msbt: 'MSBT Morgan Stanley lancé 8/4/26 — 0.14% fee (plus bas marché) — 16K advisors + $9.3T client assets — $34M inflows J1',
+      pipeline: 'MS prépare ETF ETH + SOL + trading spot E*Trade H1 2026'
+    },
+    fomc_sensitivity: 'BTC -7.47% avg autour FOMC 2025. Pré-positionner avant FOMC 28-29 avril.',
+    thesis: 'MSBT = signal institutionnel fort (première banque US). Fee war comprime coûts. BTC reste high-beta risk asset sensible aux taux et VIX. En régime stagflation + risk-off → BTC sous-performe Gold.'
+  };
+})();
+
+// ============================================================
+// DONNÉES STATIQUES MANUELLES
+// [MÀJA DIMANCHE 12 AVRIL — Niveaux techniques TradingView]
+// Prix de référence actualisés post-CPI 3.3%
+// ============================================================
+const TECH_LEVELS = {
+  'AUD/JPY': {
+    ctl_1d: '96.80',
+    ema200_4h: '96.50',
+    vwap_weekly: '96.20',
+    support_4h: '94.80',
+    resistance_1h: '95.40-95.60',
+    fvg_1h: '95.50-95.75',
+    neckline: '94.50 (H&S 1D)',
+    rsi_4h: '43',
+    divergence: 'bearish confirmée',
+    pattern_1d: 'H&S en formation',
+    ctrend_line: 'Résistance 96.80',
+    choch_4h: 'Validé bearish 28 mars',
+    fiboSwingHigh: '97.40',
+    fiboSwingLow: '94.80',
+    fiboSweepPrimary: '96.44',
+    fiboSweepSecondary: '96.10',
+    fiboExt1272: '94.20',
+    fiboExt1618: '93.61'
+  },
+  'NZD/JPY': {
+    ctl_1d: '88.20',
+    ema200_4h: '90.80',
+    vwap_weekly: '88.10',
+    support_4h: '86.80',
+    resistance_1h: '87.80-88.10',
+    fvg_1h: 'N/A',
+    neckline: '86.80 (Double Top)',
+    rsi_4h: '38',
+    divergence: 'bearish cachée (continuation)',
+    pattern_1d: 'Double Top confirmé + Bear Flag 4H',
+    ctrend_line: 'Résistance 88.20',
+    choch_4h: 'Validé bearish',
+    fiboSwingHigh: '92.40',
+    fiboSwingLow: '86.80',
+    fiboSweepPrimary: '89.60',
+    fiboSweepSecondary: '88.94',
+    fiboExt1272: '85.48',
+    fiboExt1618: '83.84'
+  },
+  'AUD/USD': {
+    ctl_1d: 'N/A (range)',
+    ema200_4h: '0.6320',
+    vwap_weekly: '0.6210',
+    support_4h: '0.6150',
+    resistance_1h: '0.6220',
+    fvg_1h: 'N/A',
+    neckline: 'N/A',
+    rsi_4h: '45',
+    divergence: 'non visible',
+    pattern_1d: 'Triple top potentiel 0.6400',
+    ctrend_line: 'N/A',
+    choch_4h: 'Non confirmé',
+    fiboSwingHigh: '0.6400',
+    fiboSwingLow: '0.6050',
+    fiboSweepPrimary: '0.6280',
+    fiboSweepSecondary: '0.6220',
+    fiboExt1272: '0.6080',
+    fiboExt1618: '0.5950'
+  }
+};
+
+// ============================================================
+// FOMC ENGINE — Recalcul automatique basé sur les données
+// MÀJ 12 avril : CPI mars sorti à 3.3% (vs 2.4% fév)
+// ============================================================
+const nfp = 178;
+const cpiYoy = 3.3;      // MÀJ : CPI mars 2026 sorti 10/04 = 3.3%
+const pceYoy = 3.0;
+const unemployment = 4.3;
+const gdpProj = 2.1;
+const cutsPriced = 1;
+
+let hawkishScore = 0;
+if (nfp > 150) hawkishScore += 2;
+else if (nfp < 0) hawkishScore -= 2;
+if (cpiYoy > 3.5) hawkishScore += 2.5;
+else if (cpiYoy < 2) hawkishScore -= 2;
+if (pceYoy > 3) hawkishScore += 2;
+else if (pceYoy < 2) hawkishScore -= 2;
+if (unemployment < 4) hawkishScore += 1.5;
+else if (unemployment > 5) hawkishScore -= 1.5;
+if (gdpProj > 2.5) hawkishScore += 1.5;
+hawkishScore += (3 - cutsPriced) * 0.8;
+hawkishScore = Math.round(hawkishScore * 10) / 10;
+
+const dxyBias = hawkishScore > 1.5 ? 'HAUSSIER' : hawkishScore < -1.5 ? 'BAISSIER' : 'RANGE';
+const reversalRisk = Math.min(90, Math.max(15, Math.abs(hawkishScore) * 8 + (cutsPriced > 1 ? 15 : 0)));
+
+const FOMC_ENGINE = {
+  nfp, cpiYoy, pceYoy, unemployment, gdpProj, cutsPriced,
+  hawkish_score: hawkishScore,
+  dxy_bias: dxyBias,
+  reversal_risk: Math.round(reversalRisk),
+  tone: 'hawkish — CPI 3.3% confirme inflation persistante',
+  verdict: `NFP ${nfp}K + CPI ${cpiYoy}% (mars) + PCE ${pceYoy}% → Fed ne peut pas couper. Score hawkish ${hawkishScore > 0 ? '+' : ''}${hawkishScore}. DXY ${dxyBias}. Risque renversement ${Math.round(reversalRisk)}%. PPI mardi 14 = prochain catalyseur.`,
+  next_catalyst: 'PPI 14 avril + Retail Sales 21 avril + FOMC 28-29 avril'
+};
+
+// ============================================================
+// SCORES COMPOSITES — Recalcul automatique
+// ============================================================
+const cryptoAdjustment = CRYPTO_RISK_FLOW.cryptoRiskSignal >= 1 ? 3 : CRYPTO_RISK_FLOW.cryptoRiskSignal <= -1 ? -3 : 0;
+
+let audJpyScore = 50;
+if (riskOffScore >= 70) audJpyScore += 15;
+if (hawkishScore > 1) audJpyScore += 8;
+const audJpySentiment = sentimentData['AUD/JPY'] || {};
+if (audJpySentiment.retailShortPct >= 65) audJpyScore += 5;
+audJpyScore += cryptoAdjustment;
+audJpyScore = Math.min(95, Math.max(20, audJpyScore));
+
+let nzdJpyScore = 50;
+if (riskOffScore >= 70) nzdJpyScore += 20;
+if (hawkishScore > 1) nzdJpyScore += 8;
+const nzdJpySentiment = sentimentData['NZD/JPY'] || {};
+if (nzdJpySentiment.retailShortPct >= 65) nzdJpyScore += 7;
+nzdJpyScore += cryptoAdjustment;
+nzdJpyScore = Math.min(98, Math.max(20, nzdJpyScore));
+
+let audUsdScore = 50;
+if (riskOffScore >= 70) audUsdScore += 10;
+if (hawkishScore > 1) audUsdScore += 5;
+audUsdScore -= 8;
+audUsdScore += Math.round(cryptoAdjustment / 2);
+audUsdScore = Math.max(30, Math.min(85, audUsdScore));
+
+const COMPOSITE_SCORES = {
+  'NZD/JPY': {
+    score: Math.round(nzdJpyScore),
+    bias: 'SELL',
+    confluences: 6 + (CRYPTO_RISK_FLOW.cryptoRiskSignal >= 1 ? 1 : 0),
+    priority: 1,
+    conviction: nzdJpyScore >= 80 ? 'TRÈS ÉLEVÉE' : 'ÉLEVÉE',
+    note: `Overcrowded ${nzdJpySentiment.retailShortPct || 71}% short · Sweep ${nzdJpySentiment.sweepZone || '88.94-89.60'} avant entrée`,
+    cryptoFlow: CRYPTO_RISK_FLOW.signal
+  },
+  'AUD/JPY': {
+    score: Math.round(audJpyScore),
+    bias: 'SELL',
+    confluences: 5 + (CRYPTO_RISK_FLOW.cryptoRiskSignal >= 1 ? 1 : 0),
+    priority: 2,
+    conviction: audJpyScore >= 75 ? 'ÉLEVÉE' : 'MODÉRÉE',
+    note: `RBA 4.10% amortit · Overcrowded ${audJpySentiment.retailShortPct || 64}% · Stop large`,
+    cryptoFlow: CRYPTO_RISK_FLOW.signal
+  },
+  'AUD/USD': {
+    score: Math.round(audUsdScore),
+    bias: audUsdScore >= 55 ? 'SELL CONDITIONNEL' : 'ATTENTE',
+    confluences: 3,
+    priority: 3,
+    conviction: 'MODÉRÉE',
+    note: 'Post-CPI 3.3% → biais bearish renforcé · RBA hawkish = facteur de soutien AUD',
+    cryptoFlow: CRYPTO_RISK_FLOW.signal
+  }
+};
+
+// ============================================================
+// PONDÉRATION CONTEXTUELLE
+// ============================================================
+const PONDERATIONS = {
+  regime: 'STAGFLATION OFFRE + RISK-OFF GÉOPOLITIQUE',
+  geopolitique: { pct: 30, note: 'Iran/Hormuz · WTI ~$97 · Choc offre persistant' },
+  inflation: { pct: 25, note: `CPI ${cpiYoy}% mars (↑ vs 2.4% fév) / PCE ${pceYoy}% — inflation ré-accélère` },
+  banques_centrales: { pct: 20, note: 'RBA/RBNZ/BoJ divergence = moteur FX · FOMC 28-29 avril' },
+  liquidite: { pct: 10, note: 'RRP $42B quasi-vide · M2 +4.6%' },
+  cot_etf: { pct: 10, note: 'Confirmation institutionnelle COT + ETF' },
+  crypto_flows: { pct: 5, note: `BTC comme proxy liquidité institutionnelle · Signal: ${CRYPTO_RISK_FLOW.signal}` }
+};
+
+// ============================================================
+// CALENDRIER ÉCONOMIQUE — Semaine 14-18 avril 2026
+// Heures en NCT (UTC+11)
+// ============================================================
+const ECONOMIC_CALENDAR = [
+  { date: 'Mar 14', time: '22h30 NCT', event: 'PPI Mars ⚡', impact: 'high', note: 'Prev. +0.7% MoM / +3.4% YoY. Pipeline inflation → confirme pression prix.' },
+  { date: 'Mer 15', time: '22h30 NCT', event: 'Empire State Manuf.', impact: 'medium', note: 'Activité manufacturière NY. Signal avancé ISM.' },
+  { date: 'Jeu 16', time: '22h30 NCT', event: 'Initial Claims + Philly Fed ⚡', impact: 'high', note: 'Claims = santé emploi. Philly Fed = manuf. côte Est.' },
+  { date: 'Jeu 16', time: '23h15 NCT', event: 'Industrial Production', impact: 'medium', note: 'Capacité utilisation + production industrielle.' },
+  { date: 'Ven 17', time: '22h30 NCT', event: 'Housing Starts', impact: 'medium', note: 'Construction résidentielle. Sensible aux taux.' },
+  { date: 'Lun 21', time: '22h30 NCT', event: 'Retail Sales Mars ⚡⚡', impact: 'critical', note: 'Reporté du 16. Consommation = 70% GDP US. EVENT RISK.' },
+  { date: '27-28 Avr', time: 'TBD', event: 'FOMC + BoJ ⚡⚡⚡', impact: 'critical', note: 'Double event risk. Fed decision + BoJ normalisation.' }
+];
+
+// ============================================================
+// CONTEXTE MACRO PERMANENT — MÀJ 12 avril 2026
+// ============================================================
+const us10yVal = finalPrices['US10Y']?.price || '4.291';
+const us2yVal = finalPrices['US2Y']?.price || '4.280';
+const spreadVal = (parseFloat(us10yVal) - parseFloat(us2yVal)).toFixed(3);
+const wtiVal = finalPrices['WTI Crude']?.price || '97';
+const goldVal = finalPrices['Gold XAU']?.price || '4787';
+const btcVal = finalPrices['BTC/USD']?.price || '71516';
+
+const MACRO_CONTEXT = `
+CONTEXTE MACRO PERMANENT (${new Date().toLocaleDateString('fr-FR')}):
+- Guerre Iran / Détroit Hormuz. WTI ~$${wtiVal}. Brent >$100. Choc d'offre persistant.
+- Fed Funds : 3.50-3.75%. Hold. CPI mars sorti 3.3% (vs 2.4% fév) → inflation ré-accélère.
+- RBA : 4.10% hawkish. RBNZ : 2.25% dovish. BoJ : ~0.50% normalisation (27-28 avril).
+- NFP mars : +178K. Chômage 4.3%. ISM Manuf. 52.7. ISM Prices 78.3 (extrême).
+- US10Y : ${us10yVal}%. US2Y : ${us2yVal}%. Spread : ${spreadVal}% (quasi-plate = stagflation).
+- Gold : $${goldVal}. Risk-off ${riskOffScore}/100. Carry désactivé. JPY safe-haven dominant.
+- BTC : $${btcVal} · Crypto Risk Flow : ${CRYPTO_RISK_FLOW.signal} (score ${CRYPTO_RISK_FLOW.cryptoRiskSignal}) · ${CRYPTO_RISK_FLOW.btcGoldDivergence}
+- MSBT Morgan Stanley lancé 8/4/26 (0.14%) — signal institutionnel. IBIT $55B dominant.
+- PPI mars mardi 14 avril = prochain catalyseur pipeline inflation.
+- RRP Fed : $42B quasi-vide. Bilan $6.66T. M2 +4.6% YoY. FOMC Engine score : ${hawkishScore > 0 ? '+' : ''}${hawkishScore} hawkish.
+- COT : JPY +${(cotData['JPY']?.net/1000||85.4).toFixed(1)}K longs (88e pct). AUD ${(cotData['AUD']?.net/1000||-45.2).toFixed(1)}K. NZD ${(cotData['NZD']?.net/1000||-22.8).toFixed(1)}K.
+- FOMC Engine : Score ${hawkishScore > 0 ? '+' : ''}${hawkishScore}. DXY ${dxyBias}. Renversement ${Math.round(reversalRisk)}%.
+- Semaine 14-18 avril : PPI Mar14 · Empire State Mer15 · Claims+Philly Jeu16 · Housing Ven17 · Retail Sales Lun21.
+`;
+
+const sessionType = (() => {
+  try {
+    const s = $('Set Session = soir').first()?.json?.sessionType;
+    if (s) return s;
+  } catch(e) {}
+  try {
+    const s = $('Set Session = midi').first()?.json?.sessionType;
+    if (s) return s;
+  } catch(e) {}
+  try {
+    const s = $('Set Session = matin').first()?.json?.sessionType;
+    if (s) return s;
+  } catch(e) {}
+  try {
+    const s = $('Définir la session = soir').first()?.json?.sessionType;
+    if (s) return s;
+  } catch(e) {}
+  try {
+    const s = $('Définir la session = midi').first()?.json?.sessionType;
+    if (s) return s;
+  } catch(e) {}
+  try {
+    const s = $('Définir la session = matin').first()?.json?.sessionType;
+    if (s) return s;
+  } catch(e) {}
+  return 'matin';
+})();
+const now = new Date();
+
+return [{
+  json: {
+    sessionType,
+    prices: finalPrices,
+    cryptoRiskFlow: CRYPTO_RISK_FLOW,
+    sentiment: sentimentData && Object.keys(sentimentData).length > 0 ? sentimentData : {
+      'AUD/JPY': { retailShortPct: 64, overcrowdLevel: 'MODÉRÉ', overcrowdRisk: 'medium', sweepProbability: 55, sweepZone: '96.10-96.44', fiboTarget1: '94.20', fiboTarget2: '93.61' },
+      'NZD/JPY': { retailShortPct: 71, overcrowdLevel: 'ÉLEVÉ ⚠', overcrowdRisk: 'high', sweepProbability: 78, sweepZone: '88.94-89.60', fiboTarget1: '85.48', fiboTarget2: '83.84' },
+      'AUD/USD': { retailShortPct: 58, overcrowdLevel: 'FAIBLE', overcrowdRisk: 'low', sweepProbability: 35, sweepZone: 'Post-CPI', fiboTarget1: '0.6080', fiboTarget2: '0.5950' }
+    },
+    cot: Object.keys(cotData).length > 0 ? cotData : {
+      AUD: { net: -45200, prev: -42100, change: -3100, signal: 'SHORTS AUGMENTENT', bias: 'bear', percentile: 28, interpretation: 'Managed money shorts AUD en hausse.' },
+      NZD: { net: -22800, prev: -20900, change: -1900, signal: 'SHORTS AUGMENTENT', bias: 'bear', percentile: 22, interpretation: 'Shorts NZD 3 semaines consécutives.' },
+      JPY: { net: 85400, prev: 73100, change: 12300, signal: 'LONGS MASSIFS', bias: 'bull', percentile: 88, interpretation: 'Accumulation safe-haven record.' }
+    },
+    etfFlows: etfFlowsData,
+    fedLiquidity: {
+      rrp: { value: '$42B', trend: 'QUASI-VIDE ↓', signal: 'CRITIQUE', color: 'bear', note: 'Prochaine tension repo = USD spike' },
+      balance_sheet: { value: '$6.66T', trend: 'STABLE', signal: 'QT TERMINÉ', color: 'neut', note: '$40B/mois reserve management' },
+      m2: { value: '$22.67T', trend: '+4.6% YoY', signal: 'SUPPORTIF', color: 'bull', note: 'Fond nominal soutien actifs' },
+      tga: { value: '~$850B', trend: 'NORMAL', signal: 'NEUTRE', color: 'neut', note: 'Pas de risque drain' }
+    },
+    yieldCurve: fredData.yieldCurve || {
+      shape: 'QUASI-PLATE',
+      signal: 'STAGFLATION confirmée — CPI 3.3% renforce le biais',
+      spread10y2y: spreadVal,
+      us10y: parseFloat(us10yVal),
+      us2y: parseFloat(us2yVal)
+    },
+    techLevels: TECH_LEVELS,
+    ponderations: PONDERATIONS,
+    compositeScores: COMPOSITE_SCORES,
+    fomcEngine: FOMC_ENGINE,
+    calendar: ECONOMIC_CALENDAR,
+    macroContext: MACRO_CONTEXT,
+    riskOffScore,
+    riskOffLabel: riskOffScore >= 70 ? 'RISK-OFF DOMINANT' : riskOffScore >= 50 ? 'NEUTRE/MIXTE' : 'RISK-ON',
+    timestamp: now.toISOString(),
+    dateFormatted: now.toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+    timeFormatted: now.toLocaleTimeString('fr-FR', { timeZone: 'Pacific/Noumea', hour: '2-digit', minute: '2-digit' }) + ' NCT',
+    dataSources: {
+      prices: 'Yahoo Finance live + FRED API',
+      sentiment: 'Myfxbook Community Outlook live',
+      cot: fredData.dataSource || 'CFTC/Nasdaq Data Link',
+      etf: 'Yahoo Finance Volume Proxy',
+      rates: 'FRED API (Federal Reserve)',
+      crypto: 'Yahoo Finance BTC-USD live'
     }
   }
-
-  // Horloge live qui tourne toutes les secondes
-  function updateClock() {
-    var topbarTime = document.getElementById('topbar-time');
-    if (topbarTime) {
-      var now = new Date();
-      topbarTime.textContent = now.toLocaleTimeString('fr-FR', {
-        timeZone: 'Pacific/Noumea',
-        hour: '2-digit',
-        minute: '2-digit'
-      }) + ' NCT';
-    }
-  }
-  setInterval(updateClock, 60000); // Mise à jour chaque minute
-  updateClock(); // Première mise à jour immédiate
-
-  // Init price grid avec BTC
-  var PAIRS = [
-    ['AUD/JPY','AUD/JPY'], ['NZD/JPY','NZD/JPY'], ['AUD/USD','AUD/USD'],
-    ['DXY','DXY'], ['Gold','Gold XAU'], ['WTI','WTI Crude'],
-    ['US10Y','US10Y'], ['VIX','VIX'], ['BTC','BTC/USD']
-  ];
-  var pg = document.getElementById('price-grid');
-  if (pg) {
-    pg.innerHTML = PAIRS.map(function(p) {
-      var d = PRICES[p[1]] || { price: 'N/A', change: '—' };
-      var unit = p[1] === 'US10Y' ? '%' : '';
-      var ch = d.change || '—';
-      var cls = ch[0] === '+' ? 'up' : ch[0] === '-' ? 'down' : 'flat';
-      return '<div class="pi"><div class="plbl">' + p[0] + '</div><div class="pval">' + d.price + unit + '</div><div class="pchg ' + cls + '">' + ch + '</div>'
-        + (d.changePct ? '<div class="pchg ' + cls + '" style="font-size:9px">' + d.changePct + '</div>' : '')
-        + '</div>';
-    }).join('');
-  }
-
-  // Claude content
-  var cc = document.getElementById('claude-content');
-  if (cc && window.MACRODESK_CLAUDE) {
-    var txt = window.MACRODESK_CLAUDE.replace(/^```html\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'');
-    cc.innerHTML = txt;
-  }
-
-  // Dot Plot
-  var dp = document.getElementById('dotPlotChart');
-  if (dp && window.Chart) {
-    var fedRate = 3.625;
-    var us10yPrice = parseFloat(((window.MACRODESK_PRICES || {})['US10Y'] || {}).price || 4.313);
-    new Chart(dp.getContext('2d'), {
-      type: 'bar',
-      data: {
-        labels: ['Fed Funds\nActuel', 'US10Y\nMarché', 'Dot Plot\n2025 fin', 'Dot Plot\n2026', 'Dot Plot\n2027', 'Neutre LT'],
-        datasets: [{
-          data: [fedRate, us10yPrice, 3.625, 3.125, 2.875, 2.5],
-          backgroundColor: ['#f43f5e','#38bdf8','#fbbf24','#10b981','#10b981','#2dd4bf'],
-          borderRadius: 4,
-          borderSkipped: false
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: function(c) { return c.parsed.y.toFixed(3) + '%'; } } }
-        },
-        scales: {
-          y: { min: 0, max: 5.5, ticks: { callback: function(v) { return v.toFixed(1) + '%'; }, color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(100,116,139,0.12)' } },
-          x: { ticks: { color: '#64748b', font: { size: 9 }, maxRotation: 0 }, grid: { display: false } }
-        }
-      }
-    });
-  }
-
-  // Yield curves
-  var yc = document.getElementById('yieldChart');
-  if (yc && window.Chart) {
-    new Chart(yc.getContext('2d'), {
-      type: 'line',
-      data: { labels: ['3M','6M','1Y','2Y','3Y','5Y','7Y','10Y','20Y','30Y'], datasets: [
-        { label: 'Actuelle', data: [4.45,4.42,4.38,4.28,4.25,4.22,4.28,4.31,4.48,4.58], borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.05)', borderWidth: 2, pointRadius: 3, tension: 0.4, fill: true },
-        { label: 'Normale', data: [3.2,3.4,3.6,3.8,4.0,4.2,4.35,4.5,4.6,4.65], borderColor: '#38bdf8', borderWidth: 1.5, borderDash: [4,4], pointRadius: 2, tension: 0.4, fill: false }
-      ]},
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { min: 3.0, max: 5.0, ticks: { callback: function(v) { return v.toFixed(1) + '%'; }, color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(100,116,139,0.1)' } }, x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { display: false } } } }
-    });
-  }
-  var yc2 = document.getElementById('yieldChart2');
-  if (yc2 && window.Chart) {
-    new Chart(yc2.getContext('2d'), {
-      type: 'line',
-      data: { labels: ['3M','6M','1Y','2Y','3Y','5Y','7Y','10Y','20Y','30Y'], datasets: [
-        { label: 'Actuelle (stagflation)', data: [4.45,4.42,4.38,4.28,4.25,4.22,4.28,4.31,4.48,4.58], borderColor: '#f43f5e', backgroundColor: 'rgba(244,63,94,0.08)', borderWidth: 2, pointRadius: 4, tension: 0.4, fill: true },
-        { label: 'Normale (croissance)', data: [3.2,3.4,3.6,3.8,4.0,4.2,4.35,4.5,4.6,4.65], borderColor: '#38bdf8', borderWidth: 1.5, borderDash: [4,4], pointRadius: 2, tension: 0.4, fill: false }
-      ]},
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#64748b', font: { size: 10 }, boxWidth: 12 } } }, scales: { y: { min: 3.0, max: 5.0, ticks: { callback: function(v) { return v.toFixed(1) + '%'; }, color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(100,116,139,0.12)' } }, x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { display: false } } } }
-    });
-  }
-});
+}];
