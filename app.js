@@ -1,5 +1,8 @@
-// MacroDesk v5 — app.js
+// MacroDesk v6 — app.js
+// + Refresh manuel des prix via webhook
+// + Animation flash sur changement de prix
 const BASE_US10Y = 4.31;
+const WEBHOOK_URL = 'https://jftrojani77.app.n8n.cloud/webhook/prices-live';
 
 function showTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
@@ -26,6 +29,104 @@ function showSent(pair) {
   });
 }
 
+// ============================================================
+// REFRESH PRIX LIVE VIA WEBHOOK
+// ============================================================
+async function refreshPrices() {
+  var btn = document.getElementById('refresh-btn');
+  var status = document.getElementById('refresh-status');
+  if (!btn) return;
+
+  // Animation bouton
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Chargement...';
+  btn.style.opacity = '0.6';
+
+  try {
+    var response = await fetch(WEBHOOK_URL);
+    var data = await response.json();
+
+    // data peut être un tableau [{}] ou un objet {}
+    var result = Array.isArray(data) ? data[0] : data;
+    var newPrices = result.prices || {};
+
+    if (Object.keys(newPrices).length === 0) {
+      throw new Error('Aucun prix reçu');
+    }
+
+    // Mettre à jour les prix dans la grille
+    updatePriceGrid(newPrices);
+
+    // Mettre à jour les données globales
+    window.MACRODESK_PRICES = Object.assign(window.MACRODESK_PRICES || {}, newPrices);
+
+    // Timestamp
+    var now = new Date();
+    var timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    if (status) status.textContent = '✓ ' + timeStr;
+    if (status) status.style.color = '#10b981';
+
+    // Reset bouton
+    btn.innerHTML = '🔄 Refresh Live';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+
+    // Flash vert sur le bouton
+    btn.style.background = 'rgba(16,185,129,0.3)';
+    setTimeout(function() { btn.style.background = ''; }, 1000);
+
+  } catch(e) {
+    if (status) status.textContent = '✗ Erreur';
+    if (status) status.style.color = '#f43f5e';
+    btn.innerHTML = '🔄 Refresh Live';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    console.log('Refresh error:', e);
+  }
+}
+
+function updatePriceGrid(newPrices) {
+  var PAIRS = [
+    ['AUD/JPY','AUD/JPY'], ['NZD/JPY','NZD/JPY'], ['AUD/USD','AUD/USD'],
+    ['DXY','DXY'], ['Gold','Gold XAU'], ['WTI','WTI Crude'],
+    ['US10Y','US10Y'], ['VIX','VIX'], ['BTC','BTC/USD']
+  ];
+
+  var pg = document.getElementById('price-grid');
+  if (!pg) return;
+
+  var oldPrices = window.MACRODESK_PRICES || {};
+
+  pg.innerHTML = PAIRS.map(function(p) {
+    var d = newPrices[p[1]] || oldPrices[p[1]] || { price: 'N/A', change: '—' };
+    var unit = p[1] === 'US10Y' ? '%' : '';
+    var ch = d.change || '—';
+    var cls = ch[0] === '+' ? 'up' : ch[0] === '-' ? 'down' : 'flat';
+
+    // Détecter si le prix a changé
+    var oldPrice = (oldPrices[p[1]] || {}).price;
+    var priceChanged = oldPrice && oldPrice !== d.price;
+    var flashClass = priceChanged ? (parseFloat(d.change) >= 0 ? 'flash-up' : 'flash-down') : '';
+
+    return '<div class="pi ' + flashClass + '">'
+      + '<div class="plbl">' + p[0] + '</div>'
+      + '<div class="pval">' + d.price + unit + '</div>'
+      + '<div class="pchg ' + cls + '">' + ch + '</div>'
+      + (d.changePct ? '<div class="pchg ' + cls + '" style="font-size:9px">' + d.changePct + '</div>' : '')
+      + '</div>';
+  }).join('');
+
+  // Supprimer les classes flash après l'animation
+  setTimeout(function() {
+    document.querySelectorAll('.flash-up,.flash-down').forEach(function(el) {
+      el.classList.remove('flash-up', 'flash-down');
+    });
+  }, 1500);
+}
+
+// ============================================================
+// FONCTIONS EXISTANTES (inchangées)
+// ============================================================
 function updateDash() {
   var nfp = parseFloat(document.getElementById('d-nfp').value);
   var cpi = parseFloat(document.getElementById('d-cpi').value);
@@ -166,10 +267,44 @@ function updateSimFibo() {
   document.getElementById('sim-fibo-verdict').textContent = msg;
 }
 
-// Init price grid
+// ============================================================
+// INIT
+// ============================================================
 window.addEventListener('DOMContentLoaded', function() {
   var PRICES = window.MACRODESK_PRICES || {};
-  var PAIRS = [['AUD/JPY','AUD/JPY'],['NZD/JPY','NZD/JPY'],['AUD/USD','AUD/USD'],['DXY','DXY'],['Gold','Gold XAU'],['WTI','WTI Crude'],['US10Y','US10Y'],['VIX','VIX']];
+
+  // Ajouter le bouton Refresh et le CSS flash dans la topbar
+  var topbar = document.querySelector('.topbar');
+  if (topbar) {
+    // Injecter le CSS pour les animations flash
+    var style = document.createElement('style');
+    style.textContent = ''
+      + '@keyframes flashUp{0%{background:rgba(16,185,129,0.3)}100%{background:var(--bg3)}}'
+      + '@keyframes flashDown{0%{background:rgba(244,63,94,0.3)}100%{background:var(--bg3)}}'
+      + '.flash-up{animation:flashUp 1.5s ease-out;}'
+      + '.flash-down{animation:flashDown 1.5s ease-out;}'
+      + '#refresh-btn{padding:4px 12px;border-radius:4px;border:1px solid rgba(45,212,191,0.4);background:rgba(45,212,191,0.1);color:#2dd4bf;font-family:var(--mono);font-size:10px;font-weight:600;cursor:pointer;transition:all .2s;}'
+      + '#refresh-btn:hover{background:rgba(45,212,191,0.25);border-color:#2dd4bf;}'
+      + '#refresh-btn:disabled{cursor:wait;}'
+      + '#refresh-status{font-size:9px;color:var(--muted);min-width:60px;}';
+    document.head.appendChild(style);
+
+    // Trouver le conteneur des badges (côté droit de la topbar)
+    var rightSide = topbar.querySelector('div:last-child');
+    if (rightSide) {
+      var refreshContainer = document.createElement('div');
+      refreshContainer.style.cssText = 'display:flex;align-items:center;gap:6px;';
+      refreshContainer.innerHTML = '<button id="refresh-btn" onclick="refreshPrices()">🔄 Refresh Live</button><span id="refresh-status" style="font-size:9px;color:var(--muted)"></span>';
+      rightSide.insertBefore(refreshContainer, rightSide.firstChild);
+    }
+  }
+
+  // Init price grid avec BTC
+  var PAIRS = [
+    ['AUD/JPY','AUD/JPY'], ['NZD/JPY','NZD/JPY'], ['AUD/USD','AUD/USD'],
+    ['DXY','DXY'], ['Gold','Gold XAU'], ['WTI','WTI Crude'],
+    ['US10Y','US10Y'], ['VIX','VIX'], ['BTC','BTC/USD']
+  ];
   var pg = document.getElementById('price-grid');
   if (pg) {
     pg.innerHTML = PAIRS.map(function(p) {
@@ -177,11 +312,13 @@ window.addEventListener('DOMContentLoaded', function() {
       var unit = p[1] === 'US10Y' ? '%' : '';
       var ch = d.change || '—';
       var cls = ch[0] === '+' ? 'up' : ch[0] === '-' ? 'down' : 'flat';
-      return '<div class="pi"><div class="plbl">' + p[0] + '</div><div class="pval">' + d.price + unit + '</div><div class="pchg ' + cls + '">' + ch + '</div></div>';
+      return '<div class="pi"><div class="plbl">' + p[0] + '</div><div class="pval">' + d.price + unit + '</div><div class="pchg ' + cls + '">' + ch + '</div>'
+        + (d.changePct ? '<div class="pchg ' + cls + '" style="font-size:9px">' + d.changePct + '</div>' : '')
+        + '</div>';
     }).join('');
   }
 
-  // Claude content — strip markdown fences
+  // Claude content
   var cc = document.getElementById('claude-content');
   if (cc && window.MACRODESK_CLAUDE) {
     var txt = window.MACRODESK_CLAUDE.replace(/^```html\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'');
@@ -226,7 +363,7 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // Init charts
+  // Yield curves
   var yc = document.getElementById('yieldChart');
   if (yc && window.Chart) {
     new Chart(yc.getContext('2d'), {
