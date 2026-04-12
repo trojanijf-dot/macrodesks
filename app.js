@@ -1,6 +1,8 @@
-// MacroDesk v6 — app.js
+// MacroDesk v7 — app.js
 // + Refresh manuel des prix via webhook
 // + Animation flash sur changement de prix
+// + Heure live mise à jour dans topbar
+// + Optimisation mobile Android/Brave
 const BASE_US10Y = 4.31;
 const WEBHOOK_URL = 'https://jftrojani77.app.n8n.cloud/webhook/prices-live';
 
@@ -9,6 +11,8 @@ function showTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
+  // Scroll en haut du tab
+  window.scrollTo({ top: document.querySelector('.tabs-bar').offsetTop - 10, behavior: 'smooth' });
 }
 
 function showTech(pair) {
@@ -37,16 +41,13 @@ async function refreshPrices() {
   var status = document.getElementById('refresh-status');
   if (!btn) return;
 
-  // Animation bouton
   btn.disabled = true;
-  btn.innerHTML = '⏳ Chargement...';
+  btn.innerHTML = '⏳';
   btn.style.opacity = '0.6';
 
   try {
     var response = await fetch(WEBHOOK_URL);
     var data = await response.json();
-
-    // data peut être un tableau [{}] ou un objet {}
     var result = Array.isArray(data) ? data[0] : data;
     var newPrices = result.prices || {};
 
@@ -54,31 +55,38 @@ async function refreshPrices() {
       throw new Error('Aucun prix reçu');
     }
 
-    // Mettre à jour les prix dans la grille
     updatePriceGrid(newPrices);
-
-    // Mettre à jour les données globales
     window.MACRODESK_PRICES = Object.assign(window.MACRODESK_PRICES || {}, newPrices);
 
-    // Timestamp
     var now = new Date();
     var timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    if (status) status.textContent = '✓ ' + timeStr;
-    if (status) status.style.color = '#10b981';
 
-    // Reset bouton
-    btn.innerHTML = '🔄 Refresh Live';
+    if (status) {
+      status.textContent = '✓ ' + timeStr;
+      status.style.color = '#10b981';
+    }
+
+    // Mettre à jour l'heure principale dans la topbar
+    var topbarTime = document.getElementById('topbar-time');
+    if (topbarTime) {
+      topbarTime.textContent = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' NCT';
+    }
+
+    // Mettre à jour la section Crypto Risk Flow
+    updateCryptoRiskFlow(newPrices);
+
+    btn.innerHTML = '🔄';
     btn.disabled = false;
     btn.style.opacity = '1';
-
-    // Flash vert sur le bouton
     btn.style.background = 'rgba(16,185,129,0.3)';
     setTimeout(function() { btn.style.background = ''; }, 1000);
 
   } catch(e) {
-    if (status) status.textContent = '✗ Erreur';
-    if (status) status.style.color = '#f43f5e';
-    btn.innerHTML = '🔄 Refresh Live';
+    if (status) {
+      status.textContent = '✗ Erreur';
+      status.style.color = '#f43f5e';
+    }
+    btn.innerHTML = '🔄';
     btn.disabled = false;
     btn.style.opacity = '1';
     console.log('Refresh error:', e);
@@ -102,8 +110,6 @@ function updatePriceGrid(newPrices) {
     var unit = p[1] === 'US10Y' ? '%' : '';
     var ch = d.change || '—';
     var cls = ch[0] === '+' ? 'up' : ch[0] === '-' ? 'down' : 'flat';
-
-    // Détecter si le prix a changé
     var oldPrice = (oldPrices[p[1]] || {}).price;
     var priceChanged = oldPrice && oldPrice !== d.price;
     var flashClass = priceChanged ? (parseFloat(d.change) >= 0 ? 'flash-up' : 'flash-down') : '';
@@ -116,12 +122,49 @@ function updatePriceGrid(newPrices) {
       + '</div>';
   }).join('');
 
-  // Supprimer les classes flash après l'animation
   setTimeout(function() {
     document.querySelectorAll('.flash-up,.flash-down').forEach(function(el) {
       el.classList.remove('flash-up', 'flash-down');
     });
   }, 1500);
+}
+
+function updateCryptoRiskFlow(newPrices) {
+  var btcData = newPrices['BTC/USD'];
+  var vixData = newPrices['VIX'];
+  var goldData = newPrices['Gold XAU'];
+  if (!btcData) return;
+
+  var btcChangePct = parseFloat(btcData.changePct || '0');
+  var vixChange = parseFloat((vixData || {}).change || '0');
+  var goldChange = parseFloat((goldData || {}).change || '0');
+
+  var signal = 0;
+  if (btcChangePct > 3) signal -= 2;
+  else if (btcChangePct > 1) signal -= 1;
+  else if (btcChangePct < -3) signal += 2;
+  else if (btcChangePct < -1) signal += 1;
+  if (vixChange > 2 && btcChangePct < -1) signal += 1.5;
+  if (vixChange < -2 && btcChangePct > 1) signal -= 1.5;
+  if (goldChange > 0 && btcChangePct < -1) signal += 1;
+  signal = Math.round(signal * 10) / 10;
+
+  var btcGoldDiv = (goldChange > 0 && btcChangePct < -1) || (goldChange < 0 && btcChangePct > 1);
+
+  // Mettre à jour les éléments du panel crypto s'ils existent
+  var els = document.querySelectorAll('.pi');
+  els.forEach(function(el) {
+    var lbl = el.querySelector('.plbl');
+    if (!lbl) return;
+    if (lbl.textContent === 'BTC/USD') {
+      el.querySelector('.pval').textContent = btcData.price;
+      var chgEl = el.querySelector('.pchg');
+      if (chgEl) {
+        chgEl.textContent = btcData.change;
+        chgEl.className = 'pchg ' + (parseFloat(btcData.change) >= 0 ? 'up' : 'down');
+      }
+    }
+  });
 }
 
 // ============================================================
@@ -273,31 +316,108 @@ function updateSimFibo() {
 window.addEventListener('DOMContentLoaded', function() {
   var PRICES = window.MACRODESK_PRICES || {};
 
-  // Ajouter le bouton Refresh et le CSS flash dans la topbar
+  // Injecter le CSS mobile + animations flash
+  var style = document.createElement('style');
+  style.textContent = ''
+    // Animations flash
+    + '@keyframes flashUp{0%{background:rgba(16,185,129,0.3)}100%{background:var(--bg3)}}'
+    + '@keyframes flashDown{0%{background:rgba(244,63,94,0.3)}100%{background:var(--bg3)}}'
+    + '.flash-up{animation:flashUp 1.5s ease-out;}'
+    + '.flash-down{animation:flashDown 1.5s ease-out;}'
+    // Bouton refresh
+    + '#refresh-btn{padding:6px 10px;border-radius:4px;border:1px solid rgba(45,212,191,0.4);background:rgba(45,212,191,0.1);color:#2dd4bf;font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;min-height:32px;}'
+    + '#refresh-btn:hover{background:rgba(45,212,191,0.25);border-color:#2dd4bf;}'
+    + '#refresh-btn:disabled{cursor:wait;}'
+    + '#refresh-status{font-size:9px;color:var(--muted);}'
+    // Mobile optimisations
+    + '@media(max-width:768px){'
+    // Topbar empilée
+    + '.topbar{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 12px;}'
+    + '.topbar>div{width:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px;}'
+    // Logo plus petit
+    + '.logo{font-size:16px;}'
+    // Tabs scrollables avec zone tactile agrandie
+    + '.tabs-bar{gap:0;padding:0;-webkit-overflow-scrolling:touch;}'
+    + '.tab-btn{padding:12px 10px;font-size:11px;min-height:44px;}'
+    // Grille prix : 3 colonnes sur mobile au lieu de 8
+    + '.g8{grid-template-columns:repeat(3,1fr)!important;gap:6px;}'
+    // Cards prix plus grandes et lisibles
+    + '.pi{padding:10px 6px;}'
+    + '.pi .plbl{font-size:10px;}'
+    + '.pi .pval{font-size:16px;}'
+    + '.pi .pchg{font-size:11px;}'
+    // Grilles 2 et 3 colonnes → 1 colonne
+    + '.g2{grid-template-columns:1fr!important;}'
+    + '.g3{grid-template-columns:1fr!important;}'
+    + '.g4{grid-template-columns:1fr 1fr!important;}'
+    // Phases FOMC
+    + '.phases{grid-template-columns:1fr!important;}'
+    // Tableaux scrollables
+    + 'table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;}'
+    // Sliders plus grands pour tactile
+    + 'input[type=range]{height:6px;}'
+    + 'input[type=range]::-webkit-slider-thumb{width:20px;height:20px;}'
+    + '.slider-row{padding:4px 0;}'
+    + '.slider-row label{font-size:11px;min-width:90px;}'
+    + '.slider-row span{font-size:12px;}'
+    // Pair cards
+    + '.pair-card{padding:12px 10px;}'
+    // Section labels
+    + '.slbl{font-size:10px;margin:12px 0 6px;}'
+    // Cards générales
+    + '.card{padding:12px 10px;margin-bottom:10px;}'
+    + '.ctitle{font-size:10px;}'
+    // Verdict
+    + '.verdict{font-size:12px;padding:10px;}'
+    // Bouton refresh plus gros sur mobile
+    + '#refresh-btn{padding:8px 14px;font-size:13px;min-height:40px;}'
+    // Badge
+    + '.badge{font-size:10px;padding:3px 8px;}'
+    // Score display
+    + '.ep-grid{grid-template-columns:1fr!important;}'
+    + '}'
+    // Petit écran (< 400px)
+    + '@media(max-width:400px){'
+    + '.g8{grid-template-columns:repeat(2,1fr)!important;}'
+    + '.pi .pval{font-size:14px;}'
+    + '.logo{font-size:14px;}'
+    + '}';
+  document.head.appendChild(style);
+
+  // Ajouter le bouton Refresh dans la topbar
   var topbar = document.querySelector('.topbar');
   if (topbar) {
-    // Injecter le CSS pour les animations flash
-    var style = document.createElement('style');
-    style.textContent = ''
-      + '@keyframes flashUp{0%{background:rgba(16,185,129,0.3)}100%{background:var(--bg3)}}'
-      + '@keyframes flashDown{0%{background:rgba(244,63,94,0.3)}100%{background:var(--bg3)}}'
-      + '.flash-up{animation:flashUp 1.5s ease-out;}'
-      + '.flash-down{animation:flashDown 1.5s ease-out;}'
-      + '#refresh-btn{padding:4px 12px;border-radius:4px;border:1px solid rgba(45,212,191,0.4);background:rgba(45,212,191,0.1);color:#2dd4bf;font-family:var(--mono);font-size:10px;font-weight:600;cursor:pointer;transition:all .2s;}'
-      + '#refresh-btn:hover{background:rgba(45,212,191,0.25);border-color:#2dd4bf;}'
-      + '#refresh-btn:disabled{cursor:wait;}'
-      + '#refresh-status{font-size:9px;color:var(--muted);min-width:60px;}';
-    document.head.appendChild(style);
-
-    // Trouver le conteneur des badges (côté droit de la topbar)
     var rightSide = topbar.querySelector('div:last-child');
     if (rightSide) {
+      // Ajouter un id à l'heure pour la mettre à jour
+      var spans = rightSide.querySelectorAll('span');
+      spans.forEach(function(span) {
+        if (span.textContent.includes('NCT') || span.textContent.includes('AEDT')) {
+          span.id = 'topbar-time';
+        }
+      });
+
       var refreshContainer = document.createElement('div');
       refreshContainer.style.cssText = 'display:flex;align-items:center;gap:6px;';
-      refreshContainer.innerHTML = '<button id="refresh-btn" onclick="refreshPrices()">🔄 Refresh Live</button><span id="refresh-status" style="font-size:9px;color:var(--muted)"></span>';
+      refreshContainer.innerHTML = '<button id="refresh-btn" onclick="refreshPrices()">🔄 Refresh</button><span id="refresh-status"></span>';
       rightSide.insertBefore(refreshContainer, rightSide.firstChild);
     }
   }
+
+  // Horloge live qui tourne toutes les secondes
+  function updateClock() {
+    var topbarTime = document.getElementById('topbar-time');
+    if (topbarTime) {
+      var now = new Date();
+      topbarTime.textContent = now.toLocaleTimeString('fr-FR', {
+        timeZone: 'Pacific/Noumea',
+        hour: '2-digit',
+        minute: '2-digit'
+      }) + ' NCT';
+    }
+  }
+  setInterval(updateClock, 60000); // Mise à jour chaque minute
+  updateClock(); // Première mise à jour immédiate
 
   // Init price grid avec BTC
   var PAIRS = [
@@ -325,7 +445,7 @@ window.addEventListener('DOMContentLoaded', function() {
     cc.innerHTML = txt;
   }
 
-  // Dot Plot Fed Funds Rate
+  // Dot Plot
   var dp = document.getElementById('dotPlotChart');
   if (dp && window.Chart) {
     var fedRate = 3.625;
@@ -349,15 +469,8 @@ window.addEventListener('DOMContentLoaded', function() {
           tooltip: { callbacks: { label: function(c) { return c.parsed.y.toFixed(3) + '%'; } } }
         },
         scales: {
-          y: {
-            min: 0, max: 5.5,
-            ticks: { callback: function(v) { return v.toFixed(1) + '%'; }, color: '#64748b', font: { size: 10 } },
-            grid: { color: 'rgba(100,116,139,0.12)' }
-          },
-          x: {
-            ticks: { color: '#64748b', font: { size: 9 }, maxRotation: 0 },
-            grid: { display: false }
-          }
+          y: { min: 0, max: 5.5, ticks: { callback: function(v) { return v.toFixed(1) + '%'; }, color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(100,116,139,0.12)' } },
+          x: { ticks: { color: '#64748b', font: { size: 9 }, maxRotation: 0 }, grid: { display: false } }
         }
       }
     });
