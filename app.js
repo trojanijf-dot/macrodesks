@@ -1,4 +1,5 @@
-// MacroDesk v7 — app.js
+// MacroDesk v8 — app.js
+// + V2 DMX : 6 donuts Chart.js + 3 gauges radiales + 3 sparklines + pulsation niveau 5
 // + Refresh manuel des prix via webhook
 // + Animation flash sur changement de prix
 // + Heure live mise à jour dans topbar
@@ -11,7 +12,6 @@ function showTab(name, btn) {
   document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
-  // Scroll en haut du tab
   window.scrollTo({ top: document.querySelector('.tabs-bar').offsetTop - 10, behavior: 'smooth' });
 }
 
@@ -66,13 +66,11 @@ async function refreshPrices() {
       status.style.color = '#10b981';
     }
 
-    // Mettre à jour l'heure principale dans la topbar
     var topbarTime = document.getElementById('topbar-time');
     if (topbarTime) {
       topbarTime.textContent = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' NCT';
     }
 
-    // Mettre à jour la section Crypto Risk Flow
     updateCryptoRiskFlow(newPrices);
 
     btn.innerHTML = '🔄';
@@ -149,9 +147,6 @@ function updateCryptoRiskFlow(newPrices) {
   if (goldChange > 0 && btcChangePct < -1) signal += 1;
   signal = Math.round(signal * 10) / 10;
 
-  var btcGoldDiv = (goldChange > 0 && btcChangePct < -1) || (goldChange < 0 && btcChangePct > 1);
-
-  // Mettre à jour les éléments du panel crypto s'ils existent
   var els = document.querySelectorAll('.pi');
   els.forEach(function(el) {
     var lbl = el.querySelector('.plbl');
@@ -163,6 +158,210 @@ function updateCryptoRiskFlow(newPrices) {
         chgEl.textContent = btcData.change;
         chgEl.className = 'pchg ' + (parseFloat(btcData.change) >= 0 ? 'up' : 'down');
       }
+    }
+  });
+}
+
+// ============================================================
+// NOUVEAU V2 — DMX CONVICTION : RENDU CHART.JS
+// ============================================================
+
+// Palette couleur selon niveau DMX
+function dmxColors(level) {
+  if (level === 5) return { main: '#f43f5e', bg: 'rgba(244,63,94,0.08)', glow: 'rgba(244,63,94,0.3)' };
+  if (level === 4) return { main: '#a78bfa', bg: 'rgba(167,139,250,0.15)', glow: 'rgba(167,139,250,0.4)' };
+  if (level === 3) return { main: '#a78bfa', bg: 'rgba(167,139,250,0.08)', glow: 'rgba(167,139,250,0.2)' };
+  if (level === 2) return { main: '#fbbf24', bg: 'rgba(251,191,36,0.05)', glow: 'rgba(251,191,36,0.15)' };
+  return { main: '#64748b', bg: 'rgba(100,116,139,0.05)', glow: 'rgba(100,116,139,0.1)' };
+}
+
+// Création d'un donut Chart.js pour Inst ou Retail
+function createDmxDonut(canvasId, longPct, shortPct, label) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas || !window.Chart) return null;
+
+  return new Chart(canvas.getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      labels: [label + ' LONG', label + ' SHORT'],
+      datasets: [{
+        data: [longPct, shortPct],
+        backgroundColor: ['#10b981', '#f43f5e'],
+        borderColor: '#080e1c',
+        borderWidth: 2,
+        hoverOffset: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '68%',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(6,12,24,0.95)',
+          borderColor: 'rgba(100,116,139,0.3)',
+          borderWidth: 1,
+          titleColor: '#e2e8f0',
+          bodyColor: '#94a3b8',
+          padding: 8,
+          callbacks: {
+            label: function(c) { return c.label + ': ' + c.parsed.toFixed(1) + '%'; }
+          }
+        }
+      },
+      animation: { duration: 800, easing: 'easeOutQuart' }
+    }
+  });
+}
+
+// Gauge radiale semi-circulaire pour conviction
+function createConvictionGauge(canvasId, conviction, color) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas || !window.Chart) return null;
+
+  var remainingColor = 'rgba(100,116,139,0.15)';
+
+  return new Chart(canvas.getContext('2d'), {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: [conviction, 100 - conviction],
+        backgroundColor: [color, remainingColor],
+        borderColor: '#080e1c',
+        borderWidth: 0,
+        circumference: 180,
+        rotation: 270
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '75%',
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false }
+      },
+      animation: { duration: 1200, easing: 'easeOutQuart' }
+    }
+  });
+}
+
+// Sparkline 12 semaines pour évolution du niveau DMX
+function createDmxSparkline(canvasId, history, color) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas || !window.Chart) return null;
+
+  var data = (history || []).map(function(h) { return h.level; });
+  var labels = (history || []).map(function(h) { return h.date; });
+
+  // Remplir avec des niveaux 1 si pas assez de données
+  while (data.length < 12) {
+    data.unshift(1);
+    labels.unshift('');
+  }
+  data = data.slice(-12);
+  labels = labels.slice(-12);
+
+  return new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: data,
+        borderColor: color,
+        backgroundColor: color.replace('rgb', 'rgba').replace(')', ',0.15)'),
+        borderWidth: 2,
+        pointRadius: 2,
+        pointBackgroundColor: color,
+        pointBorderColor: color,
+        tension: 0.3,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(6,12,24,0.95)',
+          borderColor: 'rgba(100,116,139,0.3)',
+          borderWidth: 1,
+          titleColor: '#e2e8f0',
+          bodyColor: '#94a3b8',
+          padding: 8,
+          callbacks: {
+            title: function(items) { return items[0].label || 'Semaine ' + items[0].dataIndex; },
+            label: function(c) {
+              var levels = ['—', 'NEUTRE', 'MODÉRÉ', 'FORT ⚡', 'EXTRÊME 🔥', 'EXTREMUM 💀'];
+              return 'Niveau ' + c.parsed.y + ' — ' + (levels[c.parsed.y] || 'N/A');
+            }
+          }
+        }
+      },
+      scales: {
+        y: { min: 0, max: 5, display: false, grid: { display: false } },
+        x: { display: false, grid: { display: false } }
+      },
+      animation: { duration: 1000 }
+    }
+  });
+}
+
+// Rendu complet DMX : appelé depuis DOMContentLoaded
+function renderDMX() {
+  var dmx = window.MACRODESK_DMX;
+  if (!dmx || !dmx.currencies) return;
+
+  var currencies = ['AUD', 'NZD', 'JPY'];
+
+  currencies.forEach(function(code) {
+    var cur = dmx.currencies[code];
+    if (!cur || !cur.dmx) return;
+
+    var colors = dmxColors(cur.dmx.level);
+    var lowerCode = code.toLowerCase();
+
+    // 1. Donut Institutionnels
+    createDmxDonut(
+      'dmx-donut-inst-' + lowerCode,
+      cur.institutional.longPct,
+      cur.institutional.shortPct,
+      'Inst.'
+    );
+
+    // 2. Donut Retail
+    createDmxDonut(
+      'dmx-donut-retail-' + lowerCode,
+      cur.retail.longPct,
+      cur.retail.shortPct,
+      'Retail'
+    );
+
+    // 3. Gauge Conviction
+    createConvictionGauge(
+      'dmx-gauge-' + lowerCode,
+      cur.dmx.conviction,
+      colors.main
+    );
+
+    // 4. Sparkline 12 semaines
+    var historyKey = lowerCode;
+    var history = (dmx.history && dmx.history[historyKey]) || [];
+    createDmxSparkline(
+      'dmx-spark-' + lowerCode,
+      history,
+      colors.main
+    );
+
+    // 5. Effet pulsation pour niveau 5
+    if (cur.dmx.level === 5) {
+      var card = document.getElementById('dmx-card-' + lowerCode);
+      if (card) card.classList.add('dmx-pulse-5');
+    } else if (cur.dmx.level === 4) {
+      var card4 = document.getElementById('dmx-card-' + lowerCode);
+      if (card4) card4.classList.add('dmx-pulse-4');
     }
   });
 }
@@ -316,10 +515,10 @@ function updateSimFibo() {
 window.addEventListener('DOMContentLoaded', function() {
   var PRICES = window.MACRODESK_PRICES || {};
 
-  // Injecter le CSS mobile + animations flash
+  // Injecter le CSS mobile + animations flash + effets DMX
   var style = document.createElement('style');
   style.textContent = ''
-    // Animations flash
+    // Animations flash prix
     + '@keyframes flashUp{0%{background:rgba(16,185,129,0.3)}100%{background:var(--bg3)}}'
     + '@keyframes flashDown{0%{background:rgba(244,63,94,0.3)}100%{background:var(--bg3)}}'
     + '.flash-up{animation:flashUp 1.5s ease-out;}'
@@ -329,52 +528,58 @@ window.addEventListener('DOMContentLoaded', function() {
     + '#refresh-btn:hover{background:rgba(45,212,191,0.25);border-color:#2dd4bf;}'
     + '#refresh-btn:disabled{cursor:wait;}'
     + '#refresh-status{font-size:9px;color:var(--muted);}'
-    // Mobile optimisations
+    // === DMX V2 === Pulsation niveau 5 EXTREMUM ABSOLU
+    + '@keyframes dmxPulse5{0%,100%{box-shadow:0 0 0 0 rgba(244,63,94,0.4),inset 0 0 0 1px rgba(244,63,94,0.3);}50%{box-shadow:0 0 18px 3px rgba(244,63,94,0.6),inset 0 0 0 2px rgba(244,63,94,0.5);}}'
+    + '.dmx-pulse-5{animation:dmxPulse5 2.5s ease-in-out infinite;}'
+    // Halo niveau 4 EXTRÊME
+    + '@keyframes dmxPulse4{0%,100%{box-shadow:0 0 0 0 rgba(167,139,250,0.3);}50%{box-shadow:0 0 14px 2px rgba(167,139,250,0.5);}}'
+    + '.dmx-pulse-4{animation:dmxPulse4 3s ease-in-out infinite;}'
+    // DMX containers
+    + '.dmx-donut-wrap{position:relative;width:100%;height:90px;margin:6px 0;}'
+    + '.dmx-donut-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;}'
+    + '.dmx-donut-center .dm-big{font-size:13px;font-weight:800;line-height:1.1;}'
+    + '.dmx-donut-center .dm-small{font-size:8px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;}'
+    + '.dmx-gauge-wrap{position:relative;width:100%;height:70px;margin-bottom:6px;}'
+    + '.dmx-gauge-center{position:absolute;top:70%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;}'
+    + '.dmx-gauge-center .dm-big{font-size:20px;font-weight:800;line-height:1;font-family:var(--display);}'
+    + '.dmx-gauge-center .dm-small{font-size:8px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-top:2px;}'
+    + '.dmx-spark-wrap{position:relative;width:100%;height:36px;margin-top:8px;}'
+    + '.dmx-spark-label{display:flex;justify-content:space-between;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px;}'
+    // Mobile
     + '@media(max-width:768px){'
-    // Topbar empilée
     + '.topbar{flex-direction:column;align-items:flex-start;gap:8px;padding:10px 12px;}'
     + '.topbar>div{width:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px;}'
-    // Logo plus petit
     + '.logo{font-size:16px;}'
-    // Tabs scrollables avec zone tactile agrandie
     + '.tabs-bar{gap:0;padding:0;-webkit-overflow-scrolling:touch;}'
     + '.tab-btn{padding:12px 10px;font-size:11px;min-height:44px;}'
-    // Grille prix : 3 colonnes sur mobile au lieu de 8
     + '.g8{grid-template-columns:repeat(3,1fr)!important;gap:6px;}'
-    // Cards prix plus grandes et lisibles
     + '.pi{padding:10px 6px;}'
     + '.pi .plbl{font-size:10px;}'
     + '.pi .pval{font-size:16px;}'
     + '.pi .pchg{font-size:11px;}'
-    // Grilles 2 et 3 colonnes → 1 colonne
     + '.g2{grid-template-columns:1fr!important;}'
     + '.g3{grid-template-columns:1fr!important;}'
     + '.g4{grid-template-columns:1fr 1fr!important;}'
-    // Phases FOMC
     + '.phases{grid-template-columns:1fr!important;}'
-    // Tableaux scrollables
     + 'table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;}'
-    // Sliders plus grands pour tactile
     + 'input[type=range]{height:6px;}'
     + 'input[type=range]::-webkit-slider-thumb{width:20px;height:20px;}'
     + '.slider-row{padding:4px 0;}'
     + '.slider-row label{font-size:11px;min-width:90px;}'
     + '.slider-row span{font-size:12px;}'
-    // Pair cards
     + '.pair-card{padding:12px 10px;}'
-    // Section labels
     + '.slbl{font-size:10px;margin:12px 0 6px;}'
-    // Cards générales
     + '.card{padding:12px 10px;margin-bottom:10px;}'
     + '.ctitle{font-size:10px;}'
-    // Verdict
     + '.verdict{font-size:12px;padding:10px;}'
-    // Bouton refresh plus gros sur mobile
     + '#refresh-btn{padding:8px 14px;font-size:13px;min-height:40px;}'
-    // Badge
     + '.badge{font-size:10px;padding:3px 8px;}'
-    // Score display
     + '.ep-grid{grid-template-columns:1fr!important;}'
+    // DMX mobile : donuts plus petits
+    + '.dmx-donut-wrap{height:75px;}'
+    + '.dmx-gauge-wrap{height:55px;}'
+    + '.dmx-donut-center .dm-big{font-size:11px;}'
+    + '.dmx-gauge-center .dm-big{font-size:17px;}'
     + '}'
     // Petit écran (< 400px)
     + '@media(max-width:400px){'
@@ -389,7 +594,6 @@ window.addEventListener('DOMContentLoaded', function() {
   if (topbar) {
     var rightSide = topbar.querySelector('div:last-child');
     if (rightSide) {
-      // Ajouter un id à l'heure pour la mettre à jour
       var spans = rightSide.querySelectorAll('span');
       spans.forEach(function(span) {
         if (span.textContent.includes('NCT') || span.textContent.includes('AEDT')) {
@@ -404,7 +608,7 @@ window.addEventListener('DOMContentLoaded', function() {
     }
   }
 
-  // Horloge live qui tourne toutes les secondes
+  // Horloge live
   function updateClock() {
     var topbarTime = document.getElementById('topbar-time');
     if (topbarTime) {
@@ -416,10 +620,10 @@ window.addEventListener('DOMContentLoaded', function() {
       }) + ' NCT';
     }
   }
-  setInterval(updateClock, 60000); // Mise à jour chaque minute
-  updateClock(); // Première mise à jour immédiate
+  setInterval(updateClock, 60000);
+  updateClock();
 
-  // Init price grid avec BTC
+  // Init price grid
   var PAIRS = [
     ['AUD/JPY','AUD/JPY'], ['NZD/JPY','NZD/JPY'], ['AUD/USD','AUD/USD'],
     ['DXY','DXY'], ['Gold','Gold XAU'], ['WTI','WTI Crude'],
@@ -444,6 +648,9 @@ window.addEventListener('DOMContentLoaded', function() {
     var txt = window.MACRODESK_CLAUDE.replace(/^```html\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'');
     cc.innerHTML = txt;
   }
+
+  // === NOUVEAU V2 : Rendu DMX après un court délai pour s'assurer que les canvas sont prêts ===
+  setTimeout(renderDMX, 100);
 
   // Dot Plot
   var dp = document.getElementById('dotPlotChart');
