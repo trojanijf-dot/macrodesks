@@ -1,0 +1,2893 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MacroDesk · CSI V3.7 · Force des devises</title>
+<style>
+:root {
+  --bg-primary: #0a0e1a;
+  --bg-secondary: #111624;
+  --bg-tertiary: #1a2033;
+  --bg-elevated: #222a42;
+  --border: #2a3248;
+  --border-light: #3a4563;
+  --text-primary: #e8ecf4;
+  --text-secondary: #9aa5bd;
+  --text-muted: #6b7490;
+  --accent: #4a9eff;
+  --green: #26d07c;
+  --red: #ff4757;
+  --yellow: #ffb84a;
+  --purple: #b084ff;
+  --grid: rgba(255,255,255,0.04);
+  --crosshair: rgba(255,255,255,0.25);
+  --shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.app { display: grid; grid-template-rows: 48px 40px auto 1fr; height: 100vh; }
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 20px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.brand-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+.brand-title { font-size: 14px; }
+.brand-sub { color: var(--text-muted); font-size: 11px; font-weight: 400; margin-left: 4px; }
+
+.session-info { display: flex; gap: 8px; font-size: 11px; }
+.session-badge {
+  padding: 3px 10px; border-radius: 4px;
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.session-badge.active {
+  background: rgba(38, 208, 124, 0.1);
+  border-color: var(--green); color: var(--green);
+}
+
+.toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.tf-group, .pair-group { display: flex; gap: 4px; align-items: center; }
+.tf-label {
+  font-size: 10px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.8px;
+  margin-right: 8px; font-weight: 600;
+}
+.divider { width: 1px; height: 20px; background: var(--border); margin: 0 10px; }
+
+button.pill {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 4px 10px; font-size: 11px;
+  border-radius: 4px; cursor: pointer;
+  font-family: inherit; font-weight: 500;
+  transition: all 0.15s; white-space: nowrap;
+}
+button.pill:hover {
+  border-color: var(--border-light);
+  color: var(--text-primary); background: var(--bg-tertiary);
+}
+button.pill.active {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+
+.toolbar-right { margin-left: auto; display: flex; gap: 6px; padding-left: 16px; }
+.icon-btn {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 4px; cursor: pointer;
+}
+.icon-btn:hover {
+  border-color: var(--border-light);
+  color: var(--text-primary); background: var(--bg-tertiary);
+}
+.icon-btn svg { width: 14px; height: 14px; }
+
+.main { display: grid; grid-template-columns: 220px 1fr 240px; overflow: hidden; }
+
+.pair-panel, .legend-panel { background: var(--bg-secondary); overflow-y: auto; }
+.pair-panel { border-right: 1px solid var(--border); }
+.legend-panel { border-left: 1px solid var(--border); }
+.panel-header {
+  padding: 10px 14px; font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0;
+  background: var(--bg-secondary); z-index: 2;
+}
+.pair-row {
+  display: grid; grid-template-columns: 1fr auto;
+  gap: 8px; align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(42, 50, 72, 0.4);
+  cursor: pointer;
+}
+.pair-row:hover { background: var(--bg-tertiary); }
+.pair-row.hidden { opacity: 0.4; }
+.pair-name { font-weight: 600; font-size: 12px; }
+.pair-price { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.pair-change {
+  font-size: 10px; padding: 1px 5px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums; font-weight: 600;
+}
+.pair-change.up { background: rgba(38, 208, 124, 0.15); color: var(--green); }
+.pair-change.down { background: rgba(255, 71, 87, 0.15); color: var(--red); }
+
+.div-badge {
+  display: inline-block; font-size: 9px;
+  padding: 1px 4px; border-radius: 2px;
+  margin-left: 4px; font-weight: 700;
+}
+.div-badge.p1 { background: var(--red); color: #fff; }
+.div-badge.p2 { background: var(--yellow); color: #000; }
+.div-badge.p3 { background: var(--purple); color: #fff; }
+
+.legend-row {
+  display: grid; grid-template-columns: 14px 1fr auto;
+  gap: 8px; align-items: center;
+  padding: 7px 12px; cursor: pointer;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(42, 50, 72, 0.3);
+}
+.legend-row:hover { background: var(--bg-tertiary); }
+.legend-row.hidden { opacity: 0.35; }
+.legend-swatch { width: 10px; height: 10px; border-radius: 2px; }
+.legend-name { font-weight: 500; }
+.legend-value { font-variant-numeric: tabular-nums; font-size: 10px; }
+
+.chart-area { position: relative; background: var(--bg-primary); overflow: hidden; }
+.chart-header { position: absolute; top: 12px; left: 16px; z-index: 10; pointer-events: none; }
+.chart-title { font-size: 16px; font-weight: 600; }
+.chart-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+#chart { width: 100%; height: 100%; display: block; cursor: crosshair; user-select: none; }
+
+.grid-line { stroke: var(--grid); stroke-dasharray: 2 3; }
+.axis-line { stroke: var(--border); }
+.axis-text { fill: var(--text-muted); font-size: 10px; }
+.axis-label {
+  fill: var(--text-secondary); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.8px;
+}
+.zero-line { stroke: var(--border-light); stroke-width: 1; stroke-dasharray: 4 3; }
+.pair-line {
+  fill: none; stroke-width: 1.5; opacity: 0.9;
+  transition: opacity 0.1s, stroke-width 0.1s;
+}
+.pair-line.dim { opacity: 0.12; }
+.pair-line.highlight { stroke-width: 2.5; opacity: 1; }
+.crosshair-line {
+  stroke: var(--crosshair); stroke-width: 1;
+  stroke-dasharray: 3 3; pointer-events: none;
+}
+.crosshair-label { fill: var(--text-primary); font-size: 10px; font-variant-numeric: tabular-nums; }
+.crosshair-label-bg { fill: var(--bg-elevated); stroke: var(--border-light); }
+.axis-hitzone { fill: transparent; }
+.axis-hitzone.y { cursor: ns-resize; }
+.axis-hitzone.x { cursor: ew-resize; }
+
+.tooltip {
+  position: absolute;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11px;
+  pointer-events: none;
+  box-shadow: var(--shadow);
+  z-index: 20;
+  min-width: 200px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.tooltip.visible { opacity: 1; }
+.tooltip-header {
+  font-weight: 600; margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; gap: 10px;
+}
+.tooltip-row {
+  display: grid; grid-template-columns: 10px 1fr auto;
+  gap: 6px; align-items: center;
+  padding: 2px 0;
+  font-variant-numeric: tabular-nums;
+}
+.tooltip-swatch { width: 8px; height: 8px; border-radius: 2px; }
+
+.status-bar {
+  position: relative;
+  display: flex; gap: 14px; flex-wrap: wrap;
+  font-size: 10px; color: var(--text-muted);
+  padding: 6px 16px 8px 16px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
+  pointer-events: none;
+}
+.status-item strong { color: var(--text-secondary); font-weight: 600; }
+
+.div-panel {
+  position: absolute; top: 60px; right: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11px; z-index: 15;
+  box-shadow: var(--shadow);
+  max-width: 260px;
+  display: none;
+}
+.div-panel.visible { display: block; }
+.div-panel h4 {
+  font-size: 10px;
+  text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-muted);
+  margin-bottom: 8px; font-weight: 600;
+}
+.div-item {
+  display: grid; grid-template-columns: auto 1fr auto;
+  gap: 8px; padding: 6px 0;
+  align-items: center; cursor: pointer;
+}
+.div-item + .div-item { border-top: 1px solid rgba(42, 50, 72, 0.5); }
+.div-item:hover { background: rgba(255,255,255,0.03); }
+
+/* ═══════════════════════════════════════════
+   V2 : Mini-charts paires
+   ═══════════════════════════════════════════ */
+.pairs-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 12px 16px 16px 16px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
+}
+.pair-mini {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--border-light);
+  transition: all 0.2s;
+}
+.pair-mini:hover { border-left-color: var(--accent); }
+.pair-mini[data-verdict="bullish"] { border-left-color: var(--green); }
+.pair-mini[data-verdict="bearish"] { border-left-color: var(--red); }
+.pair-mini[data-verdict="divergence"] { border-left-color: var(--yellow); }
+.pair-mini-head {
+  display: flex; align-items: baseline;
+  gap: 8px; margin-bottom: 6px;
+}
+.pair-mini-name {
+  font-family: "Syne", sans-serif;
+  font-size: 14px; font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--text-primary);
+}
+.pair-mini-price {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px; font-weight: 700;
+  color: var(--text-primary);
+  margin-left: auto;
+}
+.pair-mini-change {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px; font-weight: 600;
+  color: var(--text-muted);
+}
+.pair-mini-change.up { color: var(--green); }
+.pair-mini-change.down { color: var(--red); }
+.pair-mini-chart {
+  width: 100%; height: 85px;
+  display: block;
+  margin-bottom: 6px;
+}
+.pair-mini-foot {
+  display: flex; justify-content: space-between;
+  font-size: 10px; color: var(--text-muted);
+  font-family: "JetBrains Mono", monospace;
+}
+.pair-mini-verdict {
+  font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1px; font-size: 9px;
+}
+.pair-mini-verdict.bullish { color: var(--green); }
+.pair-mini-verdict.bearish { color: var(--red); }
+.pair-mini-verdict.divergence { color: var(--yellow); }
+.pair-mini-verdict.neutral { color: var(--text-muted); }
+@media (max-width: 900px) {
+  .pairs-row { grid-template-columns: 1fr; }
+}
+
+/* ═══════════════════════════════════════════
+   Crosshair V4 TradingView-style
+   ═══════════════════════════════════════════ */
+.ch-dot {
+  stroke: var(--bg-primary);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+.crosshair-label-bg {
+  fill: var(--bg-elevated);
+  stroke: var(--border-light);
+  stroke-width: 1;
+}
+.crosshair-label-bg.overbought {
+  fill: rgba(38, 208, 124, 0.95);
+  stroke: var(--green);
+}
+.crosshair-label-bg.oversold {
+  fill: rgba(255, 71, 87, 0.95);
+  stroke: var(--red);
+}
+.crosshair-label-bg.time {
+  fill: rgba(255, 255, 255, 0.95);
+  stroke: var(--border-light);
+}
+.crosshair-label {
+  fill: var(--text-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.crosshair-label.on-accent { fill: #000; }
+
+.tooltip { min-width: 240px; }
+.tooltip-row {
+  grid-template-columns: 16px 10px 1fr auto auto;
+  gap: 6px;
+}
+.tooltip-rank {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tooltip-delta {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+  margin-left: 2px;
+}
+.tooltip-delta.up   { color: var(--green); }
+.tooltip-delta.down { color: var(--red); }
+
+.pair-mini-chart { position: relative; }
+.pair-mini { position: relative; }
+.mini-crosshair {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 1px;
+  background: var(--crosshair);
+  pointer-events: none;
+  display: none;
+  z-index: 5;
+  box-shadow: 0 0 0 0.5px rgba(255,255,255,0.1);
+}
+.mini-crosshair.visible { display: block; }
+.mini-crosshair-label {
+  position: absolute;
+  bottom: 2px;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  font-size: 9px;
+  font-family: "JetBrains Mono", monospace;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════
+   Mode Comparaison V5
+   ═══════════════════════════════════════════ */
+.comparison-bar {
+  display: none;
+  grid-template-columns: auto 1fr;
+  gap: 10px 16px;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.comparison-bar.visible { display: grid; }
+.comparison-bar-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-weight: 700;
+  padding-right: 4px;
+}
+.comparison-bar-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.comparison-bar-buttons button.pill {
+  padding: 3px 9px;
+  font-size: 10px;
+}
+.comparison-bar-buttons button.pill.active-curr {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.comparison-bar-buttons button.pill.active-pair {
+  background: #ffb84a;
+  border-color: #ffb84a;
+  color: #000;
+}
+.comparison-bar-buttons button.pill.active-corr {
+  background: #26d07c;
+  border-color: #26d07c;
+  color: #000;
+}
+.comparison-badge {
+  position: absolute;
+  top: 48px;
+  left: 16px;
+  z-index: 12;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  box-shadow: var(--shadow);
+}
+.comparison-badge.visible { display: inline-flex; }
+.comparison-badge.confluence {
+  border-color: var(--green);
+  background: rgba(38, 208, 124, 0.12);
+  color: var(--green);
+}
+.comparison-badge.divergence {
+  border-color: var(--red);
+  background: rgba(255, 71, 87, 0.12);
+  color: var(--red);
+}
+.comparison-badge.neutral {
+  border-color: var(--border-light);
+  color: var(--text-secondary);
+}
+.comparison-badge-icon { font-size: 14px; }
+.comparison-badge-meta {
+  font-size: 9px;
+  color: var(--text-muted);
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  margin-left: 4px;
+}
+.cmp-line-csi {
+  fill: none;
+  stroke-width: 2;
+  opacity: 0.95;
+}
+.cmp-line-price {
+  fill: none;
+  stroke-width: 2;
+  opacity: 0.95;
+  stroke-dasharray: none;
+}
+.cmp-divergence-zone {
+  fill: rgba(255, 71, 87, 0.08);
+  pointer-events: none;
+}
+.cmp-confluence-zone {
+  fill: rgba(38, 208, 124, 0.06);
+  pointer-events: none;
+}
+.cmp-axis-text-right { fill: #ffb84a; font-size: 10px; font-variant-numeric: tabular-nums; }
+.cmp-axis-label-right { fill: #ffb84a; font-size: 10px; letter-spacing: 0.8px; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-dot"></div>
+      <div>
+        <span class="brand-title">MacroDesk</span>
+        <span class="brand-sub">· CSI V3.7 · Force des devises Yahoo</span>
+      </div>
+    </div>
+    <div class="session-info">
+      <span class="session-badge" id="session-sydney">Sydney</span>
+      <span class="session-badge" id="session-tokyo">Tokyo</span>
+      <span class="session-badge" id="session-london">London</span>
+      <span class="session-badge" id="session-ny">New York</span>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="tf-group">
+      <span class="tf-label">TF</span>
+      <button class="pill tf-btn" data-tf="15m">15m</button>
+      <button class="pill tf-btn" data-tf="1H">1H</button>
+      <button class="pill tf-btn active" data-tf="4H">4H</button>
+      <button class="pill tf-btn" data-tf="Daily">Daily</button>
+    </div>
+    <div class="divider"></div>
+    <div class="pair-group">
+      <span class="tf-label">Groupe</span>
+      <button class="pill group-btn active" data-group="all">Tous (8)</button>
+      <button class="pill group-btn" data-group="tokyo">Tokyo (4)</button>
+      <button class="pill group-btn" data-group="majors">Majors (5)</button>
+      <button class="pill group-btn" data-group="commodity">Commodity (3)</button>
+      <button class="pill group-btn" data-group="havens">Havens (2)</button>
+      <button class="pill group-btn" data-group="comparison" id="btn-comparison">⊕ Comparaison</button>
+    </div>
+    <div class="divider"></div>
+    <div class="pair-group">
+      <span class="tf-label">Mode</span>
+      <button class="pill mode-btn active" data-mode="base100" title="Base 100 — rebase auto sur fenêtre visible, scores comparables entre TFs">Base 100</button>
+      <button class="pill mode-btn" data-mode="pct" title="%Change — magnitude réelle, non comparable entre TFs">%Change</button>
+    </div>
+    <div class="toolbar-right">
+      <button class="icon-btn" id="btn-divs" title="Divergences">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 6-6"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-reset" title="Reset (R)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-fullscreen" title="Fullscreen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Barre de sélection Mode Comparaison -->
+  <div class="comparison-bar" id="comparison-bar">
+    <span class="comparison-bar-label">Devise</span>
+    <div class="comparison-bar-buttons" id="cmp-currency-buttons"></div>
+    <span class="comparison-bar-label">Paire</span>
+    <div class="comparison-bar-buttons" id="cmp-pair-buttons"></div>
+    <span class="comparison-bar-label">Corr</span>
+    <div class="comparison-bar-buttons" id="cmp-corr-buttons">
+      <button class="pill active-corr" data-corr="spearman">Spearman</button>
+      <button class="pill" data-corr="pearson">Pearson</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="pair-panel">
+      <div class="panel-header">Devises · <span id="pair-count">8</span></div>
+      <div id="pair-list"></div>
+    </div>
+
+    <div class="chart-area">
+      <div class="chart-header">
+        <div class="chart-title">Currency Strength Index</div>
+        <div class="chart-sub" id="chart-sub">4H · 8 devises · 180 points</div>
+      </div>
+
+      <div class="comparison-badge" id="comparison-badge">
+        <span class="comparison-badge-icon" id="cmp-badge-icon">—</span>
+        <span id="cmp-badge-text">NEUTRE</span>
+        <span class="comparison-badge-meta" id="cmp-badge-meta">initialisation…</span>
+      </div>
+
+      <div class="div-panel" id="div-panel">
+        <h4>Divergences actives</h4>
+        <div id="div-list"></div>
+      </div>
+
+      <svg id="chart" xmlns="http://www.w3.org/2000/svg"></svg>
+
+      <div class="status-bar">
+        <span class="status-item"><strong>Pan X:</strong> drag chart</span>
+        <span class="status-item"><strong>Zoom Y:</strong> drag ou scroll axe Y</span>
+        <span class="status-item"><strong>Zoom X:</strong> drag ou scroll axe X</span>
+        <span class="status-item"><strong>Reset:</strong> R / dblclick</span>
+        <span class="status-item" id="status-cursor"></span>
+      </div>
+
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+
+    <div class="legend-panel">
+      <div class="panel-header">Légende · Force</div>
+      <div id="legend"></div>
+    </div>
+  </div>
+
+  <div class="pairs-row" id="pairs-row">
+    <div class="pair-mini" data-pair="AUD/JPY">
+      <div class="pair-mini-head">
+        <span class="pair-mini-name">AUD/JPY</span>
+        <span class="pair-mini-price" id="pm-audjpy-price">—</span>
+        <span class="pair-mini-change" id="pm-audjpy-chg">—</span>
+      </div>
+      <svg class="pair-mini-chart" id="pm-audjpy-chart" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="pair-mini-foot">
+        <span id="pm-audjpy-hl">—</span>
+        <span id="pm-audjpy-verdict" class="pair-mini-verdict">—</span>
+      </div>
+    </div>
+    <div class="pair-mini" data-pair="NZD/JPY">
+      <div class="pair-mini-head">
+        <span class="pair-mini-name">NZD/JPY</span>
+        <span class="pair-mini-price" id="pm-nzdjpy-price">—</span>
+        <span class="pair-mini-change" id="pm-nzdjpy-chg">—</span>
+      </div>
+      <svg class="pair-mini-chart" id="pm-nzdjpy-chart" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="pair-mini-foot">
+        <span id="pm-nzdjpy-hl">—</span>
+        <span id="pm-nzdjpy-verdict" class="pair-mini-verdict">—</span>
+      </div>
+    </div>
+    <div class="pair-mini" data-pair="AUD/USD">
+      <div class="pair-mini-head">
+        <span class="pair-mini-name">AUD/USD</span>
+        <span class="pair-mini-price" id="pm-audusd-price">—</span>
+        <span class="pair-mini-change" id="pm-audusd-chg">—</span>
+      </div>
+      <svg class="pair-mini-chart" id="pm-audusd-chart" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="pair-mini-foot">
+        <span id="pm-audusd-hl">—</span>
+        <span id="pm-audusd-verdict" class="pair-mini-verdict">—</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+const CURRENCIES = [
+  { symbol: 'USD', color: '#4a9eff', group: ['majors', 'tokyo'] },
+  { symbol: 'EUR', color: '#b084ff', group: ['majors'] },
+  { symbol: 'JPY', color: '#ff4757', group: ['majors', 'tokyo', 'havens'] },
+  { symbol: 'GBP', color: '#ce93d8', group: ['majors'] },
+  { symbol: 'AUD', color: '#26d07c', group: ['majors', 'tokyo', 'commodity'] },
+  { symbol: 'NZD', color: '#ffb84a', group: ['tokyo', 'commodity'] },
+  { symbol: 'CAD', color: '#00d4c4', group: ['commodity'] },
+  { symbol: 'CHF', color: '#f48fb1', group: ['havens'] }
+];
+
+const PAIRS = [
+  { symbol: 'EURUSD', base: 'EUR', quote: 'USD', vol: 0.35 },
+  { symbol: 'GBPUSD', base: 'GBP', quote: 'USD', vol: 0.45 },
+  { symbol: 'AUDUSD', base: 'AUD', quote: 'USD', vol: 0.45 },
+  { symbol: 'NZDUSD', base: 'NZD', quote: 'USD', vol: 0.4 },
+  { symbol: 'USDJPY', base: 'USD', quote: 'JPY', vol: 0.4 },
+  { symbol: 'USDCHF', base: 'USD', quote: 'CHF', vol: 0.35 },
+  { symbol: 'USDCAD', base: 'USD', quote: 'CAD', vol: 0.3 },
+  { symbol: 'EURJPY', base: 'EUR', quote: 'JPY', vol: 0.5 },
+  { symbol: 'GBPJPY', base: 'GBP', quote: 'JPY', vol: 0.7 },
+  { symbol: 'AUDJPY', base: 'AUD', quote: 'JPY', vol: 0.6 },
+  { symbol: 'NZDJPY', base: 'NZD', quote: 'JPY', vol: 0.55 },
+  { symbol: 'CHFJPY', base: 'CHF', quote: 'JPY', vol: 0.35 },
+  { symbol: 'CADJPY', base: 'CAD', quote: 'JPY', vol: 0.45 },
+  { symbol: 'EURGBP', base: 'EUR', quote: 'GBP', vol: 0.25 },
+  { symbol: 'EURCHF', base: 'EUR', quote: 'CHF', vol: 0.25 },
+  { symbol: 'EURCAD', base: 'EUR', quote: 'CAD', vol: 0.3 },
+  { symbol: 'AUDNZD', base: 'AUD', quote: 'NZD', vol: 0.3 }
+];
+
+const TF_CONFIG = {
+  '15m':   { points: 400, stepMs: 15*60*1000,   label: '7 jours' },
+  '1H':    { points: 300, stepMs: 60*60*1000,   label: '15 jours' },
+  '4H':    { points: 240, stepMs: 4*60*60*1000, label: '60 jours' },
+  'Daily': { points: 128, stepMs: 24*60*60*1000,label: '6 mois' }
+};
+
+const state = {
+  tf: '4H',
+  group: 'all',
+  displayMode: 'base100',
+  pairData: {},
+  data: {},
+  divergences: [],
+  visible: new Set(CURRENCIES.map(c => c.symbol)),
+  hovered: null,
+  xDomain: null,
+  yDomain: null,
+  rawData: null,
+  csiAnalysis: null,
+  lastUpdate: null,
+  loadError: null,
+  // Mode Comparaison V5
+  comparisonMode: false,
+  comparisonCurrency: 'AUD',    // Devise CSI sélectionnée
+  comparisonPair: 'AUDJPY',     // Paire Yahoo sélectionnée
+  comparisonCorrMethod: 'spearman',  // 'spearman' | 'pearson'
+  prevGroup: 'all'              // Pour revenir au groupe précédent en quittant Comparaison
+};
+
+async function loadMacroData() {
+  try {
+    const sources = [
+      'data/macrodata.json?t=' + Date.now(),
+      '/macrodesks/data/macrodata.json?t=' + Date.now()
+    ];
+    let json = null;
+    for (const url of sources) {
+      try {
+        const response = await fetch(url, { cache: 'no-store' });
+        if (response.ok) { json = await response.json(); break; }
+      } catch(e) { /* try next */ }
+    }
+    if (!json) throw new Error('Aucune source JSON accessible');
+    const payload = json.forceDevises || json;
+    if (!payload.timeSeries) throw new Error('timeSeries manquant dans macrodata.json');
+    state.rawData = payload;
+    state.csiAnalysis = payload.csiAnalysis || null;
+    state.lastUpdate = payload.last_update || payload._generated || null;
+    console.log('[CSI V3.7] Données chargées :', {
+      version: payload.version,
+      last_update: state.lastUpdate,
+      timeSeries: Object.keys(payload.timeSeries).map(tf => ({
+        tf: tf,
+        points: (payload.timeSeries[tf] || []).length
+      }))
+    });
+    return true;
+  } catch(err) {
+    state.loadError = err.message;
+    console.error('[CSI V3.7] Erreur chargement :', err);
+    return false;
+  }
+}
+
+function buildData() {
+  if (!state.rawData || !state.rawData.timeSeries) {
+    state.data = {};
+    state.divergences = [];
+    return;
+  }
+  const series = state.rawData.timeSeries[state.tf] || [];
+  if (series.length === 0) {
+    console.warn('[CSI V3.7] Série vide pour TF=' + state.tf);
+    state.data = {};
+    state.divergences = [];
+    return;
+  }
+  state.data = {};
+  CURRENCIES.forEach(c => {
+    const currencyData = [];
+    const seenT = new Set();
+    series.forEach((pt, i) => {
+      if (!pt || typeof pt.t !== 'number') return;
+      let score;
+      if (pt.scores && typeof pt.scores === 'object') {
+        score = pt.scores[c.symbol];
+      } else {
+        score = pt[c.symbol];
+      }
+      if (typeof score !== 'number' || isNaN(score) || !isFinite(score)) return;
+      if (score < 0) score = 0;
+      if (score > 100) score = 100;
+      let tMs = pt.t;
+      if (tMs < 1e11) tMs = tMs * 1000;
+      if (seenT.has(tMs)) return;
+      seenT.add(tMs);
+      const scale = SCALE_BY_TF[state.tf] || 1;
+      const v = ((score - 50) / 50) * scale;
+      currencyData.push({ t: tMs, v: v, idx: i, score: score });
+    });
+    currencyData.sort((a, b) => a.t - b.t);
+    if (currencyData.length >= 3) {
+      const smoothed = currencyData.map((pt, i) => {
+        const prev = currencyData[i - 1] || pt;
+        const next = currencyData[i + 1] || pt;
+        const vAvg = (prev.v + pt.v * 2 + next.v) / 4;
+        const scoreAvg = (prev.score + pt.score * 2 + next.score) / 4;
+        return { t: pt.t, v: vAvg, idx: pt.idx, score: scoreAvg };
+      });
+      currencyData.length = 0;
+      currencyData.push(...smoothed);
+    }
+    currencyData.forEach((pt, i) => { pt.idx = i; });
+    if (currencyData.length > 0) state.data[c.symbol] = currencyData;
+  });
+  const diagnostic = {};
+  CURRENCIES.forEach(c => {
+    diagnostic[c.symbol] = state.data[c.symbol] ? state.data[c.symbol].length : 0;
+  });
+  console.log('[CSI V3.7] TF=' + state.tf + ' points par devise :', diagnostic);
+  state.divergences = [];
+  if (state.csiAnalysis && Array.isArray(state.csiAnalysis.divergences)) {
+    state.csiAnalysis.divergences.forEach(dv => {
+      if (!dv.currency) return;
+      let typeCode = 'P2';
+      const t = (dv.type || '').toUpperCase();
+      if (t.includes('AFFAIBLISSEMENT') || t.includes('BEARISH') || t.includes('REGULAR')) {
+        typeCode = 'P1';
+      } else if (t.includes('REDRESSEMENT') || t.includes('BULLISH') || t.includes('HIDDEN')) {
+        typeCode = 'P2';
+      } else if (t.includes('15M') || t.includes('ESSOUFFLEMENT') || t.includes('RETOURNEMENT')
+                 || t.includes('WEAK') || t.includes('CONFLUENCE')) {
+        typeCode = 'P3';
+      }
+      const s = state.data[dv.currency];
+      if (!s || s.length < 5) return;
+      const endIdx = s.length - 1;
+      const startIdx = Math.max(0, Math.floor(s.length * 0.75));
+      state.divergences.push({
+        kind: 'currency',
+        symbol: dv.currency,
+        type: typeCode,
+        label: dv.interpretation || dv.type || 'Divergence',
+        rawType: dv.type,
+        severity: dv.severity,
+        startIdx: startIdx,
+        endIdx: endIdx
+      });
+    });
+  }
+}
+
+function el(name, attrs, children) {
+  const e = document.createElementNS(SVG_NS, name);
+  if (attrs) for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
+  if (children != null) {
+    (Array.isArray(children) ? children : [children]).forEach(c => {
+      if (c == null) return;
+      e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    });
+  }
+  return e;
+}
+
+function matchesGroup(p) {
+  if (!p) return false;
+  if (state.group === 'all') return true;
+  return p.group.includes(state.group);
+}
+
+const SCALE_BY_TF = {
+  '15m':   0.2,
+  '1H':    0.3,
+  '4H':    0.8,
+  'Daily': 1.5
+};
+
+const pivots = {};
+
+function rebuildPivots() {
+  for (const sym in pivots) delete pivots[sym];
+  if (state.displayMode !== 'pct') return;
+  if (!state.xDomain) return;
+  const [x0] = state.xDomain;
+  CURRENCIES.forEach(c => {
+    if (!state.visible.has(c.symbol) || !matchesGroup(c)) return;
+    const s = state.data[c.symbol];
+    if (!s) return;
+    let pivot = null;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i].t >= x0) { pivot = s[i]; break; }
+    }
+    if (!pivot) pivot = s[s.length - 1];
+    pivots[c.symbol] = pivot.v;
+  });
+}
+
+function clip(v, min, max) {
+  return v < min ? min : (v > max ? max : v);
+}
+
+function transformValue(rawV, symbol) {
+  if (state.displayMode === 'base100') {
+    const scale = SCALE_BY_TF[state.tf] || 1;
+    return clip(50 + (rawV / scale) * 50, 0, 100);
+  }
+  const pivot = pivots[symbol];
+  if (pivot == null) return 0;
+  return rawV - pivot;
+}
+
+function referenceValue() {
+  return state.displayMode === 'base100' ? 50 : 0;
+}
+
+function formatValue(v, opts) {
+  const decimals = (opts && opts.decimals != null) ? opts.decimals : 2;
+  if (state.displayMode === 'base100') {
+    return v.toFixed(decimals);
+  }
+  return (v > 0 ? '+' : '') + v.toFixed(decimals) + '%';
+}
+
+function colorForValue(v) {
+  if (state.displayMode === 'base100') {
+    if (v >= 70) return '#26d07c';
+    if (v >= 50) return '#9aa5bd';
+    if (v > 30)  return '#ffb84a';
+    return '#ff4757';
+  }
+  return v >= 0 ? '#26d07c' : '#ff4757';
+}
+
+function formatTime(t) {
+  const d = new Date(t);
+  const pad = n => String(n).padStart(2,'0');
+  if (state.tf === 'Daily') return pad(d.getDate()) + '/' + pad(d.getMonth()+1);
+  if (state.tf === '4H') return pad(d.getDate()) + '/' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + 'h';
+  return pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function formatTimeFull(t) {
+  const d = new Date(t);
+  const pad = n => String(n).padStart(2,'0');
+  return pad(d.getDate()) + '/' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+// ═══════════════════════════════════════════════════════════════
+// V5 — MODULE COMPARAISON : corrélation, rôle devise, prix
+// ═══════════════════════════════════════════════════════════════
+
+// Cache des séries de prix par paire/TF (lazy-loaded depuis prices_history.json)
+const comparisonPricesCache = { data: null, loaded: false };
+
+async function loadComparisonPrices() {
+  if (comparisonPricesCache.loaded) return comparisonPricesCache.data;
+  try {
+    const res = await fetch('data/prices_history.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    comparisonPricesCache.data = json;
+    comparisonPricesCache.loaded = true;
+    return json;
+  } catch(e) {
+    console.warn('[CMP] Impossible de charger prices_history.json :', e.message);
+    comparisonPricesCache.loaded = true;
+    return null;
+  }
+}
+
+// Normalise un symbole de paire ("EURUSD" ou "AUDJPY=X") vers le format PAIRS.symbol
+function normalizePairSymbol(sym) {
+  if (!sym) return null;
+  return sym.replace('=X', '').replace('/', '').toUpperCase();
+}
+
+// Récupère base/quote depuis le PAIRS config
+function getPairInfo(pairSymbol) {
+  const norm = normalizePairSymbol(pairSymbol);
+  return PAIRS.find(p => p.symbol === norm) || null;
+}
+
+// Détermine le rôle d'une devise dans une paire
+// Retourne: 'base' | 'quote' | 'none'
+function getCurrencyRole(currency, pairSymbol) {
+  const info = getPairInfo(pairSymbol);
+  if (!info) return 'none';
+  if (info.base === currency) return 'base';
+  if (info.quote === currency) return 'quote';
+  return 'none';
+}
+
+// Récupère la série de prix pour une paire + TF donnés depuis prices_history.json
+// Le fichier contient pairsHistory avec format "AUD/JPY" (avec slash), on convertit
+function getPriceSeries(pairSymbol, tf) {
+  if (!comparisonPricesCache.data) return [];
+  const ph = comparisonPricesCache.data.pairsHistory;
+  if (!ph) return [];
+
+  const norm = normalizePairSymbol(pairSymbol);
+  // Cherche d'abord en format AUD/JPY puis AUDJPY
+  const info = getPairInfo(pairSymbol);
+  if (!info) return [];
+  const formatted = info.base + '/' + info.quote;
+
+  let series = ph[formatted] || ph[norm];
+  if (!series) return [];
+
+  // Si format multi-TF { '15m': [], '1H': [], ... }
+  if (!Array.isArray(series) && typeof series === 'object') {
+    series = series[tf] || [];
+  }
+  // Format legacy (flat array) = 4H uniquement
+  if (Array.isArray(series) && tf !== '4H' && !series[0]?.t) return [];
+  return Array.isArray(series) ? series : [];
+}
+
+// Corrélation de Pearson
+function pearsonCorrelation(xs, ys) {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 2) return 0;
+  let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+  for (let i = 0; i < n; i++) {
+    sx += xs[i]; sy += ys[i];
+    sxx += xs[i] * xs[i]; syy += ys[i] * ys[i];
+    sxy += xs[i] * ys[i];
+  }
+  const num = n * sxy - sx * sy;
+  const den = Math.sqrt((n * sxx - sx * sx) * (n * syy - sy * sy));
+  if (den === 0) return 0;
+  return num / den;
+}
+
+// Corrélation de Spearman : Pearson sur les rangs
+function spearmanCorrelation(xs, ys) {
+  const n = Math.min(xs.length, ys.length);
+  if (n < 2) return 0;
+  const rx = rankArray(xs.slice(0, n));
+  const ry = rankArray(ys.slice(0, n));
+  return pearsonCorrelation(rx, ry);
+}
+
+// Calcule les rangs avec gestion des ex-aequo (rang moyen)
+function rankArray(arr) {
+  const n = arr.length;
+  const indexed = arr.map((v, i) => ({ v: v, i: i }));
+  indexed.sort((a, b) => a.v - b.v);
+  const ranks = new Array(n);
+  let k = 0;
+  while (k < n) {
+    let j = k;
+    while (j + 1 < n && indexed[j + 1].v === indexed[k].v) j++;
+    const avgRank = (k + j) / 2 + 1;  // rang 1-indexed
+    for (let m = k; m <= j; m++) {
+      ranks[indexed[m].i] = avgRank;
+    }
+    k = j + 1;
+  }
+  return ranks;
+}
+
+// Aligne 2 séries par timestamp : pour chaque point de la série A, trouve le prix
+// le plus proche dans la série B. Retourne { forces: [], prices: [], times: [] }
+function alignSeries(csiSeries, priceSeries) {
+  if (!csiSeries || !priceSeries || csiSeries.length === 0 || priceSeries.length === 0) {
+    return { forces: [], prices: [], times: [] };
+  }
+  const forces = [], prices = [], times = [];
+  // Pour chaque point CSI, binary search dans priceSeries
+  priceSeries.sort((a, b) => a.t - b.t);
+  csiSeries.forEach(pt => {
+    // snap au prix le plus proche
+    let lo = 0, hi = priceSeries.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (priceSeries[mid].t < pt.t) lo = mid + 1; else hi = mid;
+    }
+    const a = priceSeries[lo];
+    const b = lo > 0 ? priceSeries[lo - 1] : null;
+    let pick = a;
+    if (b && Math.abs(b.t - pt.t) < Math.abs(a.t - pt.t)) pick = b;
+    // Tolérance : si l'écart est trop grand (> 2× stepMs de la TF), on ignore
+    const step = TF_CONFIG[state.tf]?.stepMs || 4 * 3600 * 1000;
+    if (Math.abs(pick.t - pt.t) > step * 2) return;
+    forces.push(pt.score != null ? pt.score : 50);
+    prices.push(pick.price);
+    times.push(pt.t);
+  });
+  return { forces: forces, prices: prices, times: times };
+}
+
+// Interprète la corrélation selon le rôle : retourne { verdict, icon, className }
+// verdict ∈ 'CONFLUENCE' | 'DIVERGENCE' | 'NEUTRE' | 'HORS LIEN'
+function interpretCorrelation(r, role) {
+  if (role === 'none') {
+    return { verdict: 'HORS LIEN', icon: '·', className: 'neutral',
+             detail: 'Devise non présente dans la paire' };
+  }
+  // Pour role='base' : corrélation positive attendue (force↑ → prix↑)
+  // Pour role='quote': corrélation négative attendue (force↑ → prix↓)
+  // On ajuste le signe pour avoir une métrique unifiée "alignement avec la théorie"
+  const aligned = role === 'base' ? r : -r;
+  const abs = Math.abs(aligned);
+  if (abs < 0.3) {
+    return { verdict: 'NEUTRE', icon: '—', className: 'neutral',
+             detail: 'Pas de corrélation significative' };
+  }
+  if (aligned >= 0.3) {
+    return { verdict: 'CONFLUENCE', icon: '✓', className: 'confluence',
+             detail: role === 'base' ? 'Force et prix alignés' : 'Force inverse prix (normal pour quote)' };
+  }
+  return { verdict: 'DIVERGENCE', icon: '⚠', className: 'divergence',
+           detail: 'Force et prix désalignés · possible retournement' };
+}
+
+// Calcul principal : corrélation sur la fenêtre visible (limite aux N derniers alignés)
+// Retourne { r, n, verdict, role, method }
+function computeComparisonCorrelation() {
+  const curr = state.comparisonCurrency;
+  const pair = state.comparisonPair;
+  const method = state.comparisonCorrMethod;
+  const WINDOW = 40;
+
+  const role = getCurrencyRole(curr, pair);
+  const csiData = state.data[curr] || [];
+  const priceSeries = getPriceSeries(pair, state.tf);
+
+  if (csiData.length === 0 || priceSeries.length === 0) {
+    return { r: null, n: 0, verdict: null, role: role, method: method };
+  }
+
+  const aligned = alignSeries(csiData, priceSeries);
+  // Prend les WINDOW derniers points
+  const n = Math.min(WINDOW, aligned.forces.length);
+  if (n < 5) {
+    return { r: null, n: n, verdict: null, role: role, method: method };
+  }
+  const forces = aligned.forces.slice(-n);
+  const prices = aligned.prices.slice(-n);
+  const r = method === 'spearman'
+    ? spearmanCorrelation(forces, prices)
+    : pearsonCorrelation(forces, prices);
+
+  const interp = interpretCorrelation(r, role);
+  return { r: r, n: n, verdict: interp, role: role, method: method,
+           aligned: aligned };
+}
+
+// Met à jour le badge visuel
+function updateComparisonBadge() {
+  const badge = document.getElementById('comparison-badge');
+  if (!badge) return;
+  if (!state.comparisonMode) {
+    badge.classList.remove('visible');
+    return;
+  }
+  badge.classList.add('visible');
+
+  const result = computeComparisonCorrelation();
+  badge.classList.remove('confluence', 'divergence', 'neutral');
+
+  const iconEl = document.getElementById('cmp-badge-icon');
+  const textEl = document.getElementById('cmp-badge-text');
+  const metaEl = document.getElementById('cmp-badge-meta');
+
+  if (!result.verdict || result.r == null) {
+    badge.classList.add('neutral');
+    iconEl.textContent = '⋯';
+    textEl.textContent = 'DONNÉES INSUFFISANTES';
+    metaEl.textContent = (result.n || 0) + ' pts alignés · attendu ≥5';
+    return;
+  }
+
+  badge.classList.add(result.verdict.className);
+  iconEl.textContent = result.verdict.icon;
+  textEl.textContent = result.verdict.verdict;
+  const rStr = result.r.toFixed(2);
+  const methodLabel = result.method === 'spearman' ? 'Spearman ρ' : 'Pearson r';
+  metaEl.textContent = methodLabel + '=' + rStr + ' · fen. ' + result.n
+    + ' · ' + state.comparisonCurrency + ' ' + result.role
+    + ' ' + state.comparisonPair;
+}
+
+const chartEl = document.getElementById('chart');
+const tooltipEl = document.getElementById('tooltip');
+const chartArea = document.querySelector('.chart-area');
+const margin = { top: 56, right: 56, bottom: 30, left: 52 };
+
+let W = 0, H = 0, innerW = 0, innerH = 0;
+
+function measure() {
+  const r = chartArea.getBoundingClientRect();
+  W = r.width; H = r.height;
+  innerW = Math.max(50, W - margin.left - margin.right);
+  innerH = Math.max(50, H - margin.top - margin.bottom);
+  chartEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  chartEl.setAttribute('width', W);
+  chartEl.setAttribute('height', H);
+}
+
+function computeDomains() {
+  if (!state.xDomain) {
+    let tMin = Infinity, tMax = -Infinity;
+    CURRENCIES.forEach(c => {
+      if (!state.visible.has(c.symbol) || !matchesGroup(c)) return;
+      const s = state.data[c.symbol];
+      if (!s) return;
+      if (s[0].t < tMin) tMin = s[0].t;
+      if (s[s.length - 1].t > tMax) tMax = s[s.length - 1].t;
+    });
+    if (!isFinite(tMin)) { tMin = Date.now() - 1000; tMax = Date.now(); }
+    state.xDomain = [tMin, tMax];
+  }
+  rebuildPivots();
+  if (!state.yDomain) {
+    if (state.displayMode === 'base100') {
+      state.yDomain = [0, 100];
+    } else {
+      let yMin = Infinity, yMax = -Infinity;
+      const [x0, x1] = state.xDomain;
+      CURRENCIES.forEach(c => {
+        if (!state.visible.has(c.symbol) || !matchesGroup(c)) return;
+        const s = state.data[c.symbol];
+        if (!s) return;
+        s.forEach(d => {
+          if (d.t < x0 || d.t > x1) return;
+          const tv = transformValue(d.v, c.symbol);
+          if (tv < yMin) yMin = tv;
+          if (tv > yMax) yMax = tv;
+        });
+      });
+      if (!isFinite(yMin)) { yMin = -1; yMax = 1; }
+      const pad = (yMax - yMin) * 0.1 || 0.5;
+      state.yDomain = [yMin - pad, yMax + pad];
+    }
+  }
+}
+
+function niceTicks(min, max, count) {
+  const range = max - min;
+  if (range <= 0) return [min];
+  const roughStep = range / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(roughStep)));
+  const norm = roughStep / mag;
+  let step;
+  if (norm < 1.5) step = 1 * mag;
+  else if (norm < 3) step = 2 * mag;
+  else if (norm < 7) step = 5 * mag;
+  else step = 10 * mag;
+  const ticks = [];
+  const first = Math.ceil(min / step) * step;
+  for (let v = first; v <= max; v += step) ticks.push(+v.toFixed(10));
+  return ticks;
+}
+
+function timeTicks(min, max, count) {
+  const range = max - min;
+  const stepMs = range / count;
+  const intervals = [
+    60*1000, 5*60*1000, 15*60*1000, 30*60*1000, 60*60*1000,
+    3*60*60*1000, 6*60*60*1000, 12*60*60*1000, 24*60*60*1000,
+    2*24*60*60*1000, 7*24*60*60*1000, 14*24*60*60*1000, 30*24*60*60*1000
+  ];
+  let step = intervals[intervals.length - 1];
+  for (const i of intervals) { if (i >= stepMs) { step = i; break; } }
+  const ticks = [];
+  const first = Math.ceil(min / step) * step;
+  for (let v = first; v <= max; v += step) ticks.push(v);
+  return ticks;
+}
+
+function render() {
+  if (state.comparisonMode) {
+    renderComparison();
+    return;
+  }
+  measure();
+  computeDomains();
+  const [x0, x1] = state.xDomain;
+  const [y0, y1] = state.yDomain;
+  const xSpan = x1 - x0 || 1;
+  const ySpan = y1 - y0 || 1;
+  const xScale = t => margin.left + ((t - x0) / xSpan) * innerW;
+  const yScale = v => margin.top + innerH - ((v - y0) / ySpan) * innerH;
+  while (chartEl.firstChild) chartEl.removeChild(chartEl.firstChild);
+  const defs = el('defs');
+  const clipP = el('clipPath', { id: 'clip-plot' });
+  clipP.appendChild(el('rect', { x: margin.left, y: margin.top, width: innerW, height: innerH }));
+  defs.appendChild(clipP);
+  chartEl.appendChild(defs);
+  chartEl.appendChild(el('rect', {
+    x: margin.left, y: margin.top,
+    width: innerW, height: innerH,
+    fill: 'transparent', class: 'plot-bg'
+  }));
+  const yTicks = niceTicks(y0, y1, 6);
+  yTicks.forEach(v => {
+    const y = yScale(v);
+    chartEl.appendChild(el('line', {
+      class: 'grid-line',
+      x1: margin.left, x2: margin.left + innerW, y1: y, y2: y
+    }));
+  });
+  const xTicks = timeTicks(x0, x1, 8);
+  xTicks.forEach(t => {
+    const x = xScale(t);
+    if (x < margin.left || x > margin.left + innerW) return;
+    chartEl.appendChild(el('line', {
+      class: 'grid-line',
+      x1: x, x2: x, y1: margin.top, y2: margin.top + innerH
+    }));
+  });
+  const ref = referenceValue();
+  if (y0 < ref && y1 > ref) {
+    const yRef = yScale(ref);
+    chartEl.appendChild(el('line', {
+      class: 'zero-line',
+      x1: margin.left, x2: margin.left + innerW, y1: yRef, y2: yRef
+    }));
+  }
+  if (state.displayMode === 'base100') {
+    [
+      { v: 70, color: 'rgba(38, 208, 124, 0.25)' },
+      { v: 30, color: 'rgba(255, 71, 87, 0.25)' }
+    ].forEach(th => {
+      if (y0 < th.v && y1 > th.v) {
+        const y = yScale(th.v);
+        chartEl.appendChild(el('line', {
+          x1: margin.left, x2: margin.left + innerW,
+          y1: y, y2: y,
+          stroke: th.color, 'stroke-width': 1, 'stroke-dasharray': '2 4'
+        }));
+        chartEl.appendChild(el('text', {
+          x: margin.left + innerW - 4, y: y - 3,
+          fill: th.color, 'font-size': 9, 'font-weight': 600,
+          'text-anchor': 'end'
+        }, th.v.toString()));
+      }
+    });
+  }
+  const linesG = el('g', { 'clip-path': 'url(#clip-plot)' });
+  chartEl.appendChild(linesG);
+  CURRENCIES.forEach(c => {
+    if (!state.visible.has(c.symbol) || !matchesGroup(c)) return;
+    const s = state.data[c.symbol];
+    if (!s || s.length === 0) return;
+    let d = '';
+    let isFirst = true;
+    s.forEach((pt) => {
+      if (pt == null || typeof pt.t !== 'number' || typeof pt.v !== 'number') return;
+      if (isNaN(pt.v) || !isFinite(pt.v)) return;
+      const tv = transformValue(pt.v, c.symbol);
+      if (isNaN(tv) || !isFinite(tv)) return;
+      const x = xScale(pt.t);
+      const y = yScale(tv);
+      if (isNaN(x) || isNaN(y)) return;
+      d += (isFirst ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+      isFirst = false;
+    });
+    if (!d) return;
+    let cls = 'pair-line';
+    if (state.hovered && state.hovered !== c.symbol) cls += ' dim';
+    if (state.hovered === c.symbol) cls += ' highlight';
+    linesG.appendChild(el('path', {
+      d: d, class: cls, stroke: c.color, 'data-symbol': c.symbol
+    }));
+  });
+  state.divergences.forEach(dv => {
+    const color = dv.type === 'P1' ? '#ff4757' : dv.type === 'P2' ? '#ffb84a' : '#b084ff';
+    if (dv.kind === 'currency') {
+      if (!state.visible.has(dv.symbol)) return;
+      const c = CURRENCIES.find(x => x.symbol === dv.symbol);
+      if (!c || !matchesGroup(c)) return;
+      const s = state.data[dv.symbol];
+      if (!s) return;
+      const p1 = s[dv.startIdx], p2 = s[dv.endIdx];
+      if (!p1 || !p2) return;
+      const x1v = xScale(p1.t), y1v = yScale(transformValue(p1.v, dv.symbol));
+      const x2v = xScale(p2.t), y2v = yScale(transformValue(p2.v, dv.symbol));
+      linesG.appendChild(el('line', {
+        x1: x1v, y1: y1v, x2: x2v, y2: y2v,
+        stroke: color, 'stroke-width': 2, 'stroke-dasharray': '4 2'
+      }));
+      linesG.appendChild(el('circle', { cx: x1v, cy: y1v, r: 4, fill: color, stroke: '#fff', 'stroke-width': 2 }));
+      linesG.appendChild(el('circle', { cx: x2v, cy: y2v, r: 4, fill: color, stroke: '#fff', 'stroke-width': 2 }));
+      linesG.appendChild(el('text', {
+        x: x2v + 7, y: y2v - 6,
+        fill: color, 'font-size': 10, 'font-weight': 700
+      }, dv.type));
+    } else if (dv.kind === 'pair') {
+      if (!state.visible.has(dv.a) || !state.visible.has(dv.b)) return;
+      const ca = CURRENCIES.find(x => x.symbol === dv.a);
+      const cb = CURRENCIES.find(x => x.symbol === dv.b);
+      if (!ca || !cb || !matchesGroup(ca) || !matchesGroup(cb)) return;
+      const sa = state.data[dv.a], sb = state.data[dv.b];
+      if (!sa || !sb) return;
+      const a1 = sa[dv.startIdx], a2 = sa[dv.endIdx];
+      const b1 = sb[dv.startIdx], b2 = sb[dv.endIdx];
+      if (!a1 || !a2 || !b1 || !b2) return;
+      const mid1v = (transformValue(a1.v, dv.a) + transformValue(b1.v, dv.b)) / 2;
+      const mid2v = (transformValue(a2.v, dv.a) + transformValue(b2.v, dv.b)) / 2;
+      const x1v = xScale(a1.t), y1v = yScale(mid1v);
+      const x2v = xScale(a2.t), y2v = yScale(mid2v);
+      linesG.appendChild(el('line', {
+        x1: x1v, y1: y1v, x2: x2v, y2: y2v,
+        stroke: color, 'stroke-width': 2, 'stroke-dasharray': '2 2', opacity: 0.6
+      }));
+      linesG.appendChild(el('circle', { cx: x1v, cy: y1v, r: 3, fill: color, stroke: '#fff', 'stroke-width': 1 }));
+      linesG.appendChild(el('circle', { cx: x2v, cy: y2v, r: 3, fill: color, stroke: '#fff', 'stroke-width': 1 }));
+      linesG.appendChild(el('text', {
+        x: x2v + 7, y: y2v - 4,
+        fill: color, 'font-size': 9, 'font-weight': 700
+      }, dv.type + ' ' + dv.symbol));
+    }
+  });
+  const xAxisY = margin.top + innerH;
+  chartEl.appendChild(el('line', {
+    class: 'axis-line',
+    x1: margin.left, x2: margin.left + innerW, y1: xAxisY, y2: xAxisY
+  }));
+  xTicks.forEach(t => {
+    const x = xScale(t);
+    if (x < margin.left - 20 || x > margin.left + innerW + 20) return;
+    chartEl.appendChild(el('line', { class: 'axis-line', x1: x, x2: x, y1: xAxisY, y2: xAxisY + 5 }));
+    chartEl.appendChild(el('text', {
+      class: 'axis-text', x: x, y: xAxisY + 17, 'text-anchor': 'middle'
+    }, formatTime(t)));
+  });
+  chartEl.appendChild(el('line', {
+    class: 'axis-line',
+    x1: margin.left, x2: margin.left, y1: margin.top, y2: margin.top + innerH
+  }));
+  chartEl.appendChild(el('line', {
+    class: 'axis-line',
+    x1: margin.left + innerW, x2: margin.left + innerW, y1: margin.top, y2: margin.top + innerH
+  }));
+  yTicks.forEach(v => {
+    const y = yScale(v);
+    const label = formatValue(v, { decimals: state.displayMode === 'base100' ? 1 : 1 });
+    chartEl.appendChild(el('text', {
+      class: 'axis-text', x: margin.left - 8, y: y + 3, 'text-anchor': 'end'
+    }, label));
+    chartEl.appendChild(el('text', {
+      class: 'axis-text', x: margin.left + innerW + 8, y: y + 3, 'text-anchor': 'start'
+    }, label));
+  });
+  const labelX = margin.left - 38;
+  const labelY = margin.top + innerH / 2;
+  chartEl.appendChild(el('text', {
+    class: 'axis-label',
+    x: labelX, y: labelY,
+    transform: 'rotate(-90 ' + labelX + ' ' + labelY + ')',
+    'text-anchor': 'middle'
+  }, state.displayMode === 'base100' ? 'CSI V3.2 · 0-100' : 'Force %'));
+  chartEl.appendChild(el('rect', {
+    class: 'axis-hitzone y',
+    x: 0, y: margin.top, width: margin.left, height: innerH
+  }));
+  chartEl.appendChild(el('rect', {
+    class: 'axis-hitzone y',
+    x: margin.left + innerW, y: margin.top, width: margin.right, height: innerH
+  }));
+  chartEl.appendChild(el('rect', {
+    class: 'axis-hitzone x',
+    x: margin.left, y: margin.top + innerH, width: innerW, height: margin.bottom
+  }));
+  const ch = el('g', { id: 'crosshair' });
+  ch.style.display = 'none';
+  ch.style.pointerEvents = 'none';
+  ch.appendChild(el('line', { id: 'ch-v', class: 'crosshair-line', y1: margin.top, y2: margin.top + innerH }));
+  ch.appendChild(el('line', { id: 'ch-h', class: 'crosshair-line', x1: margin.left, x2: margin.left + innerW }));
+  const xlblG = el('g', { id: 'ch-xlbl' });
+  xlblG.appendChild(el('rect', {
+    class: 'crosshair-label-bg',
+    y: margin.top + innerH + 2, height: 18, width: 90, rx: 3
+  }));
+  xlblG.appendChild(el('text', {
+    class: 'crosshair-label',
+    y: margin.top + innerH + 15, 'text-anchor': 'middle'
+  }));
+  ch.appendChild(xlblG);
+  const ylblG = el('g', { id: 'ch-ylbl' });
+  ylblG.appendChild(el('rect', {
+    class: 'crosshair-label-bg',
+    x: margin.left - 50, height: 18, width: 44, rx: 3
+  }));
+  ylblG.appendChild(el('text', {
+    class: 'crosshair-label',
+    x: margin.left - 28, 'text-anchor': 'middle'
+  }));
+  ch.appendChild(ylblG);
+  chartEl.appendChild(ch);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// V5 — renderComparison : graphe double axe Y (Force CSI + Prix)
+// ═══════════════════════════════════════════════════════════════
+function renderComparison() {
+  measure();
+  while (chartEl.firstChild) chartEl.removeChild(chartEl.firstChild);
+
+  const curr = state.comparisonCurrency;
+  const pair = state.comparisonPair;
+  const role = getCurrencyRole(curr, pair);
+  const currencyInfo = CURRENCIES.find(c => c.symbol === curr);
+  const currColor = currencyInfo ? currencyInfo.color : '#9aa5bd';
+  const priceColor = '#ffb84a';
+
+  const csiData = state.data[curr] || [];
+  const priceSeries = getPriceSeries(pair, state.tf);
+
+  // Pas de données → message
+  if (csiData.length === 0 || priceSeries.length === 0) {
+    const msg = (csiData.length === 0)
+      ? 'Force ' + curr + ' indisponible pour TF=' + state.tf
+      : 'Prix ' + pair + ' indisponible pour TF=' + state.tf + ' (fallback sur 4H ?)';
+    chartEl.appendChild(el('text', {
+      x: W / 2, y: H / 2,
+      fill: '#9aa5bd', 'font-size': 14, 'text-anchor': 'middle'
+    }, msg));
+    updateComparisonBadge();
+    return;
+  }
+
+  // Alignement temporel : on ne garde que les points CSI pour lesquels on a un prix proche
+  const aligned = alignSeries(csiData, priceSeries);
+  if (aligned.forces.length === 0) {
+    chartEl.appendChild(el('text', {
+      x: W / 2, y: H / 2,
+      fill: '#9aa5bd', 'font-size': 14, 'text-anchor': 'middle'
+    }, 'Pas d\'alignement temporel Force/Prix possible'));
+    updateComparisonBadge();
+    return;
+  }
+
+  // Domaine X : sur les timestamps alignés
+  if (!state.xDomain) {
+    state.xDomain = [aligned.times[0], aligned.times[aligned.times.length - 1]];
+  }
+  const [x0, x1] = state.xDomain;
+  const xSpan = x1 - x0 || 1;
+  const xScale = t => margin.left + ((t - x0) / xSpan) * innerW;
+
+  // Domaine Y gauche : Force CSI (toujours 0-100)
+  const y0L = 0, y1L = 100;
+  const yScaleCSI = v => margin.top + innerH - ((v - y0L) / 100) * innerH;
+
+  // Domaine Y droit : Prix (auto sur fenêtre visible)
+  const visiblePrices = [];
+  for (let i = 0; i < aligned.times.length; i++) {
+    if (aligned.times[i] >= x0 && aligned.times[i] <= x1) {
+      visiblePrices.push(aligned.prices[i]);
+    }
+  }
+  if (visiblePrices.length === 0) visiblePrices.push(...aligned.prices);
+  let y0R = Math.min(...visiblePrices);
+  let y1R = Math.max(...visiblePrices);
+  const padR = (y1R - y0R) * 0.08 || Math.abs(y0R) * 0.001 || 0.01;
+  y0R -= padR; y1R += padR;
+  const yScalePrice = p => margin.top + innerH - ((p - y0R) / (y1R - y0R)) * innerH;
+
+  // Defs + clip
+  const defs = el('defs');
+  const clipP = el('clipPath', { id: 'clip-plot' });
+  clipP.appendChild(el('rect', { x: margin.left, y: margin.top, width: innerW, height: innerH }));
+  defs.appendChild(clipP);
+  chartEl.appendChild(defs);
+
+  // Background
+  chartEl.appendChild(el('rect', {
+    x: margin.left, y: margin.top,
+    width: innerW, height: innerH,
+    fill: 'transparent', class: 'plot-bg'
+  }));
+
+  // Grids (sur axe Y gauche = force)
+  const yTicksL = niceTicks(y0L, y1L, 6);
+  yTicksL.forEach(v => {
+    const y = yScaleCSI(v);
+    chartEl.appendChild(el('line', {
+      class: 'grid-line',
+      x1: margin.left, x2: margin.left + innerW, y1: y, y2: y
+    }));
+  });
+  const xTicks = timeTicks(x0, x1, 8);
+  xTicks.forEach(t => {
+    const x = xScale(t);
+    if (x < margin.left || x > margin.left + innerW) return;
+    chartEl.appendChild(el('line', {
+      class: 'grid-line',
+      x1: x, x2: x, y1: margin.top, y2: margin.top + innerH
+    }));
+  });
+
+  // Zero line (50)
+  const yRef = yScaleCSI(50);
+  chartEl.appendChild(el('line', {
+    class: 'zero-line',
+    x1: margin.left, x2: margin.left + innerW, y1: yRef, y2: yRef
+  }));
+
+  // Seuils 70/30 (force)
+  [
+    { v: 70, color: 'rgba(38, 208, 124, 0.25)' },
+    { v: 30, color: 'rgba(255, 71, 87, 0.25)' }
+  ].forEach(th => {
+    const y = yScaleCSI(th.v);
+    chartEl.appendChild(el('line', {
+      x1: margin.left, x2: margin.left + innerW,
+      y1: y, y2: y,
+      stroke: th.color, 'stroke-width': 1, 'stroke-dasharray': '2 4'
+    }));
+  });
+
+  // Zones de divergence/confluence (fond translucide sur les sous-fenêtres significatives)
+  // On détecte des segments où la corrélation locale est fortement négative (div) ou positive (conf)
+  if (role !== 'none' && aligned.forces.length >= 10) {
+    const SEG = 10;  // taille du segment glissant pour la détection locale
+    let segStart = null, segType = null;
+    for (let i = 0; i + SEG <= aligned.forces.length; i++) {
+      const forces = aligned.forces.slice(i, i + SEG);
+      const prices = aligned.prices.slice(i, i + SEG);
+      const rLocal = state.comparisonCorrMethod === 'spearman'
+        ? spearmanCorrelation(forces, prices)
+        : pearsonCorrelation(forces, prices);
+      const aligned2 = role === 'base' ? rLocal : -rLocal;
+      let type = null;
+      if (aligned2 <= -0.5) type = 'divergence';
+      else if (aligned2 >= 0.7) type = 'confluence';
+
+      if (type !== segType) {
+        // Flush le segment précédent
+        if (segStart != null && segType != null) {
+          const x1Seg = xScale(aligned.times[segStart]);
+          const x2Seg = xScale(aligned.times[i + SEG - 1]);
+          if (x2Seg > x1Seg) {
+            chartEl.appendChild(el('rect', {
+              x: Math.max(margin.left, x1Seg),
+              y: margin.top,
+              width: Math.min(margin.left + innerW, x2Seg) - Math.max(margin.left, x1Seg),
+              height: innerH,
+              class: segType === 'divergence' ? 'cmp-divergence-zone' : 'cmp-confluence-zone'
+            }));
+          }
+        }
+        segStart = i;
+        segType = type;
+      }
+    }
+    // Flush le dernier segment
+    if (segStart != null && segType != null) {
+      const x1Seg = xScale(aligned.times[segStart]);
+      const x2Seg = xScale(aligned.times[aligned.times.length - 1]);
+      if (x2Seg > x1Seg) {
+        chartEl.appendChild(el('rect', {
+          x: Math.max(margin.left, x1Seg),
+          y: margin.top,
+          width: Math.min(margin.left + innerW, x2Seg) - Math.max(margin.left, x1Seg),
+          height: innerH,
+          class: segType === 'divergence' ? 'cmp-divergence-zone' : 'cmp-confluence-zone'
+        }));
+      }
+    }
+  }
+
+  // Courbes (dans le clip)
+  const linesG = el('g', { 'clip-path': 'url(#clip-plot)' });
+  chartEl.appendChild(linesG);
+
+  // Courbe Force CSI
+  let dCSI = '';
+  for (let i = 0; i < aligned.times.length; i++) {
+    const x = xScale(aligned.times[i]);
+    const y = yScaleCSI(aligned.forces[i]);
+    if (isNaN(x) || isNaN(y)) continue;
+    dCSI += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+  }
+  if (dCSI) {
+    linesG.appendChild(el('path', {
+      d: dCSI, class: 'cmp-line-csi', stroke: currColor,
+      'data-symbol': curr
+    }));
+  }
+
+  // Courbe Prix
+  let dPrice = '';
+  for (let i = 0; i < aligned.times.length; i++) {
+    const x = xScale(aligned.times[i]);
+    const y = yScalePrice(aligned.prices[i]);
+    if (isNaN(x) || isNaN(y)) continue;
+    dPrice += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+  }
+  if (dPrice) {
+    linesG.appendChild(el('path', {
+      d: dPrice, class: 'cmp-line-price', stroke: priceColor,
+      'data-symbol': pair
+    }));
+  }
+
+  // X axis
+  const xAxisY = margin.top + innerH;
+  chartEl.appendChild(el('line', {
+    class: 'axis-line',
+    x1: margin.left, x2: margin.left + innerW, y1: xAxisY, y2: xAxisY
+  }));
+  xTicks.forEach(t => {
+    const x = xScale(t);
+    if (x < margin.left - 20 || x > margin.left + innerW + 20) return;
+    chartEl.appendChild(el('line', { class: 'axis-line', x1: x, x2: x, y1: xAxisY, y2: xAxisY + 5 }));
+    chartEl.appendChild(el('text', {
+      class: 'axis-text', x: x, y: xAxisY + 17, 'text-anchor': 'middle'
+    }, formatTime(t)));
+  });
+
+  // Y axis gauche (CSI)
+  chartEl.appendChild(el('line', {
+    class: 'axis-line',
+    x1: margin.left, x2: margin.left, y1: margin.top, y2: margin.top + innerH,
+    stroke: currColor, 'stroke-opacity': 0.5
+  }));
+  yTicksL.forEach(v => {
+    const y = yScaleCSI(v);
+    chartEl.appendChild(el('text', {
+      class: 'axis-text', x: margin.left - 8, y: y + 3, 'text-anchor': 'end',
+      fill: currColor
+    }, v.toFixed(0)));
+  });
+
+  // Y axis droit (Prix)
+  const yTicksR = niceTicks(y0R, y1R, 6);
+  chartEl.appendChild(el('line', {
+    class: 'axis-line',
+    x1: margin.left + innerW, x2: margin.left + innerW, y1: margin.top, y2: margin.top + innerH,
+    stroke: priceColor, 'stroke-opacity': 0.5
+  }));
+  const priceDecimals = (y1R - y0R) < 1 ? 5 : (y1R - y0R) < 10 ? 3 : 2;
+  yTicksR.forEach(v => {
+    const y = yScalePrice(v);
+    chartEl.appendChild(el('text', {
+      class: 'cmp-axis-text-right',
+      x: margin.left + innerW + 8, y: y + 3, 'text-anchor': 'start'
+    }, v.toFixed(priceDecimals)));
+  });
+
+  // Labels d'axes
+  const labelXL = margin.left - 38;
+  const labelYL = margin.top + innerH / 2;
+  chartEl.appendChild(el('text', {
+    class: 'axis-label',
+    x: labelXL, y: labelYL,
+    transform: 'rotate(-90 ' + labelXL + ' ' + labelYL + ')',
+    'text-anchor': 'middle',
+    fill: currColor
+  }, 'FORCE ' + curr + ' · 0-100'));
+
+  const labelXR = margin.left + innerW + 38;
+  const labelYR = margin.top + innerH / 2;
+  chartEl.appendChild(el('text', {
+    class: 'cmp-axis-label-right',
+    x: labelXR, y: labelYR,
+    transform: 'rotate(90 ' + labelXR + ' ' + labelYR + ')',
+    'text-anchor': 'middle'
+  }, 'PRIX ' + pair));
+
+  // Hitzones (pan/zoom)
+  chartEl.appendChild(el('rect', {
+    class: 'axis-hitzone y',
+    x: 0, y: margin.top, width: margin.left, height: innerH
+  }));
+  chartEl.appendChild(el('rect', {
+    class: 'axis-hitzone y',
+    x: margin.left + innerW, y: margin.top, width: margin.right, height: innerH
+  }));
+  chartEl.appendChild(el('rect', {
+    class: 'axis-hitzone x',
+    x: margin.left, y: margin.top + innerH, width: innerW, height: margin.bottom
+  }));
+
+  // Crosshair
+  const ch = el('g', { id: 'crosshair' });
+  ch.style.display = 'none';
+  ch.style.pointerEvents = 'none';
+  ch.appendChild(el('line', { id: 'ch-v', class: 'crosshair-line', y1: margin.top, y2: margin.top + innerH }));
+  ch.appendChild(el('line', { id: 'ch-h', class: 'crosshair-line', x1: margin.left, x2: margin.left + innerW }));
+
+  const xlblG = el('g', { id: 'ch-xlbl' });
+  xlblG.appendChild(el('rect', {
+    class: 'crosshair-label-bg time',
+    y: margin.top + innerH + 2, height: 18, width: 110, rx: 3
+  }));
+  xlblG.appendChild(el('text', {
+    class: 'crosshair-label on-accent',
+    y: margin.top + innerH + 15, 'text-anchor': 'middle'
+  }));
+  ch.appendChild(xlblG);
+
+  // Label Y gauche (CSI)
+  const ylblG = el('g', { id: 'ch-ylbl' });
+  ylblG.appendChild(el('rect', {
+    class: 'crosshair-label-bg',
+    x: margin.left - 50, height: 18, width: 44, rx: 3,
+    fill: currColor, 'fill-opacity': 0.95, stroke: currColor
+  }));
+  ylblG.appendChild(el('text', {
+    class: 'crosshair-label on-accent',
+    x: margin.left - 28, 'text-anchor': 'middle'
+  }));
+  ch.appendChild(ylblG);
+
+  // Label Y droit (Prix) — nouveau pour mode Comparaison
+  const ylblGR = el('g', { id: 'ch-ylbl-right' });
+  ylblGR.appendChild(el('rect', {
+    class: 'crosshair-label-bg',
+    x: margin.left + innerW + 6, height: 18, width: 56, rx: 3,
+    fill: priceColor, 'fill-opacity': 0.95, stroke: priceColor
+  }));
+  ylblGR.appendChild(el('text', {
+    class: 'crosshair-label on-accent',
+    x: margin.left + innerW + 34, 'text-anchor': 'middle'
+  }));
+  ch.appendChild(ylblGR);
+
+  chartEl.appendChild(ch);
+
+  // Stocke les données pour le crosshair
+  chartEl._cmpAligned = aligned;
+  chartEl._cmpYScaleCSI = yScaleCSI;
+  chartEl._cmpYScalePrice = yScalePrice;
+  chartEl._cmpXScale = xScale;
+  chartEl._cmpPriceDecimals = priceDecimals;
+
+  updateComparisonBadge();
+}
+
+// ───────── Interactions ─────────
+let panState = null;
+
+chartEl.addEventListener('mousedown', (e) => {
+  const t = e.target;
+  if (!t.classList) return;
+  // En mode Comparaison : le pan X et zoom X marchent, mais pas le drag Y (2 axes distincts)
+  if (state.comparisonMode) {
+    if (t.classList.contains('plot-bg')) {
+      if (!state.xDomain) return;
+      panState = {
+        mode: 'x',
+        startX: e.clientX, startY: e.clientY,
+        xDom: state.xDomain.slice(),
+        yDom: null
+      };
+      chartEl.style.cursor = 'grabbing';
+      e.preventDefault();
+    } else if (t.classList.contains('x')) {
+      if (!state.xDomain) return;
+      panState = {
+        mode: 'zx',
+        startX: e.clientX,
+        xDom: state.xDomain.slice()
+      };
+      chartEl.style.cursor = 'ew-resize';
+      e.preventDefault();
+    }
+    // Drag axe Y désactivé en mode Comparaison (2 axes → ambigu)
+    return;
+  }
+
+  if (t.classList.contains('plot-bg')) {
+    panState = {
+      mode: 'x',
+      startX: e.clientX, startY: e.clientY,
+      xDom: state.xDomain ? state.xDomain.slice() : null,
+      yDom: state.yDomain ? state.yDomain.slice() : null
+    };
+    if (!panState.xDom || !panState.yDom) { panState = null; return; }
+    chartEl.style.cursor = 'grabbing';
+    e.preventDefault();
+  } else if (t.classList.contains('y')) {
+    if (!state.yDomain) return;
+    panState = {
+      mode: 'y',
+      startY: e.clientY,
+      yDom: state.yDomain.slice()
+    };
+    chartEl.style.cursor = 'ns-resize';
+    e.preventDefault();
+  } else if (t.classList.contains('x')) {
+    if (!state.xDomain) return;
+    panState = {
+      mode: 'zx',
+      startX: e.clientX,
+      xDom: state.xDomain.slice()
+    };
+    chartEl.style.cursor = 'ew-resize';
+    e.preventDefault();
+  }
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!panState) return;
+  if (panState.mode === 'x') {
+    const dx = e.clientX - panState.startX;
+    const xSpan = panState.xDom[1] - panState.xDom[0];
+    const shiftX = (dx / innerW) * xSpan;
+    state.xDomain = [panState.xDom[0] - shiftX, panState.xDom[1] - shiftX];
+    // En mode Comparaison : yScales sont recalculés dans renderComparison, pas besoin de reset
+    // En mode pct : rebase auto sur la nouvelle fenêtre
+    if (!state.comparisonMode && state.displayMode === 'pct') state.yDomain = null;
+    render();
+  } else if (panState.mode === 'y') {
+    if (!panState.yDom) return;
+    const dy = e.clientY - panState.startY;
+    const factor = Math.pow(1.005, dy);
+    const [y0, y1] = panState.yDom;
+    const mid = (y0 + y1) / 2;
+    const half = (y1 - y0) / 2 * factor;
+    state.yDomain = [mid - half, mid + half];
+    render();
+  } else if (panState.mode === 'zx') {
+    const dx = e.clientX - panState.startX;
+    const factor = Math.pow(1.005, dx);
+    const [x0, x1] = panState.xDom;
+    const mid = (x0 + x1) / 2;
+    const half = (x1 - x0) / 2 * factor;
+    state.xDomain = [mid - half, mid + half];
+    if (!state.comparisonMode && state.displayMode === 'pct') state.yDomain = null;
+    render();
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (panState) { panState = null; chartEl.style.cursor = 'crosshair'; }
+});
+
+chartEl.addEventListener('wheel', (e) => {
+  const t = e.target;
+  const isY = t.classList && t.classList.contains('y');
+  const isX = t.classList && t.classList.contains('x');
+  const isPlot = t.classList && t.classList.contains('plot-bg');
+  if (!isY && !isX && !isPlot) return;
+  e.preventDefault();
+  const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+
+  // En mode Comparaison : zoom Y désactivé (2 axes), on ignore
+  if (state.comparisonMode && isY) return;
+
+  if (isY) {
+    if (!state.yDomain) return;
+    const [a, b] = state.yDomain;
+    const mid = (a + b) / 2;
+    const half = (b - a) / 2 * factor;
+    state.yDomain = [mid - half, mid + half];
+  } else if (isX) {
+    if (!state.xDomain) return;
+    const [a, b] = state.xDomain;
+    const mid = (a + b) / 2;
+    const half = (b - a) / 2 * factor;
+    state.xDomain = [mid - half, mid + half];
+    if (!state.comparisonMode) state.yDomain = null;
+  } else {
+    if (!state.xDomain) return;
+    const rect = chartEl.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const [a, b] = state.xDomain;
+    const tAt = a + ((mx - margin.left) / innerW) * (b - a);
+    state.xDomain = [tAt - (tAt - a) * factor, tAt + (b - tAt) * factor];
+    if (!state.comparisonMode) state.yDomain = null;
+  }
+  render();
+}, { passive: false });
+
+chartEl.addEventListener('dblclick', (e) => {
+  if (e.target.classList && e.target.classList.contains('plot-bg')) resetView();
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CROSSHAIR V4 TradingView-style : snap, dots, pills colorées, sync mini-charts
+// ═══════════════════════════════════════════════════════════════
+
+function snapToSeries(series, tAt) {
+  if (!series || series.length === 0) return null;
+  let lo = 0, hi = series.length - 1;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (series[m].t < tAt) lo = m + 1; else hi = m;
+  }
+  const a = series[lo];
+  const b = lo > 0 ? series[lo - 1] : null;
+  if (!b) return a;
+  return Math.abs(a.t - tAt) < Math.abs(b.t - tAt) ? a : b;
+}
+
+function updateCrosshairDots(rows, xScale, yScale) {
+  const oldDots = chartEl.querySelectorAll('.ch-dot');
+  oldDots.forEach(d => d.remove());
+  const g = document.getElementById('crosshair');
+  if (!g) return;
+  rows.forEach(r => {
+    if (r.snapped == null) return;
+    const cx = xScale(r.snapped.t);
+    const cy = yScale(r.tv);
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('class', 'ch-dot');
+    dot.setAttribute('cx', cx);
+    dot.setAttribute('cy', cy);
+    dot.setAttribute('r', 3.5);
+    dot.setAttribute('fill', r.color);
+    g.appendChild(dot);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// V5 — Crosshair dédié au mode Comparaison
+// ═══════════════════════════════════════════════════════════════
+function updateCrosshairComparison(mx, my) {
+  const ch = document.getElementById('crosshair');
+  if (!ch) return;
+  const aligned = chartEl._cmpAligned;
+  const xScale = chartEl._cmpXScale;
+  const yScaleCSI = chartEl._cmpYScaleCSI;
+  const yScalePrice = chartEl._cmpYScalePrice;
+  const priceDecimals = chartEl._cmpPriceDecimals || 3;
+  if (!aligned || !xScale || !yScaleCSI || !yScalePrice) return;
+  if (aligned.times.length === 0) return;
+
+  ch.style.display = '';
+
+  // Timestamp au curseur
+  const [x0, x1] = state.xDomain;
+  const tAt = x0 + ((mx - margin.left) / innerW) * (x1 - x0);
+
+  // Snap au timestamp aligné le plus proche
+  let bestIdx = 0, bestDt = Infinity;
+  for (let i = 0; i < aligned.times.length; i++) {
+    const dt = Math.abs(aligned.times[i] - tAt);
+    if (dt < bestDt) { bestDt = dt; bestIdx = i; }
+  }
+  const snapT = aligned.times[bestIdx];
+  const snapX = xScale(snapT);
+  const forceVal = aligned.forces[bestIdx];
+  const priceVal = aligned.prices[bestIdx];
+
+  // Lignes
+  document.getElementById('ch-v').setAttribute('x1', snapX);
+  document.getElementById('ch-v').setAttribute('x2', snapX);
+  document.getElementById('ch-h').setAttribute('y1', my);
+  document.getElementById('ch-h').setAttribute('y2', my);
+
+  // Label X
+  const xRect = document.querySelector('#ch-xlbl rect');
+  const xText = document.querySelector('#ch-xlbl text');
+  xRect.setAttribute('x', snapX - 55);
+  xText.setAttribute('x', snapX);
+  xText.textContent = formatTimeFull(snapT);
+
+  // Label Y gauche (CSI) — valeur de la force à ce timestamp
+  const ylblG = document.getElementById('ch-ylbl');
+  const yCSI = yScaleCSI(forceVal);
+  ylblG.setAttribute('transform', 'translate(0,' + (yCSI - 9) + ')');
+  ylblG.querySelector('text').textContent = forceVal.toFixed(1);
+
+  // Label Y droit (Prix)
+  const ylblGR = document.getElementById('ch-ylbl-right');
+  if (ylblGR) {
+    const yPrice = yScalePrice(priceVal);
+    ylblGR.setAttribute('transform', 'translate(0,' + (yPrice - 9) + ')');
+    ylblGR.querySelector('text').textContent = priceVal.toFixed(priceDecimals);
+  }
+
+  // Dots sur les 2 courbes au snap
+  chartEl.querySelectorAll('.ch-dot').forEach(d => d.remove());
+  const currColor = (CURRENCIES.find(c => c.symbol === state.comparisonCurrency) || {}).color || '#9aa5bd';
+  [
+    { y: yCSI, color: currColor },
+    { y: yScalePrice(priceVal), color: '#ffb84a' }
+  ].forEach(d => {
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('class', 'ch-dot');
+    dot.setAttribute('cx', snapX);
+    dot.setAttribute('cy', d.y);
+    dot.setAttribute('r', 4);
+    dot.setAttribute('fill', d.color);
+    ch.appendChild(dot);
+  });
+
+  // Tooltip Comparaison : Force + Prix
+  const curr = state.comparisonCurrency;
+  const pair = state.comparisonPair;
+  const role = getCurrencyRole(curr, pair);
+  const roleLabel = role === 'base' ? 'BASE' : role === 'quote' ? 'QUOTE' : '—';
+  let html = '<div class="tooltip-header">' +
+    '<span>' + formatTimeFull(snapT) + '</span>' +
+    '<span style="color:var(--text-muted)">' + state.tf + ' · ' + roleLabel + '</span>' +
+    '</div>';
+  html += '<div class="tooltip-row" style="grid-template-columns: 10px 1fr auto;">' +
+    '<span class="tooltip-swatch" style="background:' + currColor + '"></span>' +
+    '<span>Force ' + curr + '</span>' +
+    '<span style="color:' + colorForValue(forceVal) + ';font-weight:600">' +
+    forceVal.toFixed(1) + '</span></div>';
+  html += '<div class="tooltip-row" style="grid-template-columns: 10px 1fr auto;">' +
+    '<span class="tooltip-swatch" style="background:#ffb84a"></span>' +
+    '<span>Prix ' + pair + '</span>' +
+    '<span style="color:#ffb84a;font-weight:600">' +
+    priceVal.toFixed(priceDecimals) + '</span></div>';
+
+  tooltipEl.innerHTML = html;
+  const tipW = 260;
+  let left = mx + 15;
+  if (left + tipW > W - 10) left = mx - tipW - 15;
+  tooltipEl.style.left = left + 'px';
+  tooltipEl.style.top = (my + 15) + 'px';
+  tooltipEl.classList.add('visible');
+
+  // Sync mini-charts (même event que mode normal)
+  window.dispatchEvent(new CustomEvent('macrodesk:crosshair-move', {
+    detail: { t: snapT }
+  }));
+
+  document.getElementById('status-cursor').innerHTML =
+    '<strong>Curseur:</strong> ' + formatTimeFull(snapT) +
+    ' · Force=' + forceVal.toFixed(1) +
+    ' · Prix=' + priceVal.toFixed(priceDecimals);
+}
+
+chartEl.addEventListener('mousemove', (e) => {
+  if (panState) return;
+  const rect = chartEl.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const inPlot = mx >= margin.left && mx <= margin.left + innerW
+              && my >= margin.top && my <= margin.top + innerH;
+  const ch = document.getElementById('crosshair');
+  if (!inPlot) {
+    if (ch) ch.style.display = 'none';
+    tooltipEl.classList.remove('visible');
+    document.getElementById('status-cursor').textContent = '';
+    window.dispatchEvent(new CustomEvent('macrodesk:crosshair-hide'));
+    chartEl.querySelectorAll('.ch-dot').forEach(d => d.remove());
+    return;
+  }
+
+  // ── Mode Comparaison : branche dédiée ──
+  if (state.comparisonMode) {
+    updateCrosshairComparison(mx, my);
+    return;
+  }
+
+  if (ch) ch.style.display = '';
+
+  const [x0, x1] = state.xDomain;
+  const [y0, y1] = state.yDomain;
+  const xSpan = x1 - x0 || 1;
+  const ySpan = y1 - y0 || 1;
+  const xScale = t => margin.left + ((t - x0) / xSpan) * innerW;
+  const yScale = v => margin.top + innerH - ((v - y0) / ySpan) * innerH;
+  const tAt = x0 + ((mx - margin.left) / innerW) * (x1 - x0);
+  const vAt = y1 - ((my - margin.top) / innerH) * (y1 - y0);
+  const rows = [];
+  CURRENCIES.forEach(c => {
+    if (!state.visible.has(c.symbol) || !matchesGroup(c)) return;
+    const s = state.data[c.symbol];
+    if (!s) return;
+    const snapped = snapToSeries(s, tAt);
+    if (!snapped) return;
+    const tv = transformValue(snapped.v, c.symbol);
+    rows.push({ symbol: c.symbol, color: c.color, v: tv, tv: tv, snapped: snapped });
+  });
+  rows.sort((a, b) => b.v - a.v);
+  let snapT = tAt;
+  if (rows.length > 0) {
+    snapT = rows[0].snapped.t;
+  }
+  const snapX = xScale(snapT);
+  const mean = rows.length > 0
+    ? rows.reduce((a, r) => a + r.v, 0) / rows.length
+    : 0;
+  document.getElementById('ch-v').setAttribute('x1', snapX);
+  document.getElementById('ch-v').setAttribute('x2', snapX);
+  document.getElementById('ch-h').setAttribute('y1', my);
+  document.getElementById('ch-h').setAttribute('y2', my);
+  const xRect = document.querySelector('#ch-xlbl rect');
+  const xText = document.querySelector('#ch-xlbl text');
+  xRect.setAttribute('x', snapX - 55);
+  xRect.setAttribute('width', 110);
+  xRect.setAttribute('class', 'crosshair-label-bg time');
+  xText.setAttribute('x', snapX);
+  xText.setAttribute('class', 'crosshair-label on-accent');
+  xText.textContent = formatTimeFull(snapT);
+  const ylblG = document.getElementById('ch-ylbl');
+  ylblG.setAttribute('transform', 'translate(0,' + (my - 9) + ')');
+  const yRect = ylblG.querySelector('rect');
+  const yText = ylblG.querySelector('text');
+  yText.textContent = formatValue(vAt);
+  let yClass = 'crosshair-label-bg';
+  let yTextClass = 'crosshair-label';
+  if (state.displayMode === 'base100') {
+    if (vAt >= 70) { yClass += ' overbought'; yTextClass += ' on-accent'; }
+    else if (vAt <= 30) { yClass += ' oversold'; yTextClass += ' on-accent'; }
+  }
+  yRect.setAttribute('class', yClass);
+  yText.setAttribute('class', yTextClass);
+  updateCrosshairDots(rows, xScale, yScale);
+  document.getElementById('status-cursor').innerHTML =
+    '<strong>Curseur:</strong> ' + formatTimeFull(snapT) + ' · ' + formatValue(vAt);
+  let html = '<div class="tooltip-header">' +
+    '<span>' + formatTimeFull(snapT) + '</span>' +
+    '<span style="color:var(--text-muted)">' + state.tf + '</span>' +
+    '</div>';
+  rows.forEach((r, i) => {
+    const delta = r.v - mean;
+    const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1);
+    const deltaClass = delta >= 0 ? 'up' : 'down';
+    html += '<div class="tooltip-row">' +
+      '<span class="tooltip-rank">#' + (i + 1) + '</span>' +
+      '<span class="tooltip-swatch" style="background:' + r.color + '"></span>' +
+      '<span>' + r.symbol + '</span>' +
+      '<span style="color:' + colorForValue(r.v) + ';font-weight:600">' +
+        formatValue(r.v) + '</span>' +
+      '<span class="tooltip-delta ' + deltaClass + '">' + deltaStr + '</span>' +
+      '</div>';
+  });
+  tooltipEl.innerHTML = html;
+  const tipW = 260;
+  let left = mx + 15;
+  if (left + tipW > W - 10) left = mx - tipW - 15;
+  tooltipEl.style.left = left + 'px';
+  tooltipEl.style.top = (my + 15) + 'px';
+  tooltipEl.classList.add('visible');
+  window.dispatchEvent(new CustomEvent('macrodesk:crosshair-move', {
+    detail: { t: snapT }
+  }));
+});
+
+chartEl.addEventListener('mouseleave', () => {
+  const ch = document.getElementById('crosshair');
+  if (ch) ch.style.display = 'none';
+  tooltipEl.classList.remove('visible');
+  document.getElementById('status-cursor').textContent = '';
+  window.dispatchEvent(new CustomEvent('macrodesk:crosshair-hide'));
+  chartEl.querySelectorAll('.ch-dot').forEach(d => d.remove());
+});
+
+chartEl.addEventListener('mouseover', (e) => {
+  const sym = e.target && e.target.getAttribute && e.target.getAttribute('data-symbol');
+  if (sym && state.hovered !== sym) { state.hovered = sym; render(); }
+});
+
+chartEl.addEventListener('mouseout', (e) => {
+  const sym = e.target && e.target.getAttribute && e.target.getAttribute('data-symbol');
+  if (sym && state.hovered === sym) { state.hovered = null; render(); }
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') resetView();
+});
+
+function resetView() {
+  state.xDomain = null; state.yDomain = null; render();
+}
+
+function populatePairList() {
+  const list = document.getElementById('pair-list');
+  list.innerHTML = '';
+  const filtered = CURRENCIES.filter(matchesGroup);
+  document.getElementById('pair-count').textContent = filtered.length;
+  filtered.forEach(c => {
+    const s = state.data[c.symbol];
+    if (!s || s.length === 0) return;
+    const last = s[s.length - 1];
+    const prev = s[s.length - 2] || last;
+    const tvNow = transformValue(last.v, c.symbol);
+    const tvPrev = transformValue(prev.v, c.symbol);
+    const delta = tvNow - tvPrev;
+    const divs = state.divergences.filter(d =>
+      (d.kind === 'currency' && d.symbol === c.symbol) ||
+      (d.kind === 'pair' && (d.a === c.symbol || d.b === c.symbol))
+    );
+    const badges = divs.map(d => '<span class="div-badge ' + d.type.toLowerCase() + '">' + d.type + '</span>').join('');
+    const row = document.createElement('div');
+    row.className = 'pair-row' + (!state.visible.has(c.symbol) ? ' hidden' : '');
+    const deltaTxt = (delta >= 0 ? '+' : '') + delta.toFixed(2);
+    row.innerHTML =
+      '<div>' +
+        '<div class="pair-name" style="color:' + c.color + '">' + c.symbol + badges + '</div>' +
+        '<div class="pair-price">' + formatValue(tvNow) + '</div>' +
+      '</div>' +
+      '<div class="pair-change ' + (delta >= 0 ? 'up' : 'down') + '">' +
+        deltaTxt + '</div>';
+    row.addEventListener('click', () => {
+      if (state.visible.has(c.symbol)) state.visible.delete(c.symbol);
+      else state.visible.add(c.symbol);
+      render(); populatePairList(); populateLegend();
+    });
+    list.appendChild(row);
+  });
+}
+
+function populateLegend() {
+  const leg = document.getElementById('legend');
+  leg.innerHTML = '';
+  CURRENCIES.filter(matchesGroup).forEach(c => {
+    const s = state.data[c.symbol];
+    if (!s || s.length === 0) return;
+    const last = s[s.length - 1];
+    const tv = transformValue(last.v, c.symbol);
+    const row = document.createElement('div');
+    row.className = 'legend-row' + (!state.visible.has(c.symbol) ? ' hidden' : '');
+    row.innerHTML =
+      '<div class="legend-swatch" style="background:' + c.color + '"></div>' +
+      '<div class="legend-name">' + c.symbol + '</div>' +
+      '<div class="legend-value" style="color:' + colorForValue(tv) + '">' +
+        formatValue(tv) + '</div>';
+    row.addEventListener('click', () => {
+      if (state.visible.has(c.symbol)) state.visible.delete(c.symbol);
+      else state.visible.add(c.symbol);
+      render(); populatePairList(); populateLegend();
+    });
+    leg.appendChild(row);
+  });
+}
+
+function populateDivPanel() {
+  const list = document.getElementById('div-list');
+  list.innerHTML = '';
+  if (state.divergences.length === 0) {
+    list.innerHTML = '<div style="color:var(--text-muted)">Aucune divergence active</div>';
+    return;
+  }
+  state.divergences.forEach(d => {
+    let displayName, color;
+    if (d.kind === 'currency') {
+      const c = CURRENCIES.find(x => x.symbol === d.symbol);
+      if (!c) return;
+      displayName = d.symbol;
+      color = c.color;
+    } else {
+      const ca = CURRENCIES.find(x => x.symbol === d.a);
+      if (!ca) return;
+      displayName = d.symbol;
+      color = ca.color;
+    }
+    const row = document.createElement('div');
+    row.className = 'div-item';
+    row.innerHTML =
+      '<span class="div-badge ' + d.type.toLowerCase() + '">' + d.type + '</span>' +
+      '<div>' +
+        '<div style="font-weight:600;color:' + color + '">' + displayName + '</div>' +
+        '<div style="color:var(--text-muted);font-size:10px">' + d.label + '</div>' +
+      '</div>' +
+      '<span style="color:var(--text-muted);font-size:10px">' + state.tf + '</span>';
+    row.addEventListener('click', () => {
+      const refSym = d.kind === 'currency' ? d.symbol : d.a;
+      const s = state.data[refSym];
+      if (!s) return;
+      const span = s[d.endIdx].t - s[d.startIdx].t;
+      state.xDomain = [s[d.startIdx].t - span * 0.3, s[d.endIdx].t + span * 0.3];
+      state.yDomain = null;
+      render();
+    });
+    list.appendChild(row);
+  });
+}
+
+document.querySelectorAll('.tf-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tf = btn.dataset.tf;
+    if (tf === state.tf) return;
+    document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.tf = tf;
+    state.xDomain = null; state.yDomain = null;
+    buildData();
+    const realCount = (state.rawData && state.rawData.timeSeries && state.rawData.timeSeries[tf])
+      ? state.rawData.timeSeries[tf].length
+      : TF_CONFIG[tf].points;
+    const updateInfo = state.lastUpdate ? ' · ' + new Date(state.lastUpdate).toLocaleString('fr-FR', {dateStyle:'short', timeStyle:'short'}) : '';
+    document.getElementById('chart-sub').textContent =
+      tf + ' · 8 devises · ' + realCount + ' points · ' + TF_CONFIG[tf].label + updateInfo;
+    populatePairList(); populateLegend(); populateDivPanel();
+    render();
+    window.dispatchEvent(new CustomEvent('macrodesk:tf-changed', { detail: { tf: tf } }));
+  });
+});
+
+document.querySelectorAll('.group-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const grp = btn.dataset.group;
+
+    // Mode Comparaison : bascule ON
+    if (grp === 'comparison') {
+      state.prevGroup = (state.group === 'comparison') ? state.prevGroup : state.group;
+      state.comparisonMode = true;
+      state.group = 'comparison';
+      document.querySelectorAll('.group-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('comparison-bar').classList.add('visible');
+      state.xDomain = null; state.yDomain = null;
+      renderComparisonUI();
+      render();
+      updateComparisonBadge();
+      // Dispatch vers mini-charts pour qu'ils se mettent à jour sur la paire sélectionnée
+      window.dispatchEvent(new CustomEvent('macrodesk:comparison-pair-changed', {
+        detail: { pair: state.comparisonPair }
+      }));
+      return;
+    }
+
+    // Quitter le mode Comparaison
+    if (state.comparisonMode) {
+      state.comparisonMode = false;
+      document.getElementById('comparison-bar').classList.remove('visible');
+      document.getElementById('comparison-badge').classList.remove('visible');
+      // Retour aux mini-charts normaux
+      window.dispatchEvent(new CustomEvent('macrodesk:comparison-pair-changed', {
+        detail: { pair: null }
+      }));
+    }
+
+    document.querySelectorAll('.group-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.group = grp;
+    state.xDomain = null; state.yDomain = null;
+    populatePairList(); populateLegend(); render();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// V5 — Population des pills Comparaison (devises + paires + corr)
+// ═══════════════════════════════════════════════════════════════
+function renderComparisonUI() {
+  // Devises
+  const currBox = document.getElementById('cmp-currency-buttons');
+  currBox.innerHTML = '';
+  CURRENCIES.forEach(c => {
+    const b = document.createElement('button');
+    b.className = 'pill' + (c.symbol === state.comparisonCurrency ? ' active-curr' : '');
+    b.textContent = c.symbol;
+    b.style.borderLeftColor = c.color;
+    b.addEventListener('click', () => {
+      state.comparisonCurrency = c.symbol;
+      currBox.querySelectorAll('button').forEach(x => x.classList.remove('active-curr'));
+      b.classList.add('active-curr');
+      render();
+      updateComparisonBadge();
+    });
+    currBox.appendChild(b);
+  });
+
+  // Paires (17)
+  const pairBox = document.getElementById('cmp-pair-buttons');
+  pairBox.innerHTML = '';
+  PAIRS.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'pill' + (p.symbol === state.comparisonPair ? ' active-pair' : '');
+    b.textContent = p.base + '/' + p.quote;
+    b.addEventListener('click', async () => {
+      state.comparisonPair = p.symbol;
+      pairBox.querySelectorAll('button').forEach(x => x.classList.remove('active-pair'));
+      b.classList.add('active-pair');
+      // Assure que le cache est chargé (au cas où)
+      await loadComparisonPrices();
+      state.xDomain = null;
+      render();
+      updateComparisonBadge();
+      // Informe les mini-charts
+      window.dispatchEvent(new CustomEvent('macrodesk:comparison-pair-changed', {
+        detail: { pair: state.comparisonPair }
+      }));
+    });
+    pairBox.appendChild(b);
+  });
+
+  // Corrélation toggle
+  const corrBox = document.getElementById('cmp-corr-buttons');
+  corrBox.querySelectorAll('button').forEach(b => {
+    b.classList.remove('active-corr');
+    if (b.dataset.corr === state.comparisonCorrMethod) b.classList.add('active-corr');
+    b.onclick = () => {
+      state.comparisonCorrMethod = b.dataset.corr;
+      corrBox.querySelectorAll('button').forEach(x => x.classList.remove('active-corr'));
+      b.classList.add('active-corr');
+      render();
+      updateComparisonBadge();
+    };
+  });
+}
+
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.mode;
+    if (mode === state.displayMode) return;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.displayMode = mode;
+    state.yDomain = null;
+    populateLegend(); render();
+  });
+});
+
+document.getElementById('btn-reset').addEventListener('click', resetView);
+document.getElementById('btn-divs').addEventListener('click', () => {
+  document.getElementById('div-panel').classList.toggle('visible');
+});
+document.getElementById('btn-fullscreen').addEventListener('click', () => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+  else document.exitFullscreen();
+});
+
+function updateSessions() {
+  const h = new Date().getUTCHours();
+  const map = {
+    'session-sydney': h >= 22 || h < 7,
+    'session-tokyo':  h >= 0 && h < 9,
+    'session-london': h >= 8 && h < 17,
+    'session-ny':     h >= 13 && h < 22
+  };
+  Object.entries(map).forEach(([id, active]) => {
+    const elx = document.getElementById(id);
+    if (!elx) return;
+    elx.classList.toggle('active', active);
+    const base = elx.textContent.split(' ·')[0].trim();
+    elx.textContent = active ? (base + ' · LIVE') : base;
+  });
+}
+
+async function bootstrap() {
+  const subEl = document.getElementById('chart-sub');
+  if (subEl) subEl.textContent = 'Chargement des données Yahoo…';
+  const ok = await loadMacroData();
+  if (!ok) {
+    if (subEl) subEl.textContent = '⚠️ Erreur : ' + (state.loadError || 'données indisponibles');
+  }
+  // Pré-charge les prix (pour mode Comparaison) en arrière-plan
+  loadComparisonPrices();
+
+  buildData();
+  populatePairList();
+  populateLegend();
+  populateDivPanel();
+  updateSessions();
+  setInterval(updateSessions, 60000);
+  const ptsCount = (state.rawData && state.rawData.timeSeries && state.rawData.timeSeries[state.tf])
+    ? state.rawData.timeSeries[state.tf].length
+    : 0;
+  const updateInfo = state.lastUpdate ? ' · ' + new Date(state.lastUpdate).toLocaleString('fr-FR', {dateStyle:'short', timeStyle:'short'}) : '';
+  if (subEl) subEl.textContent =
+    state.tf + ' · 8 devises · ' + ptsCount + ' points · ' + TF_CONFIG[state.tf].label + updateInfo;
+  render();
+}
+
+bootstrap();
+
+window.addEventListener('resize', render);
+
+// ══════════════════════════════════════════════════════════════
+// V2.2 : MINI-CHARTS PAIRES multi-TF (synchronisés avec CSI) + crosshair sync
+// ══════════════════════════════════════════════════════════════
+(function initPairMiniCharts(){
+  'use strict';
+
+  var PAIR_CONFIG = [
+    { pair: 'AUD/JPY', id: 'audjpy', decimals: 3 },
+    { pair: 'NZD/JPY', id: 'nzdjpy', decimals: 3 },
+    { pair: 'AUD/USD', id: 'audusd', decimals: 5 }
+  ];
+
+  var pairsData = null;
+  var currentTF = '4H';
+
+  async function loadPricesHistory(){
+    try{
+      var res = await fetch('data/prices_history.json?t=' + Date.now());
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      var data = await res.json();
+      return data;
+    } catch(e){
+      console.warn('[V2.2 Mini-charts] Impossible de charger prices_history.json:', e.message);
+      return null;
+    }
+  }
+
+  function getSeriesForTF(pair, tf){
+    if(!pairsData || !pairsData.pairsHistory) return [];
+    var ph = pairsData.pairsHistory[pair];
+    if(!ph) return [];
+    if(ph[tf] && Array.isArray(ph[tf])) return ph[tf];
+    if(Array.isArray(ph)) return tf === '4H' ? ph : [];
+    return [];
+  }
+
+  function getVerdictForPair(pair){
+    try{
+      if(window.MACRODESK_CSI_ANALYSIS && window.MACRODESK_CSI_ANALYSIS.pairInsights){
+        var pi = window.MACRODESK_CSI_ANALYSIS.pairInsights[pair];
+        if(pi && pi.recommendation){
+          var rec = pi.recommendation.toUpperCase();
+          if(rec.indexOf('DIVERG') >= 0) return 'divergence';
+          if(rec.indexOf('BULLISH') >= 0 || rec.indexOf('HAUSSIER') >= 0) return 'bullish';
+          if(rec.indexOf('BEARISH') >= 0 || rec.indexOf('BAISSIER') >= 0) return 'bearish';
+        }
+      }
+    } catch(e){}
+    return 'neutral';
+  }
+
+  function getVerdictLabel(v){
+    if(v === 'bullish')    return '▲ HAUSSIER';
+    if(v === 'bearish')    return '▼ BAISSIER';
+    if(v === 'divergence') return '⚠ DIVERGENCE';
+    return '— NEUTRE';
+  }
+
+  function fmtDate(ms, tf){
+    var d = new Date(ms);
+    var pad = function(n){ return n < 10 ? '0'+n : ''+n; };
+    if(tf === 'Daily') return pad(d.getDate()) + '/' + pad(d.getMonth()+1);
+    if(tf === '15m' || tf === '1H') return pad(d.getDate()) + '/' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + 'h';
+    return pad(d.getDate()) + '/' + pad(d.getMonth()+1) + ' ' + pad(d.getHours()) + 'h';
+  }
+
+  function drawSparkline(svgEl, series, tf){
+    if(!series || series.length < 2){
+      svgEl.innerHTML = '<text x="50%" y="50%" fill="#6b7490" font-size="10" text-anchor="middle" font-family="JetBrains Mono">no data</text>';
+      return;
+    }
+    var W = svgEl.clientWidth || 300;
+    var H = svgEl.clientHeight || 70;
+    svgEl.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    svgEl.setAttribute('preserveAspectRatio', 'none');
+    var prices = series.map(function(p){ return p.price; });
+    var minP = Math.min.apply(null, prices);
+    var maxP = Math.max.apply(null, prices);
+    var range = Math.max(maxP - minP, 0.00001);
+    var padT = 8, padB = 16;
+    var plotH = H - padT - padB;
+    var firstP = prices[0];
+    var lastP  = prices[prices.length - 1];
+    var trendUp = lastP >= firstP;
+    var colorStroke = trendUp ? '#26d07c' : '#ff4757';
+    var colorFill   = trendUp ? 'rgba(38,208,124,0.12)' : 'rgba(255,71,87,0.12)';
+    var pathD = '';
+    for(var i = 0; i < prices.length; i++){
+      var x = (i / (prices.length - 1)) * W;
+      var y = padT + (1 - (prices[i] - minP) / range) * plotH;
+      pathD += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1) + ' ';
+    }
+    var fillD = pathD + 'L' + W + ',' + (padT + plotH) + ' L0,' + (padT + plotH) + ' Z';
+    var labels = '';
+    if(series.length >= 2){
+      var startT = series[0].t;
+      var midT   = series[Math.floor(series.length / 2)].t;
+      var endT   = series[series.length - 1].t;
+      labels += '<text x="2" y="' + (H - 4) + '" class="mc-axis">' + fmtDate(startT, tf) + '</text>';
+      labels += '<text x="' + (W/2) + '" y="' + (H - 4) + '" class="mc-axis" text-anchor="middle">' + fmtDate(midT, tf) + '</text>';
+      labels += '<text x="' + (W - 2) + '" y="' + (H - 4) + '" class="mc-axis" text-anchor="end">' + fmtDate(endT, tf) + '</text>';
+    }
+    svgEl.innerHTML =
+      '<style>.mc-axis{fill:#6b7490;font-size:9px;font-family:"JetBrains Mono",monospace;}</style>' +
+      '<path d="' + fillD + '" fill="' + colorFill + '" />' +
+      '<path d="' + pathD + '" stroke="' + colorStroke + '" stroke-width="1.5" fill="none" stroke-linejoin="round" />' +
+      labels;
+  }
+
+  function updateMiniCard(cfg, series, tf){
+    var el = document.querySelector('.pair-mini[data-pair="' + cfg.pair + '"]');
+    if(!el) return;
+    if(!series || series.length === 0){
+      el.querySelector('#pm-' + cfg.id + '-price').textContent = '—';
+      el.querySelector('#pm-' + cfg.id + '-chg').textContent = '';
+      el.querySelector('#pm-' + cfg.id + '-hl').textContent = 'TF ' + tf + ' : données indispo';
+      el.querySelector('#pm-' + cfg.id + '-verdict').textContent = '—';
+      drawSparkline(el.querySelector('.pair-mini-chart'), null, tf);
+      return;
+    }
+    var prices = series.map(function(p){ return p.price; });
+    var firstP = prices[0];
+    var lastP  = prices[prices.length - 1];
+    var high   = Math.max.apply(null, prices);
+    var low    = Math.min.apply(null, prices);
+    var pctChg = ((lastP - firstP) / firstP) * 100;
+    el.querySelector('#pm-' + cfg.id + '-price').textContent = lastP.toFixed(cfg.decimals);
+    var chgEl = el.querySelector('#pm-' + cfg.id + '-chg');
+    chgEl.textContent = (pctChg >= 0 ? '+' : '') + pctChg.toFixed(2) + '%';
+    chgEl.className = 'pair-mini-change ' + (pctChg >= 0 ? 'up' : 'down');
+    el.querySelector('#pm-' + cfg.id + '-hl').textContent =
+      '[' + tf + '] H: ' + high.toFixed(cfg.decimals) + ' / L: ' + low.toFixed(cfg.decimals) + ' · ' + series.length + ' pts';
+    var verdict = getVerdictForPair(cfg.pair);
+    el.setAttribute('data-verdict', verdict);
+    var verdictEl = el.querySelector('#pm-' + cfg.id + '-verdict');
+    verdictEl.textContent = getVerdictLabel(verdict);
+    verdictEl.className = 'pair-mini-verdict ' + verdict;
+    drawSparkline(el.querySelector('.pair-mini-chart'), series, tf);
+  }
+
+  function redrawAll(){
+    PAIR_CONFIG.forEach(function(cfg){
+      var series = getSeriesForTF(cfg.pair, currentTF);
+      updateMiniCard(cfg, series, currentTF);
+    });
+  }
+
+  async function boot(){
+    pairsData = await loadPricesHistory();
+    if(!pairsData){
+      PAIR_CONFIG.forEach(function(cfg){ updateMiniCard(cfg, null, currentTF); });
+      return;
+    }
+    redrawAll();
+    console.log('[V2.2 Mini-charts] Chargé · version=' + (pairsData.version || 'V1') + ' · TF courant=' + currentTF);
+  }
+
+  window.addEventListener('macrodesk:tf-changed', function(e){
+    if(e.detail && e.detail.tf){
+      currentTF = e.detail.tf;
+      redrawAll();
+    }
+  });
+
+  // V5 : Mode Comparaison — remplace les 3 mini-charts par la paire active
+  var defaultConfig = PAIR_CONFIG.slice();  // sauvegarde
+  window.addEventListener('macrodesk:comparison-pair-changed', function(e){
+    var pairSymbol = e.detail && e.detail.pair;
+    if (pairSymbol) {
+      // Basculer sur la paire unique (affichée dans les 3 cards de façon répétée ?
+      // Non : on remplace la config par 1 seule entrée et on cache les 2 autres cards.
+      // Plus simple : on garde les 3 cards mais la même paire est dupliquée sur les 3
+      // (ou on cache les 2 dernières). Option : on cache les 2 dernières.
+      var infoList = window.__parent_PAIRS || [];
+      var info = null;
+      // Résoudre symbol → base/quote
+      var defaultList = [
+        {symbol:'EURUSD',base:'EUR',quote:'USD'},
+        {symbol:'GBPUSD',base:'GBP',quote:'USD'},
+        {symbol:'AUDUSD',base:'AUD',quote:'USD'},
+        {symbol:'NZDUSD',base:'NZD',quote:'USD'},
+        {symbol:'USDJPY',base:'USD',quote:'JPY'},
+        {symbol:'USDCHF',base:'USD',quote:'CHF'},
+        {symbol:'USDCAD',base:'USD',quote:'CAD'},
+        {symbol:'EURJPY',base:'EUR',quote:'JPY'},
+        {symbol:'GBPJPY',base:'GBP',quote:'JPY'},
+        {symbol:'AUDJPY',base:'AUD',quote:'JPY'},
+        {symbol:'NZDJPY',base:'NZD',quote:'JPY'},
+        {symbol:'CHFJPY',base:'CHF',quote:'JPY'},
+        {symbol:'CADJPY',base:'CAD',quote:'JPY'},
+        {symbol:'EURGBP',base:'EUR',quote:'GBP'},
+        {symbol:'EURCHF',base:'EUR',quote:'CHF'},
+        {symbol:'EURCAD',base:'EUR',quote:'CAD'},
+        {symbol:'AUDNZD',base:'AUD',quote:'NZD'}
+      ];
+      info = defaultList.find(function(p){ return p.symbol === pairSymbol; });
+      if (!info) return;
+      var pairFormatted = info.base + '/' + info.quote;
+
+      // Mode Comparaison : la 1ère card affiche la paire active, les 2 autres sont masquées
+      var cards = document.querySelectorAll('.pair-mini');
+      cards[0].style.display = '';
+      cards[0].setAttribute('data-pair', pairFormatted);
+      cards[0].querySelector('.pair-mini-name').textContent = pairFormatted;
+      // Les autres cards masquées
+      for (var k = 1; k < cards.length; k++) cards[k].style.display = 'none';
+      // Reconstruit la config pour redrawAll
+      PAIR_CONFIG.length = 0;
+      PAIR_CONFIG.push({
+        pair: pairFormatted,
+        id: 'audjpy',   // réutilise les IDs HTML existants (seul le 1er sert)
+        decimals: (info.quote === 'JPY') ? 3 : (info.base === 'AUD' && info.quote === 'USD' ? 5 : 4)
+      });
+      // Reset les IDs qu'on va écrire dans la card visible
+      cards[0].querySelector('.pair-mini-price').id = 'pm-audjpy-price';
+      cards[0].querySelector('.pair-mini-change').id = 'pm-audjpy-chg';
+      cards[0].querySelector('.pair-mini-foot > span:first-child').id = 'pm-audjpy-hl';
+      cards[0].querySelector('.pair-mini-verdict').id = 'pm-audjpy-verdict';
+      redrawAll();
+    } else {
+      // Retour mode normal : restaurer les 3 cards + config par défaut
+      var cards = document.querySelectorAll('.pair-mini');
+      PAIR_CONFIG.length = 0;
+      defaultConfig.forEach(function(c){ PAIR_CONFIG.push(c); });
+      cards.forEach(function(card, idx){
+        card.style.display = '';
+        if (defaultConfig[idx]) {
+          card.setAttribute('data-pair', defaultConfig[idx].pair);
+          card.querySelector('.pair-mini-name').textContent = defaultConfig[idx].pair;
+        }
+      });
+      redrawAll();
+    }
+  });
+
+  window.addEventListener('resize', function(){
+    redrawAll();
+  });
+
+  var activeTfBtn = document.querySelector('.tf-btn.active');
+  if(activeTfBtn && activeTfBtn.dataset.tf){
+    currentTF = activeTfBtn.dataset.tf;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Sync crosshair depuis le chart principal → mini-charts
+  // ═══════════════════════════════════════════════════════════════
+  (function setupMiniCrosshairSync(){
+    var cards = document.querySelectorAll('.pair-mini');
+    cards.forEach(function(card){
+      var line = document.createElement('div');
+      line.className = 'mini-crosshair';
+      var label = document.createElement('div');
+      label.className = 'mini-crosshair-label';
+      line.appendChild(label);
+      card.appendChild(line);
+    });
+
+    function getPairFromCard(card){
+      return card.getAttribute('data-pair');
+    }
+
+    function findNearestPriceAtTime(pair, tMs, tf){
+      var series = getSeriesForTF(pair, tf);
+      if(!series || series.length === 0) return null;
+      var lo = 0, hi = series.length - 1;
+      while(lo < hi){
+        var m = (lo + hi) >> 1;
+        if(series[m].t < tMs) lo = m + 1; else hi = m;
+      }
+      var a = series[lo];
+      var b = lo > 0 ? series[lo - 1] : null;
+      if(!b) return a;
+      return Math.abs(a.t - tMs) < Math.abs(b.t - tMs) ? a : b;
+    }
+
+    window.addEventListener('macrodesk:crosshair-move', function(e){
+      var tMs = e.detail && e.detail.t;
+      if(tMs == null) return;
+      cards.forEach(function(card){
+        var pair = getPairFromCard(card);
+        var svg = card.querySelector('.pair-mini-chart');
+        var line = card.querySelector('.mini-crosshair');
+        var label = card.querySelector('.mini-crosshair-label');
+        if(!svg || !line) return;
+        var point = findNearestPriceAtTime(pair, tMs, currentTF);
+        if(!point){
+          line.classList.remove('visible');
+          return;
+        }
+        var series = getSeriesForTF(pair, currentTF);
+        if(!series || series.length < 2){
+          line.classList.remove('visible');
+          return;
+        }
+        var svgRect = svg.getBoundingClientRect();
+        var cardRect = card.getBoundingClientRect();
+        var svgLeftInCard = svgRect.left - cardRect.left;
+        var tMin = series[0].t;
+        var tMax = series[series.length - 1].t;
+        var tRange = tMax - tMin || 1;
+        var ratio = (point.t - tMin) / tRange;
+        ratio = Math.max(0, Math.min(1, ratio));
+        var xInSvg = ratio * svgRect.width;
+        var xInCard = svgLeftInCard + xInSvg;
+        line.style.left = xInCard + 'px';
+        line.style.top = (svgRect.top - cardRect.top) + 'px';
+        line.style.height = svgRect.height + 'px';
+        line.style.bottom = 'auto';
+        line.classList.add('visible');
+        var cfg = PAIR_CONFIG.find(function(c){ return c.pair === pair; });
+        var decimals = cfg ? cfg.decimals : 4;
+        label.textContent = point.price.toFixed(decimals);
+      });
+    });
+
+    window.addEventListener('macrodesk:crosshair-hide', function(){
+      cards.forEach(function(card){
+        var line = card.querySelector('.mini-crosshair');
+        if(line) line.classList.remove('visible');
+      });
+    });
+  })();
+
+  boot();
+})();
+</script>
+</body>
+</html>
