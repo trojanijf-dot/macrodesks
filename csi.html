@@ -1349,6 +1349,44 @@ chartEl.addEventListener('dblclick', (e) => {
   if (e.target.classList && e.target.classList.contains('plot-bg')) resetView();
 });
 
+// Helper : snap au point le plus proche d'une série pour un timestamp donné
+function snapToSeries(series, tAt) {
+  if (!series || series.length === 0) return null;
+  let lo = 0, hi = series.length - 1;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (series[m].t < tAt) lo = m + 1; else hi = m;
+  }
+  // Compare lo et lo-1 pour choisir le plus proche
+  const a = series[lo];
+  const b = lo > 0 ? series[lo - 1] : null;
+  if (!b) return a;
+  return Math.abs(a.t - tAt) < Math.abs(b.t - tAt) ? a : b;
+}
+ 
+// Helper : ajoute/met à jour les dots sur les courbes au timestamp du crosshair
+function updateCrosshairDots(rows, tAt, xScale, yScale) {
+  // Supprime les anciens dots
+  const oldDots = chartEl.querySelectorAll('.ch-dot');
+  oldDots.forEach(d => d.remove());
+ 
+  // Ajoute un dot par série visible
+  const g = document.getElementById('crosshair');
+  if (!g) return;
+  rows.forEach(r => {
+    if (r.snapped == null) return;
+    const cx = xScale(r.snapped.t);
+    const cy = yScale(r.tv);
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('class', 'ch-dot');
+    dot.setAttribute('cx', cx);
+    dot.setAttribute('cy', cy);
+    dot.setAttribute('r', 3.5);
+    dot.setAttribute('fill', r.color);
+    g.appendChild(dot);
+  });
+}
+ 
 chartEl.addEventListener('mousemove', (e) => {
   if (panState) return;
   const rect = chartEl.getBoundingClientRect();
@@ -1356,73 +1394,130 @@ chartEl.addEventListener('mousemove', (e) => {
   const my = e.clientY - rect.top;
   const inPlot = mx >= margin.left && mx <= margin.left + innerW
               && my >= margin.top && my <= margin.top + innerH;
-
+ 
   const ch = document.getElementById('crosshair');
   if (!inPlot) {
     if (ch) ch.style.display = 'none';
     tooltipEl.classList.remove('visible');
     document.getElementById('status-cursor').textContent = '';
+    // Cache aussi le crosshair sync des mini-charts
+    window.dispatchEvent(new CustomEvent('macrodesk:crosshair-hide'));
+    // Clean dots
+    chartEl.querySelectorAll('.ch-dot').forEach(d => d.remove());
     return;
   }
   if (ch) ch.style.display = '';
-
+ 
   const [x0, x1] = state.xDomain;
   const [y0, y1] = state.yDomain;
+  const xSpan = x1 - x0 || 1;
+  const ySpan = y1 - y0 || 1;
+  const xScale = t => margin.left + ((t - x0) / xSpan) * innerW;
+  const yScale = v => margin.top + innerH - ((v - y0) / ySpan) * innerH;
+ 
   const tAt = x0 + ((mx - margin.left) / innerW) * (x1 - x0);
   const vAt = y1 - ((my - margin.top) / innerH) * (y1 - y0);
-
-  document.getElementById('ch-v').setAttribute('x1', mx);
-  document.getElementById('ch-v').setAttribute('x2', mx);
-  document.getElementById('ch-h').setAttribute('y1', my);
-  document.getElementById('ch-h').setAttribute('y2', my);
-
-  const xRect = document.querySelector('#ch-xlbl rect');
-  const xText = document.querySelector('#ch-xlbl text');
-  xRect.setAttribute('x', mx - 45);
-  xText.setAttribute('x', mx);
-  xText.textContent = formatTimeFull(tAt);
-
-  const ylblG = document.getElementById('ch-ylbl');
-  ylblG.setAttribute('transform', 'translate(0,' + (my - 9) + ')');
-  const yText = ylblG.querySelector('text');
-  yText.textContent = formatValue(vAt);
-
-  document.getElementById('status-cursor').innerHTML =
-    '<strong>Curseur:</strong> ' + formatTimeFull(tAt) + ' · ' + formatValue(vAt);
-
+ 
+  // Collecte des valeurs de chaque série au timestamp, avec snap
   const rows = [];
   CURRENCIES.forEach(c => {
     if (!state.visible.has(c.symbol) || !matchesGroup(c)) return;
     const s = state.data[c.symbol];
     if (!s) return;
-    let lo = 0, hi = s.length - 1;
-    while (lo < hi) {
-      const m = (lo + hi) >> 1;
-      if (s[m].t < tAt) lo = m + 1; else hi = m;
-    }
-    const pt = s[Math.max(0, Math.min(lo, s.length - 1))];
-    const tv = transformValue(pt.v, c.symbol);
-    rows.push({ symbol: c.symbol, color: c.color, v: tv });
+    const snapped = snapToSeries(s, tAt);
+    if (!snapped) return;
+    const tv = transformValue(snapped.v, c.symbol);
+    rows.push({ symbol: c.symbol, color: c.color, v: tv, tv: tv, snapped: snapped });
   });
   rows.sort((a, b) => b.v - a.v);
-
-  let html = '<div class="tooltip-header"><span>' + formatTimeFull(tAt) + '</span><span>' + state.tf + '</span></div>';
-  rows.forEach(r => {
+ 
+  // Snap du crosshair vertical sur le timestamp le plus proche (tous symboles confondus)
+  // On prend le timestamp médian des snapped pour stabilité
+  let snapT = tAt;
+  if (rows.length > 0) {
+    // Utilise la première série visible comme référence de snap
+    snapT = rows[0].snapped.t;
+  }
+  const snapX = xScale(snapT);
+ 
+  // Calcul de la moyenne pour les deltas
+  const mean = rows.length > 0
+    ? rows.reduce((a, r) => a + r.v, 0) / rows.length
+    : 0;
+ 
+  // --- LIGNES DU CROSSHAIR ---
+  document.getElementById('ch-v').setAttribute('x1', snapX);
+  document.getElementById('ch-v').setAttribute('x2', snapX);
+  document.getElementById('ch-h').setAttribute('y1', my);
+  document.getElementById('ch-h').setAttribute('y2', my);
+ 
+  // --- LABEL X (temps) ---
+  const xRect = document.querySelector('#ch-xlbl rect');
+  const xText = document.querySelector('#ch-xlbl text');
+  xRect.setAttribute('x', snapX - 55);
+  xRect.setAttribute('width', 110);
+  xRect.setAttribute('class', 'crosshair-label-bg time');
+  xText.setAttribute('x', snapX);
+  xText.setAttribute('class', 'crosshair-label on-accent');
+  xText.textContent = formatTimeFull(snapT);
+ 
+  // --- LABEL Y (valeur) avec couleur selon zone ---
+  const ylblG = document.getElementById('ch-ylbl');
+  ylblG.setAttribute('transform', 'translate(0,' + (my - 9) + ')');
+  const yRect = ylblG.querySelector('rect');
+  const yText = ylblG.querySelector('text');
+  yText.textContent = formatValue(vAt);
+ 
+  // Colorise le pill Y selon la zone (base100 uniquement)
+  let yClass = 'crosshair-label-bg';
+  let yTextClass = 'crosshair-label';
+  if (state.displayMode === 'base100') {
+    if (vAt >= 70) { yClass += ' overbought'; yTextClass += ' on-accent'; }
+    else if (vAt <= 30) { yClass += ' oversold'; yTextClass += ' on-accent'; }
+  }
+  yRect.setAttribute('class', yClass);
+  yText.setAttribute('class', yTextClass);
+ 
+  // --- DOTS sur chaque courbe ---
+  updateCrosshairDots(rows, snapT, xScale, yScale);
+ 
+  // --- STATUS BAR ---
+  document.getElementById('status-cursor').innerHTML =
+    '<strong>Curseur:</strong> ' + formatTimeFull(snapT) + ' · ' + formatValue(vAt);
+ 
+  // --- TOOLTIP avec rank + delta ---
+  let html = '<div class="tooltip-header">' +
+    '<span>' + formatTimeFull(snapT) + '</span>' +
+    '<span style="color:var(--text-muted)">' + state.tf + '</span>' +
+    '</div>';
+  rows.forEach((r, i) => {
+    const delta = r.v - mean;
+    const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(1);
+    const deltaClass = delta >= 0 ? 'up' : 'down';
     html += '<div class="tooltip-row">' +
+      '<span class="tooltip-rank">#' + (i + 1) + '</span>' +
       '<span class="tooltip-swatch" style="background:' + r.color + '"></span>' +
       '<span>' + r.symbol + '</span>' +
-      '<span style="color:' + colorForValue(r.v) + '">' +
-      formatValue(r.v) + '</span></div>';
+      '<span style="color:' + colorForValue(r.v) + ';font-weight:600">' +
+        formatValue(r.v) + '</span>' +
+      '<span class="tooltip-delta ' + deltaClass + '">' + deltaStr + '</span>' +
+      '</div>';
   });
   tooltipEl.innerHTML = html;
-
-  const tipW = 220;
+ 
+  const tipW = 260;
   let left = mx + 15;
   if (left + tipW > W - 10) left = mx - tipW - 15;
   tooltipEl.style.left = left + 'px';
   tooltipEl.style.top = (my + 15) + 'px';
   tooltipEl.classList.add('visible');
+ 
+  // --- SYNC MINI-CHARTS ---
+  window.dispatchEvent(new CustomEvent('macrodesk:crosshair-move', {
+    detail: { t: snapT }
+  }));
 });
+ 
 
 chartEl.addEventListener('mouseleave', () => {
   const ch = document.getElementById('crosshair');
