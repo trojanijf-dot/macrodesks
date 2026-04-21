@@ -1517,7 +1517,150 @@ chartEl.addEventListener('mousemove', (e) => {
     detail: { t: snapT }
   }));
 });
- 
+/* ═══════════════════════════════════════════════════════════════
+   PATCH DE RESTAURATION — Code supprimé par erreur lors du patch [B]
+   ═══════════════════════════════════════════════════════════════
+   
+   PLACEMENT :
+   Colle ce bloc JUSTE APRÈS ton `});` du nouveau handler mousemove
+   (ligne ~1519 dans ton fichier actuel) et AVANT le
+   `chartEl.addEventListener('mouseleave', ...)` existant (ligne 1522).
+   
+   En gros : entre les lignes 1520 (vide) et 1522 chez toi,
+   tu insères tout le contenu ci-dessous.
+   ═══════════════════════════════════════════════════════════════ */
+
+chartEl.addEventListener('mouseover', (e) => {
+  const sym = e.target && e.target.getAttribute && e.target.getAttribute('data-symbol');
+  if (sym && state.hovered !== sym) { state.hovered = sym; render(); }
+});
+
+chartEl.addEventListener('mouseout', (e) => {
+  const sym = e.target && e.target.getAttribute && e.target.getAttribute('data-symbol');
+  if (sym && state.hovered === sym) { state.hovered = null; render(); }
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') resetView();
+});
+
+function resetView() {
+  state.xDomain = null; state.yDomain = null; render();
+}
+
+function populatePairList() {
+  const list = document.getElementById('pair-list');
+  list.innerHTML = '';
+  const filtered = CURRENCIES.filter(matchesGroup);
+  document.getElementById('pair-count').textContent = filtered.length;
+  filtered.forEach(c => {
+    const s = state.data[c.symbol];
+    if (!s || s.length === 0) return;
+    const last = s[s.length - 1];
+    const prev = s[s.length - 2];
+    const tvNow = transformValue(last.v, c.symbol);
+    const tvPrev = transformValue(prev.v, c.symbol);
+    const delta = tvNow - tvPrev;
+    const divs = state.divergences.filter(d =>
+      (d.kind === 'currency' && d.symbol === c.symbol) ||
+      (d.kind === 'pair' && (d.a === c.symbol || d.b === c.symbol))
+    );
+    const badges = divs.map(d => '<span class="div-badge ' + d.type.toLowerCase() + '">' + d.type + '</span>').join('');
+    const row = document.createElement('div');
+    row.className = 'pair-row' + (!state.visible.has(c.symbol) ? ' hidden' : '');
+    const deltaTxt = (delta >= 0 ? '+' : '') + delta.toFixed(2);
+    row.innerHTML =
+      '<div>' +
+        '<div class="pair-name" style="color:' + c.color + '">' + c.symbol + badges + '</div>' +
+        '<div class="pair-price">' + formatValue(tvNow) + '</div>' +
+      '</div>' +
+      '<div class="pair-change ' + (delta >= 0 ? 'up' : 'down') + '">' +
+        deltaTxt + '</div>';
+    row.addEventListener('click', () => {
+      if (state.visible.has(c.symbol)) state.visible.delete(c.symbol);
+      else state.visible.add(c.symbol);
+      render(); populatePairList(); populateLegend();
+    });
+    list.appendChild(row);
+  });
+}
+
+function populateLegend() {
+  const leg = document.getElementById('legend');
+  leg.innerHTML = '';
+  CURRENCIES.filter(matchesGroup).forEach(c => {
+    const s = state.data[c.symbol];
+    if (!s || s.length === 0) return;
+    const last = s[s.length - 1];
+    const tv = transformValue(last.v, c.symbol);
+    const row = document.createElement('div');
+    row.className = 'legend-row' + (!state.visible.has(c.symbol) ? ' hidden' : '');
+    row.innerHTML =
+      '<div class="legend-swatch" style="background:' + c.color + '"></div>' +
+      '<div class="legend-name">' + c.symbol + '</div>' +
+      '<div class="legend-value" style="color:' + colorForValue(tv) + '">' +
+        formatValue(tv) + '</div>';
+    row.addEventListener('click', () => {
+      if (state.visible.has(c.symbol)) state.visible.delete(c.symbol);
+      else state.visible.add(c.symbol);
+      render(); populatePairList(); populateLegend();
+    });
+    leg.appendChild(row);
+  });
+}
+
+function populateDivPanel() {
+  const list = document.getElementById('div-list');
+  list.innerHTML = '';
+  if (state.divergences.length === 0) {
+    list.innerHTML = '<div style="color:var(--text-muted)">Aucune divergence active</div>';
+    return;
+  }
+  state.divergences.forEach(d => {
+    let displayName, color;
+    if (d.kind === 'currency') {
+      const c = CURRENCIES.find(x => x.symbol === d.symbol);
+      if (!c) return;
+      displayName = d.symbol;
+      color = c.color;
+    } else {
+      const ca = CURRENCIES.find(x => x.symbol === d.a);
+      if (!ca) return;
+      displayName = d.symbol;
+      color = ca.color;
+    }
+    const row = document.createElement('div');
+    row.className = 'div-item';
+    row.innerHTML =
+      '<span class="div-badge ' + d.type.toLowerCase() + '">' + d.type + '</span>' +
+      '<div>' +
+        '<div style="font-weight:600;color:' + color + '">' + displayName + '</div>' +
+        '<div style="color:var(--text-muted);font-size:10px">' + d.label + '</div>' +
+      '</div>' +
+      '<span style="color:var(--text-muted);font-size:10px">' + state.tf + '</span>';
+    row.addEventListener('click', () => {
+      const refSym = d.kind === 'currency' ? d.symbol : d.a;
+      const s = state.data[refSym];
+      if (!s) return;
+      const span = s[d.endIdx].t - s[d.startIdx].t;
+      state.xDomain = [s[d.startIdx].t - span * 0.3, s[d.endIdx].t + span * 0.3];
+      state.yDomain = null;
+      render();
+    });
+    list.appendChild(row);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FIN DU BLOC DE RESTAURATION
+   
+   Après collage, vérifie dans la console :
+     typeof populatePairList     → "function"  ✅
+     typeof resetView            → "function"  ✅
+     document.querySelectorAll('.pair-line').length → 8
+   
+   Le chart doit réapparaître avec toutes ses courbes.
+   ═══════════════════════════════════════════════════════════════ */ 
 
 chartEl.addEventListener('mouseleave', () => {
   const ch = document.getElementById('crosshair');
