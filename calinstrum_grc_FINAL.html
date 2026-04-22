@@ -146,13 +146,19 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .doc-totals td{padding:3px 6px}
 .doc-totals td:last-child{text-align:right;font-weight:600}
 .dtf td{font-size:12.5px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:5px}
-.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:8px 11px;font-size:13px;color:#444;margin-bottom:12px}
-.doc-bank{background:#eef2f7;padding:8px 11px;border-radius:3px;margin-bottom:12px;font-size:13px}
+.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:8px 11px;font-size:10px;color:#444;margin-bottom:12px}
+.doc-bank{background:#eef2f7;padding:8px 11px;border-radius:3px;margin-bottom:12px;font-size:10px}
 .doc-bank strong{display:block;color:#1e3a5f;margin-bottom:3px}
-.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-top:16px;padding-top:10px;border-top:1px solid #ddd}
-.doc-sign-box{text-align:center;font-size:10px;display:flex;flex-direction:column;justify-content:space-between;min-height:140px}
+.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-top:16px;padding-top:10px;border-top:1px solid #ddd;align-items:stretch}
+.doc-sign-box{text-align:center;font-size:10px;display:flex;flex-direction:column;min-height:150px}
+.doc-sign-box .dsl{font-weight:700;margin-bottom:3px;color:#1e3a5f;flex-shrink:0}
+.doc-sign-box .ds-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:stretch}
+.doc-sign-box .ds-siglot{height:70px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:2px}
+.doc-sign-box .ds-siglot img{max-height:68px;max-width:170px;display:block}
+.doc-sign-box .dsline{height:0;border-bottom:1px solid #999;margin:0 0 4px 0}
+.doc-sign-box p{margin:0;line-height:1.3;min-height:2.6em;display:flex;align-items:flex-start;justify-content:center;text-align:center}
 .dsl{font-weight:700;margin-bottom:3px;color:#1e3a5f}
-.dsline{height:4px;border-bottom:1px solid #999;margin-bottom:3px}
+.dsline{height:0;border-bottom:1px solid #999;margin-bottom:3px}
 .doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:6px;font-size:9px;margin-top:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .doc-legal{font-size:9px;color:#cc2200;font-style:italic;text-align:center;margin-top:5px}
 .doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:11px;padding:5px 8px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -626,10 +632,16 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div style="background:var(--bg3);border-radius:5px;padding:10px;margin-bottom:10px;border:1px solid var(--border)">
       <div class="sec" style="margin-top:0">Vendeur — Emerson</div>
       <div class="form-row">
-        <div class="form-group"><label>Contact</label><input class="form-input" id="bc-vcont" placeholder="Pacheco, Jose"></div>
-        <div class="form-group"><label>Email</label><input class="form-input" id="bc-vemail"></div>
+        <div class="form-group"><label>Contact</label>
+          <select class="form-select" id="bc-vcont-sel" onchange="onEmersonContactChange()"></select>
+          <input class="form-input" id="bc-vcont" style="margin-top:4px;display:none" placeholder="Nom du contact (saisir puis Entrée)">
+        </div>
+        <div class="form-group"><label>Email</label><input class="form-input" id="bc-vemail" onchange="persistCurrentEmersonContact()"></div>
       </div>
-      <div class="form-group" style="margin-bottom:0"><label>Adresse</label><input class="form-input" id="bc-vaddr" value="471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA"></div>
+      <div class="form-row">
+        <div class="form-group"><label>Téléphone</label><input class="form-input" id="bc-vphone" onchange="persistCurrentEmersonContact()"></div>
+        <div class="form-group"><label>Adresse</label><input class="form-input" id="bc-vaddr" value="471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA"></div>
+      </div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>Incoterms</label><select class="form-select" id="bc-inco"><option value="">—</option><option>DDP SLN</option><option>DDP PE</option><option>DDP NOUMEA</option><option>FCA BAYSWATER</option></select></div>
@@ -655,7 +667,11 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <input class="form-input" id="bc-client-final" placeholder="Rempli automatiquement ou saisir manuellement">
     </div>
     <hr class="sep">
-    <button class="btn btn-ghost btn-sm mb8" onclick="addBCL()">+ Ajouter ligne</button>
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-ghost btn-sm" onclick="addBCL()">+ Ajouter ligne</button>
+      <button class="btn btn-ghost btn-sm" onclick="addBCHeader()" style="border-color:rgba(244,63,94,0.4);color:var(--red)">+ Titre de section</button>
+      <span style="font-size:9px;color:var(--muted);font-style:italic">Les titres regroupent visuellement les lignes (ex: « AMS WIRELESS VIBRATION MONITOR POC STARTER KIT »)</span>
+    </div>
     <table class="items-tbl"><thead><tr><th>#</th><th>Réf.</th><th style="min-width:170px">Description</th><th>Qté</th><th>PU</th><th>Montant</th><th></th></tr></thead>
     <tbody id="bcLN"></tbody></table>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
@@ -1124,31 +1140,36 @@ function applyStampAndPrint(){
     if(c.toDataURL()!==blank.toDataURL()) sigSrc=c.toDataURL();
   }
 
-  // Place signature in CALINSTRUM sign box: between .dsl and .dsline, keep the line
+  // Place signature in CALINSTRUM sign box: dans la zone ds-siglot (réservée pour alignement)
   var signBoxes=pb.querySelectorAll('.doc-sign-box');
   signBoxes.forEach(function(box){
     var dsl=box.querySelector('.dsl');
     if(!dsl||dsl.textContent.trim()!=='CALINSTRUM')return;
-    var dsline=box.querySelector('.dsline');
-    if(!dsline)return;
 
-    // Remove any previous signature image
-    var prev=box.querySelector('.sig-img');
-    if(prev)prev.remove();
-    // Remove any previous stamp
-    var prevStamp=box.querySelector('.stamp-circle');
-    if(prevStamp)prevStamp.remove();
+    // Remove any previous signature image / stamp
+    var prev=box.querySelector('.sig-img');if(prev)prev.remove();
+    var prevStamp=box.querySelector('.stamp-circle');if(prevStamp)prevStamp.remove();
 
-    if(sigSrc){
-      // Insert signature image BEFORE the dsline inside the bottom div
+    if(!sigSrc)return;
+
+    var slot=box.querySelector('.ds-siglot');
+    if(slot){
+      // Nouvelle structure : on met l'image dans le slot réservé
+      slot.innerHTML='';
       var sigImg=document.createElement('img');
       sigImg.className='sig-img';
       sigImg.src=sigSrc;
-      sigImg.style.cssText='max-height:95px;max-width:220px;display:block;margin:0 auto;position:absolute;bottom:40px;left:50%;transform:translateX(-50%)';
-      dsline.parentNode.insertBefore(sigImg, dsline);
+      slot.appendChild(sigImg);
+    } else {
+      // Fallback ancienne structure : insertion avant dsline
+      var dsline=box.querySelector('.dsline');
+      if(!dsline)return;
+      var sigImg2=document.createElement('img');
+      sigImg2.className='sig-img';
+      sigImg2.src=sigSrc;
+      sigImg2.style.cssText='max-height:55px;max-width:150px;display:block;margin:0 auto 4px';
+      dsline.parentNode.insertBefore(sigImg2, dsline);
     }
-
-
   });
 
   cm('mSTAMP');
@@ -1502,24 +1523,87 @@ function openDV(id){
 }
 // ===== PARAMS / LISTES DÉROULANTES =====
 function getParams(){
-  if(!DB.params){DB.params={incoterms:['DDP SLN','DDP PE','DDP NOUMEA'],freightTerms:['Collect'],delaisLivraison:['4 à 5 semaines après réception du BC Client','7 à 8 semaines après réception du BC Client']};}
-  return DB.params;
+  if(!DB.params){DB.params={};}
+  var p=DB.params;
+  if(!p.incoterms)p.incoterms=['DDP SLN','DDP PE','DDP NOUMEA','FCA BAYSWATER'];
+  if(!p.freightTerms)p.freightTerms=['Collect'];
+  if(!p.delaisLivraison)p.delaisLivraison=['4 à 5 semaines après réception du BC Client','7 à 8 semaines après réception du BC Client'];
+  if(!p.delaisPaiement)p.delaisPaiement=['Paiement sous 30 jours à reception de la facture','Paiement immédiat','Paiement sous 60 jours','100% à la réception de la marchandise','50% à la commande, 50% à la livraison'];
+  if(!p.devises)p.devises=['AUD','USD','EUR','XPF'];
+  if(!p.typesDevis)p.typesDevis=['Fourniture','Prestation de service','Fourniture + Prestation'];
+  return p;
 }
 function buildParamSelect(elId,listKey,allowEmpty){
   var el=document.getElementById(elId);if(!el)return;
   var cur=el.value;
   var opts=getParams()[listKey]||[];
-  el.innerHTML=(allowEmpty?'<option value="">—</option>':'')+opts.map(function(v){return'<option>'+esc(v)+'</option>';}).join('');
-  if(cur)el.value=cur;
+  el.innerHTML=(allowEmpty?'<option value="">—</option>':'')+opts.map(function(v){return'<option>'+esc(v)+'</option>';}).join('')+'<option value="__custom">✎ Saisie manuelle…</option>';
+  if(cur && cur!=='__custom')el.value=cur;
 }
 function rebuildAllParamSelects(){
   ['dv-incoterms','bc-inco'].forEach(function(id){buildParamSelect(id,'incoterms',true);});
   ['dv-freight','bc-fret'].forEach(function(id){buildParamSelect(id,'freightTerms',true);});
   ['dv-delai'].forEach(function(id){buildParamSelect(id,'delaisLivraison',true);});
+  ['dv-paiement','fa-delai'].forEach(function(id){buildParamSelect(id,'delaisPaiement',false);});
+  ['bc-devise'].forEach(function(id){buildParamSelect(id,'devises',false);});
+  ['dv-type'].forEach(function(id){buildParamSelect(id,'typesDevis',false);});
+  attachSmartSelects();
+}
+// Transforme tous les select "à saisie manuelle" : quand __custom est choisi,
+// un champ texte apparaît sous le select, et la valeur saisie est persistée au blur/Enter.
+function attachSmartSelects(){
+  var mapping=[
+    {id:'dv-incoterms',key:'incoterms'},
+    {id:'bc-inco',key:'incoterms'},
+    {id:'dv-freight',key:'freightTerms'},
+    {id:'bc-fret',key:'freightTerms'},
+    {id:'dv-delai',key:'delaisLivraison'},
+    {id:'dv-paiement',key:'delaisPaiement'},
+    {id:'fa-delai',key:'delaisPaiement'},
+    {id:'bc-devise',key:'devises'},
+    {id:'dv-type',key:'typesDevis'}
+  ];
+  mapping.forEach(function(m){attachSmartSelect(m.id,m.key);});
+}
+function attachSmartSelect(selId,paramKey){
+  var sel=document.getElementById(selId);if(!sel)return;
+  if(sel.dataset.smart==='1')return; // déjà attaché
+  sel.dataset.smart='1';sel.dataset.smartKey=paramKey;
+  // Crée input texte juste après le select, caché par défaut
+  var inp=document.createElement('input');
+  inp.type='text';inp.className='form-input';
+  inp.style.marginTop='4px';inp.style.display='none';
+  inp.placeholder='Saisir une nouvelle valeur puis Entrée…';
+  inp.id=selId+'-custom';
+  sel.parentNode.insertBefore(inp,sel.nextSibling);
+  sel.addEventListener('change',function(){
+    if(this.value==='__custom'){
+      inp.style.display='';inp.value='';inp.focus();
+    } else {
+      inp.style.display='none';
+    }
+  });
+  var commit=function(){
+    var v=(inp.value||'').trim();
+    if(!v){inp.style.display='none';sel.value='';return;}
+    var p=getParams();if(!p[paramKey])p[paramKey]=[];
+    if(p[paramKey].indexOf(v)<0){p[paramKey].push(v);saveDB();}
+    // Reconstruit le select et sélectionne la nouvelle valeur
+    var allowEmpty=sel.options.length>0 && sel.options[0].value==='';
+    buildParamSelect(selId,paramKey,allowEmpty);
+    sel.value=v;
+    inp.style.display='none';inp.value='';
+    if(typeof renderParams==='function')renderParams();
+  };
+  inp.addEventListener('blur',commit);
+  inp.addEventListener('keydown',function(e){
+    if(e.key==='Enter'){e.preventDefault();commit();}
+    else if(e.key==='Escape'){inp.style.display='none';inp.value='';sel.value='';}
+  });
 }
 function renderParams(){
   var p=getParams();
-  ['incoterms','freightTerms','delaisLivraison'].forEach(function(key){
+  ['incoterms','freightTerms','delaisLivraison','delaisPaiement','devises','typesDevis'].forEach(function(key){
     var ul=document.getElementById('param-list-'+key);if(!ul)return;
     ul.innerHTML=(p[key]||[]).map(function(v,i){
       return'<div class="param-item"><span class="param-val">'+esc(v)+'</span>'+
@@ -1531,6 +1615,39 @@ function renderParams(){
       });
     });
   });
+  // Contacts Emerson (structure différente : name/email/phone)
+  var ec=getEmersonContacts();
+  var ul=document.getElementById('param-list-emersonContacts');
+  if(ul){
+    ul.innerHTML=ec.map(function(c,i){
+      return'<div class="param-item" style="display:grid;grid-template-columns:1.2fr 2fr 1.2fr auto;gap:8px;align-items:center">'+
+        '<span class="param-val" style="font-weight:700">'+esc(c.name||'')+'</span>'+
+        '<span style="color:var(--muted);font-size:10.5px">'+esc(c.email||'')+'</span>'+
+        '<span style="color:var(--muted);font-size:10.5px">'+esc(c.phone||'')+'</span>'+
+        '<button class="btn btn-red btn-sm" data-ecidx="'+i+'">✕</button>'+
+      '</div>';
+    }).join('');
+    ul.querySelectorAll('button[data-ecidx]').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        delEmersonContact(parseInt(this.getAttribute('data-ecidx')));
+      });
+    });
+  }
+}
+function addEmersonContact(){
+  var n=(gvg('param-ec-name')||'').trim();
+  var e=(gvg('param-ec-email')||'').trim();
+  var ph=(gvg('param-ec-phone')||'').trim();
+  if(!n)return;
+  upsertEmersonContact(n,e,ph);
+  gv('param-ec-name','');gv('param-ec-email','');gv('param-ec-phone','');
+  renderParams();rebuildEmersonContactSelect();
+}
+function delEmersonContact(idx){
+  var p=getParams();
+  if(!p.emersonContacts||idx<0||idx>=p.emersonContacts.length)return;
+  p.emersonContacts.splice(idx,1);
+  saveDB();renderParams();rebuildEmersonContactSelect();
 }
 function addParam(key){
   var inp=document.getElementById('param-input-'+key);
@@ -1700,7 +1817,7 @@ function renderDV(){
 // ===== FACTURES =====
 var eFAid=null,faL=[];
 function openFA(id,fromDV){
-  eFAid=id||null;faL=[];
+  eFAid=id||null;faL=[];rebuildAllParamSelects();
   buildClientOptions('fa-client','');
   if(id){
     var f=DB.factures.find(function(x){return x.id===id;});
@@ -1807,28 +1924,170 @@ function renderFA(){
 
 // ===== BC =====
 var eBCid=null,bcL=[];
+// Contacts Emerson par défaut — seed initial, persisté ensuite dans DB.params.emersonContacts
+var EMERSON_CONTACTS_DEFAULT=[
+  {name:'Pacheco, Jose',email:'JosePacheco@Emerson.com',phone:'+61 498 026 183'},
+  {name:'Venugopal, Ratish',email:'Ratish.Venugopal@Emerson.com',phone:'+61 490 008 557'}
+];
+function getEmersonContacts(){
+  var p=getParams();
+  if(!p.emersonContacts||!p.emersonContacts.length){p.emersonContacts=EMERSON_CONTACTS_DEFAULT.slice();saveDB();}
+  return p.emersonContacts;
+}
+function findEmersonContact(name){
+  var list=getEmersonContacts();
+  for(var i=0;i<list.length;i++)if(list[i].name===name)return list[i];
+  return null;
+}
+function upsertEmersonContact(name,email,phone){
+  if(!name)return;
+  var list=getEmersonContacts();
+  var found=null;
+  for(var i=0;i<list.length;i++)if(list[i].name===name){found=list[i];break;}
+  if(found){found.email=email||found.email;found.phone=phone||found.phone;}
+  else list.push({name:name,email:email||'',phone:phone||''});
+  saveDB();
+}
+function rebuildEmersonContactSelect(selectedName){
+  var sel=document.getElementById('bc-vcont-sel');if(!sel)return;
+  var list=getEmersonContacts();
+  sel.innerHTML=list.map(function(c){return'<option value="'+esc(c.name)+'">'+esc(c.name)+'</option>';}).join('')+
+    '<option value="__custom">✎ Saisie manuelle…</option>';
+  if(selectedName){
+    var exists=false;
+    for(var i=0;i<sel.options.length;i++)if(sel.options[i].value===selectedName){exists=true;break;}
+    sel.value=exists?selectedName:(list.length?list[0].name:'__custom');
+  }
+}
+function onEmersonContactChange(){
+  var sel=document.getElementById('bc-vcont-sel');
+  var custom=document.getElementById('bc-vcont');
+  if(!sel)return;
+  var v=sel.value;
+  if(v==='__custom'){
+    custom.style.display='';
+    custom.value='';
+    custom.focus();
+    gv('bc-vemail','');
+    gv('bc-vphone','');
+  } else {
+    custom.style.display='none';
+    custom.value=v;
+    var c=findEmersonContact(v);
+    if(c){gv('bc-vemail',c.email||'');gv('bc-vphone',c.phone||'');}
+  }
+}
+// Quand l'utilisateur saisit un nouveau nom dans bc-vcont (mode __custom)
+// ou quand il modifie email/phone d'un contact existant → persist
+function persistCurrentEmersonContact(){
+  var sel=document.getElementById('bc-vcont-sel');
+  var custom=document.getElementById('bc-vcont');
+  if(!sel)return;
+  var name;
+  if(sel.value==='__custom'){
+    name=(custom.value||'').trim();
+    if(!name)return;
+  } else {
+    name=sel.value;
+  }
+  var email=gvg('bc-vemail'),phone=gvg('bc-vphone');
+  upsertEmersonContact(name,email,phone);
+  if(sel.value==='__custom'){
+    // passer le select sur la valeur créée
+    rebuildEmersonContactSelect(name);
+    custom.style.display='none';
+  }
+}
+function setEmersonContactUI(name,email,phone){
+  rebuildEmersonContactSelect();
+  var sel=document.getElementById('bc-vcont-sel');
+  var custom=document.getElementById('bc-vcont');
+  if(!sel)return;
+  var existing=name?findEmersonContact(name):null;
+  if(existing){
+    sel.value=name;
+    custom.style.display='none';
+    custom.value=name;
+    gv('bc-vemail',email||existing.email||'');
+    gv('bc-vphone',phone||existing.phone||'');
+  } else if(name){
+    // contact présent sur le BC mais plus dans la liste → le réinjecter
+    upsertEmersonContact(name,email,phone);
+    rebuildEmersonContactSelect(name);
+    custom.style.display='none';
+    custom.value=name;
+    gv('bc-vemail',email||'');
+    gv('bc-vphone',phone||'');
+  } else {
+    var list=getEmersonContacts();
+    if(list.length){
+      sel.value=list[0].name;
+      custom.style.display='none';
+      custom.value=list[0].name;
+      gv('bc-vemail',list[0].email||'');
+      gv('bc-vphone',list[0].phone||'');
+    } else {
+      sel.value='__custom';
+      custom.style.display='';
+      gv('bc-vemail','');
+      gv('bc-vphone','');
+    }
+  }
+}
+// Input custom : à la sortie ou Entrée, persist
+document.addEventListener('DOMContentLoaded',function(){
+  var el=document.getElementById('bc-vcont');
+  if(el){
+    el.addEventListener('blur',persistCurrentEmersonContact);
+    el.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();persistCurrentEmersonContact();}});
+  }
+});
 function openBC(id){
   eBCid=id||null;bcL=[];rebuildAllParamSelects();
   if(id){
     var b=DB.bcs.find(function(x){return x.id===id;});
-    if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);gv('bc-vcont',b.vcont||'');gv('bc-vemail',b.vemail||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-cref',b.cref||'');gv('bc-prop',b.prop||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:'');gv('bc-prop2',b.prop2!=null?b.prop2:'');gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
+    if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-cref',b.cref||'');gv('bc-prop',b.prop||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:'');gv('bc-prop2',b.prop2!=null?b.prop2:'');gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
-    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');gv('bc-vcont','Pacheco, Jose');gv('bc-vemail','JosePacheco@Emerson.com');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-cref','');gv('bc-prop','');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');gv('bc-prop2','');gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');sv('mBCtitle','Nouveau BC — Emerson');
+    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-cref','');gv('bc-prop','');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');gv('bc-prop2','');gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');sv('mBCtitle','Nouveau BC — Emerson');
   }
   rBClines();om('mBC');
 }
 function addBCL(){bcL.push({ref:'',desc:'',qte:1,pu:0});rBClines();}
+function addBCHeader(){bcL.push({type:'header',desc:'TITRE DE SECTION'});rBClines();}
+function moveBCLine(idx,dir){
+  var n=idx+dir;
+  if(n<0||n>=bcL.length)return;
+  var tmp=bcL[idx];bcL[idx]=bcL[n];bcL[n]=tmp;rBClines();
+}
 function rBClines(){
   var tb=document.getElementById('bcLN');if(!tb)return;
+  var itemNum=0;
   tb.innerHTML=bcL.map(function(l,i){
+    if(l.type==='header'){
+      return'<tr style="background:rgba(45,212,191,0.08);border-top:2px solid rgba(244,63,94,0.5);border-bottom:2px solid rgba(244,63,94,0.5)">'+
+        '<td style="text-align:center;color:var(--red);font-weight:700" title="Titre de section">▸</td>'+
+        '<td colspan="4"><input style="width:100%;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.08em" value="'+esc(l.desc||'')+'" data-field="desc" data-idx="'+i+'" placeholder="Ex: AMS WIRELESS VIBRATION MONITOR POC STARTER KIT"></td>'+
+        '<td style="text-align:center;color:var(--muted);font-size:9px;font-style:italic">section</td>'+
+        '<td style="white-space:nowrap">'+
+          '<button class="bc-up-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Monter">▲</button>'+
+          '<button class="bc-down-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Descendre">▼</button>'+
+          '<button class="bc-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button>'+
+        '</td>'+
+        '</tr>';
+    }
+    itemNum++;
     return'<tr>'+
-      '<td style="text-align:center;color:var(--muted);font-weight:700">'+(i+1)+'</td>'+
+      '<td style="text-align:center;color:var(--muted);font-weight:700">'+itemNum+'</td>'+
       '<td><input style="width:100px" value="'+esc(l.ref)+'" data-field="ref" data-idx="'+i+'"></td>'+
       '<td><input style="min-width:150px;width:100%" value="'+esc(l.desc)+'" data-field="desc" data-idx="'+i+'"></td>'+
       '<td><input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'"></td>'+
       '<td><input type="number" style="width:75px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'"></td>'+
       '<td style="font-weight:700;color:var(--teal)">'+fN((l.qte||0)*(l.pu||0))+'</td>'+
-      '<td><button class="bc-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="bc-up-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Monter">▲</button>'+
+        '<button class="bc-down-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Descendre">▼</button>'+
+        '<button class="bc-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button>'+
+      '</td>'+
       '</tr>';
   }).join('');
   tb.querySelectorAll('input').forEach(function(inp){
@@ -1840,10 +2099,16 @@ function rBClines(){
   tb.querySelectorAll('.bc-del-btn').forEach(function(btn){
     btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx)){bcL.splice(idx,1);rBClines();}});
   });
+  tb.querySelectorAll('.bc-up-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx))moveBCLine(idx,-1);});
+  });
+  tb.querySelectorAll('.bc-down-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx))moveBCLine(idx,1);});
+  });
   cBCtot();
 }
 function cBCtot(){
-  var sub=bcL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0);},0);
+  var sub=bcL.reduce(function(s,l){return l.type==='header'?s:s+(l.qte||0)*(l.pu||0);},0);
   var disc=parseFloat(gvg('bc-discount'))||0;
   var sales=parseFloat(gvg('bc-sales-tax'))||0;
   var other=parseFloat(gvg('bc-other-tax'))||0;
@@ -1861,7 +2126,7 @@ function cBCtot(){
   sv('bcDeviseLbl','Total Amount ('+dv+')');
   return{sub:sub,disc:discAmt,sales:salesAmt,other:other,ship:ship,total:total};
 }
-function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),cref:gvg('bc-cref'),prop:gvg('bc-prop'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),prop2:gvg('bc-prop2'),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr')};}
+function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),cref:gvg('bc-cref'),prop:gvg('bc-prop'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),prop2:gvg('bc-prop2'),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr')};}
 function populateBCDevisSelect(){
   var sel=document.getElementById('bc-devis-lie');
   if(!sel)return;
@@ -2197,7 +2462,7 @@ function bDV(d){
     lastS=l.sec;
     var tgcDisplay=(l.tgc||0)+'%';
     var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
-    return sr+'<tr><td>'+(i+1)+'</td><td style="font-size:11.5px;text-align:center;font-weight:700;color:#1e3a5f;letter-spacing:0.3px;white-space:nowrap;padding-left:10px;padding-right:10px">'+esc(l.ref||'')+'</td><td>'+esc(l.designation||'')+'</td>'+
+    return sr+'<tr><td>'+(i+1)+'</td><td style="font-size:9px">'+esc(l.ref||'')+'</td><td>'+esc(l.designation||'')+'</td>'+
       '<td style="text-align:center">'+tgcDisplay+'</td><td style="text-align:center">'+(l.unite||'U')+'</td>'+
       '<td style="text-align:center">'+(l.qte||0)+'</td><td style="text-align:right">'+fN(l.pu)+'</td>'+
       '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td></tr>';
@@ -2241,16 +2506,8 @@ function bDV(d){
     '</div>'+
     bankHtml()+
     '<div class="doc-sign">'+
-      '<div class="doc-sign-box" style="display:flex;flex-direction:column;position:relative">'+
-        '<div class="dsl">Le Client</div>'+
-        '<div class="dsline" style="position:absolute;bottom:35px;left:0;right:0"></div>'+
-        '<p style="position:absolute;bottom:5px;left:0;right:0;margin:0">Signature précédée de la mention manuscrite "lu et approuvé"</p>'+
-      '</div>'+
-      '<div class="doc-sign-box" style="display:flex;flex-direction:column;position:relative">'+
-        '<div class="dsl">CALINSTRUM</div>'+
-        '<div class="dsline" style="position:absolute;bottom:35px;left:0;right:0"></div>'+
-        '<p style="position:absolute;bottom:15px;left:0;right:0;margin:0">Signature</p>'+
-      '</div>'+
+      '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de la mention manuscrite "lu et approuvé"</p></div></div>'+
+      '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature</p></div></div>'+
     '</div>'+
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
     '<p class="doc-legal">'+mention+'</p>'+
@@ -2295,16 +2552,8 @@ function bFA(f){
     '</div>'+
     bankHtml()+
     '<div class="doc-sign">'+
-      '<div class="doc-sign-box" style="display:flex;flex-direction:column;position:relative">'+
-        '<div class="dsl">Le Client</div>'+
-        '<div class="dsline" style="position:absolute;bottom:35px;left:0;right:0"></div>'+
-        '<p style="position:absolute;bottom:5px;left:0;right:0;margin:0">Signature précédée de "lu et approuvé"</p>'+
-      '</div>'+
-      '<div class="doc-sign-box" style="display:flex;flex-direction:column;position:relative">'+
-        '<div class="dsl">CALINSTRUM</div>'+
-        '<div class="dsline" style="position:absolute;bottom:35px;left:0;right:0"></div>'+
-        '<p style="position:absolute;bottom:15px;left:0;right:0;margin:0">Signature</p>'+
-      '</div>'+
+      '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de "lu et approuvé"</p></div></div>'+
+      '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature</p></div></div>'+
     '</div>'+
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
     '<p class="doc-legal">'+getMention(isExo?f.tgcM:'tgc')+'</p>'+
@@ -2312,8 +2561,13 @@ function bFA(f){
 }
 
 function bBC(b){
+  var itemNum=0;
   var rows=(b.lines||[]).map(function(l,i){
-    return'<tr><td style="text-align:center">'+(i+1)+'</td><td style="font-size:11.5px;text-align:center;font-weight:700;color:#1e3a5f;letter-spacing:0.3px;white-space:nowrap;padding-left:10px;padding-right:10px">'+esc(l.ref||'')+'</td>'+
+    if(l.type==='header'){
+      return'<tr style="background:#e8f4f1"><td colspan="6" style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#1e3a5f;padding:6px 8px;border:1px solid #1e3a5f">'+esc(l.desc||'')+'</td></tr>';
+    }
+    itemNum++;
+    return'<tr><td style="text-align:center">'+itemNum+'</td><td style="font-size:9px">'+esc(l.ref||'')+'</td>'+
       '<td>'+esc(l.desc||'')+'</td><td style="text-align:center">'+(l.qte||0)+'</td>'+
       '<td style="text-align:right">'+fN(l.pu)+'</td><td style="text-align:right;font-weight:700">'+fN((l.qte||0)*(l.pu||0))+'</td></tr>';
   }).join('');
@@ -2326,7 +2580,7 @@ function bBC(b){
       '<div><span class="dlbl">DEVISE</span>'+esc(b.devise||'')+'</div><div></div>'+
     '</div>'+
     '<div class="doc-parties">'+
-      '<div class="doc-party"><h4>VENDOR</h4><p><strong>Emerson Process Management Australia Pty Ltd</strong><br>Contact: '+esc(b.vcont||'')+'<br>'+esc(b.vaddr||'')+'<br>'+esc(b.vemail||'')+'</p></div>'+
+      '<div class="doc-party"><h4>VENDOR</h4><p><strong>Emerson Process Management Australia Pty Ltd</strong><br>Contact: '+esc(b.vcont||'')+'<br>'+esc(b.vaddr||'')+(b.vphone?'<br>Tél: '+esc(b.vphone):'')+'<br>'+esc(b.vemail||'')+'</p></div>'+
       '<div class="doc-party"><h4>CUSTOMER</h4><p><strong>'+CI.nom+'</strong><br>Contact: Fabrice RIZZO<br>'+ci_adr+'<br>'+CI.tel+'<br>'+CI.email+'</p></div>'+
     '</div>'+
     '<table class="doc-tbl"><thead><tr><th>Item</th><th>Réf.</th><th>Description</th><th>Qté</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Amount</th></tr></thead>'+
@@ -2360,7 +2614,7 @@ function bBC(b){
 
 function bBL(b){
   var rows=(b.lines||[]).map(function(l){
-    return'<tr><td style="font-size:11.5px;text-align:center;font-weight:700;color:#1e3a5f;letter-spacing:0.3px;white-space:nowrap;padding-left:10px;padding-right:10px">'+esc(l.ref||'')+'</td><td>'+esc(l.desc||'')+'</td>'+
+    return'<tr><td style="font-size:9px">'+esc(l.ref||'')+'</td><td>'+esc(l.desc||'')+'</td>'+
       '<td style="text-align:center">'+(l.qte||0)+'</td><td style="text-align:right;font-weight:700">'+fN(l.pu||0)+'</td></tr>';
   }).join('');
   var clientDetail=getClientDetail(b.client);
@@ -2449,11 +2703,11 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   var cliEmail=clientDetail.email||d.email||'';
   var cliTel=clientDetail.tel||'';
   var mention=getMention(isExo?d.tgcM:'tgc');
-  var PAGE1_BUDGET=480, PAGE_N_BUDGET=820;
+  var PAGE1_BUDGET=520, PAGE_N_BUDGET=900;
   var measureDiv=document.createElement('div');
   measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:780px;font-family:Arial,sans-serif;font-size:8px;visibility:hidden';
   document.body.appendChild(measureDiv);
-  var colgroup='<colgroup><col style="width:30px"><col style="width:210px"><col><col style="width:42px"><col style="width:36px"><col style="width:36px"><col style="width:95px"><col style="width:95px"></colgroup>';
+  var colgroup='<colgroup><col style="width:30px"><col style="width:160px"><col><col style="width:42px"><col style="width:36px"><col style="width:36px"><col style="width:95px"><col style="width:95px"></colgroup>';
   function measureRow(html){var t=document.createElement('table');t.style.cssText='width:780px;border-collapse:collapse;table-layout:fixed;font-size:8px';t.innerHTML=colgroup+'<tbody>'+html+'</tbody>';measureDiv.appendChild(t);var h=t.getBoundingClientRect().height;measureDiv.removeChild(t);return h;}
   var rowItems=[];
   lineData.forEach(function(item){
@@ -2462,7 +2716,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       rowItems.push({html:h,height:measureRow(h),isSec:true,tot:0});
     } else {
       var l=item.l,tot=item.tot,tgcD=(l.tgc||0)+'%';
-      var h='<tr><td style="text-align:center">'+item.idx+'</td><td style="font-size:12px;text-align:center;font-weight:700;color:#1e3a5f;letter-spacing:0.3px">'+esc(l.ref||'')+'</td>'+
+      var h='<tr><td style="text-align:center">'+item.idx+'</td><td style="font-size:9px;text-align:center">'+esc(l.ref||'')+'</td>'+
         '<td>'+esc(l.designation||'')+'</td>'+
         '<td style="text-align:center">'+tgcD+'</td><td style="text-align:center">'+(l.unite||'U')+'</td>'+
         '<td style="text-align:center">'+(l.qte||0)+'</td><td style="text-align:right">'+fN(l.pu)+'</td>'+
@@ -2471,41 +2725,12 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
     }
   });
   document.body.removeChild(measureDiv);
-  // Budget réduit pour la dernière page (qui doit accueillir totaux+notes+bank+signature ≈ 410px)
-  var LAST_PAGE_RESERVED=430;
   var pages=[],currentPage=[],usedHeight=0,budget=PAGE1_BUDGET,SUBTOTAL_H=24;
   rowItems.forEach(function(item){
-    if(usedHeight+item.height+SUBTOTAL_H>budget){
-      pages.push(currentPage);
-      currentPage=[item];
-      usedHeight=item.height;
-      budget=PAGE_N_BUDGET;
-    } else {
-      currentPage.push(item);
-      usedHeight+=item.height;
-    }
+    if(usedHeight+item.height+SUBTOTAL_H>budget){pages.push(currentPage);currentPage=[item];usedHeight=item.height;budget=PAGE_N_BUDGET;}
+    else{currentPage.push(item);usedHeight+=item.height;}
   });
   if(currentPage.length)pages.push(currentPage);
-  // Si multi-pages : vérifier que la dernière page a assez de place pour totaux+notes+bank+signature
-  // Si 1 seule page : pas d'ajustement (tout tient naturellement dans PAGE1_BUDGET)
-  if(pages.length>1){
-    var lastPage=pages[pages.length-1];
-    var lastPageHeight=lastPage.reduce(function(s,it){return s+it.height;},0);
-    var maxLastPageBudget=PAGE_N_BUDGET-LAST_PAGE_RESERVED;
-    if(maxLastPageBudget<100)maxLastPageBudget=100;
-    if(lastPageHeight>maxLastPageBudget && lastPage.length>1){
-      // Transférer les derniers items vers une nouvelle page
-      var newLastPage=[];
-      while(lastPage.length>0 && lastPageHeight>maxLastPageBudget){
-        var removed=lastPage.pop();
-        newLastPage.unshift(removed);
-        lastPageHeight-=removed.height;
-      }
-      if(newLastPage.length>0){
-        pages.push(newLastPage);
-      }
-    }
-  }
   var isMultiPage=pages.length>1;
   var tblCols='<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>';
   var tblHead='<thead><tr><th>#</th><th>Réf.</th><th>Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th style="text-align:right">PU</th><th style="text-align:right">TOTAL TTC</th></tr></thead>';
@@ -2567,17 +2792,9 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
         '</div>'+
         bankHtml()+
         '<div class="doc-sign">'+
-          '<div class="doc-sign-box" style="display:flex;flex-direction:column;position:relative">'+
-            '<div class="dsl">Le Client</div>'+
-            '<div class="dsline" style="position:absolute;bottom:35px;left:0;right:0"></div>'+
-            '<p style="position:absolute;bottom:5px;left:0;right:0;margin:0">Signature précédée de la mention manuscrite "lu et approuvé"</p>'+
-          '</div>'+
-          '<div class="doc-sign-box" style="display:flex;flex-direction:column;position:relative">'+
-            '<div class="dsl">CALINSTRUM</div>'+
-            (sigSrc?'<img src="'+sigSrc+'" style="max-height:95px;max-width:220px;display:block;margin:0 auto;position:absolute;bottom:40px;left:50%;transform:translateX(-50%)">':'')+
-            '<div class="dsline" style="position:absolute;bottom:35px;left:0;right:0"></div>'+
-            '<p style="position:absolute;bottom:15px;left:0;right:0;margin:0">Signature</p>'+
-          '</div>'+
+          '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de la mention manuscrite "lu et approuvé"</p></div></div>'+
+          '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot">'+
+            (sigSrc?'<img src="'+sigSrc+'">':'')+'</div><div class="dsline"></div><p>Signature</p></div></div>'+
         '</div>'+
         '</div>';
     }
@@ -2604,7 +2821,7 @@ function doPrint(){
     '.doc-page-content{}'+
     '.doc-footer{position:fixed;bottom:0;left:12mm;right:12mm;padding-top:4px;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
     '.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:6px;font-size:16px;table-layout:fixed}'+
-    '.doc-tbl col.c-num{width:26px}.doc-tbl col.c-ref{width:175px}.doc-tbl col.c-des{width:auto}'+
+    '.doc-tbl col.c-num{width:26px}.doc-tbl col.c-ref{width:155px}.doc-tbl col.c-des{width:auto}'+
     '.doc-tbl col.c-tgc{width:38px}.doc-tbl col.c-ute{width:34px}.doc-tbl col.c-qte{width:34px}'+
     '.doc-tbl col.c-pu{width:90px}.doc-tbl col.c-ttc{width:90px}'+
     '.doc-tbl thead th{background:#1e3a5f!important;color:#fff!important;padding:6px 5px;text-align:left;font-size:16px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'+
@@ -2617,11 +2834,11 @@ function doPrint(){
     '.doc-totals{margin-left:auto;width:280px;border-collapse:collapse;font-size:10px}'+
     '.doc-totals td{padding:3px 6px;font-weight:400;font-size:13px}.doc-totals td:last-child{text-align:right}'+
     '.dtf td{font-size:16px;font-weight:700;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}'+
-    '.doc-notes{background:#f8fafc!important;border-left:3px solid #1e3a5f;padding:9px 11px;font-size:15px;font-weight:400;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'+
-    '.doc-bank{background:#eef2f7!important;padding:9px 11px;border-radius:3px;margin-bottom:10px;font-size:15px;font-weight:400;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'+
+    '.doc-notes{background:#f8fafc!important;border-left:3px solid #1e3a5f;padding:8px 10px;font-size:13px;font-weight:400;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'+
+    '.doc-bank{background:#eef2f7!important;padding:8px 10px;border-radius:3px;margin-bottom:10px;font-size:13px;font-weight:400;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'+
     '.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px;font-weight:700}'+
     '.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:12px;padding-top:8px;border-top:1px solid #ddd}'+
-    '.doc-sign-box{text-align:center;font-size:13px;min-height:140px}'+
+    '.doc-sign-box{text-align:center;font-size:13px;min-height:100px}'+
     '.dsl{font-weight:700;color:#1e3a5f;margin-bottom:4px}'+
     '.dsline{border-bottom:1px solid #999;margin-bottom:4px;height:4px}'+
     '.doc-sec-head{background:#e8eef5!important;color:#1e3a5f;font-weight:700;font-size:16px;padding:6px 7px;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'+
@@ -2666,7 +2883,7 @@ function doPrint(){
 }
 
 
-var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;padding:10px;font-size:9px;color:#111}.doc{max-width:760px;margin:0 auto}.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:7px;border-bottom:2.5px solid #1e3a5f}.doc-title{font-size:18px;font-weight:900;color:#1e3a5f;text-align:right}.doc-meta{text-align:right;font-size:10px;color:#555}.doc-parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px}.doc-party h4{font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px}.doc-party p{font-size:13px;line-height:1.6;color:#333}.doc-info-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact;word-break:break-word}.dlbl{font-weight:700;text-transform:uppercase;color:#64748b;font-size:8.5px;display:block}.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:12px;table-layout:fixed}.doc-tbl col.c-num{width:22px}.doc-tbl col.c-ref{width:210px}.doc-tbl col.c-des{width:auto}.doc-tbl col.c-tgc{width:32px}.doc-tbl col.c-ute{width:28px}.doc-tbl col.c-qte{width:28px}.doc-tbl col.c-pu{width:72px}.doc-tbl col.c-ttc{width:72px}.doc-tbl thead th{background:#1e3a5f;color:#fff;padding:4px 4px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact;overflow:hidden}.doc-tbl thead th:nth-child(1){text-align:center}.doc-tbl thead th:nth-child(n+4){text-align:center}.doc-tbl thead th:nth-child(7),.doc-tbl thead th:nth-child(8){text-align:right}.doc-tbl tbody td{padding:5px 4px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word;font-size:12px;overflow:hidden}.doc-tbl tbody td:nth-child(1){text-align:center}.doc-tbl tbody td:nth-child(2){white-space:nowrap!important;word-break:keep-all!important;overflow:visible!important}.doc-tbl tbody td:nth-child(4),.doc-tbl tbody td:nth-child(5),.doc-tbl tbody td:nth-child(6){text-align:center;white-space:nowrap}.doc-tbl tbody td:nth-child(7),.doc-tbl tbody td:nth-child(8){text-align:right;white-space:nowrap;font-weight:600}.doc-tbl tfoot td{padding:4px;font-weight:800;font-size:10px;color:#1e3a5f;border-top:2px solid #1e3a5f}.doc-tbl tfoot td:last-child{text-align:right}.doc-totals{margin-left:auto;width:270px;border-collapse:collapse;font-size:10.5px}.doc-totals td{padding:2px 6px}.doc-totals td:last-child{text-align:right;font-weight:600}.dtf td{font-size:12px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:7px 11px;font-size:14px;line-height:1.45;color:#444;margin-bottom:6px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank{background:#eef2f7;padding:7px 11px;border-radius:3px;margin-bottom:6px;font-size:14px;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px}.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:8px;padding-top:6px;border-top:1px solid #ddd}.doc-sign-box{text-align:center;font-size:11px;display:flex;flex-direction:column;justify-content:space-between;min-height:155px}.dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f}.dsline{height:4px;border-bottom:1px solid #999;margin-bottom:2px}.doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:5px;font-size:9px;margin-top:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-legal{font-size:11px;color:#cc2200;font-style:italic;text-align:center;margin-top:4px}.doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:16px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-tbl{page-break-inside:auto}.doc-tbl tr{page-break-inside:avoid;page-break-after:auto}.doc-sec-head{page-break-after:avoid}.doc-totals-wrap{page-break-inside:avoid}.doc-repeat-header{display:none}.tbl-subtotal{display:none}.thead-repeat-header{display:none}@media print{.doc-repeat-header{display:block}.tbl-subtotal{display:table-row}.thead-repeat-header{display:table-row}}';
+var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;padding:10px;font-size:9px;color:#111}.doc{max-width:760px;margin:0 auto}.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:7px;border-bottom:2.5px solid #1e3a5f}.doc-title{font-size:18px;font-weight:900;color:#1e3a5f;text-align:right}.doc-meta{text-align:right;font-size:10px;color:#555}.doc-parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px}.doc-party h4{font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px}.doc-party p{font-size:13px;line-height:1.6;color:#333}.doc-info-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact;word-break:break-word}.dlbl{font-weight:700;text-transform:uppercase;color:#64748b;font-size:8.5px;display:block}.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:8px;table-layout:fixed}.doc-tbl col.c-num{width:22px}.doc-tbl col.c-ref{width:145px}.doc-tbl col.c-des{width:auto}.doc-tbl col.c-tgc{width:32px}.doc-tbl col.c-ute{width:28px}.doc-tbl col.c-qte{width:28px}.doc-tbl col.c-pu{width:72px}.doc-tbl col.c-ttc{width:72px}.doc-tbl thead th{background:#1e3a5f;color:#fff;padding:3px 4px;text-align:left;font-size:7.5px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact;overflow:hidden}.doc-tbl thead th:nth-child(1){text-align:center}.doc-tbl thead th:nth-child(n+4){text-align:center}.doc-tbl thead th:nth-child(7),.doc-tbl thead th:nth-child(8){text-align:right}.doc-tbl tbody td{padding:3px 4px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word;font-size:8px;overflow:hidden}.doc-tbl tbody td:nth-child(1){text-align:center}.doc-tbl tbody td:nth-child(4),.doc-tbl tbody td:nth-child(5),.doc-tbl tbody td:nth-child(6){text-align:center;white-space:nowrap}.doc-tbl tbody td:nth-child(7),.doc-tbl tbody td:nth-child(8){text-align:right;white-space:nowrap;font-weight:600}.doc-tbl tfoot td{padding:4px;font-weight:800;font-size:10px;color:#1e3a5f;border-top:2px solid #1e3a5f}.doc-tbl tfoot td:last-child{text-align:right}.doc-totals{margin-left:auto;width:270px;border-collapse:collapse;font-size:10.5px}.doc-totals td{padding:2px 6px}.doc-totals td:last-child{text-align:right;font-weight:600}.dtf td{font-size:12px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:7px 10px;font-size:10px;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank{background:#eef2f7;padding:7px 10px;border-radius:3px;margin-bottom:10px;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px}.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:14px;padding-top:9px;border-top:1px solid #ddd;align-items:stretch}.doc-sign-box{text-align:center;font-size:11px;display:flex;flex-direction:column;min-height:150px}.doc-sign-box .dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f;flex-shrink:0}.doc-sign-box .ds-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:stretch}.doc-sign-box .ds-siglot{height:70px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:2px}.doc-sign-box .ds-siglot img{max-height:68px;max-width:170px;display:block}.doc-sign-box .dsline{height:0;border-bottom:1px solid #999;margin:0 0 3px 0}.doc-sign-box p{margin:0;line-height:1.3}.dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f}.dsline{height:0;border-bottom:1px solid #999;margin-bottom:2px}.doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:5px;font-size:9px;margin-top:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-legal{font-size:11px;color:#cc2200;font-style:italic;text-align:center;margin-top:4px}.doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:16px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-tbl{page-break-inside:auto}.doc-tbl tr{page-break-inside:avoid;page-break-after:auto}.doc-sec-head{page-break-after:avoid}.doc-totals-wrap{page-break-inside:avoid}.doc-repeat-header{display:none}.tbl-subtotal{display:none}.thead-repeat-header{display:none}@media print{.doc-repeat-header{display:block}.tbl-subtotal{display:table-row}.thead-repeat-header{display:table-row}}';
 
 function doPrint(){
   var c=document.getElementById('prvBody');if(!c)return;
@@ -2678,41 +2895,15 @@ function doPrint(){
   var extraCSS=`
     @page{
       size:A4 portrait;
-      margin:0;
+      margin:8mm 10mm 20mm 10mm;
     }
+    /* This suppresses browser default header/footer in most browsers */
+    @page :first{ margin-top:8mm; }
     html,body{margin:0!important;padding:0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
     body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;font-size:13px;color:#111;}
     .doc{max-width:100%;width:100%;}
 
-    /* === Pages paginées (multi-pages devis) === */
-    .doc-page{
-      width:210mm;
-      min-height:297mm;
-      height:297mm;
-      padding:10mm 12mm 0 12mm;
-      box-sizing:border-box;
-      display:flex;
-      flex-direction:column;
-      page-break-after:always;
-      break-after:page;
-      overflow:hidden;
-      position:relative;
-    }
-    .doc-page:last-of-type{
-      page-break-after:avoid!important;
-      break-after:avoid!important;
-    }
-    .doc-page-content{
-      flex:0 0 auto;
-    }
-
-    /* Footer bande bleue + mention rouge - placés en bas de chaque page */
-    .doc-page > div[style*="background:#1e3a5f"]{
-      margin-top:auto;
-      flex-shrink:0;
-    }
-
-    /* Footer classique (non-paginé) */
+    /* === FIXED FOOTER: blue bar + red text on EVERY page === */
     .doc-fixed-footer{
       position:fixed;
       bottom:0;left:0;right:0;
@@ -2739,6 +2930,18 @@ function doPrint(){
       print-color-adjust:exact!important;
     }
 
+    /* === REPEAT HEADER: compact header on page 2, 3, 4... === */
+    /* Hidden on screen, shown on all pages via running element */
+    .doc-repeat-header{
+      display:block;
+      page-break-after:avoid;
+      padding-bottom:6px;
+      border-bottom:2px solid #1e3a5f;
+      margin-bottom:8px;
+    }
+    /* On page 1: hide repeat header (it's part of the doc flow,
+       page 1 has full header already, so we hide it with JS below) */
+
     /* Table */
     thead{display:table-header-group!important;}
     tfoot{display:table-footer-group!important;}
@@ -2752,36 +2955,20 @@ function doPrint(){
     .doc-notes{page-break-inside:avoid!important;}
     .doc-bank{page-break-inside:avoid!important;}
 
+    /* Subtotal row: only show on print */
     .tbl-subtotal{display:table-row!important;}
 
     /* Hide UI */
     .aud-row,.no-print{display:none!important;}
   `;
 
-  // Détection du type de document pour appliquer la pagination adéquate
-  var isDevis=(docTitle||'').indexOf('Devis')===0;
-
-  var content;
-  if(isDevis){
-    // Pour les devis : utiliser la pagination multi-pages avec buildPaginatedDV
-    var dvNum=(docTitle||'').replace(/^Devis\s*\u2014\s*/,'').trim();
-    var dObj=DB.devis.find(function(x){return x.num===dvNum;});
-    if(dObj){
-      var logoSrc=document.querySelector('#prvBody img')?document.querySelector('#prvBody img').src:LG_PLACEHOLDER;
-      var sigSrc=null;
-      var sigImgEl=document.querySelector('#prvBody .sig-img');
-      if(sigImgEl&&sigImgEl.src)sigSrc=sigImgEl.src;
-      content=buildPaginatedDV(dObj,logoSrc,sigSrc);
-    } else {
-      content=c.innerHTML;
-    }
-  } else {
-    // Pour les autres documents (FA, BC, BL) : wrap footer en fixed sur chaque page
-    content=c.innerHTML.replace(
-      /(<div class="doc-footer-bar">[\s\S]*?<\/div>)\s*(<p class="doc-legal">[\s\S]*?<\/p>)/,
-      '<div class="doc-fixed-footer">$1$2</div>'
-    );
-  }
+  // Wrap footer so it stays fixed on every page
+  var content=c.innerHTML;
+  // Wrap doc-footer-bar and doc-legal in a fixed container
+  content=content.replace(
+    /(<div class="doc-footer-bar">[\s\S]*?<\/div>)\s*(<p class="doc-legal">[\s\S]*?<\/p>)/,
+    '<div class="doc-fixed-footer">$1$2</div>'
+  );
 
   var w=window.open('','_blank','');
   if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
@@ -2811,7 +2998,7 @@ document.addEventListener('DOMContentLoaded',function(){
   <div class="flex-between mb12 no-print">
     <h2 style="font-family:var(--display);color:var(--teal);font-size:18px">Paramètres — Listes déroulantes</h2>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px">
 
     <!-- INCOTERMS -->
     <div class="card" style="padding:16px">
@@ -2840,6 +3027,48 @@ document.addEventListener('DOMContentLoaded',function(){
       <div style="display:flex;gap:6px">
         <input class="form-input" id="param-input-delaisLivraison" placeholder="ex: 10 semaines après BC" style="flex:1" onkeydown="if(event.key==='Enter')addParam('delaisLivraison')">
         <button class="btn btn-teal btn-sm" onclick="addParam('delaisLivraison')">+ Ajouter</button>
+      </div>
+    </div>
+
+    <!-- DÉLAIS DE PAIEMENT -->
+    <div class="card" style="padding:16px">
+      <div style="font-weight:700;color:var(--teal);margin-bottom:12px;font-size:13px">💳 Modalités / Délais de paiement</div>
+      <div id="param-list-delaisPaiement" style="margin-bottom:10px"></div>
+      <div style="display:flex;gap:6px">
+        <input class="form-input" id="param-input-delaisPaiement" placeholder="ex: Paiement sous 45 jours" style="flex:1" onkeydown="if(event.key==='Enter')addParam('delaisPaiement')">
+        <button class="btn btn-teal btn-sm" onclick="addParam('delaisPaiement')">+ Ajouter</button>
+      </div>
+    </div>
+
+    <!-- DEVISES -->
+    <div class="card" style="padding:16px">
+      <div style="font-weight:700;color:var(--teal);margin-bottom:12px;font-size:13px">💱 Devises</div>
+      <div id="param-list-devises" style="margin-bottom:10px"></div>
+      <div style="display:flex;gap:6px">
+        <input class="form-input" id="param-input-devises" placeholder="ex: SGD" style="flex:1" onkeydown="if(event.key==='Enter')addParam('devises')">
+        <button class="btn btn-teal btn-sm" onclick="addParam('devises')">+ Ajouter</button>
+      </div>
+    </div>
+
+    <!-- TYPES DE DEVIS -->
+    <div class="card" style="padding:16px">
+      <div style="font-weight:700;color:var(--teal);margin-bottom:12px;font-size:13px">📝 Types de devis</div>
+      <div id="param-list-typesDevis" style="margin-bottom:10px"></div>
+      <div style="display:flex;gap:6px">
+        <input class="form-input" id="param-input-typesDevis" placeholder="ex: Audit technique" style="flex:1" onkeydown="if(event.key==='Enter')addParam('typesDevis')">
+        <button class="btn btn-teal btn-sm" onclick="addParam('typesDevis')">+ Ajouter</button>
+      </div>
+    </div>
+
+    <!-- CONTACTS EMERSON -->
+    <div class="card" style="padding:16px;grid-column:1/-1">
+      <div style="font-weight:700;color:var(--teal);margin-bottom:12px;font-size:13px">👤 Contacts Emerson</div>
+      <div id="param-list-emersonContacts" style="margin-bottom:10px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:6px">
+        <input class="form-input" id="param-ec-name" placeholder="Nom, Prénom">
+        <input class="form-input" id="param-ec-email" placeholder="Email" type="email">
+        <input class="form-input" id="param-ec-phone" placeholder="+61 ...">
+        <button class="btn btn-teal btn-sm" onclick="addEmersonContact()">+ Ajouter</button>
       </div>
     </div>
 
