@@ -2892,36 +2892,22 @@ function doPrint(){
   var dateStr=now.toLocaleDateString('fr-FR')+' '+now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
   var titleEl=document.getElementById('prvTitle');
   var docTitle=titleEl?titleEl.textContent:'CALINSTRUM';
+  var isDevisDoc=docTitle && /^Devis\s/i.test(docTitle);
 
-  var extraCSS=`
-    @page{
-      size:A4 portrait;
-      margin:8mm 10mm 20mm 10mm;
-      @bottom-right{
-        content: counter(page) " / " counter(pages);
-        font-family: Calibri, Trebuchet MS, Arial, sans-serif;
-        font-size: 10px;
-        color: #64748b;
-        padding-right: 2mm;
-      }
-    }
-    /* This suppresses browser default header/footer in most browsers */
-    @page :first{ margin-top:8mm; }
+  // Pour les devis paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
+  // Pour les autres docs, on garde des marges A4 standard
+  var pageRule=isDevisDoc
+    ? `@page{size:A4 portrait;margin:0;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 6mm;padding-bottom: 4mm;}}`
+    : `@page{size:A4 portrait;margin:8mm 10mm 20mm 10mm;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}} @page :first{ margin-top:8mm; }`;
+
+  var extraCSS=pageRule+`
     html,body{margin:0!important;padding:0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
     body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;font-size:13px;color:#111;}
     .doc{max-width:100%;width:100%;}
 
-    /* Fallback pagination (affichée uniquement si @page ne fonctionne pas) */
-    .page-counter-fallback{
-      position:fixed;
-      bottom:2mm;
-      right:5mm;
-      font-size:10px;
-      color:#64748b;
-      font-family:Calibri,Trebuchet MS,Arial,sans-serif;
-      -webkit-print-color-adjust:exact;
-      print-color-adjust:exact;
-    }
+    /* === Pagination manuelle pour devis === */
+    .doc-page{page-break-after:always;break-after:always;}
+    .doc-page:last-of-type{page-break-after:avoid!important;break-after:avoid!important;}
 
     /* === FIXED FOOTER: blue bar + red text on EVERY page === */
     .doc-fixed-footer{
@@ -2950,18 +2936,6 @@ function doPrint(){
       print-color-adjust:exact!important;
     }
 
-    /* === REPEAT HEADER: compact header on page 2, 3, 4... === */
-    /* Hidden on screen, shown on all pages via running element */
-    .doc-repeat-header{
-      display:block;
-      page-break-after:avoid;
-      padding-bottom:6px;
-      border-bottom:2px solid #1e3a5f;
-      margin-bottom:8px;
-    }
-    /* On page 1: hide repeat header (it's part of the doc flow,
-       page 1 has full header already, so we hide it with JS below) */
-
     /* Table */
     thead{display:table-header-group!important;}
     tfoot{display:table-footer-group!important;}
@@ -2983,12 +2957,29 @@ function doPrint(){
   `;
 
   // Wrap footer so it stays fixed on every page
-  var content=c.innerHTML;
-  // Wrap doc-footer-bar and doc-legal in a fixed container
-  content=content.replace(
-    /(<div class="doc-footer-bar">[\s\S]*?<\/div>)\s*(<p class="doc-legal">[\s\S]*?<\/p>)/,
-    '<div class="doc-fixed-footer">$1$2</div>'
-  );
+  var content;
+  if(isDevisDoc){
+    var dvNum=(docTitle||'').replace(/^Devis\s*\u2014\s*/,'').trim();
+    var dObj=DB.devis.find(function(x){return x.num===dvNum;});
+    if(dObj){
+      var logoSrc=document.querySelector('#prvBody img')?document.querySelector('#prvBody img').src:(typeof LG_PLACEHOLDER!=='undefined'?LG_PLACEHOLDER:'');
+      var sigSrc=null;
+      var sigImgEl=document.querySelector('#prvBody .sig-img');
+      if(sigImgEl&&sigImgEl.src)sigSrc=sigImgEl.src;
+      content=buildPaginatedDV(dObj,logoSrc,sigSrc);
+    } else {
+      content=c.innerHTML;
+    }
+  } else {
+    content=c.innerHTML;
+  }
+  // Wrap doc-footer-bar and doc-legal in a fixed container (only for non-paginated docs)
+  if(!isDevisDoc){
+    content=content.replace(
+      /(<div class="doc-footer-bar">[\s\S]*?<\/div>)\s*(<p class="doc-legal">[\s\S]*?<\/p>)/,
+      '<div class="doc-fixed-footer">$1$2</div>'
+    );
+  }
 
   var w=window.open('','_blank','');
   if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
