@@ -1460,8 +1460,10 @@ function renderTable(){
   tb.innerHTML=data.map(function(i){
     var st=getStatus(i),bd=parseDate(i.dateButoir);
     var rs=st==='late'?'background:rgba(244,63,94,.04)':'';
+    var grcBadge=i._fromGRC?' <span title="Créée automatiquement depuis une facture GRC" style="display:inline-block;background:rgba(45,212,191,.15);color:var(--teal);padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">GRC</span>':'';
+    var grcBtn=i._fromGRC&&i.grcFactureId?'<button class="btn btn-ghost btn-sm" title="Ouvrir la facture GRC liée" onclick="openFA('+i.grcFactureId+')">📋</button> ':'';
     return'<tr style="'+rs+'">'+
-      '<td><span style="font-weight:700;color:var(--teal)">'+i.num+'</span></td>'+
+      '<td><span style="font-weight:700;color:var(--teal)">'+i.num+'</span>'+grcBadge+'</td>'+
       '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(i.intitule)+'</td>'+
       '<td style="font-weight:700">'+fN(i.montant)+' XPF</td>'+
       '<td style="color:var(--muted)">'+fD(i.dateEnvoi)+'</td>'+
@@ -1469,6 +1471,7 @@ function renderTable(){
       '<td>'+statusLabel(st)+'</td>'+
       '<td>'+daysLeftLabel(i)+'</td>'+
       '<td class="no-print" style="white-space:nowrap">'+
+        grcBtn+
         '<button class="btn btn-ghost btn-sm" onclick="openSUIVI('+i.id+')">✏️</button> '+
         '<button class="btn btn-red btn-sm" onclick="delInv('+i.id+')">🗑</button>'+
       '</td></tr>';
@@ -2071,17 +2074,87 @@ function autoSplitVersements(){
 function getFA(){
   var t=cFAtot();
   var totVerse=faVersements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
+  // Récupérer suiviId existant si on modifie une facture
+  var existingSuiviId=null;
+  if(eFAid){
+    var existing=DB.factures.find(function(x){return x.id===eFAid;});
+    if(existing) existingSuiviId=existing.suiviId||null;
+  }
   return{id:eFAid||Date.now(),num:gvg('fa-num'),date:gvg('fa-date'),client:gvg('fa-client'),
     contact:gvg('fa-contact'),adresse:gvg('fa-adresse'),email:gvg('fa-email'),objet:gvg('fa-objet'),
     dvlie:gvg('fa-dvlie'),status:gvg('fa-status'),tgcM:gvg('fa-tgc-mention'),
     delai:gvg('fa-delai'),paye:totVerse,versements:JSON.parse(JSON.stringify(faVersements)),notes:gvg('fa-notes'),
-    lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc};
+    lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc,suiviId:existingSuiviId};
 }
 function saveFA(){
   var f=getFA();if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
   if(eFAid){var i=DB.factures.findIndex(function(x){return x.id===eFAid;});if(i>=0)DB.factures[i]=f;else DB.factures.push(f);}
   else DB.factures.push(f);
+  // Sync vers Suivi Factures (DB.invoices) : créer ou mettre à jour l'entrée miroir
+  syncFactureToSuivi(f);
+  // Mettre à jour le f dans DB.factures avec le suiviId retourné
+  var fi=DB.factures.findIndex(function(x){return x.id===f.id;});
+  if(fi>=0) DB.factures[fi]=f;
   saveDB();cm('mFA');renderFA();rDash();renderHist();
+  if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){console.warn('renderSuivi skipped:',e.message);}}
+}
+
+// Synchronise une facture GRC vers le Suivi Factures (DB.invoices)
+// Crée une entrée miroir si pas encore liée, sinon met à jour l'existante
+function syncFactureToSuivi(f){
+  if(!DB.invoices) DB.invoices=[];
+  // Calcul du total versé et pourcentage
+  var totVerse=(f.versements&&f.versements.length)?f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0):(Number(f.paye)||0);
+  var ttc=f.ttc||0;
+  var pct=ttc>0?Math.round(totVerse/ttc*100):0;
+  // Calcul du statut suivi à partir du statut GRC
+  var statutSuivi='pending';
+  if(f.status==='Payée' || totVerse>=ttc) statutSuivi='paid';
+  else if(f.status==='Partiel' || (totVerse>0 && totVerse<ttc)) statutSuivi='partial';
+  else statutSuivi='pending';
+  // Date butoir calculée à partir du délai
+  var bd='';
+  try{
+    if(f.date){
+      var d=new Date(f.date);
+      var delai=(f.delai||'').toString();
+      var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
+      d.setDate(d.getDate()+days);
+      bd=d.toISOString().slice(0,10);
+    }
+  }catch(e){}
+  // Chercher l'entrée Suivi liée via suiviId (lien stocké dans la facture)
+  var suiviId=f.suiviId;
+  var idx=-1;
+  if(suiviId) idx=DB.invoices.findIndex(function(x){return x.id===suiviId;});
+  // Si pas de lien existant, chercher par numéro (rétrocompat) pour éviter les doublons
+  if(idx<0){
+    idx=DB.invoices.findIndex(function(x){return x.num===f.num;});
+    if(idx>=0) f.suiviId=DB.invoices[idx].id; // créer le lien
+  }
+  var miroir={
+    id: idx>=0 ? DB.invoices[idx].id : Date.now(),
+    num: f.num,
+    intitule: f.objet||'',
+    montant: ttc,
+    po: (idx>=0 ? DB.invoices[idx].po : '') || f.dvlie || '', // préserve le PO existant
+    dateEnvoi: f.date||'',
+    dateButoir: bd,
+    statut: statutSuivi,
+    pct: pct,
+    comment: (idx>=0 ? DB.invoices[idx].comment : '') || '',
+    _fromGRC: true,        // marqueur : cette entrée est créée depuis une facture GRC
+    grcFactureId: f.id     // lien inverse vers la facture GRC
+  };
+  if(idx>=0){
+    // Préserver les champs que l'utilisateur aurait modifiés manuellement dans le Suivi (po, comment)
+    DB.invoices[idx]=Object.assign({},DB.invoices[idx],miroir);
+  } else {
+    DB.invoices.push(miroir);
+    f.suiviId=miroir.id;
+  }
+  // Mettre à jour la variable globale invoices (utilisée par renderSuivi)
+  invoices=DB.invoices;
 }
 function renderFA(){
   updFC('fFAcli',DB.factures);
@@ -2542,10 +2615,24 @@ function updFC(id,arr){
 }
 function delDoc(col,id){
   if(!confirm('Supprimer ce document?'))return;
+  // Si c'est une facture GRC avec un suivi lié, demander si on le supprime aussi
+  if(col==='factures'){
+    var f=DB.factures.find(function(x){return x.id===id;});
+    if(f && f.suiviId){
+      var suivi=(DB.invoices||[]).find(function(x){return x.id===f.suiviId;});
+      if(suivi){
+        if(confirm('Cette facture est liée à une entrée du Suivi Factures ('+suivi.num+'). Supprimer aussi l\'entrée du suivi ?\n\n[OK] = Supprimer les deux\n[Annuler] = Garder le suivi (la trace reste)')){
+          DB.invoices=DB.invoices.filter(function(x){return x.id!==f.suiviId;});
+          invoices=DB.invoices;
+        }
+      }
+    }
+  }
   DB[col]=DB[col].filter(function(x){return x.id!==id;});
   saveDB();
   if(col==='devis')renderDV();if(col==='factures')renderFA();if(col==='bcs')renderBC();if(col==='bls')renderBL();if(col==='articles')renderART();
   rDash();
+  if(col==='factures' && typeof renderSuivi==='function'){try{renderSuivi();}catch(e){console.warn('renderSuivi skipped:',e.message);}}
 }
 function exportJSON(){
   var b=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
