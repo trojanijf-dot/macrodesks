@@ -210,6 +210,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
   <span id="topTitle" style="font-family:var(--display);font-size:14px;font-weight:800;color:#fff">Dashboard</span>
   <div class="no-print" style="display:flex;gap:8px;align-items:center">
     <div id="alert-pill" class="pill pill-red" style="display:none"><div class="dot"></div><span id="alert-count">0 alertes</span></div>
+    <button class="btn btn-ghost btn-sm" id="globalUndoBtn" onclick="doUndo()" disabled style="opacity:0.4;color:#fcd34d;border-color:rgba(252,211,77,0.3)" title="Aucune action à annuler">↶ Annuler <span id="globalUndoCount" style="font-size:9px;color:var(--muted)"></span></button>
     <div id="autoSaveIndicator" style="display:flex;align-items:center;gap:5px;padding:3px 9px;background:rgba(45,212,191,0.1);border:1px solid rgba(45,212,191,0.3);border-radius:12px;font-size:10px;color:var(--muted)" title="Indicateur de sauvegarde automatique">
       <span id="autoSaveDot" style="width:7px;height:7px;border-radius:50%;background:var(--teal);display:inline-block"></span>
       <span>Auto-save</span>
@@ -1766,7 +1767,17 @@ function rDVlines(){
     tb.querySelectorAll('.dv-del-btn').forEach(function(btn){
       btn.addEventListener('click',function(){
         var sec2=this.getAttribute('data-sec'),idx=parseInt(this.getAttribute('data-idx'));
-        if(sec2&&!isNaN(idx)){dvL[sec2].splice(idx,1);rDVlines();}
+        if(sec2&&!isNaN(idx)){
+          // Snapshot for undo
+          var snap=JSON.parse(JSON.stringify(dvL));
+          var removed=dvL[sec2][idx];
+          var lbl='ligne devis « '+((removed&&(removed.ref||removed.designation))||'(vide)')+' » ('+sec2+')';
+          pushUndo('Suppr. '+lbl,function(){
+            dvL=snap;
+            if(document.getElementById('mDV').classList.contains('open'))rDVlines();
+          });
+          dvL[sec2].splice(idx,1);rDVlines();
+        }
       });
     });
   });
@@ -1891,7 +1902,19 @@ function rFAlines(){
     });
   });
   tb.querySelectorAll('.fa-del-btn').forEach(function(btn){
-    btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx)){faL.splice(idx,1);rFAlines();}});
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      if(!isNaN(idx)){
+        var snap=JSON.parse(JSON.stringify(faL));
+        var removed=faL[idx];
+        var lbl='ligne facture « '+((removed&&(removed.ref||removed.desc||removed.designation))||'(vide)')+' »';
+        pushUndo('Suppr. '+lbl,function(){
+          faL=snap;
+          if(document.getElementById('mFA').classList.contains('open'))rFAlines();
+        });
+        faL.splice(idx,1);rFAlines();
+      }
+    });
   });
   cFAtot();
 }
@@ -1940,7 +1963,7 @@ function renderFA(){
 // ===== BC =====
 var eBCid=null,bcL=[];
 function openBC(id){
-  eBCid=id||null;bcL=[];bcUndoStack=[];rebuildAllParamSelects();
+  eBCid=id||null;bcL=[];rebuildAllParamSelects();
   if(id){
     var b=DB.bcs.find(function(x){return x.id===id;});
     if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);gv('bc-vcont',b.vcont||'');gv('bc-vemail',b.vemail||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-cref',b.cref||'');gv('bc-prop',b.prop||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:'');gv('bc-prop2',b.prop2!=null?b.prop2:'');gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
@@ -1949,6 +1972,46 @@ function openBC(id){
   }
   rBClines();om('mBC');
 }
+// ===== GLOBAL UNDO SYSTEM =====
+// Pile d'undo unifiée pour TOUT le GRC : lignes BC/Devis/BL + suppression de documents dans les listes.
+// Chaque entrée contient un label + une fonction de restauration fournie par l'appelant.
+var undoStack=[];
+var UNDO_MAX=100;
+function pushUndo(label,revertFn){
+  if(typeof revertFn!=='function')return;
+  undoStack.push({label:label||'suppression',revert:revertFn,ts:Date.now()});
+  if(undoStack.length>UNDO_MAX)undoStack.shift();
+  updateUndoUI();
+}
+function doUndo(){
+  if(!undoStack.length)return;
+  var last=undoStack.pop();
+  try{last.revert();}catch(e){console.warn('Undo failed:',e);alert('Impossible d\'annuler: '+e.message);}
+  updateUndoUI();
+}
+function clearUndo(){undoStack=[];updateUndoUI();}
+function updateUndoUI(){
+  // Global topbar button
+  var gbtn=document.getElementById('globalUndoBtn');
+  if(gbtn){
+    if(undoStack.length){
+      gbtn.disabled=false;gbtn.style.opacity='1';
+      gbtn.title='Annuler: '+undoStack[undoStack.length-1].label+' ('+undoStack.length+' étape'+(undoStack.length>1?'s':'')+' disponible'+(undoStack.length>1?'s':'')+')';
+      var cnt=document.getElementById('globalUndoCount');
+      if(cnt)cnt.textContent=undoStack.length>1?('('+undoStack.length+')'):'';
+    } else {
+      gbtn.disabled=true;gbtn.style.opacity='0.4';
+      gbtn.title='Aucune action à annuler';
+      var cnt2=document.getElementById('globalUndoCount');if(cnt2)cnt2.textContent='';
+    }
+  }
+  // Keep the existing BC-local button synced too (same stack)
+  var btn=document.getElementById('bcUndoBtn');if(btn){
+    if(undoStack.length){btn.disabled=false;btn.style.opacity='1';btn.title='Annuler: '+undoStack[undoStack.length-1].label+' ('+undoStack.length+')';}
+    else{btn.disabled=true;btn.style.opacity='0.5';btn.title='Aucune action à annuler';}
+  }
+}
+
 // ===== BC Lines v2 — support: flat lines, sections (titles), KIT (parent + sub-lines), undo, reorder =====
 // Data model:
 //   {type:'item', ref, desc, qte, pu}                              -> standard flat line
@@ -1959,30 +2022,18 @@ function openBC(id){
 //   sub-lines inside kit.children: {ref, desc, qte, pu}
 // Backwards-compat: old lines without 'type' treated as 'item'.
 
-var bcUndoStack=[];
 function bcSnapshot(){return JSON.parse(JSON.stringify(bcL));}
 function bcPushUndo(label){
-  bcUndoStack.push({snapshot:bcSnapshot(),label:label||'suppression'});
-  if(bcUndoStack.length>50)bcUndoStack.shift();
-  updateBCUndoBtn();
+  // Snapshot-based: push a revert fn that restores bcL entirely
+  var snap=bcSnapshot();
+  pushUndo(label||'suppression (BC)',function(){
+    bcL=snap;
+    // If BC modal still open, rerender; else just update in-memory state so user sees it next time
+    if(document.getElementById('mBC').classList.contains('open'))rBClines();
+  });
 }
-function undoBCL(){
-  if(!bcUndoStack.length)return;
-  var last=bcUndoStack.pop();
-  bcL=last.snapshot;
-  updateBCUndoBtn();
-  rBClines();
-}
-function updateBCUndoBtn(){
-  var btn=document.getElementById('bcUndoBtn');if(!btn)return;
-  if(bcUndoStack.length){
-    btn.disabled=false;btn.style.opacity='1';
-    btn.title='Annuler: '+bcUndoStack[bcUndoStack.length-1].label+' ('+bcUndoStack.length+' étape'+(bcUndoStack.length>1?'s':'')+')';
-  } else {
-    btn.disabled=true;btn.style.opacity='0.5';
-    btn.title='Aucune action à annuler';
-  }
-}
+function undoBCL(){doUndo();}
+function updateBCUndoBtn(){updateUndoUI();}
 function normalizeBCL(){
   for(var i=0;i<bcL.length;i++){
     var l=bcL[i];if(!l.type)l.type='item';
@@ -2284,7 +2335,19 @@ function rBLlines(){
     });
   });
   tb.querySelectorAll('.bl-del-btn').forEach(function(btn){
-    btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx)){blL.splice(idx,1);rBLlines();}});
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      if(!isNaN(idx)){
+        var snap=JSON.parse(JSON.stringify(blL));
+        var removed=blL[idx];
+        var lbl='ligne BL « '+((removed&&(removed.ref||removed.desc))||'(vide)')+' »';
+        pushUndo('Suppr. '+lbl,function(){
+          blL=snap;
+          if(document.getElementById('mBL').classList.contains('open'))rBLlines();
+        });
+        blL.splice(idx,1);rBLlines();
+      }
+    });
   });
   cBLtot();
 }
@@ -2428,6 +2491,20 @@ function updFC(id,arr){
 }
 function delDoc(col,id){
   if(!confirm('Supprimer ce document?'))return;
+  var idx=DB[col].findIndex(function(x){return x.id===id;});
+  if(idx<0)return;
+  var removedDoc=JSON.parse(JSON.stringify(DB[col][idx]));
+  var removedIdx=idx;
+  var docLabel=removedDoc.num||('doc #'+id);
+  var colLabel={devis:'Devis',factures:'Facture',bcs:'BC',bls:'BL',articles:'Article'}[col]||col;
+  pushUndo('Suppr. '+colLabel+' « '+docLabel+' »',function(){
+    // Re-insert at its previous position (or at the end if the list grew/shrank)
+    var insertAt=Math.min(removedIdx,DB[col].length);
+    DB[col].splice(insertAt,0,removedDoc);
+    saveDB();
+    if(col==='devis')renderDV();if(col==='factures')renderFA();if(col==='bcs')renderBC();if(col==='bls')renderBL();if(col==='articles')renderART();
+    rDash();renderHist();
+  });
   DB[col]=DB[col].filter(function(x){return x.id!==id;});
   saveDB();
   if(col==='devis')renderDV();if(col==='factures')renderFA();if(col==='bcs')renderBC();if(col==='bls')renderBL();if(col==='articles')renderART();
@@ -3083,7 +3160,14 @@ document.addEventListener('DOMContentLoaded',function(){
   // Ctrl+S / Cmd+S => manual save
   document.addEventListener('keydown',function(e){
     if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();manualSave();}
+    // Ctrl+Z / Cmd+Z => undo (only when focus is NOT in a text field, to avoid conflict with native undo)
+    if((e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='Z')){
+      var t=e.target;var isField=t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);
+      if(!isField&&undoStack.length){e.preventDefault();doUndo();}
+    }
   });
+  // Init undo UI state
+  updateUndoUI();
   // Check for draft recovery
   setTimeout(checkDraftRecovery,500);
 });
