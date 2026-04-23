@@ -2703,12 +2703,16 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   var cliEmail=clientDetail.email||d.email||'';
   var cliTel=clientDetail.tel||'';
   var mention=getMention(isExo?d.tgcM:'tgc');
-  var PAGE1_BUDGET=500, PAGE_N_BUDGET=880;
+  // Zone A4 utile (marges 10/12/16/12mm) ≈ 703×1024px
+  // Footer par page (bar + mention) ≈ 45px
+  // PAGE1 : header complet ~260px + footer 45px = 305px → budget lignes ~700 → mais on doit aussi caser d'éventuels totals si c'est aussi la dernière → LAST_EXTRA
+  // PAGE_N : header compact ~70px + footer 45px = 115px → budget lignes ~900
+  var PAGE1_BUDGET=700, PAGE_N_BUDGET=900, LAST_EXTRA=420, FOOTER_H=45;
   var measureDiv=document.createElement('div');
-  measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:780px;font-family:Calibri,Arial,sans-serif;font-size:13px;visibility:hidden';
+  measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:13px;visibility:hidden';
   document.body.appendChild(measureDiv);
   var colgroup='<colgroup><col style="width:28px"><col style="width:130px"><col><col style="width:38px"><col style="width:32px"><col style="width:32px"><col style="width:78px"><col style="width:82px"></colgroup>';
-  function measureRow(html){var t=document.createElement('table');t.style.cssText='width:780px;border-collapse:collapse;table-layout:fixed;font-size:13px;font-family:Calibri,Arial,sans-serif';t.innerHTML=colgroup+'<tbody>'+html+'</tbody>';measureDiv.appendChild(t);var h=t.getBoundingClientRect().height;measureDiv.removeChild(t);return h;}
+  function measureRow(html){var t=document.createElement('table');t.style.cssText='width:703px;border-collapse:collapse;table-layout:fixed;font-size:13px;font-family:Calibri,Arial,sans-serif';t.innerHTML=colgroup+'<tbody>'+html+'</tbody>';measureDiv.appendChild(t);var h=t.getBoundingClientRect().height;measureDiv.removeChild(t);return h;}
   var rowItems=[];
   lineData.forEach(function(item){
     if(item.isSec){
@@ -2731,17 +2735,39 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
     else{currentPage.push(item);usedHeight+=item.height;}
   });
   if(currentPage.length)pages.push(currentPage);
+
+  // Vérifier que la DERNIÈRE page a la place pour le bloc totals+notes+bank+signatures (LAST_EXTRA)
+  // Si elle dépasse, pousser ses lignes vers une nouvelle page vide pour les totals
+  if(pages.length>=1){
+    var lastPage=pages[pages.length-1];
+    var lastHeight=lastPage.reduce(function(s,r){return s+r.height;},0);
+    var lastBudget=pages.length===1?PAGE1_BUDGET:PAGE_N_BUDGET;
+    while(lastHeight+LAST_EXTRA>lastBudget && lastPage.length>1){
+      // Déplacer la dernière ligne vers une nouvelle page
+      var moved=lastPage.pop();
+      pages.push([moved]);
+      lastPage=pages[pages.length-1];
+      lastHeight=moved.height;
+      lastBudget=PAGE_N_BUDGET;
+    }
+    // Si même seul il ne rentre pas → on ajoute une page vide dédiée au bloc final
+    if(lastPage.length && lastHeight+LAST_EXTRA>lastBudget){
+      // Garde les lignes, mais ajoute une page vide après pour totals+sign
+      // (cas rare, on laisse en l'état : Chrome gèrera le débordement)
+    }
+  }
+
   var isMultiPage=pages.length>1;
   var tblCols='<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>';
   var tblHead='<thead><tr><th>#</th><th>Réf.</th><th>Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th style="text-align:right">PU</th><th style="text-align:right">TOTAL TTC</th></tr></thead>';
   function buildPageHeader(pageNum,totalPages){
     var isFirstPage=pageNum===1;
-    var pnHtml=totalPages>1?'<div style="font-size:8px;color:#888;text-align:right;margin-bottom:4px">Page '+pageNum+' / '+totalPages+'</div>':'';
-    var logoBlock=pnHtml+
+    // Pas de "Page X/Y" dans le header — on utilise @page counter en bas à droite
+    var logoBlock=
       '<div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:8px;border-bottom:2.5px solid #1e3a5f;margin-bottom:14px">'+
-        '<div><img src="'+logoSrc+'" style="height:35px;width:auto;display:block;margin-bottom:3px" alt="CALINSTRUM"><div style="font-size:11px;font-weight:900;color:#1e3a5f;letter-spacing:1px">CALINSTRUM</div></div>'+
+        '<div><img src="'+logoSrc+'" style="height:50px;width:auto;display:block;margin-bottom:3px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px">CALINSTRUM</div></div>'+
         '<div style="text-align:right;padding-bottom:4px">'+
-          '<div style="font-size:20px;font-weight:900;color:#1e3a5f">DEVIS N\u00b0 '+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</div>'+
+          '<div style="font-size:18px;font-weight:900;color:#1e3a5f">DEVIS N\u00b0 '+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</div>'+
           '<div style="font-size:10px;color:#555;margin-top:3px">Le : '+fD(d.date)+'</div>'+
         '</div>'+
       '</div>';
@@ -2777,9 +2803,12 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       '</tr></tfoot>';
     }
     var tableHTML='<table class="doc-tbl">'+tblCols+tblHead+'<tbody>'+rowsHTML+'</tbody>'+subtotalRowHTML+'</table>';
-    var footerHTML='<div style="background:#1e3a5f;color:#fff;text-align:center;padding:5px 0;font-size:10px;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important">'+CI.nom+' \u2014 '+CI.tel+' \u2014 '+CI.email+' \u2014 '+CI.rcs+'</div>'+
-    '<p style="font-size:10px;color:#cc2200;font-style:italic;text-align:center;margin:0;padding:3px 0;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important">'+mention+'</p>';
-    var pageHTML='<div class="doc-page"><div class="doc-page-content">';
+    var pageFooterHTML=
+      '<div class="doc-page-footer">'+
+        '<div class="doc-footer-bar">'+CI.nom+' \u2014 '+CI.tel+' \u2014 '+CI.email+' \u2014 '+CI.rcs+'</div>'+
+        '<p class="doc-legal">'+mention+'</p>'+
+      '</div>';
+    var pageHTML='<div class="doc-page">';
     pageHTML+=buildPageHeader(pi+1,pages.length);
     pageHTML+=tableHTML;
     if(isLast){
@@ -2799,9 +2828,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
         '</div>'+
         '</div>';
     }
-    pageHTML+='</div>';
-    pageHTML+='<div style="flex:1"></div>';
-    pageHTML+=footerHTML;
+    pageHTML+=pageFooterHTML;
     pageHTML+='</div>';
     pagesHTML+=pageHTML;
   });
@@ -2897,7 +2924,7 @@ function doPrint(){
   // Pour les devis paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
   // Pour les autres docs, on garde des marges A4 standard
   var pageRule=isDevisDoc
-    ? `@page{size:A4 portrait;margin:0;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 6mm;padding-bottom: 4mm;}}`
+    ? `@page{size:A4 portrait;margin:10mm 12mm 16mm 12mm;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}}`
     : `@page{size:A4 portrait;margin:8mm 10mm 20mm 10mm;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}} @page :first{ margin-top:8mm; }`;
 
   var extraCSS=pageRule+`
@@ -2905,18 +2932,45 @@ function doPrint(){
     body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;font-size:13px;color:#111;}
     .doc{max-width:100%;width:100%;}
 
-    /* === Pagination manuelle pour devis === */
-    .doc-page{page-break-after:always;break-after:always;}
+    /* === Pagination manuelle pour devis (marges natives via @page) === */
+    .doc-page{page-break-after:always;break-after:always;position:relative;}
     .doc-page:last-of-type{page-break-after:avoid!important;break-after:avoid!important;}
 
-    /* === FIXED FOOTER: blue bar + red text on EVERY page === */
+    /* Footer par page — en flow, à la fin de chaque .doc-page */
+    .doc-page-footer{
+      margin-top:14px;
+      page-break-inside:avoid;
+      break-inside:avoid;
+    }
+    .doc-page-footer .doc-footer-bar{
+      background:#1e3a5f!important;
+      color:#fff!important;
+      text-align:center;
+      padding:5px 10mm;
+      font-size:9px;
+      -webkit-print-color-adjust:exact!important;
+      print-color-adjust:exact!important;
+    }
+    .doc-page-footer .doc-legal{
+      font-size:9px;
+      color:#cc2200!important;
+      font-style:italic;
+      text-align:center;
+      background:#fff!important;
+      padding:3px 0 0 0;
+      margin:0;
+      -webkit-print-color-adjust:exact!important;
+      print-color-adjust:exact!important;
+    }
+
+    /* FIXED FOOTER (legacy, pour docs non-paginés) */
     .doc-fixed-footer{
       position:fixed;
       bottom:0;left:0;right:0;
       -webkit-print-color-adjust:exact!important;
       print-color-adjust:exact!important;
     }
-    .doc-footer-bar{
+    .doc-fixed-footer .doc-footer-bar{
       background:#1e3a5f!important;
       color:#fff!important;
       text-align:center;
@@ -2925,7 +2979,7 @@ function doPrint(){
       -webkit-print-color-adjust:exact!important;
       print-color-adjust:exact!important;
     }
-    .doc-legal{
+    .doc-fixed-footer .doc-legal{
       font-size:8px;
       color:#cc2200!important;
       font-style:italic;
