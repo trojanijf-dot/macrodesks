@@ -1556,6 +1556,16 @@ function saveSUIVI(){
 }
 function delInv(id){
   if(!confirm('Supprimer cette facture ?'))return;
+  var idx=invoices.findIndex(function(x){return x.id===id;});
+  if(idx<0)return;
+  var removed=JSON.parse(JSON.stringify(invoices[idx]));
+  var removedIdx=idx;
+  var lbl=removed.num||('facture #'+id);
+  pushUndo('Suppr. facture (Suivi) « '+lbl+' »',function(){
+    var insertAt=Math.min(removedIdx,invoices.length);
+    invoices.splice(insertAt,0,removed);
+    DB.invoices=invoices;saveDB();renderSuivi();rDash();
+  });
   invoices=invoices.filter(function(x){return x.id!==id;});
   DB.invoices=invoices;saveDB();renderSuivi();
 }
@@ -1672,7 +1682,18 @@ function addParam(key){
   if(p[key].indexOf(inp.value.trim())<0){p[key].push(inp.value.trim());saveDB();inp.value='';renderParams();rebuildAllParamSelects();}
 }
 function delParam(key,idx){
-  var p=getParams();if(p[key])p[key].splice(idx,1);
+  var p=getParams();
+  if(p[key]&&p[key][idx]!=null){
+    var removed=p[key][idx];
+    var removedIdx=idx;
+    pushUndo('Suppr. paramètre « '+removed+' » ('+key+')',function(){
+      var pp=getParams();
+      if(!pp[key])pp[key]=[];
+      pp[key].splice(Math.min(removedIdx,pp[key].length),0,removed);
+      saveDB();renderParams();rebuildAllParamSelects();
+    });
+    p[key].splice(idx,1);
+  }
   saveDB();renderParams();rebuildAllParamSelects();
 }
 // ===== DEVIS LINES =====
