@@ -2818,11 +2818,59 @@ function openBC(id){
   eBCid=id||null;bcL=[];rebuildAllParamSelects();
   if(id){
     var b=DB.bcs.find(function(x){return x.id===id;});
-    if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-cref',b.cref||'');gv('bc-prop',b.prop||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:'');gv('bc-prop2',b.prop2!=null?b.prop2:'');gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
+    if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-cref',b.cref||'');gv('bc-prop',b.prop||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:'');gv('bc-prop2',b.prop2!=null?b.prop2:'');gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
     gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-cref','');gv('bc-prop','');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');gv('bc-prop2','');gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');sv('mBCtitle','Nouveau BC — Emerson');
   }
   rBClines();om('mBC');
+}
+
+// Migration rétrocompat : pour les items en mode Kit avec textarea multi-lignes,
+// parse le texte en subLines[] structurées
+function migrateLegacyKits(lines){
+  var currentIsKit=false;
+  lines.forEach(function(l){
+    if(l.type==='header'){
+      currentIsKit=(l.mode==='kit');
+      return;
+    }
+    // Item en mode Kit et pas encore de subLines[] : migrer le textarea
+    if(currentIsKit && !Array.isArray(l.subLines) && l.desc){
+      var allLines=l.desc.split(/\r?\n/);
+      if(allLines.length>1){
+        // 1ère ligne = description principale, reste = sous-lignes
+        var first=allLines[0];
+        var rest=allLines.slice(1).filter(function(s){return s.trim().length>0;});
+        l.desc=first;
+        l.subLines=rest.map(function(s){
+          // Tenter de parser : "1 SNG-A43-0 AMS MACHINE WORKS..." → qte=1, ref=SNG-A43-0, desc=AMS...
+          var m=s.match(/^\s*(\d+)\s+(\S+)\s+(.+)$/);
+          if(m) return {qte:+m[1],ref:m[2],desc:m[3]};
+          // Sinon, tout en description
+          return {qte:1,ref:'',desc:s.trim()};
+        });
+      } else {
+        l.subLines=[];
+      }
+    } else if(currentIsKit && !Array.isArray(l.subLines)){
+      l.subLines=[];
+    }
+  });
+}
+
+// Ajoute une sous-ligne à un item kit
+function addBCKitSubLine(itemIdx){
+  var l=bcL[itemIdx];
+  if(!l) return;
+  if(!Array.isArray(l.subLines)) l.subLines=[];
+  l.subLines.push({ref:'',desc:'',qte:1});
+  rBClines();
+}
+function deleteBCKitSubLine(itemIdx, subIdx){
+  var l=bcL[itemIdx];
+  if(!l||!Array.isArray(l.subLines)) return;
+  l.subLines.splice(subIdx,1);
+  rBClines();
 }
 function addBCL(){bcL.push({ref:'',desc:'',qte:1,pu:0});rBClines();}
 function addBCHeader(){bcL.push({type:'header',desc:'TITRE DE SECTION',mode:'items'});rBClines();}
@@ -2860,21 +2908,48 @@ function rBClines(){
         '</tr>';
     }
     itemNum++;
-    // Mode Kit = textarea multi-lignes pour description (retours à la ligne → sous-lignes PDF)
-    var descField;
+    var kitBadge=currentMode==='kit'?' <span style="display:inline-block;background:rgba(59,130,246,.15);color:#3b82f6;padding:1px 4px;border-radius:3px;font-size:8.5px;font-weight:700;margin-left:2px" title="Ce item est dans une section Kit : le PU = prix du lot (pas de ×qté)">K</span>':'';
+    var lineExt=currentMode==='kit'?(Number(l.pu)||0):((Number(l.qte)||0)*(Number(l.pu)||0));
+
     if(currentMode==='kit'){
-      descField='<textarea rows="3" style="min-width:150px;width:100%;font-size:11px;resize:vertical;font-family:var(--mono)" data-field="desc" data-idx="'+i+'" placeholder="1 SNG-A43-0 AMS MACHINE WORKS...&#10;2 SNG-A43USER-1-0 USER LICENSE...&#10;(chaque ligne = 1 sous-ligne dans le PDF)">'+esc(l.desc)+'</textarea>';
-    } else {
-      descField='<input style="min-width:150px;width:100%" value="'+esc(l.desc)+'" data-field="desc" data-idx="'+i+'">';
+      // Mode KIT : item principal + sous-lignes structurées. Rowspan sur # / PU / MONTANT
+      if(!Array.isArray(l.subLines)) l.subLines=[];
+      var rowspan=1+l.subLines.length; // ligne principale + sous-lignes
+      // Ligne principale (avec rowspan)
+      var html='<tr style="border-top:1px solid rgba(59,130,246,.3)">'+
+        '<td rowspan="'+rowspan+'" style="text-align:center;color:var(--muted);font-weight:700;vertical-align:middle;background:rgba(59,130,246,.04)">'+itemNum+kitBadge+'</td>'+
+        '<td><input style="width:110px" value="'+esc(l.ref)+'" data-field="ref" data-idx="'+i+'" placeholder="Réf principale"></td>'+
+        '<td><input style="min-width:150px;width:100%" value="'+esc(l.desc)+'" data-field="desc" data-idx="'+i+'" placeholder="Description de l\'item principal (Ex: AMS WIRELESS VIBRATION MONITOR...)"></td>'+
+        '<td><input type="number" style="width:55px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'" title="Qté principale (descriptive : nombre d\'unités livrées)"></td>'+
+        '<td rowspan="'+rowspan+'" style="vertical-align:middle;background:rgba(59,130,246,.04)"><input type="number" style="width:80px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'" title="Prix du lot (global)"></td>'+
+        '<td rowspan="'+rowspan+'" style="font-weight:700;color:var(--teal);vertical-align:middle;background:rgba(59,130,246,.04)" title="Prix du lot (Kit)">'+fN(lineExt)+'</td>'+
+        '<td rowspan="'+rowspan+'" style="white-space:nowrap;vertical-align:middle;background:rgba(59,130,246,.04)">'+
+          '<button class="bc-up-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Monter">▲</button>'+
+          '<button class="bc-down-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Descendre">▼</button>'+
+          '<button class="bc-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer" title="Supprimer l\'item complet">✕</button>'+
+          '<br><button class="bc-addsub-btn" data-idx="'+i+'" style="margin-top:4px;padding:2px 6px;border:1px solid rgba(59,130,246,.5);background:rgba(59,130,246,.08);color:#3b82f6;border-radius:3px;cursor:pointer;font-size:9px;font-weight:700" title="Ajouter une sous-ligne">+ Sous-ligne</button>'+
+        '</td>'+
+      '</tr>';
+      // Sous-lignes (REF / DESC / QTE éditables, pas de PU/MONTANT car déjà en rowspan)
+      l.subLines.forEach(function(sub,si){
+        html+='<tr style="background:rgba(59,130,246,.02)">'+
+          '<td><input style="width:110px;font-family:var(--mono);font-size:11px" value="'+esc(sub.ref||'')+'" data-sub-field="ref" data-idx="'+i+'" data-sub="'+si+'" placeholder="Part Number"></td>'+
+          '<td><input style="min-width:150px;width:100%" value="'+esc(sub.desc||'')+'" data-sub-field="desc" data-idx="'+i+'" data-sub="'+si+'" placeholder="Sous-ligne descriptive"></td>'+
+          '<td><input type="number" style="width:55px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub="'+si+'"></td>'+
+        '</tr>';
+      });
+      return html;
     }
-    var kitBadge=currentMode==='kit'?' <span style="display:inline-block;background:rgba(59,130,246,.15);color:#3b82f6;padding:1px 4px;border-radius:3px;font-size:8.5px;font-weight:700;margin-left:2px" title="Ce item est dans une section Kit">K</span>':'';
+
+    // Mode ITEMS (standard)
+    var descField='<input style="min-width:150px;width:100%" value="'+esc(l.desc)+'" data-field="desc" data-idx="'+i+'">';
     return'<tr>'+
-      '<td style="text-align:center;color:var(--muted);font-weight:700">'+itemNum+kitBadge+'</td>'+
+      '<td style="text-align:center;color:var(--muted);font-weight:700">'+itemNum+'</td>'+
       '<td><input style="width:110px" value="'+esc(l.ref)+'" data-field="ref" data-idx="'+i+'"></td>'+
       '<td>'+descField+'</td>'+
       '<td><input type="number" style="width:55px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'"></td>'+
       '<td><input type="number" style="width:80px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'"></td>'+
-      '<td style="font-weight:700;color:var(--teal)">'+fN((l.qte||0)*(l.pu||0))+'</td>'+
+      '<td style="font-weight:700;color:var(--teal)" title="Qté × PU">'+fN(lineExt)+'</td>'+
       '<td style="white-space:nowrap">'+
         '<button class="bc-up-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Monter">▲</button>'+
         '<button class="bc-down-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Descendre">▼</button>'+
@@ -2882,10 +2957,28 @@ function rBClines(){
       '</td>'+
       '</tr>';
   }).join('');
-  tb.querySelectorAll('input,textarea').forEach(function(inp){
+  // Listeners champs principaux (item + header)
+  tb.querySelectorAll('input[data-field]').forEach(function(inp){
     inp.addEventListener('input',function(){
       var idx=parseInt(this.getAttribute('data-idx')),field=this.getAttribute('data-field');
-      if(!isNaN(idx)&&field){bcL[idx][field]=field==='qte'||field==='pu'?+this.value:this.value;cBCtot();}
+      if(!isNaN(idx)&&field){
+        bcL[idx][field]=field==='qte'||field==='pu'?+this.value:this.value;
+        // Mise à jour light : juste recalculer le sous-total et les cellules concernées
+        updateBCLineMontant(idx);
+        cBCtotLight();
+      }
+    });
+  });
+  // Listeners sous-lignes (kit)
+  tb.querySelectorAll('input[data-sub-field]').forEach(function(inp){
+    inp.addEventListener('input',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      var sub=parseInt(this.getAttribute('data-sub'));
+      var field=this.getAttribute('data-sub-field');
+      if(!isNaN(idx)&&!isNaN(sub)&&field&&bcL[idx]&&bcL[idx].subLines&&bcL[idx].subLines[sub]){
+        bcL[idx].subLines[sub][field]=field==='qte'?+this.value:this.value;
+        // Pas de recalcul de total nécessaire : les sous-lignes ne changent pas le prix
+      }
     });
   });
   tb.querySelectorAll('.bc-del-btn').forEach(function(btn){
@@ -2897,10 +2990,70 @@ function rBClines(){
   tb.querySelectorAll('.bc-down-btn').forEach(function(btn){
     btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx))moveBCLine(idx,1);});
   });
+  tb.querySelectorAll('.bc-addsub-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx))addBCKitSubLine(idx);});
+  });
   cBCtot();
 }
+
+// Mise à jour light d'une seule ligne (montant affiché) sans re-render complet du tableau
+// Évite de perdre le focus pendant la saisie
+function updateBCLineMontant(idx){
+  var l=bcL[idx];
+  if(!l||l.type==='header') return;
+  var flags=computeBCKitFlags(bcL);
+  var ext=bcLineExtended(l, flags[idx]);
+  // Chercher la cellule montant de cette ligne
+  var tb=document.getElementById('bcLN');if(!tb) return;
+  // Pour les items kit, la cellule montant a rowspan : chercher dans la 1ère ligne de cet item
+  var inputs=tb.querySelectorAll('input[data-field][data-idx="'+idx+'"]');
+  if(inputs.length===0) return;
+  var tr=inputs[0].closest('tr');
+  if(!tr) return;
+  // Cellule montant est la 6e (index 5) dans mode Items, ou dans un td rowspan en mode Kit
+  var tds=tr.querySelectorAll('td');
+  // Trouver la cellule qui contient déjà un nombre formaté (pas d'input)
+  for(var k=0;k<tds.length;k++){
+    var td=tds[k];
+    if(!td.querySelector('input,button,select') && td.getAttribute('rowspan') !== null){
+      // Cellule rowspan sans input → c'est le montant
+      td.textContent=fN(ext);
+      break;
+    }
+    if(!td.querySelector('input,button,select') && td.style.color && td.style.color.indexOf('teal')>=0){
+      td.textContent=fN(ext);
+      break;
+    }
+  }
+}
+
+// Version light de cBCtot : recalcule juste les totaux sans toucher au DOM du tableau
+function cBCtotLight(){ return cBCtot(); }
+// Pour chaque ligne item, détermine si elle appartient à une section en mode Kit
+// Retourne un array de booléens (même longueur que bcL) : true = kit, false = items
+function computeBCKitFlags(lines){
+  var flags=[];
+  var currentIsKit=false;
+  (lines||[]).forEach(function(l){
+    if(l.type==='header'){
+      currentIsKit=(l.mode==='kit');
+      flags.push(currentIsKit);
+    } else {
+      flags.push(currentIsKit);
+    }
+  });
+  return flags;
+}
+// Calcule l'Extended Price d'une ligne item en fonction du mode de sa section
+function bcLineExtended(line, isKit){
+  if(line.type==='header') return 0;
+  if(isKit) return Number(line.pu)||0;       // Mode Kit : prix du lot, pas de multiplication
+  return (Number(line.qte)||0)*(Number(line.pu)||0); // Mode Items : qté × PU
+}
 function cBCtot(){
-  var sub=bcL.reduce(function(s,l){return l.type==='header'?s:s+(l.qte||0)*(l.pu||0);},0);
+  var flags=computeBCKitFlags(bcL);
+  var sub=0;
+  bcL.forEach(function(l,i){ sub += bcLineExtended(l, flags[i]); });
   var disc=parseFloat(gvg('bc-discount'))||0;
   var sales=parseFloat(gvg('bc-sales-tax'))||0;
   var other=parseFloat(gvg('bc-other-tax'))||0;
@@ -3375,32 +3528,38 @@ function bBC(b){
       return'<tr><td colspan="6" style="background:#e8eff7;font-weight:700;font-size:10.5px;color:#1e3a5f;padding:6px 9px;border:1px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact;letter-spacing:.02em">'+esc(l.desc||'')+'</td></tr>';
     }
     itemNum++;
-    var total=(l.qte||0)*(l.pu||0);
+    var total=(currentMode==='kit')?(Number(l.pu)||0):((Number(l.qte)||0)*(Number(l.pu)||0));
     if(currentMode==='kit'){
-      // Mode KIT Emerson : description multi-lignes → 1ère ligne = item principal avec prix, suivantes = sous-lignes sans prix
-      var descLines=(l.desc||'').split(/\r?\n/).filter(function(s){return s.trim().length>0;});
-      if(descLines.length===0) descLines=[''];
-      var firstLine=descLines[0];
-      var subLines=descLines.slice(1);
-      // Item principal : numéro + qté + ref + 1ère ligne desc + prix global
+      // Mode KIT Emerson : sous-lignes structurées dans l.subLines[]
+      // Rétrocompat : si pas de subLines mais desc multi-lignes, migrer à la volée pour affichage
+      var subs=Array.isArray(l.subLines)?l.subLines:[];
+      if(!Array.isArray(l.subLines) && l.desc && l.desc.indexOf('\n')>=0){
+        var allLines=l.desc.split(/\r?\n/).filter(function(s){return s.trim().length>0;});
+        var mainDescFallback=allLines[0]||'';
+        subs=allLines.slice(1).map(function(s){
+          var m=s.match(/^\s*(\d+)\s+(\S+)\s+(.+)$/);
+          if(m) return {qte:+m[1], ref:m[2], desc:m[3]};
+          return {qte:'', ref:'', desc:s.trim()};
+        });
+        // Pour cette génération PDF, utiliser juste la 1ère ligne
+        var tmpL=Object.assign({},l,{desc:mainDescFallback});
+        l=tmpL;
+      }
+      var rowspan=1+subs.length;
       var html='<tr>'+
-        '<td style="text-align:center;font-weight:700;vertical-align:top"'+(subLines.length?' rowspan="'+(1+subLines.length)+'"':'')+'>'+itemNum+'</td>'+
+        '<td style="text-align:center;font-weight:700;vertical-align:middle"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+itemNum+'</td>'+
         '<td style="text-align:center;font-weight:600;vertical-align:top">'+(l.qte||0)+'</td>'+
         '<td style="font-family:var(--mono);font-size:9.5px;vertical-align:top">'+esc(l.ref||'')+'</td>'+
-        '<td style="vertical-align:top">'+esc(firstLine)+'</td>'+
-        '<td style="text-align:right;vertical-align:top"'+(subLines.length?' rowspan="'+(1+subLines.length)+'"':'')+'>'+fN(l.pu)+'</td>'+
-        '<td style="text-align:right;font-weight:700;vertical-align:top"'+(subLines.length?' rowspan="'+(1+subLines.length)+'"':'')+'>'+fN(total)+'</td>'+
+        '<td style="vertical-align:top">'+esc(l.desc||'')+'</td>'+
+        '<td style="text-align:right;vertical-align:middle"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+fN(l.pu)+'</td>'+
+        '<td style="text-align:right;font-weight:700;vertical-align:middle"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+fN(total)+'</td>'+
       '</tr>';
-      // Sous-lignes (pas de numéro, pas de prix : déjà couverts par rowspan)
-      subLines.forEach(function(sub){
-        // Tenter d'extraire ref en début si présente (ex: "1 SNG-A43-0 AMS MACHINE..." → qté=1, ref=SNG-A43-0, desc=AMS MACHINE...)
-        var m=sub.match(/^(\d+)\s+(\S+)\s+(.+)$/);
-        var sQty='',sRef='',sDesc=sub;
-        if(m){sQty=m[1];sRef=m[2];sDesc=m[3];}
+      // Sous-lignes structurées
+      subs.forEach(function(sub){
         html+='<tr>'+
-          '<td style="text-align:center;color:#64748b;font-size:9.5px">'+esc(sQty)+'</td>'+
-          '<td style="font-family:var(--mono);font-size:9.5px;color:#64748b">'+esc(sRef)+'</td>'+
-          '<td style="color:#334155;font-size:10px">'+esc(sDesc)+'</td>'+
+          '<td style="text-align:center;color:#64748b;font-size:9.5px">'+esc(sub.qte!=null?String(sub.qte):'')+'</td>'+
+          '<td style="font-family:var(--mono);font-size:9.5px;color:#64748b">'+esc(sub.ref||'')+'</td>'+
+          '<td style="color:#334155;font-size:10px">'+esc(sub.desc||'')+'</td>'+
         '</tr>';
       });
       return html;
