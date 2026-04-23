@@ -578,9 +578,51 @@ tr:hover td{background:rgba(255,255,255,.02)}
             <option>Paiement sous 60 jours</option>
           </select>
         </div>
-        <div class="form-group"><label>Montant payé (XPF)</label><input type="number" class="form-input" id="fa-paye" value="0"></div>
       </div>
-      <div class="form-group"><label>Notes</label><textarea class="form-textarea" id="fa-notes" rows="2"></textarea></div>
+      <!-- BLOC VERSEMENTS -->
+      <div style="margin-top:10px;padding:10px;background:rgba(45,212,191,.04);border:1px solid rgba(45,212,191,.2);border-radius:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+          <strong style="color:var(--teal)">💰 Suivi des versements</strong>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <select id="fa-split-n" class="form-select" style="width:auto;padding:4px 8px;font-size:11.5px">
+              <option value="1">1 versement</option>
+              <option value="2">2 versements</option>
+              <option value="3">3 versements</option>
+              <option value="4">4 versements</option>
+              <option value="5">5 versements</option>
+              <option value="6">6 versements</option>
+            </select>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="autoSplitVersements()" style="padding:4px 10px">⚡ Auto-split</button>
+            <button type="button" class="btn btn-teal btn-sm" onclick="addVersement()" style="padding:4px 10px">+ Versement</button>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+          <thead>
+            <tr style="background:rgba(45,212,191,.1);color:var(--teal)">
+              <th style="padding:5px 6px;text-align:left;width:40px">#</th>
+              <th style="padding:5px 6px;text-align:left">Date</th>
+              <th style="padding:5px 6px;text-align:right">Montant (XPF)</th>
+              <th style="padding:5px 6px;text-align:right">Cumul</th>
+              <th style="width:32px"></th>
+            </tr>
+          </thead>
+          <tbody id="faVers"></tbody>
+          <tfoot>
+            <tr style="border-top:2px solid var(--teal);font-weight:700">
+              <td colspan="2" style="padding:6px;color:var(--teal)">Total versé</td>
+              <td style="padding:6px;text-align:right;color:var(--teal)" id="faTotVerse">0 XPF</td>
+              <td colspan="2"></td>
+            </tr>
+            <tr style="font-weight:700">
+              <td colspan="2" style="padding:6px;color:var(--red)">Reste à payer</td>
+              <td style="padding:6px;text-align:right;color:var(--red)" id="faReste">0 XPF</td>
+              <td colspan="2"></td>
+            </tr>
+          </tfoot>
+        </table>
+        <div id="faStatusHint" style="margin-top:6px;font-size:10.5px;color:var(--text-dim);font-style:italic"></div>
+      </div>
+      <div class="form-group" style="margin-top:10px"><label>Notes</label><textarea class="form-textarea" id="fa-notes" rows="2"></textarea></div>
       <div style="background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.2);border-radius:6px;padding:10px;font-size:10.5px;line-height:1.8;color:var(--teal);margin-top:10px">
         <strong style="display:block;margin-bottom:4px">🏦 Coordonnées bancaires CALINSTRUM</strong>
         <span style="color:var(--text)">Banque: BNC | Code: 14889 | Guichet: 00081 | Compte: 08769168802 | Clé: 18<br>
@@ -1354,6 +1396,21 @@ function getAlertData(){
     else if(d===0)alerts.push(Object.assign({},inv,{type:'today',message:'Echeance AUJOURD\'HUI - '+dateStr}));
     else if(d<=7)alerts.push(Object.assign({},inv,{type:'soon',message:'Echeance dans '+d+' jour'+(d>1?'s':'')+' - '+dateStr}));
   });
+  // Alertes factures GRC : si reste à payer > 0 et date butoir dépassée (calculée via delai)
+  (DB.factures||[]).forEach(function(f){
+    var totVerse=(f.versements&&f.versements.length)?f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0):(Number(f.paye)||0);
+    var reste=(f.ttc||0)-totVerse;
+    if(reste<=0)return;
+    // Calculer date butoir à partir de date facture + delai
+    var fd=parseDate(f.date);if(!fd)return;
+    var delai=(f.delai||'').toString();
+    var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
+    var bd=new Date(fd);bd.setDate(bd.getDate()+days);
+    var d=diffDays(td2,bd),dateStr=bd.toLocaleDateString('fr-FR');
+    if(d<0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'late',message:'GRC — En retard de '+Math.abs(d)+'j, reste '+fN(reste)+' XPF (ech. '+dateStr+')',dateEnvoi:f.date,dateButoir:bd.toISOString().slice(0,10)});
+    else if(d===0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'today',message:'GRC — Echeance AUJOURD\'HUI, reste '+fN(reste)+' XPF'});
+    else if(d<=7) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'soon',message:'GRC — Echeance dans '+d+'j, reste '+fN(reste)+' XPF'});
+  });
   return alerts.sort(function(a,b){var o={late:0,today:1,soon:2};return o[a.type]-o[b.type];});
 }
 function renderAlertes(){
@@ -1455,10 +1512,19 @@ function rDash(){
   var tvFA=fa.reduce(function(s,x){return s+(x.ttc||0);},0);
   var lateFA=invoices.filter(function(x){return getStatus(x)==='late';}).reduce(function(s,x){return s+x.montant;},0);
   var paidFA=invoices.filter(function(x){return getStatus(x)==='paid';}).reduce(function(s,x){return s+x.montant;},0);
+  // Calculs versements factures GRC
+  function totVerseFA(f){
+    if(f.versements && f.versements.length) return f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
+    return Number(f.paye)||0;
+  }
+  var encaisseGRC=fa.reduce(function(s,f){return s+Math.min(totVerseFA(f),f.ttc||0);},0);
+  var recouvrerGRC=fa.reduce(function(s,f){return s+Math.max(0,(f.ttc||0)-totVerseFA(f));},0);
   var sr=document.getElementById('statsRow');
   if(sr) sr.innerHTML=
     '<div class="metric m-teal"><div class="mlbl">Devis total</div><div class="mval">'+fN(tvDV)+'</div><div class="msub">'+dv.length+' devis</div></div>'+
     '<div class="metric m-green"><div class="mlbl">Factures GRC</div><div class="mval">'+fN(tvFA)+'</div><div class="msub">'+fa.length+' factures</div></div>'+
+    '<div class="metric m-green"><div class="mlbl">💰 Encaissé (GRC)</div><div class="mval">'+fN(encaisseGRC)+'</div><div class="msub">XPF versés</div></div>'+
+    '<div class="metric m-red"><div class="mlbl">⏳ À recouvrer (GRC)</div><div class="mval red">'+fN(recouvrerGRC)+'</div><div class="msub">XPF restants</div></div>'+
     '<div class="metric m-red"><div class="mlbl">Suivi en retard</div><div class="mval red">'+fN(lateFA)+'</div><div class="msub">XPF SLN</div></div>'+
     '<div class="metric m-green"><div class="mlbl">Suivi encaissé</div><div class="mval">'+fN(paidFA)+'</div><div class="msub">XPF SLN</div></div>';
   function hList(arr,cls,ico){
@@ -1817,7 +1883,7 @@ function renderDV(){
 // ===== FACTURES =====
 var eFAid=null,faL=[];
 function openFA(id,fromDV){
-  eFAid=id||null;faL=[];rebuildAllParamSelects();
+  eFAid=id||null;faL=[];faVersements=[];rebuildAllParamSelects();
   buildClientOptions('fa-client','');
   if(id){
     var f=DB.factures.find(function(x){return x.id===id;});
@@ -1827,7 +1893,13 @@ function openFA(id,fromDV){
       gv('fa-contact',f.contact||'');gv('fa-adresse',f.adresse||'');gv('fa-email',f.email||'');gv('fa-objet',f.objet||'');
       gv('fa-dvlie',f.dvlie||'');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
-      gv('fa-paye',f.paye||0);gv('fa-notes',f.notes||'');
+      gv('fa-notes',f.notes||'');
+      // Rétrocompat : si versements absents mais paye>0, créer 1 versement
+      if(f.versements && f.versements.length){
+        faVersements=JSON.parse(JSON.stringify(f.versements));
+      } else if(f.paye && f.paye>0){
+        faVersements=[{date:f.date||new Date().toISOString().slice(0,10),montant:+f.paye}];
+      }
       faL=JSON.parse(JSON.stringify(f.lines||[]));
       sv('mFAtitle','Modifier '+f.num);
     }
@@ -1836,7 +1908,7 @@ function openFA(id,fromDV){
     buildClientOptions('fa-client',fromDV.client||'');
     gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');gv('fa-email',fromDV.email||'');
     gv('fa-objet',fromDV.objet||'');gv('fa-dvlie',fromDV.num||'');gv('fa-status','En attente');
-    gv('fa-paye',0);gv('fa-notes','');
+    gv('fa-notes','');
     if(isClientExo(fromDV.client))gv('fa-tgc-mention','506-2');else gv('fa-tgc-mention','tgc');
     var lf=fromDV.lines||{};
     faL=[].concat(lf.fourniture||[],lf.service||[],lf.fret||[]).map(function(l){return Object.assign({},l);});
@@ -1844,7 +1916,7 @@ function openFA(id,fromDV){
   } else {
     gv('fa-num',nxt('fa'));gv('fa-date',td());gv('fa-contact','');
     gv('fa-adresse','');gv('fa-email','');gv('fa-objet','');gv('fa-dvlie','');
-    gv('fa-status','En attente');gv('fa-paye',0);gv('fa-notes','');gv('fa-tgc-mention','506-2');
+    gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
     sv('mFAtitle','Nouvelle Facture');
   }
   rFAlines();om('mFA');
@@ -1885,14 +1957,115 @@ function cFAtot(){
   faL.forEach(function(l){var h=(l.qte||0)*(l.pu||0);ht+=h;tgcTotal+=h*(Number(l.tgc)||0)/100;});
   sv('faTHT',fN(ht)+' XPF');sv('faTGC',fN(tgcTotal)+' XPF');sv('faTTTC',fN(ht+tgcTotal)+' XPF');
   var r=document.getElementById('faRowTGC');if(r)r.style.display=tgcTotal>0?'flex':'none';
+  rVersements();
   return{ht:ht,tgc:tgcTotal,ttc:ht+tgcTotal};
 }
+
+// ===== VERSEMENTS =====
+var faVersements=[]; // [{date:'2026-04-23', montant:50000}]
+
+function rVersements(){
+  var tb=document.getElementById('faVers');if(!tb)return;
+  if(!faVersements.length){
+    tb.innerHTML='<tr><td colspan="5" style="padding:10px;text-align:center;color:var(--text-dim);font-style:italic">Aucun versement enregistré. Ajoute un versement ou utilise Auto-split.</td></tr>';
+  } else {
+    var cumul=0;
+    tb.innerHTML=faVersements.map(function(v,i){
+      cumul+=Number(v.montant)||0;
+      return'<tr>'+
+        '<td style="padding:4px 6px;font-weight:700;color:var(--teal)">'+(i+1)+'</td>'+
+        '<td style="padding:4px 6px"><input type="date" class="form-input" style="padding:3px 6px;font-size:11px;width:140px" value="'+esc(v.date||'')+'" data-vfield="date" data-vidx="'+i+'"></td>'+
+        '<td style="padding:4px 6px"><input type="number" class="form-input" style="padding:3px 6px;font-size:11px;width:110px;text-align:right" value="'+(v.montant||0)+'" data-vfield="montant" data-vidx="'+i+'"></td>'+
+        '<td style="padding:4px 6px;text-align:right;font-weight:700">'+fN(cumul)+' XPF</td>'+
+        '<td style="padding:4px 6px"><button class="fa-vdel-btn" data-vidx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px">✕</button></td>'+
+      '</tr>';
+    }).join('');
+  }
+  // Calculer totaux + statut auto
+  var totVerse=faVersements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
+  var ttc=(+faL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);},0))||0;
+  ttc=Math.round(ttc);
+  var reste=Math.max(0,ttc-totVerse);
+  sv('faTotVerse',fN(totVerse)+' XPF');
+  sv('faReste',fN(reste)+' XPF');
+  // Statut auto
+  var newStatus='En attente';
+  if(totVerse>=ttc && ttc>0) newStatus='Payée';
+  else if(totVerse>0) newStatus='Partiel';
+  // Check date butoir pour 'En retard'
+  var dateStr=gvg('fa-date');
+  if(dateStr && totVerse<ttc){
+    var d=new Date(dateStr);
+    var delai=gvg('fa-delai')||'';
+    var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
+    d.setDate(d.getDate()+days);
+    if(d<new Date() && newStatus!=='Payée') newStatus='En retard';
+  }
+  var sel=document.getElementById('fa-status');
+  if(sel){
+    // Ne change pas si utilisateur a manuellement forcé un statut hors auto
+    var curr=sel.value;
+    if(['En attente','Partiel','Payée','En retard'].indexOf(curr)>=0){
+      sel.value=newStatus;
+    }
+  }
+  var hint=document.getElementById('faStatusHint');
+  if(hint){
+    if(ttc===0) hint.textContent='';
+    else if(totVerse===0) hint.textContent='Aucun versement — statut: En attente';
+    else if(totVerse>=ttc) hint.textContent='✓ Facture intégralement soldée';
+    else hint.textContent='Versé: '+fN(totVerse)+' / '+fN(ttc)+' XPF ('+Math.round(totVerse/ttc*100)+'%)';
+  }
+  // Attacher listeners aux inputs
+  tb.querySelectorAll('input[data-vfield]').forEach(function(inp){
+    inp.addEventListener('input',function(){
+      var idx=parseInt(this.getAttribute('data-vidx'));
+      var field=this.getAttribute('data-vfield');
+      if(!isNaN(idx)&&field){
+        faVersements[idx][field]=field==='montant'?(+this.value||0):this.value;
+        rVersements();
+      }
+    });
+  });
+  tb.querySelectorAll('.fa-vdel-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-vidx'));
+      if(!isNaN(idx)){faVersements.splice(idx,1);rVersements();}
+    });
+  });
+}
+
+function addVersement(){
+  var today=new Date().toISOString().slice(0,10);
+  faVersements.push({date:today,montant:0});
+  rVersements();
+}
+
+function autoSplitVersements(){
+  var n=parseInt(gvg('fa-split-n'))||1;
+  var ttc=Math.round(+faL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);},0))||0;
+  if(ttc===0){alert('Ajoute d\'abord des lignes à la facture pour calculer le TTC.');return;}
+  if(faVersements.length && !confirm('Remplacer les '+faVersements.length+' versement(s) existant(s) par '+n+' versement(s) auto-répartis ?')) return;
+  var baseDate=new Date(gvg('fa-date')||new Date().toISOString().slice(0,10));
+  var part=Math.floor(ttc/n);
+  var reste=ttc-part*n; // mis dans le dernier
+  faVersements=[];
+  for(var i=0;i<n;i++){
+    var d=new Date(baseDate);
+    d.setDate(d.getDate()+i*30); // +0j, +30j, +60j, +90j...
+    var montant=part+(i===n-1?reste:0);
+    faVersements.push({date:d.toISOString().slice(0,10),montant:montant});
+  }
+  rVersements();
+}
+
 function getFA(){
   var t=cFAtot();
+  var totVerse=faVersements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
   return{id:eFAid||Date.now(),num:gvg('fa-num'),date:gvg('fa-date'),client:gvg('fa-client'),
     contact:gvg('fa-contact'),adresse:gvg('fa-adresse'),email:gvg('fa-email'),objet:gvg('fa-objet'),
     dvlie:gvg('fa-dvlie'),status:gvg('fa-status'),tgcM:gvg('fa-tgc-mention'),
-    delai:gvg('fa-delai'),paye:+gvg('fa-paye')||0,notes:gvg('fa-notes'),
+    delai:gvg('fa-delai'),paye:totVerse,versements:JSON.parse(JSON.stringify(faVersements)),notes:gvg('fa-notes'),
     lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc};
 }
 function saveFA(){
