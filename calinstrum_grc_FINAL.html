@@ -2128,7 +2128,9 @@ function rBClines(){
       var isKit=l.mode==='kit';
       var modeLbl=isKit?'🎁 KIT (1 prix global)':'📦 ITEMS (prix individuels)';
       var modeBg=isKit?'rgba(88,166,255,0.2)':'rgba(45,212,191,0.15)';
-      // Kit header row
+      var children=l.children||[];
+      var nSub=children.length;
+      // Kit header row (title + mode toggle)
       html+='<tr style="background:rgba(204,34,0,0.08);border-top:2px solid rgba(204,34,0,0.3)">'+
         '<td style="text-align:center;color:var(--red);font-weight:700">'+num+'</td>'+
         '<td colspan="3"><input style="width:100%;font-weight:700;color:var(--red);text-transform:uppercase;background:rgba(204,34,0,0.04);border-color:rgba(204,34,0,0.3)" value="'+esc(l.label||'')+'" data-field="label" data-idx="'+i+'" placeholder="TITRE DU KIT / DE LA SECTION"></td>'+
@@ -2138,31 +2140,57 @@ function rBClines(){
           '<button class="bc-dn-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer" title="Descendre">▼</button>'+
           '<button class="bc-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer" title="Supprimer KIT et toutes ses sous-lignes">✕</button>'+
         '</td></tr>';
-      // Sub-lines
-      var children=l.children||[];
-      for(var c=0;c<children.length;c++){
+      // Sub-lines — in KIT mode, use rowspan for PU/Montant (fused cells like Emerson)
+      for(var c=0;c<nSub;c++){
         var s=children[c];
-        var subTot=isKit?'':fN((s.qte||0)*(s.pu||0));
+        var isFirst=(c===0);
+        // PU cell
+        var puCell='';
+        if(isKit){
+          if(isFirst){
+            // Fused cell spanning all sub-lines: editable KIT global price
+            puCell='<td rowspan="'+nSub+'" style="background:rgba(88,166,255,0.08);border:2px solid rgba(88,166,255,0.3);vertical-align:middle;text-align:center"><input type="number" style="width:75px;font-weight:700;text-align:right" value="'+(l.kitPrice||0)+'" data-field="kitPrice" data-idx="'+i+'" placeholder="Prix KIT" title="Prix global du KIT (AUD) — pour toutes les sous-lignes"></td>';
+          }
+          // Else: no <td> emitted for PU (rowspan covers it)
+        } else {
+          puCell='<td><input type="number" style="width:75px" value="'+(s.pu||0)+'" data-kit="'+i+'" data-sub="'+c+'" data-field="pu"></td>';
+        }
+        // Montant cell
+        var mCell='';
+        if(isKit){
+          if(isFirst){
+            mCell='<td rowspan="'+nSub+'" style="background:rgba(88,166,255,0.08);border:2px solid rgba(88,166,255,0.3);vertical-align:middle;text-align:right;font-weight:700;color:var(--teal);font-size:12px">'+fN(l.kitPrice||0)+'</td>';
+          }
+        } else {
+          mCell='<td style="font-weight:600;color:var(--teal)">'+fN((s.qte||0)*(s.pu||0))+'</td>';
+        }
         html+='<tr style="background:rgba(0,0,0,0.02)">'+
           '<td></td>'+
           '<td style="padding-left:18px"><input style="width:100%" value="'+esc(s.ref||'')+'" data-kit="'+i+'" data-sub="'+c+'" data-field="ref"></td>'+
           '<td><input style="min-width:150px;width:100%" value="'+esc(s.desc||'')+'" data-kit="'+i+'" data-sub="'+c+'" data-field="desc"></td>'+
           '<td><input type="number" style="width:55px" value="'+(s.qte||1)+'" data-kit="'+i+'" data-sub="'+c+'" data-field="qte"></td>'+
-          '<td>'+(isKit?'<span style="color:var(--muted);font-size:10px;font-style:italic">inclus</span>':'<input type="number" style="width:75px" value="'+(s.pu||0)+'" data-kit="'+i+'" data-sub="'+c+'" data-field="pu">')+'</td>'+
-          '<td style="font-weight:600;color:var(--teal)">'+subTot+'</td>'+
+          puCell+mCell+
           '<td style="white-space:nowrap">'+
             '<button class="bc-sup-btn" data-kit="'+i+'" data-sub="'+c+'" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px" title="Monter sous-ligne">▲</button>'+
             '<button class="bc-sdn-btn" data-kit="'+i+'" data-sub="'+c+'" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px" title="Descendre sous-ligne">▼</button>'+
             '<button class="bc-sdel-btn" data-kit="'+i+'" data-sub="'+c+'" style="background:none;border:none;color:var(--red);cursor:pointer" title="Supprimer sous-ligne">✕</button>'+
           '</td></tr>';
       }
-      // Add subline button + kit price (if kit mode)
+      // If no sub-lines yet AND in KIT mode, show a placeholder row with the KIT price input
+      if(nSub===0&&isKit){
+        html+='<tr style="background:rgba(0,0,0,0.02)">'+
+          '<td></td>'+
+          '<td colspan="3" style="padding-left:18px;color:var(--muted);font-style:italic;font-size:10px">(ajoutez des sous-lignes ci-dessous)</td>'+
+          '<td style="background:rgba(88,166,255,0.08);border:2px solid rgba(88,166,255,0.3);text-align:center"><input type="number" style="width:75px;font-weight:700;text-align:right" value="'+(l.kitPrice||0)+'" data-field="kitPrice" data-idx="'+i+'" placeholder="Prix KIT"></td>'+
+          '<td style="background:rgba(88,166,255,0.08);border:2px solid rgba(88,166,255,0.3);text-align:right;font-weight:700;color:var(--teal)">'+fN(l.kitPrice||0)+'</td>'+
+          '<td></td></tr>';
+      }
+      // + Sous-ligne button row (always)
       html+='<tr style="background:rgba(0,0,0,0.02)">'+
         '<td></td>'+
-        '<td colspan="3" style="padding-left:18px"><button class="bc-addsub-btn" data-kit="'+i+'" class="btn btn-ghost btn-sm" style="background:rgba(45,212,191,0.1);border:1px dashed var(--teal);color:var(--teal);padding:3px 8px;border-radius:3px;cursor:pointer;font-size:10px">+ Sous-ligne</button></td>'+
-        '<td>'+(isKit?'<input type="number" style="width:75px" value="'+(l.kitPrice||0)+'" data-field="kitPrice" data-idx="'+i+'" placeholder="Prix KIT" title="Prix global du KIT">':'')+'</td>'+
-        '<td style="font-weight:700;color:var(--teal)">'+(isKit?fN(l.kitPrice||0):'')+'</td>'+
-        '<td></td></tr>';
+        '<td colspan="'+(isKit&&nSub>0?3:6)+'" style="padding-left:18px"><button class="bc-addsub-btn" data-kit="'+i+'" style="background:rgba(45,212,191,0.1);border:1px dashed var(--teal);color:var(--teal);padding:3px 8px;border-radius:3px;cursor:pointer;font-size:10px">+ Sous-ligne</button></td>'+
+        (isKit&&nSub>0?'<td colspan="3"></td>':'')+
+        '</tr>';
     } else {
       // plain item
       num++;
@@ -2739,17 +2767,42 @@ function bBC(b){
     } else if(l.type==='kit'){
       num++;
       var isKit=l.mode==='kit';
-      // KIT header row
-      var priceCol=isKit?'<td style="text-align:right">'+fN(l.kitPrice||0)+'</td><td style="text-align:right;font-weight:700">'+fN(l.kitPrice||0)+'</td>':'<td colspan="2" style="text-align:right;font-weight:700">'+fN((l.children||[]).reduce(function(s,c){return s+(c.qte||0)*(c.pu||0);},0))+'</td>';
-      rows+='<tr style="background:#e8eef5"><td style="text-align:center;font-weight:700">'+num+'</td><td colspan="3" style="font-weight:700;color:#1e3a5f;text-transform:uppercase;padding:5px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+esc(l.label||'')+(isKit?' <span style="font-size:8px;font-weight:400;color:#64748b">(kit – prix global)</span>':' <span style="font-size:8px;font-weight:400;color:#64748b">(items – prix individuels)</span>')+'</td>'+priceCol+'</tr>';
-      // Sub-lines
-      (l.children||[]).forEach(function(s){
-        rows+='<tr><td></td><td style="font-size:9px;padding-left:12px">'+esc(s.ref||'')+'</td><td>'+esc(s.desc||'')+'</td><td style="text-align:center">'+(s.qte||0)+'</td>'+
-          (isKit
-            ? '<td style="text-align:right;color:#64748b;font-style:italic;font-size:8px">inclus</td><td></td>'
-            : '<td style="text-align:right">'+fN(s.pu)+'</td><td style="text-align:right;font-weight:600">'+fN((s.qte||0)*(s.pu||0))+'</td>')+
-          '</tr>';
-      });
+      var children=l.children||[];
+      var nSub=children.length;
+      // Section title row (spans all 6 columns) - exactly like Emerson "AMS WIRELESS VIBRATION MONITOR POC STARTER KIT"
+      rows+='<tr><td colspan="6" style="background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:10px;padding:4px 7px;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+esc(l.label||'')+'</td></tr>';
+      if(nSub===0){
+        // Empty kit: show a placeholder row with just the kit price
+        if(isKit){
+          rows+='<tr><td style="text-align:center">'+num+'</td><td colspan="3" style="color:#999;font-style:italic">(no sub-lines)</td><td style="text-align:right">'+fN(l.kitPrice||0)+'</td><td style="text-align:right;font-weight:700">'+fN(l.kitPrice||0)+'</td></tr>';
+        }
+      } else {
+        // Total for the KIT (either global kitPrice or sum of sub-lines in items mode)
+        var kitTotal=isKit?(parseFloat(l.kitPrice)||0):children.reduce(function(s,c){return s+(c.qte||0)*(c.pu||0);},0);
+        // Sub-lines: use rowspan on PU+Montant for the first sub-line in KIT mode (Emerson style)
+        children.forEach(function(s,c){
+          var isFirst=(c===0);
+          var cells='';
+          // Item # column: only on first sub-line
+          if(isFirst){
+            cells+='<td rowspan="'+nSub+'" style="text-align:center;vertical-align:middle;font-weight:700">'+num+'</td>';
+          }
+          cells+='<td style="font-size:9px">'+esc(s.ref||'')+'</td>';
+          cells+='<td>'+esc(s.desc||'')+'</td>';
+          cells+='<td style="text-align:center">'+(s.qte||0)+'</td>';
+          if(isKit){
+            // Fused PU + Montant on first sub-line only (like Emerson 9,126.00 | 9,126.00)
+            if(isFirst){
+              cells+='<td rowspan="'+nSub+'" style="text-align:right;vertical-align:middle;font-weight:700">'+fN(l.kitPrice||0)+'</td>';
+              cells+='<td rowspan="'+nSub+'" style="text-align:right;vertical-align:middle;font-weight:700">'+fN(l.kitPrice||0)+'</td>';
+            }
+          } else {
+            cells+='<td style="text-align:right">'+fN(s.pu)+'</td>';
+            cells+='<td style="text-align:right;font-weight:600">'+fN((s.qte||0)*(s.pu||0))+'</td>';
+          }
+          rows+='<tr>'+cells+'</tr>';
+        });
+      }
     }
   });
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
