@@ -43,6 +43,7 @@ body::before{content:"";position:fixed;inset:0;background-image:linear-gradient(
 .msub{font-size:9px;margin-top:2px;color:var(--muted)}
 .metric.m-teal{border-top:2px solid var(--teal)}
 .metric.m-green{border-top:2px solid var(--green)}
+.metric.m-blue{border-top:2px solid #3b82f6}
 .metric.m-red{border-top:2px solid var(--red)}
 .metric.m-amber{border-top:2px solid var(--amber)}
 .badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:9px;font-weight:700;white-space:nowrap;font-family:var(--mono)}
@@ -118,6 +119,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .alert-row.soon{border-left:3px solid var(--blue)}
 .filter-btn{padding:4px 11px;border-radius:4px;border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--muted);font-family:var(--mono);font-size:9.5px;cursor:pointer;transition:all .15s}
 .filter-btn.active{background:var(--teal);border-color:var(--teal);color:#000;font-weight:700}
+.filter-btn-type{padding:3px 9px;border-radius:4px;border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--muted);font-family:var(--mono);font-size:9px;cursor:pointer;transition:all .15s}
+.filter-btn-type.active{background:rgba(45,212,191,.18);border-color:var(--teal);color:var(--teal);font-weight:700}
 /* CLIENT SELECT ROW */
 .client-select-row{display:flex;gap:6px;align-items:center}
 .client-select-row select{flex:1}
@@ -225,13 +228,21 @@ tr:hover td{background:rgba(255,255,255,.02)}
 <!-- DASHBOARD -->
 <div class="page active" id="page-dashboard">
   <div class="g4" id="statsRow"></div>
+  <div class="g3" id="statsRowType" style="margin-top:10px"></div>
   <div class="g2">
     <div class="card"><div class="ctitle">📋 Devis récents</div><div id="dashDV"></div></div>
     <div class="card"><div class="ctitle">📈 Alertes facturation</div><div id="dashAlerts"></div></div>
   </div>
   <div class="g2">
-    <div class="card"><div class="ctitle">📦 Commandes Emerson</div><div id="dashBC"></div></div>
+    <div class="card">
+      <div class="ctitle">🥧 Répartition par type d'activité</div>
+      <div style="height:220px;position:relative"><canvas id="chart-types"></canvas></div>
+    </div>
     <div class="card"><div class="ctitle">📅 Historique récent</div><div id="dashHist"></div></div>
+  </div>
+  <div class="g2">
+    <div class="card"><div class="ctitle">📦 Commandes Emerson</div><div id="dashBC"></div></div>
+    <div class="card"></div>
   </div>
 </div>
 
@@ -291,7 +302,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div class="card mt8"><div class="ctitle">🚨 Factures urgentes</div><div id="urgent-list"></div></div>
   </div>
   <div class="tab-pane" id="suiviTab-liste">
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
       <button class="filter-btn active" onclick="setFilter('all',this)">Toutes</button>
       <button class="filter-btn" onclick="setFilter('paid',this)">✓ Payées</button>
       <button class="filter-btn" onclick="setFilter('partial',this)">⟳ Partielles</button>
@@ -300,10 +311,18 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <input class="search-input" id="search-input" placeholder="Rechercher..." oninput="renderTable()" style="margin-left:auto;max-width:200px">
       <button class="btn btn-teal btn-sm no-print" onclick="addSUIVI()">+ Ajouter</button>
     </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+      <span style="font-size:9.5px;color:var(--muted);font-family:var(--mono);margin-right:2px">TYPE :</span>
+      <button class="filter-btn-type active" onclick="setTypeFilter('all',this)">Tous</button>
+      <button class="filter-btn-type" onclick="setTypeFilter('Fourniture',this)">🔧 Fourniture</button>
+      <button class="filter-btn-type" onclick="setTypeFilter('Prestation de service',this)">🛠 Prestation</button>
+      <button class="filter-btn-type" onclick="setTypeFilter('Fourniture + Prestation',this)">🔗 Mixte</button>
+    </div>
     <div class="tbl-wrap">
       <table><thead><tr>
         <th onclick="sortBy('num')">N° Facture</th>
         <th onclick="sortBy('intitule')">Désignation</th>
+        <th onclick="sortBy('type')">Type</th>
         <th onclick="sortBy('montant')">Montant</th>
         <th onclick="sortBy('dateEnvoi')">Date envoi</th>
         <th onclick="sortBy('dateButoir')">Échéance</th>
@@ -543,9 +562,19 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="form-group"><label>Objet <span class="req">*</span></label><textarea class="form-textarea" id="fa-objet" rows="2"></textarea></div>
       <div class="form-row">
         <div class="form-group"><label>Devis lié</label><input class="form-input" id="fa-dvlie"></div>
+        <div class="form-group"><label>Type</label>
+          <select class="form-select" id="fa-type">
+            <option>Fourniture</option>
+            <option>Prestation de service</option>
+            <option>Fourniture + Prestation</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
         <div class="form-group"><label>Statut</label>
           <select class="form-select" id="fa-status"><option>En attente</option><option>Partiel</option><option>Payée</option><option>En retard</option></select>
         </div>
+        <div class="form-group"></div>
       </div>
       <div class="form-group"><label>Mention TGC</label>
         <select class="form-select" id="fa-tgc-mention">
@@ -1284,7 +1313,7 @@ function st(grp,tab){
 }
 
 // ===== SUIVI FACTURES =====
-var activeFilter='all', charts={}, currentSortKey='dateButoir', currentSortDir=1;
+var activeFilter='all', activeTypeFilter='all', charts={}, currentSortKey='dateButoir', currentSortDir=1;
 function parseDate(s){return s?new Date(s):null;}
 function diffDays(d1,d2){return Math.round((d2-d1)/(1000*60*60*24));}
 function today(){var t=new Date();t.setHours(0,0,0,0);return t;}
@@ -1333,6 +1362,7 @@ function renderSuviKPIs(){
 }
 function dChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
 function renderCharts(){
+  if(typeof Chart==='undefined') return; // Chart.js pas chargé, skip
   var paid=invoices.filter(function(i){return getStatus(i)==='paid';});
   var partial=invoices.filter(function(i){return getStatus(i)==='partial';});
   var pending=invoices.filter(function(i){return getStatus(i)==='pending';});
@@ -1440,11 +1470,16 @@ function renderUrgent(){
 }
 function sortBy(key){if(currentSortKey===key)currentSortDir*=-1;else{currentSortKey=key;currentSortDir=1;}renderTable();}
 function setFilter(f,btn){activeFilter=f;document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');renderTable();}
+function setTypeFilter(t,btn){activeTypeFilter=t;document.querySelectorAll('.filter-btn-type').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');renderTable();}
 function renderTable(){
   var search=(gvg('search-input')||'').toLowerCase();
   var data=invoices.filter(function(i){
     var st=getStatus(i);
     if(activeFilter!=='all'&&st!==activeFilter)return false;
+    if(activeTypeFilter!=='all'){
+      var typ=i.type||'Fourniture'; // défaut pour entrées legacy sans type
+      if(typ!==activeTypeFilter) return false;
+    }
     if(search&&JSON.stringify(i).toLowerCase().indexOf(search)<0)return false;
     return true;
   });
@@ -1462,9 +1497,14 @@ function renderTable(){
     var rs=st==='late'?'background:rgba(244,63,94,.04)':'';
     var grcBadge=i._fromGRC?' <span title="Créée automatiquement depuis une facture GRC" style="display:inline-block;background:rgba(45,212,191,.15);color:var(--teal);padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">GRC</span>':'';
     var grcBtn=i._fromGRC&&i.grcFactureId?'<button class="btn btn-ghost btn-sm" title="Ouvrir la facture GRC liée" onclick="openFA('+i.grcFactureId+')">📋</button> ':'';
+    var typ=i.type||'Fourniture';
+    var typIcon=typ==='Prestation de service'?'🛠':(typ==='Fourniture + Prestation'?'🔗':'🔧');
+    var typShort=typ==='Prestation de service'?'Prestation':(typ==='Fourniture + Prestation'?'Mixte':'Fourniture');
+    var typCell='<td style="font-size:10px;white-space:nowrap"><span title="'+esc(typ)+'">'+typIcon+' '+typShort+'</span></td>';
     return'<tr style="'+rs+'">'+
       '<td><span style="font-weight:700;color:var(--teal)">'+i.num+'</span>'+grcBadge+'</td>'+
-      '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(i.intitule)+'</td>'+
+      '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(i.intitule)+'</td>'+
+      typCell+
       '<td style="font-weight:700">'+fN(i.montant)+' XPF</td>'+
       '<td style="color:var(--muted)">'+fD(i.dateEnvoi)+'</td>'+
       '<td style="font-weight:700">'+(bd?bd.toLocaleDateString('fr-FR'):'—')+'</td>'+
@@ -1522,14 +1562,101 @@ function rDash(){
   }
   var encaisseGRC=fa.reduce(function(s,f){return s+Math.min(totVerseFA(f),f.ttc||0);},0);
   var recouvrerGRC=fa.reduce(function(s,f){return s+Math.max(0,(f.ttc||0)-totVerseFA(f));},0);
+
+  // Agrégats par TYPE (source combinée : factures GRC + entrées Suivi manuelles non-GRC pour couvrir ta migration janvier→lancement)
+  // Une entrée Suivi non-GRC = saisie manuelle, on l'intègre aussi.
+  function typeOf(o){
+    var t=o.type||'Fourniture';
+    if(t==='Prestation de service') return 'Prestation';
+    if(t==='Fourniture + Prestation') return 'Mixte';
+    return 'Fourniture';
+  }
+  var byType={Fourniture:{total:0,encaisse:0,recouvrer:0,count:0},Prestation:{total:0,encaisse:0,recouvrer:0,count:0},Mixte:{total:0,encaisse:0,recouvrer:0,count:0}};
+  // Factures GRC
+  fa.forEach(function(f){
+    var k=typeOf(f);
+    var verse=Math.min(totVerseFA(f),f.ttc||0);
+    byType[k].total += (f.ttc||0);
+    byType[k].encaisse += verse;
+    byType[k].recouvrer += Math.max(0,(f.ttc||0)-verse);
+    byType[k].count++;
+  });
+  // Entrées Suivi manuelles (non _fromGRC) : on utilise statut + pct
+  invoices.forEach(function(i){
+    if(i._fromGRC) return; // évite double-comptage
+    var k=typeOf(i);
+    var m=i.montant||0;
+    var st=getStatus(i);
+    var enc = st==='paid' ? m : (st==='partial' ? Math.round(m*(i.pct||0)/100) : 0);
+    byType[k].total += m;
+    byType[k].encaisse += enc;
+    byType[k].recouvrer += (m-enc);
+    byType[k].count++;
+  });
+
   var sr=document.getElementById('statsRow');
   if(sr) sr.innerHTML=
     '<div class="metric m-teal"><div class="mlbl">Devis total</div><div class="mval">'+fN(tvDV)+'</div><div class="msub">'+dv.length+' devis</div></div>'+
     '<div class="metric m-green"><div class="mlbl">Factures GRC</div><div class="mval">'+fN(tvFA)+'</div><div class="msub">'+fa.length+' factures</div></div>'+
     '<div class="metric m-green"><div class="mlbl">💰 Encaissé (GRC)</div><div class="mval">'+fN(encaisseGRC)+'</div><div class="msub">XPF versés</div></div>'+
-    '<div class="metric m-red"><div class="mlbl">⏳ À recouvrer (GRC)</div><div class="mval red">'+fN(recouvrerGRC)+'</div><div class="msub">XPF restants</div></div>'+
-    '<div class="metric m-red"><div class="mlbl">Suivi en retard</div><div class="mval red">'+fN(lateFA)+'</div><div class="msub">XPF SLN</div></div>'+
-    '<div class="metric m-green"><div class="mlbl">Suivi encaissé</div><div class="mval">'+fN(paidFA)+'</div><div class="msub">XPF SLN</div></div>';
+    '<div class="metric m-red"><div class="mlbl">⏳ À recouvrer (GRC)</div><div class="mval red">'+fN(recouvrerGRC)+'</div><div class="msub">XPF restants</div></div>';
+
+  // Ligne Stats par type (fusion factures GRC + entrées manuelles Suivi)
+  var srt=document.getElementById('statsRowType');
+  if(srt){
+    function typeCard(label,icon,data,color){
+      var pctEnc=data.total>0?Math.round(data.encaisse/data.total*100):0;
+      return '<div class="metric m-'+color+'" style="padding:12px 14px">'+
+        '<div class="mlbl">'+icon+' '+label+'</div>'+
+        '<div class="mval" style="font-size:16px">'+fN(data.total)+'<span style="font-size:10px;font-weight:400;color:var(--muted);margin-left:4px">XPF</span></div>'+
+        '<div class="msub" style="display:flex;gap:8px;font-size:9.5px;margin-top:3px;flex-wrap:wrap">'+
+          '<span style="color:var(--green)">✓ '+fN(data.encaisse)+' ('+pctEnc+'%)</span>'+
+          '<span style="color:var(--red)">⏳ '+fN(data.recouvrer)+'</span>'+
+          '<span style="color:var(--muted)">'+data.count+' fac.</span>'+
+        '</div>'+
+      '</div>';
+    }
+    srt.innerHTML=
+      typeCard('Fourniture','🔧',byType.Fourniture,'teal')+
+      typeCard('Prestation','🛠',byType.Prestation,'green')+
+      typeCard('Mixte','🔗',byType.Mixte,'blue');
+  }
+
+  // Graphique camembert Répartition par type
+  try{
+    var ctxT=document.getElementById('chart-types');
+    if(ctxT && typeof Chart!=='undefined'){
+      if(charts.types) charts.types.destroy();
+      var total=byType.Fourniture.total+byType.Prestation.total+byType.Mixte.total;
+      if(total>0){
+        charts.types=new Chart(ctxT,{
+          type:'doughnut',
+          data:{
+            labels:['🔧 Fourniture','🛠 Prestation','🔗 Mixte'],
+            datasets:[{
+              data:[byType.Fourniture.total,byType.Prestation.total,byType.Mixte.total],
+              backgroundColor:['#2dd4bf','#10b981','#3b82f6'],
+              borderColor:'rgba(0,0,0,0)',borderWidth:2
+            }]
+          },
+          options:{
+            responsive:true,maintainAspectRatio:false,
+            plugins:{
+              legend:{position:'right',labels:{color:'#cbd5e1',font:{size:11,family:'monospace'},boxWidth:12,padding:10}},
+              tooltip:{callbacks:{label:function(c){var pct=total>0?Math.round(c.parsed/total*100):0;return c.label+': '+fN(c.parsed)+' XPF ('+pct+'%)';}}}
+            },
+            cutout:'60%'
+          }
+        });
+      } else {
+        // Si aucune donnée, vider le canvas
+        var ctx=ctxT.getContext('2d');
+        ctx.clearRect(0,0,ctxT.width,ctxT.height);
+      }
+    }
+  }catch(e){console.warn('chart-types skipped:',e.message);}
+
+  var sr2=document.getElementById('statsRow');  // ancien fallback laissé au cas où
   function hList(arr,cls,ico){
     return arr.slice(-4).reverse().map(function(x){
       return'<div class="h-item">'+
@@ -1894,7 +2021,7 @@ function openFA(id,fromDV){
       gv('fa-num',f.num);gv('fa-date',f.date);
       buildClientOptions('fa-client',f.client);
       gv('fa-contact',f.contact||'');gv('fa-adresse',f.adresse||'');gv('fa-email',f.email||'');gv('fa-objet',f.objet||'');
-      gv('fa-dvlie',f.dvlie||'');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
+      gv('fa-dvlie',f.dvlie||'');gv('fa-type',f.type||'Fourniture');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
       gv('fa-notes',f.notes||'');
       // Rétrocompat : si versements absents mais paye>0, créer 1 versement
@@ -1910,7 +2037,7 @@ function openFA(id,fromDV){
     gv('fa-num',nxt('fa'));gv('fa-date',td());
     buildClientOptions('fa-client',fromDV.client||'');
     gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');gv('fa-email',fromDV.email||'');
-    gv('fa-objet',fromDV.objet||'');gv('fa-dvlie',fromDV.num||'');gv('fa-status','En attente');
+    gv('fa-objet',fromDV.objet||'');gv('fa-dvlie',fromDV.num||'');gv('fa-type',fromDV.type||'Fourniture');gv('fa-status','En attente');
     gv('fa-notes','');
     if(isClientExo(fromDV.client))gv('fa-tgc-mention','506-2');else gv('fa-tgc-mention','tgc');
     var lf=fromDV.lines||{};
@@ -1919,7 +2046,7 @@ function openFA(id,fromDV){
   } else {
     gv('fa-num',nxt('fa'));gv('fa-date',td());gv('fa-contact','');
     gv('fa-adresse','');gv('fa-email','');gv('fa-objet','');gv('fa-dvlie','');
-    gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
+    gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
     sv('mFAtitle','Nouvelle Facture');
   }
   rFAlines();om('mFA');
@@ -2082,7 +2209,7 @@ function getFA(){
   }
   return{id:eFAid||Date.now(),num:gvg('fa-num'),date:gvg('fa-date'),client:gvg('fa-client'),
     contact:gvg('fa-contact'),adresse:gvg('fa-adresse'),email:gvg('fa-email'),objet:gvg('fa-objet'),
-    dvlie:gvg('fa-dvlie'),status:gvg('fa-status'),tgcM:gvg('fa-tgc-mention'),
+    dvlie:gvg('fa-dvlie'),type:gvg('fa-type')||'Fourniture',status:gvg('fa-status'),tgcM:gvg('fa-tgc-mention'),
     delai:gvg('fa-delai'),paye:totVerse,versements:JSON.parse(JSON.stringify(faVersements)),notes:gvg('fa-notes'),
     lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc,suiviId:existingSuiviId};
 }
@@ -2137,6 +2264,7 @@ function syncFactureToSuivi(f){
     num: f.num,
     intitule: f.objet||'',
     montant: ttc,
+    type: f.type||'Fourniture',
     po: (idx>=0 ? DB.invoices[idx].po : '') || f.dvlie || '', // préserve le PO existant
     dateEnvoi: f.date||'',
     dateButoir: bd,
