@@ -2730,30 +2730,70 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   });
   document.body.removeChild(measureDiv);
   var pages=[],currentPage=[],usedHeight=0,budget=PAGE1_BUDGET,SUBTOTAL_H=30;
-  rowItems.forEach(function(item){
-    if(usedHeight+item.height+SUBTOTAL_H>budget){pages.push(currentPage);currentPage=[item];usedHeight=item.height;budget=PAGE_N_BUDGET;}
-    else{currentPage.push(item);usedHeight+=item.height;}
+
+  // Helper : trouver la prochaine ligne non-section après l'index i
+  function nextNonSecHeight(fromIdx){
+    for(var j=fromIdx;j<rowItems.length;j++){
+      if(!rowItems[j].isSec) return rowItems[j].height;
+    }
+    return 0;
+  }
+
+  rowItems.forEach(function(item,i){
+    var tentativeHeight=usedHeight+item.height+SUBTOTAL_H;
+    // RÈGLE: si c'est un header de section, vérifier qu'il reste aussi la place
+    // pour au moins la première ligne qui le suit → sinon saut de page immédiat
+    // (le header doit rester soudé à sa première ligne)
+    if(item.isSec){
+      var nextLineH=nextNonSecHeight(i+1);
+      if(nextLineH>0 && usedHeight+item.height+nextLineH+SUBTOTAL_H>budget){
+        // Le header + sa 1ère ligne ne tiennent plus → nouvelle page
+        if(currentPage.length){pages.push(currentPage);currentPage=[];usedHeight=0;budget=PAGE_N_BUDGET;}
+      }
+      currentPage.push(item);
+      usedHeight+=item.height;
+      return;
+    }
+    // Ligne normale : saut de page classique
+    if(tentativeHeight>budget){
+      pages.push(currentPage);currentPage=[item];usedHeight=item.height;budget=PAGE_N_BUDGET;
+    } else {
+      currentPage.push(item);usedHeight+=item.height;
+    }
   });
   if(currentPage.length)pages.push(currentPage);
 
+  // Nettoyage : si une page se termine UNIQUEMENT par un ou plusieurs headers de section
+  // (= headers orphelins, leurs lignes ont été poussées à la page suivante), les déplacer
+  for(var pi=0;pi<pages.length-1;pi++){
+    var pg=pages[pi];
+    // Trouver la fin de la page : tous les trailing isSec (= headers orphelins)
+    var orphanStart=pg.length;
+    while(orphanStart>0 && pg[orphanStart-1].isSec){ orphanStart--; }
+    if(orphanStart<pg.length){
+      var orphans=pg.splice(orphanStart);
+      pages[pi+1]=orphans.concat(pages[pi+1]);
+    }
+  }
+  // Retirer les pages vides éventuellement créées
+  pages=pages.filter(function(p){return p.length>0;});
+
   // Vérifier que la DERNIÈRE page a la place pour le bloc totals+notes+bank+signatures (LAST_EXTRA)
-  // Si elle dépasse, pousser ses lignes vers une nouvelle page vide pour les totals
   if(pages.length>=1){
     var lastPage=pages[pages.length-1];
     var lastHeight=lastPage.reduce(function(s,r){return s+r.height;},0);
     var lastBudget=pages.length===1?PAGE1_BUDGET:PAGE_N_BUDGET;
     while(lastHeight+LAST_EXTRA>lastBudget && lastPage.length>1){
-      // Déplacer la dernière ligne vers une nouvelle page
-      var moved=lastPage.pop();
-      pages.push([moved]);
+      // Déplacer la dernière ligne vers une nouvelle page — MAIS si celle du dessus est un header,
+      // le déplacer aussi (ne pas séparer header + 1ère ligne)
+      var moved=[lastPage.pop()];
+      while(lastPage.length && lastPage[lastPage.length-1].isSec){
+        moved.unshift(lastPage.pop());
+      }
+      pages.push(moved);
       lastPage=pages[pages.length-1];
-      lastHeight=moved.height;
+      lastHeight=moved.reduce(function(s,r){return s+r.height;},0);
       lastBudget=PAGE_N_BUDGET;
-    }
-    // Si même seul il ne rentre pas → on ajoute une page vide dédiée au bloc final
-    if(lastPage.length && lastHeight+LAST_EXTRA>lastBudget){
-      // Garde les lignes, mais ajoute une page vide après pour totals+sign
-      // (cas rare, on laisse en l'état : Chrome gèrera le débordement)
     }
   }
 
