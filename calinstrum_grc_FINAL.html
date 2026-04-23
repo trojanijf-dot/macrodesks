@@ -2109,6 +2109,14 @@ function toggleKitMode(kitIdx){
   rBClines();
 }
 function rBClines(){
+  // !!! IMPORTANT pour toute modification future !!!
+  // Cette fonction reconstruit TOUT le <tbody> via innerHTML. Un rerender complet
+  // DÉTRUIT les inputs et FAIT PERDRE LE FOCUS au champ actif (bug UX : l'utilisateur
+  // doit recliquer après chaque chiffre tapé).
+  // Règle d'or : NE JAMAIS appeler rBClines() depuis un handler 'input' d'un champ numérique.
+  // À la place, mettre à jour EN PLACE la cellule d'affichage (textContent) du montant concerné.
+  // Les appels à rBClines() sont acceptables pour : ajout/suppression/déplacement de lignes,
+  // bascule KIT↔ITEMS, et à l'ouverture du modal. Pas pour une simple saisie de nombre.
   var tb=document.getElementById('bcLN');if(!tb)return;
   normalizeBCL();
   var html='',num=0;
@@ -2216,16 +2224,21 @@ function rBClines(){
       if(!isNaN(idx)&&field){
         var numFields=['qte','pu','kitPrice'];
         bcL[idx][field]=numFields.indexOf(field)>=0?+this.value:this.value;
-        // If qte/pu/kitPrice changed, refresh totals only (keep cursor in field)
+        // If numeric field changed, refresh totals WITHOUT full rerender (to keep cursor in input)
         if(numFields.indexOf(field)>=0){
           cBCtot();
-          // refresh only the row total cell for this line (for UX), but full rerender for kitPrice
-          if(field==='kitPrice')rBClines();
-          else {
-            var l=bcL[idx];
-            if(l&&l.type==='item'){
-              var row=this.closest('tr');
-              if(row){var cell=row.cells[5];if(cell)cell.textContent=fN((l.qte||0)*(l.pu||0));}
+          var l=bcL[idx];
+          if(l&&l.type==='item'){
+            // Update item montant cell in-place (cell[5] = Montant)
+            var row=this.closest('tr');
+            if(row){var cell=row.cells[5];if(cell)cell.textContent=fN((l.qte||0)*(l.pu||0));}
+          } else if(l&&l.type==='kit'&&field==='kitPrice'){
+            // Update kit Montant cell in-place — it's a sibling <td rowspan="..."> right after the PU cell.
+            // The input that fired is inside the PU cell; find its parent <td> and then the next <td> (Montant cell).
+            var puCell=this.closest('td');
+            if(puCell){
+              var mCell=puCell.nextElementSibling;
+              if(mCell&&mCell.tagName==='TD')mCell.textContent=fN(l.kitPrice||0);
             }
           }
         }
