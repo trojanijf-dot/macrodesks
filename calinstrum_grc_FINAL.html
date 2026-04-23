@@ -651,6 +651,15 @@ tr:hover td{background:rgba(255,255,255,.02)}
         </table>
         <div id="faStatusHint" style="margin-top:6px;font-size:10.5px;color:var(--text-dim);font-style:italic"></div>
       </div>
+      <!-- BLOC FACTURES D'ACOMPTE -->
+      <div style="margin-top:10px;padding:10px;background:rgba(59,130,246,.05);border:1px solid rgba(59,130,246,.25);border-radius:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+          <strong style="color:#3b82f6">🧾 Factures d'acompte</strong>
+          <button type="button" class="btn btn-sm" onclick="openAcompteModal()" style="padding:4px 10px;background:#3b82f6;color:#fff;border:none;border-radius:4px;font-weight:700">+ Créer facture d'acompte</button>
+        </div>
+        <div id="faAcomptesList" style="font-size:11px"></div>
+        <div id="faAcomptesHint" style="margin-top:6px;font-size:10.5px;color:var(--text-dim);font-style:italic"></div>
+      </div>
       <div class="form-group" style="margin-top:10px"><label>Notes</label><textarea class="form-textarea" id="fa-notes" rows="2"></textarea></div>
       <div style="background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.2);border-radius:6px;padding:10px;font-size:10.5px;line-height:1.8;color:var(--teal);margin-top:10px">
         <strong style="display:block;margin-bottom:4px">🏦 Coordonnées bancaires CALINSTRUM</strong>
@@ -663,6 +672,58 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <button class="btn btn-ghost" onclick="cm('mFA')">Annuler</button>
     <button class="btn btn-ghost" onclick="previewFA()">👁 Aperçu</button>
     <button class="btn btn-teal" onclick="saveFA()">✓ Enregistrer</button>
+  </div>
+</div></div>
+
+<!-- MODAL CRÉATION FACTURE D'ACOMPTE -->
+<div class="modal-overlay" id="mAcompte">
+<div class="modal" style="max-width:600px">
+  <div class="modal-header"><h3>🧾 Créer une facture d'acompte</h3><button class="modal-close" onclick="cm('mAcompte')">✕</button></div>
+  <div class="modal-body">
+    <div id="acompteInfo" style="padding:10px;background:rgba(59,130,246,.08);border-radius:6px;font-size:11.5px;color:#cbd5e1;margin-bottom:12px">
+      <!-- Rempli dynamiquement -->
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>N° Facture d'acompte</label>
+        <input class="form-input" id="ac-num" placeholder="F096-A1">
+        <small style="display:block;font-size:10px;color:var(--muted);margin-top:3px">Modifiable. Suggestion: <span id="ac-numSugg"></span></small>
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="date" class="form-input" id="ac-date">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Pourcentage d'acompte</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="number" class="form-input" id="ac-pct" min="1" max="100" value="50" style="width:90px" oninput="onAcomptePctChange()">
+          <span style="color:var(--muted)">%</span>
+          <span style="color:var(--muted);font-size:11px">→</span>
+          <span id="ac-montantPreview" style="font-weight:700;color:#3b82f6"></span>
+        </div>
+        <small style="display:block;font-size:10px;color:var(--muted);margin-top:3px">Appliqué à chaque ligne de la facture mère</small>
+      </div>
+      <div class="form-group">
+        <label>Type de facture</label>
+        <select class="form-select" id="ac-type">
+          <option value="acompte">Acompte (Ax)</option>
+          <option value="solde">Solde (SO)</option>
+        </select>
+        <small style="display:block;font-size:10px;color:var(--muted);margin-top:3px">Le "Solde" calcule automatiquement le reste</small>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Libellé apparaissant sur les lignes</label>
+      <input class="form-input" id="ac-libelle" placeholder="Acompte 50%">
+      <small style="display:block;font-size:10px;color:var(--muted);margin-top:3px">Ajouté à la fin de chaque désignation, ex: "Reset des erreurs (Acompte 50%)"</small>
+    </div>
+    <div id="ac-warning" style="display:none;padding:8px 10px;background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.3);border-radius:5px;font-size:11px;color:#f87171;margin-top:8px"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mAcompte')">Annuler</button>
+    <button class="btn btn-teal" onclick="generateAcompteInvoice()">✓ Générer la facture d'acompte</button>
   </div>
 </div></div>
 
@@ -2049,7 +2110,10 @@ function openFA(id,fromDV){
     gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
     sv('mFAtitle','Nouvelle Facture');
   }
-  rFAlines();om('mFA');
+  rFAlines();
+  // Afficher la liste des acomptes liés à cette facture (si c'est une facture existante)
+  if(typeof renderAcomptesList==='function') renderAcomptesList();
+  om('mFA');
 }
 function dv2fa(id){var d=DB.devis.find(function(x){return x.id===id;});if(d){cm('mDV');openFA(null,d);}}
 function addFAL(t){
@@ -2213,6 +2277,231 @@ function getFA(){
     delai:gvg('fa-delai'),paye:totVerse,versements:JSON.parse(JSON.stringify(faVersements)),notes:gvg('fa-notes'),
     lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc,suiviId:existingSuiviId};
 }
+// ===== FACTURES D'ACOMPTE =====
+// Retourne toutes les factures filles (acomptes + solde) d'une facture mère
+function getFactureAcomptes(parentId){
+  return (DB.factures||[]).filter(function(x){return x.parentId===parentId;});
+}
+// Retourne le % cumulé déjà émis en acomptes pour une facture mère
+function getAcomptesCumulePct(parentId){
+  return getFactureAcomptes(parentId).reduce(function(s,a){return s+(Number(a.acomptePct)||0);},0);
+}
+function getAcomptesCumuleMontant(parentId){
+  return getFactureAcomptes(parentId).reduce(function(s,a){return s+(Number(a.ttc)||0);},0);
+}
+
+// Ouvre la modal de création d'acompte
+function openAcompteModal(){
+  if(!eFAid){
+    alert('Enregistre d\'abord la facture mère avant de générer une facture d\'acompte.');
+    return;
+  }
+  var f=DB.factures.find(function(x){return x.id===eFAid;});
+  if(!f){alert('Facture mère introuvable');return;}
+  if(!f.lines||!f.lines.length){alert('La facture mère doit avoir des lignes avant de créer un acompte');return;}
+  // Infos
+  var acomptes=getFactureAcomptes(f.id);
+  var pctEmis=getAcomptesCumulePct(f.id);
+  var pctRestant=Math.max(0,100-pctEmis);
+  var nextAcompteIdx=acomptes.filter(function(a){return a.acompteType==='acompte';}).length+1;
+  var suggestedNum=f.num+'-A'+nextAcompteIdx;
+  // Remplir la modal
+  var info=document.getElementById('acompteInfo');
+  if(info){
+    info.innerHTML='<div><strong>Facture mère :</strong> '+esc(f.num)+' — '+fN(f.ttc||0)+' XPF TTC</div>'+
+      '<div style="margin-top:4px"><strong>Acomptes déjà émis :</strong> '+acomptes.length+' ('+pctEmis+'% = '+fN(getAcomptesCumuleMontant(f.id))+' XPF)</div>'+
+      '<div><strong>Reste disponible :</strong> '+pctRestant+'% = '+fN(Math.round((f.ttc||0)*pctRestant/100))+' XPF</div>';
+  }
+  gv('ac-num',suggestedNum);
+  sv('ac-numSugg',suggestedNum);
+  gv('ac-date',new Date().toISOString().slice(0,10));
+  gv('ac-pct',Math.min(50,pctRestant));
+  gv('ac-type','acompte');
+  gv('ac-libelle','Acompte '+Math.min(50,pctRestant)+'%');
+  onAcomptePctChange();
+  om('mAcompte');
+}
+
+// Met à jour l'aperçu du montant et le libellé auto à chaque changement de %
+function onAcomptePctChange(){
+  if(!eFAid)return;
+  var f=DB.factures.find(function(x){return x.id===eFAid;});
+  if(!f)return;
+  var pct=parseFloat(gvg('ac-pct'))||0;
+  var montant=Math.round((f.ttc||0)*pct/100);
+  sv('ac-montantPreview',fN(montant)+' XPF');
+  // Auto-ajuster libellé si standard
+  var lib=gvg('ac-libelle');
+  if(/^Acompte \d+%?$/.test(lib)){
+    gv('ac-libelle','Acompte '+pct+'%');
+  }
+  // Warning si dépasse 100%
+  var pctEmis=getAcomptesCumulePct(f.id);
+  var warning=document.getElementById('ac-warning');
+  if(warning){
+    var total=pctEmis+pct;
+    if(total>100){
+      warning.style.display='block';
+      warning.innerHTML='⚠️ Ce acompte ferait dépasser 100% ('+pctEmis+'% déjà émis + '+pct+'% = '+total+'%). Ajustez ou choisissez "Solde".';
+    } else {
+      warning.style.display='none';
+    }
+  }
+  // Gérer le type "Solde" qui ajuste auto
+  var type=gvg('ac-type');
+  if(type==='solde'){
+    var pctRestant=100-pctEmis;
+    gv('ac-pct',pctRestant);
+    sv('ac-montantPreview',fN(Math.round((f.ttc||0)*pctRestant/100))+' XPF');
+    gv('ac-libelle','Solde '+pctRestant+'%');
+    // Suggérer F-XXX-SO
+    var base=f.num.replace(/-A\d+$|-SO$/,'');
+    gv('ac-num',base+'-SO');
+  }
+}
+
+// Listener sur le select type pour appeler onAcomptePctChange
+document.addEventListener('change',function(e){
+  if(e.target&&e.target.id==='ac-type'){onAcomptePctChange();}
+});
+
+// Génère la facture d'acompte à partir des champs de la modal
+function generateAcompteInvoice(){
+  if(!eFAid){alert('Pas de facture mère sélectionnée');return;}
+  var parent=DB.factures.find(function(x){return x.id===eFAid;});
+  if(!parent){alert('Facture mère introuvable');return;}
+  var num=gvg('ac-num');
+  var date=gvg('ac-date');
+  var pct=parseFloat(gvg('ac-pct'))||0;
+  var type=gvg('ac-type');
+  var libelle=gvg('ac-libelle')||('Acompte '+pct+'%');
+  if(!num){alert('Le numéro est requis');return;}
+  if(pct<=0||pct>100){alert('Le pourcentage doit être entre 1 et 100');return;}
+  // Check doublon numéro
+  if(DB.factures.some(function(x){return x.num===num;})){
+    alert('Le numéro '+num+' est déjà utilisé. Choisis un autre numéro.');
+    return;
+  }
+  // Check dépassement 100%
+  var pctEmis=getAcomptesCumulePct(parent.id);
+  if(pctEmis+pct>100.01){
+    if(!confirm('Attention : ce acompte + les précédents font '+(pctEmis+pct)+'% du total. Continuer quand même ?')) return;
+  }
+  // Construire les lignes : copie des lignes mère avec PU × pct/100 + suffixe libellé
+  var factor=pct/100;
+  var acompteLines=(parent.lines||[]).map(function(l){
+    return Object.assign({},l,{
+      pu:Math.round((l.pu||0)*factor),
+      designation:(l.designation||'')+' ('+libelle+')'
+    });
+  });
+  // Recalculer HT / TGC / TTC
+  var ht=0,tgcSum=0;
+  acompteLines.forEach(function(l){
+    var h=(l.qte||0)*(l.pu||0);
+    ht+=h;
+    tgcSum+=h*(Number(l.tgc)||0)/100;
+  });
+  var ttc=Math.round(ht+tgcSum);
+  // Construire la nouvelle facture
+  var newFA={
+    id: Date.now(),
+    num: num,
+    date: date,
+    client: parent.client,
+    contact: parent.contact||'',
+    adresse: parent.adresse||'',
+    email: parent.email||'',
+    objet: (type==='solde'?'Solde — ':'Acompte — ')+(parent.objet||''),
+    dvlie: parent.dvlie||'',
+    type: parent.type||'Fourniture',
+    status: 'En attente',
+    tgcM: parent.tgcM||'506-2',
+    delai: parent.delai||'Paiement sous 30 jours à reception de la facture',
+    notes: 'Facture '+(type==='solde'?'de solde':'d\'acompte')+' liée à '+parent.num+'. Pourcentage : '+pct+'%.',
+    lines: acompteLines,
+    ht: Math.round(ht),
+    tgc: Math.round(tgcSum),
+    ttc: ttc,
+    paye: 0,
+    versements: [],
+    // Métadonnées acompte
+    parentId: parent.id,
+    parentNum: parent.num,
+    acompteType: type,   // 'acompte' ou 'solde'
+    acomptePct: pct,
+    acompteLibelle: libelle
+  };
+  DB.factures.push(newFA);
+  syncFactureToSuivi(newFA);
+  saveDB();
+  cm('mAcompte');
+  renderFA();rDash();
+  if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+  // Rafraîchir l'affichage des acomptes dans la modal facture mère
+  renderAcomptesList();
+  alert('✓ Facture '+num+' créée ('+fN(ttc)+' XPF TTC). Tu peux la retrouver dans la liste Factures.');
+}
+
+// Affiche la liste des acomptes dans la modal facture mère
+function renderAcomptesList(){
+  var listEl=document.getElementById('faAcomptesList');
+  var hintEl=document.getElementById('faAcomptesHint');
+  if(!listEl||!eFAid)return;
+  var acomptes=getFactureAcomptes(eFAid);
+  var parent=DB.factures.find(function(x){return x.id===eFAid;});
+  if(!acomptes.length){
+    listEl.innerHTML='<div style="padding:8px;text-align:center;color:var(--text-dim);font-style:italic;font-size:10.5px">Aucune facture d\'acompte générée.</div>';
+    if(hintEl) hintEl.textContent='';
+    return;
+  }
+  var pctEmis=getAcomptesCumulePct(eFAid);
+  listEl.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:11px">'+
+    '<thead><tr style="background:rgba(59,130,246,.1);color:#3b82f6">'+
+      '<th style="padding:5px 6px;text-align:left">N°</th>'+
+      '<th style="padding:5px 6px;text-align:left">Type</th>'+
+      '<th style="padding:5px 6px;text-align:right">%</th>'+
+      '<th style="padding:5px 6px;text-align:right">Montant TTC</th>'+
+      '<th style="padding:5px 6px">Statut</th>'+
+      '<th style="padding:5px 6px;text-align:left">Date</th>'+
+      '<th style="width:80px"></th>'+
+    '</tr></thead><tbody>'+
+    acomptes.map(function(a){
+      var typeLabel=a.acompteType==='solde'?'<span style="color:#10b981;font-weight:700">SOLDE</span>':'<span style="color:#3b82f6;font-weight:700">Acompte</span>';
+      return '<tr>'+
+        '<td style="padding:4px 6px"><strong style="color:var(--teal)">'+esc(a.num)+'</strong></td>'+
+        '<td style="padding:4px 6px">'+typeLabel+'</td>'+
+        '<td style="padding:4px 6px;text-align:right">'+a.acomptePct+'%</td>'+
+        '<td style="padding:4px 6px;text-align:right;font-weight:700">'+fN(a.ttc)+' XPF</td>'+
+        '<td style="padding:4px 6px">'+esc(a.status||'—')+'</td>'+
+        '<td style="padding:4px 6px;color:var(--muted)">'+fD(a.date)+'</td>'+
+        '<td style="padding:4px 6px;white-space:nowrap">'+
+          '<button class="btn btn-ghost btn-sm" onclick="openFA('+a.id+')" title="Ouvrir cette facture">📋</button>'+
+          '<button class="btn btn-red btn-sm" onclick="deleteAcompte('+a.id+')" title="Supprimer">🗑</button>'+
+        '</td>'+
+      '</tr>';
+    }).join('')+'</tbody></table>';
+  if(hintEl){
+    var restant=100-pctEmis;
+    hintEl.innerHTML='Cumul émis : <strong style="color:#3b82f6">'+pctEmis+'%</strong> — Reste disponible : <strong style="color:'+(restant>0?'#10b981':'#f87171')+'">'+restant+'%</strong>';
+  }
+}
+
+function deleteAcompte(id){
+  var a=DB.factures.find(function(x){return x.id===id;});
+  if(!a)return;
+  if(!confirm('Supprimer la facture '+a.num+' ? Cela la retirera aussi du Suivi.'))return;
+  // Supprimer aussi l'entrée Suivi liée
+  if(a.suiviId){
+    DB.invoices=(DB.invoices||[]).filter(function(x){return x.id!==a.suiviId;});
+    invoices=DB.invoices;
+  }
+  DB.factures=DB.factures.filter(function(x){return x.id!==id;});
+  saveDB();
+  renderAcomptesList();renderFA();rDash();
+  if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+}
+
 function saveFA(){
   var f=getFA();if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
   if(eFAid){var i=DB.factures.findIndex(function(x){return x.id===eFAid;});if(i>=0)DB.factures[i]=f;else DB.factures.push(f);}
@@ -2291,12 +2580,32 @@ function renderFA(){
   var sm={'En attente':'b-pending',Partiel:'b-partial',Payée:'b-paid','En retard':'b-late'};
   var tb=document.getElementById('tbFA');if(!tb)return;
   tb.innerHTML=data.length?data.map(function(x){
+    // Badge acompte/solde
+    var acompteBadge='';
+    if(x.acompteType==='acompte'){
+      acompteBadge=' <span title="Facture d\'acompte liée à '+esc(x.parentNum||'')+'" style="display:inline-block;background:rgba(59,130,246,.2);color:#3b82f6;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">🧾 '+x.acomptePct+'%</span>';
+    } else if(x.acompteType==='solde'){
+      acompteBadge=' <span title="Facture de solde liée à '+esc(x.parentNum||'')+'" style="display:inline-block;background:rgba(16,185,129,.2);color:#10b981;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">✓ SOLDE '+x.acomptePct+'%</span>';
+    } else {
+      // Facture mère : si elle a des acomptes, afficher badge compte
+      var kids=getFactureAcomptes(x.id);
+      if(kids.length){
+        acompteBadge=' <span title="'+kids.length+' facture(s) d\'acompte liée(s)" style="display:inline-block;background:rgba(251,191,36,.2);color:#fbbf24;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">⊕'+kids.length+' acpt</span>';
+      }
+    }
+    // Parent clickable
+    var parentCell='—';
+    if(x.parentId&&x.parentNum){
+      parentCell='<span onclick="openFA('+x.parentId+')" title="Ouvrir la facture mère" style="color:var(--teal);cursor:pointer;text-decoration:underline">↑ '+esc(x.parentNum)+'</span>';
+    } else if(x.dvlie){
+      parentCell='<span style="color:var(--teal)">'+esc(x.dvlie)+'</span>';
+    }
     return'<tr>'+
-      '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td><td>'+esc(x.client||'')+'</td>'+
+      '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+acompteBadge+'</td><td>'+fD(x.date)+'</td><td>'+esc(x.client||'')+'</td>'+
       '<td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.objet||'')+'</td>'+
       '<td style="font-weight:700;color:var(--teal)">'+fN(x.ttc)+' XPF</td>'+
       '<td><span class="badge '+(sm[x.status]||'b-pending')+'">'+esc(x.status||'')+'</span></td>'+
-      '<td>'+(x.dvlie?'<span style="color:var(--teal)">'+esc(x.dvlie)+'</span>':'—')+'</td>'+
+      '<td>'+parentCell+'</td>'+
       '<td class="no-print" style="white-space:nowrap">'+
         '<button class="btn btn-ghost btn-sm" onclick="prvFA('+x.id+')">👁</button> '+
         '<button class="btn btn-ghost btn-sm" onclick="openFA('+x.id+')">✏️</button> '+
