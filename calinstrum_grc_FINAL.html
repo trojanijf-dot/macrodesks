@@ -2573,35 +2573,105 @@ function syncFactureToSuivi(f){
   // Mettre à jour la variable globale invoices (utilisée par renderSuivi)
   invoices=DB.invoices;
 }
+// Stockage des mères dépliées (persisté en localStorage pour survivre aux re-renders)
+var faExpandedParents = (function(){
+  try { return new Set(JSON.parse(localStorage.getItem('faExpanded')||'[]')); }
+  catch(e) { return new Set(); }
+})();
+function saveFaExpanded(){
+  try { localStorage.setItem('faExpanded', JSON.stringify(Array.from(faExpandedParents))); } catch(e){}
+}
+function toggleFaParent(parentId){
+  if(faExpandedParents.has(parentId)) faExpandedParents.delete(parentId);
+  else faExpandedParents.add(parentId);
+  saveFaExpanded();
+  renderFA();
+}
+
 function renderFA(){
   updFC('fFAcli',DB.factures);
   var s=(gvg('sFA')||'').toLowerCase(),fc=gvg('fFAcli'),fs=gvg('fFAst');
-  var data=DB.factures.filter(function(x){return(!fc||x.client===fc)&&(!fs||x.status===fs)&&(!s||(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)>=0);}).reverse();
+  var all=DB.factures.filter(function(x){return(!fc||x.client===fc)&&(!fs||x.status===fs)&&(!s||(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)>=0);});
   var sm={'En attente':'b-pending',Partiel:'b-partial',Payée:'b-paid','En retard':'b-late'};
   var tb=document.getElementById('tbFA');if(!tb)return;
-  tb.innerHTML=data.length?data.map(function(x){
+  if(!all.length){tb.innerHTML='<tr><td colspan="8" class="empty">Aucune facture</td></tr>';return;}
+
+  // Séparer mères + orphelines d'une part, enfants d'autre part
+  var parents = all.filter(function(x){return !x.parentId;});
+  var childrenByParent = {};
+  all.forEach(function(x){
+    if(x.parentId){
+      if(!childrenByParent[x.parentId]) childrenByParent[x.parentId]=[];
+      childrenByParent[x.parentId].push(x);
+    }
+  });
+  // Tri enfants : acomptes d'abord (par pct croissant), solde en dernier
+  Object.keys(childrenByParent).forEach(function(k){
+    childrenByParent[k].sort(function(a,b){
+      if(a.acompteType==='solde' && b.acompteType!=='solde') return 1;
+      if(b.acompteType==='solde' && a.acompteType!=='solde') return -1;
+      return (a.acomptePct||0)-(b.acomptePct||0);
+    });
+  });
+  // Inverser l'ordre des mères (plus récentes en haut)
+  parents.reverse();
+
+  // Cas où l'enfant matche le filtre mais pas la mère → garder mère quand même pour contexte
+  var visibleParentIds = new Set(parents.map(function(p){return p.id;}));
+  all.forEach(function(x){
+    if(x.parentId && !visibleParentIds.has(x.parentId)){
+      var parent=DB.factures.find(function(f){return f.id===x.parentId;});
+      if(parent){
+        parents.unshift(parent);
+        visibleParentIds.add(parent.id);
+        if(!childrenByParent[parent.id]) childrenByParent[parent.id]=[];
+      }
+    }
+  });
+
+  function renderRow(x, isChild){
     // Badge acompte/solde
     var acompteBadge='';
     if(x.acompteType==='acompte'){
-      acompteBadge=' <span title="Facture d\'acompte liée à '+esc(x.parentNum||'')+'" style="display:inline-block;background:rgba(59,130,246,.2);color:#3b82f6;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">🧾 '+x.acomptePct+'%</span>';
+      acompteBadge=' <span title="Facture d\'acompte" style="display:inline-block;background:rgba(59,130,246,.2);color:#3b82f6;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">🧾 '+x.acomptePct+'%</span>';
     } else if(x.acompteType==='solde'){
-      acompteBadge=' <span title="Facture de solde liée à '+esc(x.parentNum||'')+'" style="display:inline-block;background:rgba(16,185,129,.2);color:#10b981;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">✓ SOLDE '+x.acomptePct+'%</span>';
-    } else {
-      // Facture mère : si elle a des acomptes, afficher badge compte
-      var kids=getFactureAcomptes(x.id);
-      if(kids.length){
-        acompteBadge=' <span title="'+kids.length+' facture(s) d\'acompte liée(s)" style="display:inline-block;background:rgba(251,191,36,.2);color:#fbbf24;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">⊕'+kids.length+' acpt</span>';
-      }
+      acompteBadge=' <span title="Facture de solde" style="display:inline-block;background:rgba(16,185,129,.2);color:#10b981;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">✓ SOLDE '+x.acomptePct+'%</span>';
     }
-    // Parent clickable
+    // Colonne 1 : numéro avec indentation si enfant + bouton toggle si mère avec enfants
+    var numCell;
+    var kids=childrenByParent[x.id]||[];
+    if(isChild){
+      // Ligne enfant : indentée avec arbre visuel
+      numCell='<td style="font-weight:700;color:var(--teal);padding-left:28px;position:relative">'+
+        '<span style="position:absolute;left:12px;top:50%;color:#3b82f6;opacity:.5;font-size:11px">└</span>'+
+        esc(x.num)+acompteBadge+'</td>';
+    } else if(kids.length){
+      // Ligne mère avec enfants : bouton toggle
+      var isOpen=faExpandedParents.has(x.id);
+      var btnIcon=isOpen?'−':'+';
+      var btnColor=isOpen?'#fbbf24':'var(--teal)';
+      numCell='<td style="font-weight:700;color:var(--teal)">'+
+        '<button onclick="toggleFaParent('+x.id+')" title="'+(isOpen?'Replier':'Déplier')+' les factures d\'acompte" style="width:18px;height:18px;border-radius:3px;border:1px solid '+btnColor+';background:rgba(45,212,191,.08);color:'+btnColor+';font-weight:900;font-size:12px;line-height:1;cursor:pointer;margin-right:6px;padding:0;display:inline-flex;align-items:center;justify-content:center;vertical-align:middle">'+btnIcon+'</button>'+
+        esc(x.num)+
+        ' <span title="'+kids.length+' facture(s) liée(s)" style="display:inline-block;background:rgba(251,191,36,.2);color:#fbbf24;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700;vertical-align:middle;margin-left:3px">⊕'+kids.length+' acpt</span>'+
+        '</td>';
+    } else {
+      // Ligne mère sans enfants (facture simple)
+      numCell='<td style="font-weight:700;color:var(--teal)"><span style="display:inline-block;width:24px"></span>'+esc(x.num)+acompteBadge+'</td>';
+    }
+    // Colonne Devis lié / Parent
     var parentCell='—';
     if(x.parentId&&x.parentNum){
-      parentCell='<span onclick="openFA('+x.parentId+')" title="Ouvrir la facture mère" style="color:var(--teal);cursor:pointer;text-decoration:underline">↑ '+esc(x.parentNum)+'</span>';
+      parentCell='<span onclick="toggleFaParent('+x.parentId+')" title="Replier ce groupe" style="color:var(--teal);cursor:pointer;text-decoration:underline">↑ '+esc(x.parentNum)+'</span>';
     } else if(x.dvlie){
       parentCell='<span style="color:var(--teal)">'+esc(x.dvlie)+'</span>';
     }
-    return'<tr>'+
-      '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+acompteBadge+'</td><td>'+fD(x.date)+'</td><td>'+esc(x.client||'')+'</td>'+
+    // Row background pour enfants
+    var rowStyle=isChild?'background:rgba(59,130,246,.04)':'';
+    return'<tr style="'+rowStyle+'">'+
+      numCell+
+      '<td>'+fD(x.date)+'</td>'+
+      '<td>'+esc(x.client||'')+'</td>'+
       '<td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.objet||'')+'</td>'+
       '<td style="font-weight:700;color:var(--teal)">'+fN(x.ttc)+' XPF</td>'+
       '<td><span class="badge '+(sm[x.status]||'b-pending')+'">'+esc(x.status||'')+'</span></td>'+
@@ -2611,7 +2681,17 @@ function renderFA(){
         '<button class="btn btn-ghost btn-sm" onclick="openFA('+x.id+')">✏️</button> '+
         '<button class="btn btn-red btn-sm" onclick="delDoc(\'factures\','+x.id+')">🗑</button>'+
       '</td></tr>';
-  }).join(''):'<tr><td colspan="8" class="empty">Aucune facture</td></tr>';
+  }
+
+  var html='';
+  parents.forEach(function(p){
+    html += renderRow(p, false);
+    if(faExpandedParents.has(p.id)){
+      var kids = childrenByParent[p.id]||[];
+      kids.forEach(function(k){ html += renderRow(k, true); });
+    }
+  });
+  tb.innerHTML = html;
 }
 
 // ===== BC =====
