@@ -1451,6 +1451,20 @@ function applyStampAndPrint(){
     }
   });
 
+  // BC uses a flat .bc-sign-zone (no .doc-sign-box). Also place signature/stamp here.
+  var bcZones=pb.querySelectorAll('.bc-sign-zone');
+  bcZones.forEach(function(zone){
+    // Clear previous
+    var prev=zone.querySelector('.sig-img');if(prev)prev.remove();
+    var prevStamp=zone.querySelector('.stamp-circle');if(prevStamp)prevStamp.remove();
+    if(!sigSrc)return;
+    var sigImg=document.createElement('img');
+    sigImg.className='sig-img';
+    sigImg.src=sigSrc;
+    sigImg.style.cssText='max-height:130px;max-width:260px;display:block;margin:0 auto';
+    zone.appendChild(sigImg);
+  });
+
   cm('mSTAMP');
   setTimeout(function(){doPrint();},300);
 }
@@ -3843,26 +3857,29 @@ function bBC(b){
         '<th style="width:90px;text-align:right;background:#1e3a5f;color:#fff">Extended Price<br>('+esc(b.devise||'')+')</th>'+
       '</tr></thead>'+
     '<tbody>'+rows+'</tbody></table>'+
-    '<table style="width:100%;margin-top:14px;border-collapse:collapse">'+
+    // ======= Footer block: signature (left) at same height as totals (right) =======
+    '<table class="doc-bc-footer" style="width:100%;margin-top:14px;border-collapse:collapse">'+
     '<tr>'+
-      '<td style="width:50%;vertical-align:top;padding-right:10px">'+
-        '<table style="width:100%;border-collapse:collapse;font-size:9px">'+
-          '<tr><td colspan="2" style="background:#1e3a5f;color:#fff;padding:5px 8px;font-weight:700;font-size:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact">Signature:</td></tr>'+
-          '<tr><td colspan="2" style="height:50px;border-bottom:1px solid #ccc;padding:4px"></td></tr>'+
-          '<tr><td colspan="2" style="padding:6px 4px;border-bottom:1px solid #eee;font-size:9px">'+
-            (b.cref2?'<strong>Customer Ref #:</strong> '+esc(b.cref2)+'<br>':'')+
-            (b.prop2?'<strong>Emerson Proposal:</strong> '+esc(b.prop2):'')+'</td></tr>'+
-
-        '</table>'+
+      '<td class="doc-bc-sig-cell" style="width:50%;vertical-align:top;padding-right:14px">'+
+        // Signature zone: header bar + empty area (stamp/signature injected here by applyStamp)
+        '<div class="doc-bc-sig-box" style="border:1px solid #e2e8f0">'+
+          '<div style="background:#1e3a5f;color:#fff;padding:5px 10px;font-weight:700;font-size:10.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact">Signature:</div>'+
+          '<div class="bc-sign-zone" style="height:148px;padding:6px;display:flex;align-items:center;justify-content:center;position:relative"></div>'+
+        '</div>'+
+        // References BELOW the signature box (as per target PDF)
+        '<div class="doc-bc-refs" style="padding:8px 2px 0 2px;font-size:10px;line-height:1.45;color:#334155">'+
+          (b.cref2?'<div><strong style="color:#1e3a5f">Customer Ref #:</strong> '+esc(b.cref2)+'</div>':'')+
+          (b.prop2?'<div><strong style="color:#1e3a5f">Emerson Proposal:</strong> '+esc(b.prop2)+'</div>':'')+
+        '</div>'+
       '</td>'+
-      '<td style="width:50%;vertical-align:top">'+
-        '<table class="doc-totals" style="width:100%">'+
-          '<tr><td>Subtotal ('+esc(b.devise||'')+')</td><td>'+fN(b.totals?b.totals.sub:(b.total||0))+'</td></tr>'+
-          '<tr><td>Discount (%)</td><td>'+(+b.discount>0?'-'+fN(b.totals?b.totals.disc:0):'—')+'</td></tr>'+
-          '<tr><td>Sales (%)</td><td>'+(+b.salesTax>0?fN(b.totals?b.totals.sales:0):'—')+'</td></tr>'+
-          '<tr><td>Other Cost Tax ($)</td><td>'+(+b.otherTax>0?fN(+b.otherTax):'—')+'</td></tr>'+
-          '<tr><td>Shipping & Handling ($)</td><td>'+(+b.shipping>0?fN(+b.shipping):'—')+'</td></tr>'+
-          '<tr class="dtf"><td>Total Amount ('+esc(b.devise||'')+')</td><td>'+fN(b.total||0)+'</td></tr>'+
+      '<td class="doc-bc-tot-cell" style="width:50%;vertical-align:top">'+
+        '<table class="doc-totals doc-totals-bc" style="width:100%;border-collapse:collapse">'+
+          '<tr><td style="padding:4px 6px">Subtotal ('+esc(b.devise||'')+')</td><td style="padding:4px 6px;text-align:right;font-weight:700">'+fN(b.totals?b.totals.sub:(b.total||0))+'</td></tr>'+
+          '<tr><td style="padding:4px 6px">Discount (%)</td><td style="padding:4px 6px;text-align:right">'+(+b.discount>0?'<span style="color:#cc2200;font-weight:700">-'+fN(b.totals?b.totals.disc:0)+'</span>':'<span style="color:#cc2200;font-weight:700">—</span>')+'</td></tr>'+
+          '<tr><td style="padding:4px 6px">Sales (%)</td><td style="padding:4px 6px;text-align:right">'+(+b.salesTax>0?fN(b.totals?b.totals.sales:0):'<span style="color:#cc2200;font-weight:700">—</span>')+'</td></tr>'+
+          '<tr><td style="padding:4px 6px">Other Cost Tax ($)</td><td style="padding:4px 6px;text-align:right">'+(+b.otherTax>0?fN(+b.otherTax):'<span style="color:#cc2200;font-weight:700">—</span>')+'</td></tr>'+
+          '<tr><td style="padding:4px 6px;border-bottom:1px solid #cbd5e1">Shipping & Handling ($)</td><td style="padding:4px 6px;text-align:right;border-bottom:1px solid #cbd5e1">'+(+b.shipping>0?fN(+b.shipping):'<span style="color:#cc2200;font-weight:700">—</span>')+'</td></tr>'+
+          '<tr><td style="padding:7px 6px 4px 6px;font-weight:900;font-size:12.5px;color:#1e3a5f">Total Amount ('+esc(b.devise||'')+')</td><td style="padding:7px 6px 4px 6px;text-align:right;font-weight:900;font-size:13px;color:#1e3a5f">'+fN(b.total||0)+'</td></tr>'+
         '</table>'+
       '</td>'+
     '</tr></table>'+
