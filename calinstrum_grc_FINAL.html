@@ -1976,15 +1976,43 @@ function rVersements(){
         '<td style="padding:4px 6px;font-weight:700;color:var(--teal)">'+(i+1)+'</td>'+
         '<td style="padding:4px 6px"><input type="date" class="form-input" style="padding:3px 6px;font-size:11px;width:140px" value="'+esc(v.date||'')+'" data-vfield="date" data-vidx="'+i+'"></td>'+
         '<td style="padding:4px 6px"><input type="number" class="form-input" style="padding:3px 6px;font-size:11px;width:110px;text-align:right" value="'+(v.montant||0)+'" data-vfield="montant" data-vidx="'+i+'"></td>'+
-        '<td style="padding:4px 6px;text-align:right;font-weight:700">'+fN(cumul)+' XPF</td>'+
+        '<td style="padding:4px 6px;text-align:right;font-weight:700" data-cumul-idx="'+i+'">'+fN(cumul)+' XPF</td>'+
         '<td style="padding:4px 6px"><button class="fa-vdel-btn" data-vidx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px">✕</button></td>'+
       '</tr>';
     }).join('');
   }
-  // Calculer totaux + statut auto
-  var totVerse=faVersements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
-  var ttc=(+faL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);},0))||0;
-  ttc=Math.round(ttc);
+  updateVersementsTotals();
+  // Attacher listeners (UNE SEULE FOIS par reconstruction)
+  tb.querySelectorAll('input[data-vfield]').forEach(function(inp){
+    inp.addEventListener('input',function(){
+      var idx=parseInt(this.getAttribute('data-vidx'));
+      var field=this.getAttribute('data-vfield');
+      if(!isNaN(idx)&&field){
+        faVersements[idx][field]=field==='montant'?(+this.value||0):this.value;
+        // Mise à jour LIGHT sans reconstruire la table (pour ne pas perdre le focus)
+        updateVersementsTotals();
+      }
+    });
+  });
+  tb.querySelectorAll('.fa-vdel-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-vidx'));
+      if(!isNaN(idx)){faVersements.splice(idx,1);rVersements();}
+    });
+  });
+}
+
+// Mise à jour LIGHT : recalcule cumuls + totaux + statut SANS toucher aux inputs
+function updateVersementsTotals(){
+  var tb=document.getElementById('faVers');if(!tb)return;
+  var cumul=0;
+  faVersements.forEach(function(v,i){
+    cumul+=Number(v.montant)||0;
+    var cell=tb.querySelector('[data-cumul-idx="'+i+'"]');
+    if(cell) cell.textContent=fN(cumul)+' XPF';
+  });
+  var totVerse=cumul;
+  var ttc=Math.round(+faL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);},0))||0;
   var reste=Math.max(0,ttc-totVerse);
   sv('faTotVerse',fN(totVerse)+' XPF');
   sv('faReste',fN(reste)+' XPF');
@@ -1992,7 +2020,6 @@ function rVersements(){
   var newStatus='En attente';
   if(totVerse>=ttc && ttc>0) newStatus='Payée';
   else if(totVerse>0) newStatus='Partiel';
-  // Check date butoir pour 'En retard'
   var dateStr=gvg('fa-date');
   if(dateStr && totVerse<ttc){
     var d=new Date(dateStr);
@@ -2003,7 +2030,6 @@ function rVersements(){
   }
   var sel=document.getElementById('fa-status');
   if(sel){
-    // Ne change pas si utilisateur a manuellement forcé un statut hors auto
     var curr=sel.value;
     if(['En attente','Partiel','Payée','En retard'].indexOf(curr)>=0){
       sel.value=newStatus;
@@ -2016,23 +2042,6 @@ function rVersements(){
     else if(totVerse>=ttc) hint.textContent='✓ Facture intégralement soldée';
     else hint.textContent='Versé: '+fN(totVerse)+' / '+fN(ttc)+' XPF ('+Math.round(totVerse/ttc*100)+'%)';
   }
-  // Attacher listeners aux inputs
-  tb.querySelectorAll('input[data-vfield]').forEach(function(inp){
-    inp.addEventListener('input',function(){
-      var idx=parseInt(this.getAttribute('data-vidx'));
-      var field=this.getAttribute('data-vfield');
-      if(!isNaN(idx)&&field){
-        faVersements[idx][field]=field==='montant'?(+this.value||0):this.value;
-        rVersements();
-      }
-    });
-  });
-  tb.querySelectorAll('.fa-vdel-btn').forEach(function(btn){
-    btn.addEventListener('click',function(){
-      var idx=parseInt(this.getAttribute('data-vidx'));
-      if(!isNaN(idx)){faVersements.splice(idx,1);rVersements();}
-    });
-  });
 }
 
 function addVersement(){
