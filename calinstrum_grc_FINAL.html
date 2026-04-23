@@ -150,7 +150,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .doc-totals td:last-child{text-align:right;font-weight:600}
 .dtf td{font-size:12.5px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:5px}
 /* ==== BC (Purchase Order) — rendu aperçu écran aligné sur le rendu impression ==== */
-.bc-table-wrap{border:2.5px solid #1e3a5f;margin-bottom:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.bc-table-wrap{border:2.5px solid #1e3a5f;margin-bottom:12px;width:100%;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .doc-tbl-bc{width:100%;border-collapse:collapse;border:none;margin:0;font-size:11px;table-layout:auto}
 .doc-tbl-bc thead th{background:#1e3a5f;color:#fff;padding:7px 8px;text-align:left;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.02em;border:1px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .doc-tbl-bc .th-item{text-align:center;width:40px}
@@ -172,8 +172,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .bc-left-top{flex:1 1 auto;display:flex;flex-direction:column;min-height:85px}
 .bc-right-top{flex:1 1 auto;display:flex;flex-direction:column;justify-content:flex-end;min-height:85px}
 .bc-sig-header{background:#1e3a5f;color:#fff;padding:6px 10px;font-weight:700;font-size:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.bc-sig-cell{flex:1 1 auto;min-height:50px;border-left:1px solid #cbd5e1;border-right:1px solid #cbd5e1;display:flex;align-items:flex-start;justify-content:center;overflow:hidden;padding:0}
-.bc-sig-cell img.sig-img{max-height:100px;max-width:95%;display:block;margin-top:-10px}
+.bc-sig-cell{flex:1 1 auto;min-height:50px;border-left:1px solid #cbd5e1;border-right:1px solid #cbd5e1;display:flex;align-items:flex-start;justify-content:center;padding:0 6px}
+.bc-sig-cell img.sig-img{max-height:85px;max-width:95%;display:block}
 .bc-totals{width:100%;margin:0;font-size:11.5px;border-collapse:collapse}
 .bc-totals td{padding:4px 6px}
 .bc-totals td:last-child{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
@@ -1337,18 +1337,85 @@ function applyStampAndPrint(){
   });
 
   // Place signature for BC (Purchase Order) — cellule .bc-sig-cell
+  // On recadre automatiquement l'image pour éliminer les marges blanches/transparentes
+  // avant de l'insérer, de sorte que la sig se colle parfaitement sous le bandeau bleu.
   var bcSigCells=pb.querySelectorAll('.bc-sig-cell');
-  bcSigCells.forEach(function(cell){
-    var prev=cell.querySelector('.sig-img');if(prev)prev.remove();
-    if(!sigSrc)return;
-    var sigImg=document.createElement('img');
-    sigImg.className='sig-img';
-    sigImg.src=sigSrc;
-    cell.appendChild(sigImg);
-  });
+  if(bcSigCells.length && sigSrc){
+    var sigImgProbe=new Image();
+    sigImgProbe.onload=function(){
+      var cropped=cropSigEdges(sigImgProbe);
+      bcSigCells.forEach(function(cell){
+        var prev=cell.querySelector('.sig-img');if(prev)prev.remove();
+        var sigImg=document.createElement('img');
+        sigImg.className='sig-img';
+        sigImg.src=cropped;
+        cell.appendChild(sigImg);
+      });
+      cm('mSTAMP');
+      setTimeout(function(){doPrint();},300);
+    };
+    sigImgProbe.onerror=function(){
+      // Fallback : pas de crop, insertion directe
+      bcSigCells.forEach(function(cell){
+        var prev=cell.querySelector('.sig-img');if(prev)prev.remove();
+        var sigImg=document.createElement('img');
+        sigImg.className='sig-img';
+        sigImg.src=sigSrc;
+        cell.appendChild(sigImg);
+      });
+      cm('mSTAMP');
+      setTimeout(function(){doPrint();},300);
+    };
+    sigImgProbe.src=sigSrc;
+    return; // on attendra le onload pour déclencher doPrint
+  } else {
+    // Pas de BC dans l'aperçu ou pas de sig : nettoyer quand même
+    bcSigCells.forEach(function(cell){
+      var prev=cell.querySelector('.sig-img');if(prev)prev.remove();
+    });
+  }
 
   cm('mSTAMP');
   setTimeout(function(){doPrint();},300);
+}
+
+// Recadre les marges transparentes ET blanches autour d'une image de signature.
+// Renvoie un data URL PNG contenant uniquement le contenu utile.
+function cropSigEdges(img){
+  try{
+    var cv=document.createElement('canvas');
+    cv.width=img.naturalWidth||img.width;
+    cv.height=img.naturalHeight||img.height;
+    var ctx=cv.getContext('2d');
+    ctx.drawImage(img,0,0);
+    var data=ctx.getImageData(0,0,cv.width,cv.height).data;
+    var minX=cv.width, minY=cv.height, maxX=-1, maxY=-1;
+    // Un pixel est "de contenu" si : alpha>20 ET (luminance<230 OU alpha<250)
+    // → gère autant PNG transparent que JPG fond blanc.
+    for(var y=0;y<cv.height;y++){
+      for(var x=0;x<cv.width;x++){
+        var i=(y*cv.width+x)*4;
+        var r=data[i], g=data[i+1], bl=data[i+2], a=data[i+3];
+        if(a<20) continue;
+        var lum=0.299*r+0.587*g+0.114*bl;
+        if(lum>235 && a>240) continue; // blanc quasi opaque = fond
+        if(x<minX)minX=x; if(x>maxX)maxX=x;
+        if(y<minY)minY=y; if(y>maxY)maxY=y;
+      }
+    }
+    if(maxX<0 || maxY<0) return img.src; // image vide, fallback
+    // petit padding de 2px autour du contenu
+    var pad=2;
+    minX=Math.max(0,minX-pad); minY=Math.max(0,minY-pad);
+    maxX=Math.min(cv.width-1,maxX+pad); maxY=Math.min(cv.height-1,maxY+pad);
+    var w=maxX-minX+1, h=maxY-minY+1;
+    var out=document.createElement('canvas');
+    out.width=w; out.height=h;
+    out.getContext('2d').drawImage(cv,minX,minY,w,h,0,0,w,h);
+    return out.toDataURL('image/png');
+  }catch(e){
+    return img.src;
+  }
 }
 
 
@@ -4108,7 +4175,7 @@ function doPrint(){
 
     /* ==== Purchase Order (BC) — override les règles devis-centric du PRINT_CSS ==== */
     /* Cadre extérieur bleu GRAS : via wrapper DIV (bulletproof, pas d'interférence avec rowspan) */
-    .bc-table-wrap{border:2.5px solid #1e3a5f!important;margin-bottom:10px!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
+    .bc-table-wrap{border:2.5px solid #1e3a5f!important;margin-bottom:10px!important;width:100%!important;box-sizing:border-box!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
     .doc-tbl-bc{table-layout:auto!important;font-size:10.5px!important;width:100%!important;border-collapse:collapse!important;border:none!important;margin:0!important;}
     .doc-tbl-bc thead th{font-size:10px!important;padding:7px 8px!important;text-align:left!important;white-space:normal!important;background:#1e3a5f!important;color:#fff!important;font-weight:700!important;text-transform:uppercase!important;letter-spacing:.02em!important;border:1px solid #1e3a5f!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
     .doc-tbl-bc .th-item{text-align:center!important;width:40px!important;}
@@ -4139,9 +4206,10 @@ function doPrint(){
     .bc-right-top{flex:1 1 auto!important;display:flex!important;flex-direction:column!important;justify-content:flex-end!important;min-height:85px!important;}
     /* Bandeau Signature */
     .bc-sig-header{background:#1e3a5f!important;color:#fff!important;padding:6px 10px!important;font-weight:700!important;font-size:10px!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
-    /* Cellule signature : pas d'espace blanc au-dessus, image collée au bandeau bleu */
-    .bc-sig-cell{flex:1 1 auto!important;min-height:50px!important;border-left:1px solid #cbd5e1!important;border-right:1px solid #cbd5e1!important;display:flex!important;align-items:flex-start!important;justify-content:center!important;overflow:hidden!important;padding:0!important;}
-    .bc-sig-cell img.sig-img{max-height:100px!important;max-width:95%!important;display:block!important;margin-top:-10px!important;}
+    /* Cellule signature : la sig est auto-recadrée en JS (cropSigEdges) → aucune marge blanche,
+       collée DIRECTEMENT sous le bandeau bleu, sans padding-top */
+    .bc-sig-cell{flex:1 1 auto!important;min-height:50px!important;border-left:1px solid #cbd5e1!important;border-right:1px solid #cbd5e1!important;display:flex!important;align-items:flex-start!important;justify-content:center!important;padding:0 6px!important;}
+    .bc-sig-cell img.sig-img{max-height:85px!important;max-width:95%!important;display:block!important;}
     /* Tableau totaux haut (Subtotal → Shipping) — font agrandie */
     .bc-totals{width:100%!important;margin:0!important;font-size:11.5px!important;border-collapse:collapse!important;}
     .bc-totals td{padding:4px 6px!important;}
