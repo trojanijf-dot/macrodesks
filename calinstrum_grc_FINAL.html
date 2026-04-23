@@ -219,6 +219,13 @@ tr:hover td{background:rgba(255,255,255,.02)}
   <span id="topTitle" style="font-family:var(--display);font-size:14px;font-weight:800;color:#fff">Dashboard</span>
   <div class="no-print" style="display:flex;gap:8px;align-items:center">
     <div id="alert-pill" class="pill pill-red" style="display:none"><div class="dot"></div><span id="alert-count">0 alertes</span></div>
+    <button class="btn btn-ghost btn-sm" id="globalUndoBtn" onclick="doUndo()" disabled style="opacity:0.4;color:#fcd34d;border-color:rgba(252,211,77,0.3)" title="Aucune action à annuler">↶ Annuler <span id="globalUndoCount" style="font-size:9px;color:var(--muted)"></span></button>
+    <div id="autoSaveIndicator" style="display:flex;align-items:center;gap:5px;padding:3px 9px;background:rgba(45,212,191,0.1);border:1px solid rgba(45,212,191,0.3);border-radius:12px;font-size:10px;color:var(--muted)" title="Indicateur de sauvegarde automatique">
+      <span id="autoSaveDot" style="width:7px;height:7px;border-radius:50%;background:var(--teal);display:inline-block"></span>
+      <span>Auto-save</span>
+    </div>
+    <button class="btn btn-ghost btn-sm" id="manualSaveBtn" onclick="manualSave()" title="Forcer une sauvegarde maintenant (Ctrl+S)">💾 Sauver</button>
+    <button class="btn btn-ghost btn-sm" onclick="exportDBBackup()" title="Télécharger une sauvegarde complète (JSON)">⬇ Export</button>
     <span id="time-v" style="font-size:10px;color:var(--muted)"></span>
     <button class="btn btn-ghost btn-sm" onclick="window.print()">🖨 Imprimer</button>
   </div>
@@ -802,6 +809,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-ghost btn-sm" onclick="addBCL()">+ Ajouter ligne</button>
       <button class="btn btn-ghost btn-sm" onclick="addBCHeader()" style="border-color:rgba(244,63,94,0.4);color:var(--red)">+ Titre de section</button>
+      <button class="btn btn-ghost btn-sm" id="bcUndoBtn" onclick="doUndo()" title="Annuler la dernière suppression" disabled style="opacity:0.5;color:#fcd34d;border-color:rgba(252,211,77,0.3)">↶ Annuler suppression</button>
       <span style="font-size:9px;color:var(--muted);font-style:italic">Les titres regroupent visuellement les lignes (ex: « AMS WIRELESS VIBRATION MONITOR POC STARTER KIT »)</span>
     </div>
     <table class="items-tbl"><thead><tr><th>#</th><th>Réf.</th><th style="min-width:170px">Description</th><th>Qté</th><th>PU</th><th>Montant</th><th></th></tr></thead>
@@ -1115,7 +1123,146 @@ function defDB(){
     }
   };
 }
-function saveDB(){try{localStorage.setItem('ci_grc3',JSON.stringify(DB));}catch(e){}}
+function saveDB(){
+  try{
+    var json=JSON.stringify(DB);
+    localStorage.setItem('ci_grc3',json);
+    var now=new Date().toISOString();
+    localStorage.setItem('ci_grc3_lastSave',now);
+    localStorage.setItem('ci_grc3_backup',json);
+    localStorage.setItem('ci_grc3_backup_time',now);
+  }catch(e){
+    console.warn('saveDB failed:',e);
+    try{alert('⚠ Sauvegarde échouée (stockage plein?). Exportez vos données via le bouton Export.');}catch(e2){}
+  }
+}
+
+// ===== GLOBAL UNDO SYSTEM =====
+// Pile d'undo unifiée pour toute l'app. Chaque entrée = {label, revert, ts}.
+var undoStack=[];
+var UNDO_MAX=100;
+function pushUndo(label,revertFn){
+  if(typeof revertFn!=='function')return;
+  undoStack.push({label:label||'suppression',revert:revertFn,ts:Date.now()});
+  if(undoStack.length>UNDO_MAX)undoStack.shift();
+  updateUndoUI();
+}
+function doUndo(){
+  if(!undoStack.length)return;
+  var last=undoStack.pop();
+  try{last.revert();}catch(e){console.warn('Undo failed:',e);alert('Impossible d\'annuler : '+e.message);}
+  updateUndoUI();
+}
+function clearUndo(){undoStack=[];updateUndoUI();}
+function updateUndoUI(){
+  var gbtn=document.getElementById('globalUndoBtn');
+  if(gbtn){
+    if(undoStack.length){
+      gbtn.disabled=false;gbtn.style.opacity='1';
+      gbtn.title='Annuler : '+undoStack[undoStack.length-1].label+' ('+undoStack.length+' étape'+(undoStack.length>1?'s':'')+' disponible'+(undoStack.length>1?'s':'')+')';
+      var cnt=document.getElementById('globalUndoCount');
+      if(cnt)cnt.textContent=undoStack.length>1?('('+undoStack.length+')'):'';
+    } else {
+      gbtn.disabled=true;gbtn.style.opacity='0.4';
+      gbtn.title='Aucune action à annuler';
+      var cnt2=document.getElementById('globalUndoCount');if(cnt2)cnt2.textContent='';
+    }
+  }
+  var btn=document.getElementById('bcUndoBtn');if(btn){
+    if(undoStack.length){btn.disabled=false;btn.style.opacity='1';btn.title='Annuler : '+undoStack[undoStack.length-1].label+' ('+undoStack.length+')';}
+    else{btn.disabled=true;btn.style.opacity='0.5';btn.title='Aucune action à annuler';}
+  }
+}
+
+// ===== AUTO-SAVE =====
+// - Sauvegarde périodique complète de la DB (30 s)
+// - Sauvegarde brouillon du BC/Devis en cours d'édition (10 s) pour récupération en cas de crash
+// - Sauvegarde avant fermeture d'onglet
+// - Indicateur visuel + bouton manuel + raccourci Ctrl+S
+var AUTOSAVE_INTERVAL=30000;
+var DRAFT_INTERVAL=10000;
+function autoSaveTick(){try{saveDB();setAutoSaveIndicator('ok');}catch(e){setAutoSaveIndicator('err');}}
+function draftSaveTick(){
+  try{
+    var bcOpen=document.getElementById('mBC');
+    if(bcOpen&&bcOpen.classList.contains('open')&&typeof bcL!=='undefined'&&(bcL.length||gvg('bc-num'))){
+      var draft={ts:new Date().toISOString(),id:(typeof eBCid!=='undefined'?eBCid:null),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref:gvg('bc-cref'),prop:gvg('bc-prop'),notes:gvg('bc-notes'),lines:bcL};
+      localStorage.setItem('ci_grc3_draft_bc',JSON.stringify(draft));
+    }
+    var dvOpen=document.getElementById('mDV');
+    if(dvOpen&&dvOpen.classList.contains('open')&&typeof dvL!=='undefined'&&dvL&&(dvL.fourniture&&(dvL.fourniture.length||dvL.service.length||dvL.fret.length))){
+      var dvDraft={ts:new Date().toISOString(),id:(typeof eDVid!=='undefined'?eDVid:null),lines:dvL};
+      try{dvDraft.num=gvg('dv-num');dvDraft.client=gvg('dv-client');dvDraft.objet=gvg('dv-objet');}catch(e){}
+      localStorage.setItem('ci_grc3_draft_dv',JSON.stringify(dvDraft));
+    }
+  }catch(e){console.warn('draftSave failed:',e);}
+}
+function setAutoSaveIndicator(state){
+  var el=document.getElementById('autoSaveDot');if(!el)return;
+  var now=new Date();
+  var hh=String(now.getHours()).padStart(2,'0'),mm=String(now.getMinutes()).padStart(2,'0'),ss=String(now.getSeconds()).padStart(2,'0');
+  var ind=document.getElementById('autoSaveIndicator');
+  if(state==='ok'){el.style.background='var(--teal)';if(ind)ind.title='✓ Sauvegardé à '+hh+':'+mm+':'+ss;}
+  else if(state==='err'){el.style.background='var(--red)';if(ind)ind.title='⚠ Erreur de sauvegarde à '+hh+':'+mm+':'+ss;}
+  else {el.style.background='#f59e0b';if(ind)ind.title='Sauvegarde en cours…';}
+}
+function manualSave(){
+  saveDB();
+  setAutoSaveIndicator('ok');
+  try{
+    var btn=document.getElementById('manualSaveBtn');
+    if(btn){var orig=btn.innerHTML;btn.innerHTML='✓ Sauvegardé';btn.style.background='var(--teal)';btn.style.color='#fff';setTimeout(function(){btn.innerHTML=orig;btn.style.background='';btn.style.color='';},1500);}
+  }catch(e){}
+}
+function clearBCDraft(){try{localStorage.removeItem('ci_grc3_draft_bc');}catch(e){}}
+function clearDVDraft(){try{localStorage.removeItem('ci_grc3_draft_dv');}catch(e){}}
+function checkDraftRecovery(){
+  try{
+    var bcDraftRaw=localStorage.getItem('ci_grc3_draft_bc');
+    if(bcDraftRaw){
+      var bcDraft=JSON.parse(bcDraftRaw);
+      var age=Math.round((new Date()-new Date(bcDraft.ts))/60000);
+      if(age<60*24*7){
+        var msg='📋 Un brouillon de BC non sauvegardé a été trouvé :\n\n';
+        msg+='• N° : '+(bcDraft.num||'(non défini)')+'\n';
+        msg+='• Client : '+(bcDraft.clientFinal||'—')+'\n';
+        msg+='• Lignes : '+((bcDraft.lines||[]).length)+'\n';
+        msg+='• Daté du : '+new Date(bcDraft.ts).toLocaleString('fr-FR')+'\n\n';
+        msg+='Voulez-vous le restaurer ?';
+        if(confirm(msg)){
+          setTimeout(function(){
+            try{
+              eBCid=bcDraft.id||null;bcL=bcDraft.lines||[];
+              om('mBC');
+              gv('bc-num',bcDraft.num||'');gv('bc-date',bcDraft.date||td());gv('bc-devise',bcDraft.devise||'AUD');
+              gv('bc-status',bcDraft.status||'En attente');gv('bc-client-final',bcDraft.clientFinal||'');
+              gv('bc-cref',bcDraft.cref||'');gv('bc-prop',bcDraft.prop||'');gv('bc-notes',bcDraft.notes||'');
+              if(typeof populateBCDevisSelect==='function')populateBCDevisSelect();
+              rBClines();
+              sv('mBCtitle','Brouillon restauré — '+(bcDraft.num||'BC'));
+            }catch(e){console.warn('Recovery failed:',e);}
+          },300);
+        } else {
+          localStorage.removeItem('ci_grc3_draft_bc');
+        }
+      } else {
+        localStorage.removeItem('ci_grc3_draft_bc');
+      }
+    }
+  }catch(e){console.warn('draft recovery failed:',e);}
+}
+function exportDBBackup(){
+  try{
+    var data=JSON.stringify(DB,null,2);
+    var blob=new Blob([data],{type:'application/json'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url;
+    a.download='calinstrum_grc_backup_'+new Date().toISOString().replace(/[:.]/g,'-').substring(0,19)+'.json';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }catch(e){alert('Export échoué : '+e.message);}
+}
 var DB=loadDB();
 var invoices=DB.invoices||[];
 
@@ -1605,6 +1752,16 @@ function saveSUIVI(){
 }
 function delInv(id){
   if(!confirm('Supprimer cette facture ?'))return;
+  var idx=invoices.findIndex(function(x){return x.id===id;});
+  if(idx<0)return;
+  var removed=JSON.parse(JSON.stringify(invoices[idx]));
+  var removedIdx=idx;
+  var lbl=removed.num||('facture #'+id);
+  pushUndo('Suppr. facture (Suivi) « '+lbl+' »',function(){
+    var insertAt=Math.min(removedIdx,invoices.length);
+    invoices.splice(insertAt,0,removed);
+    DB.invoices=invoices;saveDB();renderSuivi();rDash();
+  });
   invoices=invoices.filter(function(x){return x.id!==id;});
   DB.invoices=invoices;saveDB();renderSuivi();
 }
@@ -1913,7 +2070,18 @@ function addParam(key){
   if(p[key].indexOf(inp.value.trim())<0){p[key].push(inp.value.trim());saveDB();inp.value='';renderParams();rebuildAllParamSelects();}
 }
 function delParam(key,idx){
-  var p=getParams();if(p[key])p[key].splice(idx,1);
+  var p=getParams();
+  if(p[key]&&p[key][idx]!=null){
+    var removed=p[key][idx];
+    var removedIdx=idx;
+    pushUndo('Suppr. paramètre « '+removed+' » ('+key+')',function(){
+      var pp=getParams();
+      if(!pp[key])pp[key]=[];
+      pp[key].splice(Math.min(removedIdx,pp[key].length),0,removed);
+      saveDB();renderParams();rebuildAllParamSelects();
+    });
+    p[key].splice(idx,1);
+  }
   saveDB();renderParams();rebuildAllParamSelects();
 }
 // ===== DEVIS LINES =====
@@ -2008,7 +2176,16 @@ function rDVlines(){
     tb.querySelectorAll('.dv-del-btn').forEach(function(btn){
       btn.addEventListener('click',function(){
         var sec2=this.getAttribute('data-sec'),idx=parseInt(this.getAttribute('data-idx'));
-        if(sec2&&!isNaN(idx)){dvL[sec2].splice(idx,1);rDVlines();}
+        if(sec2&&!isNaN(idx)){
+          var snap=JSON.parse(JSON.stringify(dvL));
+          var removed=dvL[sec2][idx];
+          var lbl='ligne devis « '+((removed&&(removed.ref||removed.designation))||'(vide)')+' » ('+sec2+')';
+          pushUndo('Suppr. '+lbl,function(){
+            dvL=snap;
+            if(document.getElementById('mDV').classList.contains('open'))rDVlines();
+          });
+          dvL[sec2].splice(idx,1);rDVlines();
+        }
       });
     });
   });
@@ -2142,7 +2319,19 @@ function rFAlines(){
     });
   });
   tb.querySelectorAll('.fa-del-btn').forEach(function(btn){
-    btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx)){faL.splice(idx,1);rFAlines();}});
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      if(!isNaN(idx)){
+        var snap=JSON.parse(JSON.stringify(faL));
+        var removed=faL[idx];
+        var lbl='ligne facture « '+((removed&&(removed.ref||removed.desc||removed.designation))||'(vide)')+' »';
+        pushUndo('Suppr. '+lbl,function(){
+          faL=snap;
+          if(document.getElementById('mFA').classList.contains('open'))rFAlines();
+        });
+        faL.splice(idx,1);rFAlines();
+      }
+    });
   });
   cFAtot();
 }
@@ -2869,6 +3058,13 @@ function addBCKitSubLine(itemIdx){
 function deleteBCKitSubLine(itemIdx, subIdx){
   var l=bcL[itemIdx];
   if(!l||!Array.isArray(l.subLines)) return;
+  var sub=l.subLines[subIdx];if(!sub)return;
+  var snap=JSON.parse(JSON.stringify(bcL));
+  var lbl='sous-ligne « '+((sub.ref||sub.desc)||'(vide)')+' »';
+  pushUndo('Suppr. '+lbl,function(){
+    bcL=snap;
+    if(document.getElementById('mBC').classList.contains('open'))rBClines();
+  });
   l.subLines.splice(subIdx,1);
   rBClines();
 }
@@ -2982,7 +3178,21 @@ function rBClines(){
     });
   });
   tb.querySelectorAll('.bc-del-btn').forEach(function(btn){
-    btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx)){bcL.splice(idx,1);rBClines();}});
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      if(!isNaN(idx)){
+        var snap=JSON.parse(JSON.stringify(bcL));
+        var removed=bcL[idx];
+        var lbl;
+        if(removed&&removed.type==='header')lbl='section « '+(removed.desc||'(sans titre)')+' »';
+        else lbl='ligne BC « '+((removed&&(removed.ref||removed.desc))||'(vide)')+' »';
+        pushUndo('Suppr. '+lbl,function(){
+          bcL=snap;
+          if(document.getElementById('mBC').classList.contains('open'))rBClines();
+        });
+        bcL.splice(idx,1);rBClines();
+      }
+    });
   });
   tb.querySelectorAll('.bc-up-btn').forEach(function(btn){
     btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx))moveBCLine(idx,-1);});
@@ -3100,7 +3310,7 @@ function saveBC(){
   var b=getBC();if(!b.num){alert('N° PO manquant');return;}
   if(eBCid){var i=DB.bcs.findIndex(function(x){return x.id===eBCid;});if(i>=0)DB.bcs[i]=b;else DB.bcs.push(b);}
   else DB.bcs.push(b);
-  saveDB();cm('mBC');renderBC();rDash();renderHist();
+  saveDB();clearBCDraft();cm('mBC');renderBC();rDash();renderHist();
 }
 function renderBC(){
   var s=(gvg('sBC')||'').toLowerCase(),fs=gvg('fBCst');
@@ -3160,7 +3370,19 @@ function rBLlines(){
     });
   });
   tb.querySelectorAll('.bl-del-btn').forEach(function(btn){
-    btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx)){blL.splice(idx,1);rBLlines();}});
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      if(!isNaN(idx)){
+        var snap=JSON.parse(JSON.stringify(blL));
+        var removed=blL[idx];
+        var lbl='ligne BL « '+((removed&&(removed.ref||removed.desc))||'(vide)')+' »';
+        pushUndo('Suppr. '+lbl,function(){
+          blL=snap;
+          if(document.getElementById('mBL').classList.contains('open'))rBLlines();
+        });
+        blL.splice(idx,1);rBLlines();
+      }
+    });
   });
   cBLtot();
 }
@@ -3304,6 +3526,13 @@ function updFC(id,arr){
 }
 function delDoc(col,id){
   if(!confirm('Supprimer ce document?'))return;
+  // Snapshot pour l'undo
+  var idx=DB[col].findIndex(function(x){return x.id===id;});
+  if(idx<0)return;
+  var removedDoc=JSON.parse(JSON.stringify(DB[col][idx]));
+  var removedIdx=idx;
+  var removedSuivi=null;
+  var removedSuiviIdx=-1;
   // Si c'est une facture GRC avec un suivi lié, demander si on le supprime aussi
   if(col==='factures'){
     var f=DB.factures.find(function(x){return x.id===id;});
@@ -3311,12 +3540,30 @@ function delDoc(col,id){
       var suivi=(DB.invoices||[]).find(function(x){return x.id===f.suiviId;});
       if(suivi){
         if(confirm('Cette facture est liée à une entrée du Suivi Factures ('+suivi.num+'). Supprimer aussi l\'entrée du suivi ?\n\n[OK] = Supprimer les deux\n[Annuler] = Garder le suivi (la trace reste)')){
+          removedSuiviIdx=DB.invoices.findIndex(function(x){return x.id===f.suiviId;});
+          removedSuivi=JSON.parse(JSON.stringify(suivi));
           DB.invoices=DB.invoices.filter(function(x){return x.id!==f.suiviId;});
           invoices=DB.invoices;
         }
       }
     }
   }
+  var docLabel=removedDoc.num||('doc #'+id);
+  var colLabel={devis:'Devis',factures:'Facture',bcs:'BC',bls:'BL',articles:'Article'}[col]||col;
+  pushUndo('Suppr. '+colLabel+' « '+docLabel+' »',function(){
+    var insertAt=Math.min(removedIdx,DB[col].length);
+    DB[col].splice(insertAt,0,removedDoc);
+    if(removedSuivi){
+      var si=Math.min(removedSuiviIdx>=0?removedSuiviIdx:DB.invoices.length,DB.invoices.length);
+      DB.invoices.splice(si,0,removedSuivi);
+      invoices=DB.invoices;
+    }
+    saveDB();
+    if(col==='devis')renderDV();if(col==='factures')renderFA();if(col==='bcs')renderBC();if(col==='bls')renderBL();if(col==='articles')renderART();
+    rDash();
+    if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+    if(typeof renderHist==='function'){try{renderHist();}catch(e){}}
+  });
   DB[col]=DB[col].filter(function(x){return x.id!==id;});
   saveDB();
   if(col==='devis')renderDV();if(col==='factures')renderFA();if(col==='bcs')renderBC();if(col==='bls')renderBL();if(col==='articles')renderART();
@@ -4135,6 +4382,23 @@ document.addEventListener('DOMContentLoaded',function(){
   document.querySelectorAll('.modal-overlay').forEach(function(o){
     o.addEventListener('click',function(e){if(e.target===o)o.classList.remove('open');});
   });
+  // ===== AUTO-SAVE + UNDO init =====
+  setInterval(autoSaveTick,AUTOSAVE_INTERVAL);
+  setInterval(draftSaveTick,DRAFT_INTERVAL);
+  setAutoSaveIndicator('ok');
+  updateUndoUI();
+  // Save before tab close
+  window.addEventListener('beforeunload',function(){try{saveDB();draftSaveTick();}catch(e){}});
+  // Shortcuts: Ctrl+S = save, Ctrl+Z = undo (only when not in text field)
+  document.addEventListener('keydown',function(e){
+    if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();manualSave();}
+    if((e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='Z')){
+      var t=e.target;var isField=t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);
+      if(!isField&&undoStack.length){e.preventDefault();doUndo();}
+    }
+  });
+  // Draft recovery (if a BC edit was lost after crash/close)
+  setTimeout(checkDraftRecovery,500);
 });
 </script>
 
