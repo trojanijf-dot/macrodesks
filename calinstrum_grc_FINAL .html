@@ -3464,9 +3464,32 @@ function onBCDevisLie(){
 }
 function saveBC(){
   var b=getBC();if(!b.num){alert('N° PO manquant');return;}
+  var wasNew=!eBCid;
   if(eBCid){var i=DB.bcs.findIndex(function(x){return x.id===eBCid;});if(i>=0)DB.bcs[i]=b;else DB.bcs.push(b);}
-  else DB.bcs.push(b);
-  saveDB();clearBCDraft();cm('mBC');renderBC();rDash();renderHist();
+  else {DB.bcs.push(b);eBCid=b.id;} // IMPORTANT : mémoriser l'ID pour que re-sauvegarder ne crée pas de doublon
+  saveDB();clearBCDraft();
+  // Si c'était un nouveau BC, on met à jour le titre du modal (passe de "Nouveau..." à "Modifier...")
+  if(wasNew) sv('mBCtitle','Modifier BC — '+b.num);
+  // Rafraîchir les listes en arrière-plan sans fermer le modal
+  renderBC();rDash();renderHist();
+  // Petit toast de confirmation en haut à droite
+  showBCSaveToast(wasNew?'BC créé ✓':'Modifications enregistrées ✓');
+}
+// Toast temporaire de confirmation (disparaît automatiquement)
+function showBCSaveToast(msg){
+  var old=document.getElementById('bcSaveToast');if(old)old.remove();
+  var t=document.createElement('div');
+  t.id='bcSaveToast';
+  t.textContent=msg;
+  t.style.cssText='position:fixed;top:20px;right:20px;background:#10b981;color:#fff;padding:12px 18px;border-radius:6px;font-family:sans-serif;font-size:13px;font-weight:700;z-index:99999;box-shadow:0 4px 20px rgba(0,0,0,0.4);opacity:0;transform:translateY(-10px);transition:opacity .25s,transform .25s';
+  document.body.appendChild(t);
+  // Apparition
+  requestAnimationFrame(function(){t.style.opacity='1';t.style.transform='translateY(0)';});
+  // Disparition après 2s
+  setTimeout(function(){
+    t.style.opacity='0';t.style.transform='translateY(-10px)';
+    setTimeout(function(){if(t.parentNode)t.remove();},250);
+  },2000);
 }
 function renderBC(){
   var s=(gvg('sBC')||'').toLowerCase(),fs=gvg('fBCst');
