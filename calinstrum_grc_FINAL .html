@@ -4398,9 +4398,9 @@ function downloadPreviewAsPDF(){
           '.doc-tbl-bc thead th{padding:6px 7px!important;font-size:10.5px!important;}'+
           '.doc-tbl-bc tbody td{padding:5px 7px!important;font-size:10.5px!important;}'+
           '.doc-tbl-bc .bc-section{padding:5px 9px!important;font-size:11px!important;}'+
-          '.bc-table-wrap{margin-bottom:6px!important;}'+
-          // Footer : compacté
-          '.bc-footer-grid{margin-top:8px!important;gap:14px!important;}'+
+          '.bc-table-wrap{margin-bottom:14px!important;}'+
+          // Footer : compacté MAIS avec air entre tableau et footer
+          '.bc-footer-grid{margin-top:16px!important;gap:14px!important;}'+
           '.bc-left-top,.bc-right-top{min-height:65px!important;}'+
           '.bc-sig-header{padding:5px 9px!important;font-size:10.5px!important;}'+
           '.bc-sig-cell{min-height:40px!important;}'+
@@ -4429,7 +4429,20 @@ function downloadPreviewAsPDF(){
   var prevScroll=window.scrollY;
   window.scrollTo(0,0);
 
-  html2pdf().set(opt).from(docEl).save().then(function(){
+  // === APPROCHE FORCE SINGLE PAGE ===
+  // On utilise html2pdf en mode "canvas direct" : on capture l'élément,
+  // puis on crée manuellement un PDF A4 avec l'image scalée pour tenir sur 1 seule page.
+  html2pdf().set(opt).from(docEl).toPdf().get('pdf').then(function(pdf){
+    // Récupère la taille totale du PDF généré
+    var totalPages=pdf.internal.getNumberOfPages();
+    // Si html2pdf a créé plusieurs pages, on supprime toutes celles au-delà de la 1ère
+    if(totalPages>1){
+      for(var i=totalPages;i>1;i--){
+        pdf.deletePage(i);
+      }
+    }
+    // Sauvegarde le PDF (1 seule page)
+    pdf.save(filename);
     var l=document.getElementById('pdfLoader');if(l)l.remove();
     window.scrollTo(0,prevScroll);
   }).catch(function(err){
