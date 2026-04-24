@@ -4325,7 +4325,8 @@ var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;p
 // Utilise html2pdf.js pour capturer le DOM de l'aperçu EXACTEMENT tel qu'il
 // s'affiche à l'écran, sans passer par le moteur d'impression du navigateur
 // (qui re-layoute et dégrade la qualité).
-// Scale 3x = résolution ~300dpi (qualité pro)
+// Scale 4x = résolution ~400dpi (qualité pro max)
+// Format PNG (pas de compression) + largeur forcée 190mm pour tenir dans A4
 function downloadPreviewAsPDF(){
   var c=document.getElementById('prvBody');
   if(!c){alert('Aucun aperçu à télécharger.');return;}
@@ -4335,49 +4336,84 @@ function downloadPreviewAsPDF(){
   }
   var titleEl=document.getElementById('prvTitle');
   var docTitle=titleEl?titleEl.textContent:'CALINSTRUM';
-  // Nom de fichier propre (enlève caractères spéciaux)
   var filename=docTitle.replace(/[^a-zA-Z0-9_\-]/g,'_').replace(/_+/g,'_')+'.pdf';
 
-  // Cloner le noeud d'aperçu pour pouvoir le manipuler sans affecter l'UI
-  var clone=c.cloneNode(true);
-  clone.style.cssText='background:#fff;width:210mm;padding:0;margin:0;box-sizing:border-box;';
+  // === Préparation du clone avec largeur A4 forcée ===
+  // A4 portrait = 210mm. Avec marges 10mm de chaque côté → largeur utile = 190mm
+  // À 96 DPI (standard écran), 190mm = 718px
+  // On force la largeur pour que le layout tienne PARFAITEMENT dans la page sans débordement.
+  var A4_WIDTH_PX = 718; // 190mm * 96/25.4
 
-  // Afficher un indicateur de progression
+  // Créer un conteneur temporaire qu'on ajoutera au DOM (nécessaire pour que html2canvas mesure correctement)
+  var wrapper=document.createElement('div');
+  wrapper.id='pdfExportWrapper';
+  wrapper.style.cssText='position:fixed;top:-99999px;left:0;width:'+A4_WIDTH_PX+'px;background:#fff;font-family:Helvetica,Arial,sans-serif;z-index:-1;';
+
+  var clone=c.cloneNode(true);
+  // Forcer le clone à prendre TOUTE la largeur du wrapper (A4 utile)
+  clone.style.cssText='background:#fff;width:100%;max-width:100%;padding:0;margin:0;box-sizing:border-box;font-family:Helvetica,Arial,sans-serif;';
+
+  // Dans le clone, forcer les tableaux BC à utiliser 100% de la largeur disponible
+  // et réduire les tailles qui pourraient causer un débordement
+  var bcTables=clone.querySelectorAll('.doc-tbl-bc,.bc-table-wrap');
+  bcTables.forEach(function(t){
+    t.style.width='100%';
+    t.style.maxWidth='100%';
+    t.style.tableLayout='fixed';
+  });
+  // Forcer toutes les images à rester dans le cadre
+  var imgs=clone.querySelectorAll('img');
+  imgs.forEach(function(im){im.style.maxWidth='100%';im.style.height='auto';});
+
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+
+  // Indicateur de progression
   var loader=document.createElement('div');
   loader.id='pdfLoader';
-  loader.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);color:#fff;padding:24px 36px;border-radius:8px;z-index:99999;font-size:14px;font-weight:700;font-family:sans-serif;box-shadow:0 10px 30px rgba(0,0,0,0.5)';
-  loader.innerHTML='🔄 Génération du PDF en cours...<br><span style="font-size:11px;font-weight:400;opacity:0.8">Cela peut prendre quelques secondes</span>';
+  loader.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.88);color:#fff;padding:24px 36px;border-radius:8px;z-index:99999;font-size:14px;font-weight:700;font-family:sans-serif;box-shadow:0 10px 30px rgba(0,0,0,0.5);text-align:center';
+  loader.innerHTML='🔄 Génération PDF Haute Définition...<br><span style="font-size:11px;font-weight:400;opacity:0.8;display:block;margin-top:6px">Scale 4x / ~400 DPI — patientez 3 à 5 secondes</span>';
   document.body.appendChild(loader);
 
-  // Options html2pdf — scale 3x pour qualité haute définition
+  // Options html2pdf — qualité MAXIMALE
   var opt={
-    margin:       [8, 10, 8, 10],
+    margin:       [10, 10, 10, 10], // marges uniformes 10mm (égales de chaque côté)
     filename:     filename,
-    image:        { type: 'jpeg', quality: 0.98 },
+    image:        { type: 'png', quality: 1.0 }, // PNG = pas de compression = texte plus net que JPEG
     html2canvas:  {
-      scale: 3,
+      scale: 4,                    // 4x = ~400 DPI (qualité imprimante pro)
       useCORS: true,
       letterRendering: true,
       allowTaint: false,
       backgroundColor: '#ffffff',
-      logging: false
+      logging: false,
+      windowWidth: A4_WIDTH_PX,    // force le viewport à la largeur A4 pour que le layout soit calculé correctement
+      width: A4_WIDTH_PX,          // largeur du canvas = largeur cible exacte
+      imageTimeout: 15000,         // laisser le temps aux images de charger
+      removeContainer: true
     },
     jsPDF:        {
       unit: 'mm',
       format: 'a4',
       orientation: 'portrait',
-      compress: true
+      compress: true,
+      hotfixes: ['px_scaling']
     },
     pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
   };
 
-  html2pdf().set(opt).from(clone).save().then(function(){
-    var l=document.getElementById('pdfLoader');if(l)l.remove();
-  }).catch(function(err){
-    console.error('Erreur génération PDF:',err);
-    var l=document.getElementById('pdfLoader');if(l)l.remove();
-    alert('Erreur lors de la génération du PDF :\n'+(err.message||err));
-  });
+  // Laisser le navigateur faire le layout avant capture
+  setTimeout(function(){
+    html2pdf().set(opt).from(clone).save().then(function(){
+      var l=document.getElementById('pdfLoader');if(l)l.remove();
+      var w=document.getElementById('pdfExportWrapper');if(w)w.remove();
+    }).catch(function(err){
+      console.error('Erreur génération PDF:',err);
+      var l=document.getElementById('pdfLoader');if(l)l.remove();
+      var w=document.getElementById('pdfExportWrapper');if(w)w.remove();
+      alert('Erreur lors de la génération du PDF :\n'+(err.message||err));
+    });
+  },150);
 }
 
 function doPrint(){
