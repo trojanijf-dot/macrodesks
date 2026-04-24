@@ -161,13 +161,15 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .doc-tbl-bc .th-pu{text-align:right;width:90px}
 .doc-tbl-bc .th-ext{text-align:right;width:100px}
 /* Par défaut : PAS de gras (évite bug i/l à petite taille) */
-.doc-tbl-bc tbody td{padding:8px 10px;border:1px solid #cbd5e1;vertical-align:middle;font-weight:400;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111}
-.doc-tbl-bc .bc-item{text-align:center;font-weight:700;font-size:12.5px;color:#111}
-.doc-tbl-bc .bc-qty,.doc-tbl-bc .bc-sub-qty{text-align:center;color:#111;font-size:11.5px;font-weight:400}
-.doc-tbl-bc .bc-ref,.doc-tbl-bc .bc-sub-ref{color:#111;font-size:11.5px;font-weight:400;white-space:nowrap;letter-spacing:.02em}
-.doc-tbl-bc .bc-desc,.doc-tbl-bc .bc-sub-desc{color:#111;font-size:11.5px;font-weight:400;line-height:1.45}
-.doc-tbl-bc .bc-pu{text-align:right;white-space:nowrap;font-size:11.5px;color:#111;font-variant-numeric:tabular-nums;font-weight:400}
-.doc-tbl-bc .bc-ext{text-align:right;white-space:nowrap;font-weight:700;font-size:12px;color:#111;background:#f8fafc;font-variant-numeric:tabular-nums;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+/* vertical-align:top avec padding haut/bas égal → texte bien lisible même sur plusieurs lignes */
+.doc-tbl-bc tbody td{padding:10px 10px 10px 10px;border:1px solid #cbd5e1;vertical-align:middle;font-weight:400;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#111}
+.doc-tbl-bc .bc-item{text-align:center;font-weight:700;font-size:12.5px;color:#111;vertical-align:middle}
+.doc-tbl-bc .bc-qty,.doc-tbl-bc .bc-sub-qty{text-align:center;color:#111;font-size:11.5px;font-weight:400;vertical-align:middle}
+.doc-tbl-bc .bc-ref,.doc-tbl-bc .bc-sub-ref{color:#111;font-size:11.5px;font-weight:400;white-space:nowrap;letter-spacing:.02em;vertical-align:middle}
+/* bc-desc : vertical-align:top pour garantir que la 1ère ligne ne soit pas coupée en haut */
+.doc-tbl-bc .bc-desc,.doc-tbl-bc .bc-sub-desc{color:#111;font-size:11.5px;font-weight:400;line-height:1.45;vertical-align:top;padding-top:11px}
+.doc-tbl-bc .bc-pu{text-align:right;white-space:nowrap;font-size:11.5px;color:#111;font-variant-numeric:tabular-nums;font-weight:400;vertical-align:middle}
+.doc-tbl-bc .bc-ext{text-align:right;white-space:nowrap;font-weight:700;font-size:12px;color:#111;background:#f8fafc;font-variant-numeric:tabular-nums;vertical-align:middle;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .doc-tbl-bc .bc-section{text-align:left;background:#e8eff7;font-weight:700;font-size:12px;color:#1e3a5f;letter-spacing:.04em;padding:8px 11px;border:1px solid #cbd5e1;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .bc-footer-grid{display:flex;flex-direction:row;gap:20px;margin-top:14px;align-items:stretch;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}
 .bc-footer-left{flex:1 1 50%;display:flex;flex-direction:column}
@@ -823,10 +825,6 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div class="form-group"><label>Fret Terms</label><select class="form-select" id="bc-fret"><option value="">—</option><option>Collect</option></select></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>Customer Ref #</label><input class="form-input" id="bc-cref"></div>
-      <div class="form-group"><label>Emerson Proposal N°</label><input class="form-input" id="bc-prop"></div>
-    </div>
-    <div class="form-row">
       <div class="form-group"><label>Statut</label>
         <select class="form-select" id="bc-status"><option>En attente</option><option>Confirmé</option><option>Livré</option><option>Annulé</option></select>
       </div>
@@ -1223,7 +1221,7 @@ function draftSaveTick(){
   try{
     var bcOpen=document.getElementById('mBC');
     if(bcOpen&&bcOpen.classList.contains('open')&&typeof bcL!=='undefined'&&(bcL.length||gvg('bc-num'))){
-      var draft={ts:new Date().toISOString(),id:(typeof eBCid!=='undefined'?eBCid:null),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref:gvg('bc-cref'),prop:gvg('bc-prop'),notes:gvg('bc-notes'),lines:bcL};
+      var draft={ts:new Date().toISOString(),id:(typeof eBCid!=='undefined'?eBCid:null),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),prop2:gvg('bc-prop2'),notes:gvg('bc-notes'),lines:bcL};
       localStorage.setItem('ci_grc3_draft_bc',JSON.stringify(draft));
     }
     var dvOpen=document.getElementById('mDV');
@@ -1273,7 +1271,7 @@ function checkDraftRecovery(){
               om('mBC');
               gv('bc-num',bcDraft.num||'');gv('bc-date',bcDraft.date||td());gv('bc-devise',bcDraft.devise||'AUD');
               gv('bc-status',bcDraft.status||'En attente');gv('bc-client-final',bcDraft.clientFinal||'');
-              gv('bc-cref',bcDraft.cref||'');gv('bc-prop',bcDraft.prop||'');gv('bc-notes',bcDraft.notes||'');
+              gv('bc-cref2',bcDraft.cref2||bcDraft.cref||'');gv('bc-prop2',bcDraft.prop2||bcDraft.prop||'');gv('bc-notes',bcDraft.notes||'');
               if(typeof populateBCDevisSelect==='function')populateBCDevisSelect();
               rBClines();
               sv('mBCtitle','Brouillon restauré — '+(bcDraft.num||'BC'));
@@ -3120,9 +3118,9 @@ function openBC(id){
   eBCid=id||null;bcL=[];rebuildAllParamSelects();
   if(id){
     var b=DB.bcs.find(function(x){return x.id===id;});
-    if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-cref',b.cref||'');gv('bc-prop',b.prop||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:'');gv('bc-prop2',b.prop2!=null?b.prop2:'');gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
+    if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:(b.cref||''));gv('bc-prop2',b.prop2!=null?b.prop2:(b.prop||''));gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
-    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-cref','');gv('bc-prop','');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');gv('bc-prop2','');gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');sv('mBCtitle','Nouveau BC — Emerson');
+    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');gv('bc-prop2','');gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');sv('mBCtitle','Nouveau BC — Emerson');
   }
   rBClines();om('mBC');
 }
@@ -3439,7 +3437,7 @@ function cBCtot(){
   sv('bcDeviseLbl','Total Amount ('+dv+')');
   return{sub:sub,disc:discAmt,sales:salesAmt,other:other,ship:ship,total:total};
 }
-function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),cref:gvg('bc-cref'),prop:gvg('bc-prop'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),prop2:gvg('bc-prop2'),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr')};}
+function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),prop2:gvg('bc-prop2'),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr')};}
 function populateBCDevisSelect(){
   var sel=document.getElementById('bc-devis-lie');
   if(!sel)return;
@@ -4002,8 +4000,9 @@ function bBC(b){
           '<div class="bc-sig-cell"></div>'+
         '</div>'+
         '<div class="bc-refs">'+
-          (b.cref2?'<strong>Customer Ref #:</strong> '+esc(b.cref2)+'<br>':'')+
-          (b.prop2?'<strong>Emerson Proposal:</strong> '+esc(b.prop2):'')+
+          // Affichage du Customer Ref # et Emerson Proposal (avec fallback sur l'ancien champ pour les BC historiques)
+          ((b.cref2||b.cref)?'<strong>Customer Ref #:</strong> '+esc(b.cref2||b.cref)+'<br>':'')+
+          ((b.prop2||b.prop)?'<strong>Emerson Proposal:</strong> '+esc(b.prop2||b.prop):'')+
         '</div>'+
       '</div>'+
       '<div class="bc-footer-right">'+
@@ -4441,7 +4440,10 @@ function downloadPreviewAsPDF(){
           // Tableau BC : padding réduit
           '.doc-tbl-bc{font-size:10.5px!important;}'+
           '.doc-tbl-bc thead th{padding:6px 7px!important;font-size:10.5px!important;}'+
-          '.doc-tbl-bc tbody td{padding:5px 7px!important;font-size:10.5px!important;}'+
+          '.doc-tbl-bc tbody td{padding:7px 7px!important;font-size:10.5px!important;}'+
+          // Descriptions : texte collé en haut de la cellule (évite troncature visuelle quand texte multi-lignes)
+          '.doc-tbl-bc .bc-desc,.doc-tbl-bc .bc-sub-desc{vertical-align:top!important;padding-top:8px!important;line-height:1.4!important;}'+
+          '.doc-tbl-bc .bc-item,.doc-tbl-bc .bc-qty,.doc-tbl-bc .bc-sub-qty,.doc-tbl-bc .bc-ref,.doc-tbl-bc .bc-sub-ref,.doc-tbl-bc .bc-pu,.doc-tbl-bc .bc-ext{vertical-align:middle!important;}'+
           '.doc-tbl-bc .bc-section{padding:5px 9px!important;font-size:11px!important;}'+
           '.bc-table-wrap{margin-bottom:14px!important;}'+
           // Footer : compacté MAIS avec air entre tableau et footer
@@ -4668,19 +4670,19 @@ function doPrint(){
     /* Toutes les td : bordure 1px uniforme → avec border-collapse, jonctions nettes */
     /* IMPORTANT : font-weight:400 par défaut (PAS de gras) — évite le bug d'affichage des caractères
        étroits (i, l, j, f) à petite taille en gras. Seules les colonnes Item et Extended Price sont en gras. */
-    .doc-tbl-bc tbody td{padding:8px 10px!important;vertical-align:middle!important;white-space:normal!important;word-break:normal!important;overflow-wrap:break-word!important;font-weight:400!important;border:1px solid #cbd5e1!important;color:#111!important;}
+    .doc-tbl-bc tbody td{padding:10px 10px!important;vertical-align:middle!important;white-space:normal!important;word-break:normal!important;overflow-wrap:break-word!important;font-weight:400!important;border:1px solid #cbd5e1!important;color:#111!important;}
     /* Item : gras (gros chiffre) — gras OK car taille suffisante */
-    .doc-tbl-bc .bc-item{text-align:center!important;font-weight:700!important;font-size:12.5px!important;color:#111!important;}
+    .doc-tbl-bc .bc-item{text-align:center!important;font-weight:700!important;font-size:12.5px!important;color:#111!important;vertical-align:middle!important;}
     /* Qty : normal (pas de gras → évite bug "1" / "l") */
-    .doc-tbl-bc .bc-qty,.doc-tbl-bc .bc-sub-qty{text-align:center!important;color:#111!important;font-size:11.5px!important;font-weight:400!important;}
+    .doc-tbl-bc .bc-qty,.doc-tbl-bc .bc-sub-qty{text-align:center!important;color:#111!important;font-size:11.5px!important;font-weight:400!important;vertical-align:middle!important;}
     /* Part Number : NORMAL (SURTOUT PAS EN GRAS — c'est là que le bug i/l apparaissait le plus) */
-    .doc-tbl-bc .bc-ref,.doc-tbl-bc .bc-sub-ref{color:#111!important;font-size:11.5px!important;font-weight:400!important;text-align:left!important;white-space:nowrap!important;letter-spacing:.02em!important;}
-    /* Description : NORMAL aussi (le gras à 11px sur des lettres étroites = flou) */
-    .doc-tbl-bc .bc-desc,.doc-tbl-bc .bc-sub-desc{color:#111!important;font-size:11.5px!important;text-align:left!important;font-weight:400!important;line-height:1.45!important;}
+    .doc-tbl-bc .bc-ref,.doc-tbl-bc .bc-sub-ref{color:#111!important;font-size:11.5px!important;font-weight:400!important;text-align:left!important;white-space:nowrap!important;letter-spacing:.02em!important;vertical-align:middle!important;}
+    /* Description : vertical-align:top + padding-top pour que le texte multi-lignes ne soit pas tronqué en haut */
+    .doc-tbl-bc .bc-desc,.doc-tbl-bc .bc-sub-desc{color:#111!important;font-size:11.5px!important;text-align:left!important;font-weight:400!important;line-height:1.45!important;vertical-align:top!important;padding-top:11px!important;}
     /* Unit Price : normal */
-    .doc-tbl-bc .bc-pu{text-align:right!important;white-space:nowrap!important;font-size:11.5px!important;font-weight:400!important;color:#111!important;font-variant-numeric:tabular-nums!important;}
+    .doc-tbl-bc .bc-pu{text-align:right!important;white-space:nowrap!important;font-size:11.5px!important;font-weight:400!important;color:#111!important;font-variant-numeric:tabular-nums!important;vertical-align:middle!important;}
     /* Extended Price : gras (montant important) — taille 12px minimum pour le gras */
-    .doc-tbl-bc .bc-ext{text-align:right!important;white-space:nowrap!important;font-weight:700!important;font-size:12px!important;color:#111!important;background:#f8fafc!important;font-variant-numeric:tabular-nums!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
+    .doc-tbl-bc .bc-ext{text-align:right!important;white-space:nowrap!important;font-weight:700!important;font-size:12px!important;color:#111!important;background:#f8fafc!important;font-variant-numeric:tabular-nums!important;vertical-align:middle!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
     /* Bandeau de section (colspan=6) */
     .doc-tbl-bc .bc-section{text-align:left!important;background:#e8eff7!important;font-weight:700!important;font-size:12px!important;color:#1e3a5f!important;letter-spacing:.04em!important;padding:8px 11px!important;border:1px solid #cbd5e1!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
 
