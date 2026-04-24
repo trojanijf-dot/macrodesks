@@ -3244,7 +3244,9 @@ function rBClines(){
         html+='<tr style="background:rgba(59,130,246,.02)">'+
           '<td><input style="width:110px;font-family:var(--mono);font-size:11px" value="'+esc(sub.ref||'')+'" data-sub-field="ref" data-idx="'+i+'" data-sub="'+si+'" placeholder="Part Number"></td>'+
           '<td><input style="min-width:150px;width:100%" value="'+esc(sub.desc||'')+'" data-sub-field="desc" data-idx="'+i+'" data-sub="'+si+'" placeholder="Sous-ligne descriptive"></td>'+
-          '<td><input type="number" style="width:55px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub="'+si+'"></td>'+
+          '<td style="display:flex;gap:4px;align-items:center"><input type="number" style="width:55px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub="'+si+'">'+
+            '<button class="bc-delsub-btn" data-idx="'+i+'" data-sub="'+si+'" style="background:none;border:none;color:var(--red);cursor:pointer;padding:2px 4px;font-size:13px" title="Supprimer cette sous-ligne">✕</button>'+
+          '</td>'+
         '</tr>';
       });
       return html;
@@ -3315,6 +3317,24 @@ function rBClines(){
   });
   tb.querySelectorAll('.bc-addsub-btn').forEach(function(btn){
     btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx))addBCKitSubLine(idx);});
+  });
+  // Supprimer une sous-ligne d'un KIT (avec undo)
+  tb.querySelectorAll('.bc-delsub-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      var si=parseInt(this.getAttribute('data-sub'));
+      if(!isNaN(idx)&&!isNaN(si)&&bcL[idx]&&Array.isArray(bcL[idx].subLines)&&bcL[idx].subLines[si]){
+        var snap=JSON.parse(JSON.stringify(bcL));
+        var removed=bcL[idx].subLines[si];
+        var lbl='sous-ligne « '+((removed&&(removed.ref||removed.desc))||'(vide)')+' »';
+        pushUndo('Suppr. '+lbl,function(){
+          bcL=snap;
+          if(document.getElementById('mBC').classList.contains('open'))rBClines();
+        });
+        bcL[idx].subLines.splice(si,1);
+        rBClines();
+      }
+    });
   });
   cBCtot();
 }
