@@ -3653,45 +3653,74 @@ function parseEmersonQuoteText(text){
   var lines=[];
   var formatDetected='inconnu';
 
-  // --- HEADER : patterns robustes ---
-  // Ver peut être "Ver:2", "Ver :2", "Ver: 2" - il faut capturer juste le chiffre/identifiant (pas au-delà d'un espace)
+  // Note importante : pdf.js extrait souvent le texte avec des ESPACES au milieu des mots.
+  // Exemple réel : "AO - SVC - A N A" au lieu de "AO-SVC-ANA", "23,8 72 .00" au lieu de "23,872.00".
+  // On normalise en priorité les tokens importants (N° de proposition, montants, part numbers).
+
+  // Helper : normalise les nombres en gérant les espaces parasites
+  // "23,8 72 .00" -> 23872.00 ; "2 ,000.00" -> 2000.00 ; "3,480.00" -> 3480.00
+  function parseNum(s){
+    if(!s)return 0;
+    // Retire espaces internes entre chiffres/virgules puis parse
+    var cleaned=String(s).replace(/\s+/g,'').replace(/,/g,'');
+    return parseFloat(cleaned)||0;
+  }
+  // Helper : normalise un Part Number en retirant les espaces parasites autour des tirets
+  // "AO - SVC - A N A" -> "AO-SVC-ANA" ; "SNG - A9530V3 - T03 - AUNZ" -> "SNG-A9530V3-T03-AUNZ"
+  function normalizePartNum(s){
+    if(!s)return '';
+    // Si la chaîne contient des "-" avec espaces autour, on les serre
+    var out=String(s)
+      .replace(/\s*-\s*/g,'-')           // "AO - SVC" -> "AO-SVC"
+      .replace(/\s+(?=[A-Z0-9])/g,'')    // "A N A" -> "ANA" (mais conserve mots séparés par espaces-après-letter-lower)
+      .trim();
+    return out;
+  }
+
+  // --- HEADER ---
+  // "Emerson Proposal: 27453702 Ver: 2" — "Ver:" peut avoir des espaces
   var mProp=text.match(/Emerson\s*Proposal\s*:?\s*(\S+)\s*Ver\s*:?\s*(\S+?)(?:\s|$)/i);
   if(mProp){
     header.num=mProp[1].trim();
-    // Le Ver peut contenir des caractères superflus — on nettoie pour garder l'identifiant version pur
     header.ver=mProp[2].replace(/[^\w\-\.]/g,'').trim();
   }
   var mCref=text.match(/(?:Customer\s*Ref\s*#?|Reference)\s*:?\s*(\d{5,})/i);
   if(mCref){header.cref=mCref[1].trim();}
-  var mDate=text.match(/Date\s*:?\s*(\d{1,2}[-\/]\w{3}[-\/]\d{2,4})/i);
-  if(mDate){header.date=mDate[1].trim();}
+  // Date au format "27 - Aug - 25" ou "28-Jul-25" (avec ou sans espaces autour des tirets)
+  var mDate=text.match(/Date\s*:?\s*(\d{1,2}\s*-\s*\w{3}\s*-\s*\d{2,4}|\d{1,2}\/\w{3}\/\d{2,4})/i);
+  if(mDate){header.date=mDate[1].replace(/\s+/g,'').replace(/\-/g,'-').trim();}
   var mProject=text.match(/Project\s*:?\s*([^\n\r]{2,80})/i);
   if(mProject){
     var pj=mProject[1].trim();
-    // On enlève les artefacts (ex: "Wi-Fi temperature Expiration Date:")
     pj=pj.replace(/\s*Expiration\s*Date\s*:.*$/i,'').trim();
     header.project=pj;
   }
-  // Total Price : on scanne TOUS les "Total Price" du document et on garde LE PLUS GRAND
-  // (les devis Emerson ont souvent plusieurs "Total Price" : sous-totaux + total final)
-  // En prenant le max, on est sûr de capturer le grand total et pas un intermédiaire.
+
+  // Total Price : gère les espaces bizarres dans les nombres ("23,8 72 .00")
+  // Stratégie : scanner tous les "Total Price" du document, extraire le nombre en tolérant les espaces, garder le MAX
   var allTotals=[];
-  var reTot=/Total\s*Price\s*(?:\([^)]*\))?\s*([\d,]+\.?\d*)/gi;
+  var reTot=/Total\s*Price\s*(?:\([^)]*\))?\s*([\d,\s]+\.\d{2})/gi;
   var mm;
   while((mm=reTot.exec(text))!==null){
-    var v=parseFloat(mm[1].replace(/,/g,''))||0;
+    var v=parseNum(mm[1]);
     if(v>0)allTotals.push(v);
   }
   if(allTotals.length){header.amount=Math.max.apply(null,allTotals);}
 
   // --- DÉTECTION FORMAT ---
-  var hasCustLine=/Cust\s*Line\s+Item\s+Qty\s+Units/i.test(text);
-  var hasUnitPrice=/Unit\s*Price/i.test(text);
-  var hasPartNumber=/Part\s*Number/i.test(text);
+  // Format A : "Cust Line Item Qty Units" (très distinctif)
+  // Format B : "Part Number Description ... Unit Price ... Extended Price"
+  // Format C : "Part Number Description Extended Price" (pas de Unit Price séparé)
+  // On cherche les mots-clés avec plus de tolérance (peut être sur plusieurs lignes)
+  var hasCustLine=/Cust\s*Line.*Item.*Qty.*Units/i.test(text);
+  var hasUnitPrice=/Unit\s+Price/i.test(text);
+  var hasPartNumber=/Part\s+Number/i.test(text);
+  var hasLOTInTable=/\bLOT\b/.test(text); // indicateur fort du Format C (Services)
 
   if(hasCustLine){formatDetected='A (Quote classique avec Cust Line/Units)';}
-  else if(hasPartNumber && hasUnitPrice){formatDetected='B (AMS standard)';}
-  else if(hasPartNumber && !hasUnitPrice){formatDetected='C (Services forfait, pas de Unit Price séparé)';}
+  else if(hasPartNumber && hasUnitPrice){formatDetected='B (AMS standard avec Unit Price)';}
+  else if(hasPartNumber && hasLOTInTable){formatDetected='C (Services forfait, pas de Unit Price séparé)';}
+  else if(hasPartNumber){formatDetected='B (AMS standard avec Unit Price)';}
   else {formatDetected='inconnu — extraction best-effort';}
 
   // --- EXTRACTION DES LIGNES ---
@@ -3703,186 +3732,207 @@ function parseEmersonQuoteText(text){
   var rows=tableZone.split(/\n/).map(function(s){return s.trim();}).filter(function(s){return s;});
 
   if(hasCustLine){
-    // === FORMAT A === — ligne complète sur 1 ligne
-    var reA=/^(\d+)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+(\d+\s*weeks?|N\/A|\d+\s*days?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
+    // === FORMAT A ===
+    // Ligne type : "1 4 Each Rosemount 214C ... 8 weeks 250.00 1,000.00"
+    // Part Number sur la ligne suivante (ex: "214CRTSSB1S3M0170WAAF1C2B1GP2TB")
+    // OU Part Number intégré dans la description avec ":" (ex: "RMT-OTHR-3-AU160338:701PBKKF ...")
+    var reA=/^(\d+)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+(\d+\s*weeks?|N\/A|\d+\s*days?)?\s*([\d,\s]+\.\d{2})\s+([\d,\s]+\.\d{2})$/;
+    // Variante sans Lead Time (dernier item freight par ex. "5 1 Each RMT-FREIGHT-JPG:Freight... 125.00 125.00")
+    var reA_noLead=/^(\d+)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+([\d,\s]+\.\d{2})\s+([\d,\s]+\.\d{2})$/;
     rows.forEach(function(r,idx){
       var m=r.match(reA);
+      var extM, descRaw, puVal, extVal;
       if(m){
-        var descRaw=m[4].trim();
-        var nextLine=rows[idx+1]||'';
-        var partNum='';
-        if(/^[A-Z0-9][\w\-]+$/.test(nextLine) && nextLine.length>5 && nextLine.length<60){
-          partNum=nextLine;
+        descRaw=m[4].trim();
+        puVal=parseNum(m[6]);
+        extVal=parseNum(m[7]);
+      } else {
+        var m2=r.match(reA_noLead);
+        if(m2){
+          descRaw=m2[4].trim();
+          puVal=parseNum(m2[5]);
+          extVal=parseNum(m2[6]);
+          m=m2;
         }
-        lines.push({
-          qte:parseInt(m[2])||1,
-          ref:partNum,
-          desc:descRaw,
-          pu:parseFloat(m[6].replace(/,/g,''))||0,
-          ext:parseFloat(m[7].replace(/,/g,''))||0
-        });
+      }
+      if(m){
+        var qte=parseInt(m[2])||1;
+        // Chercher le Part Number : priorité à celui intégré via ":" dans la description
+        var partNum='';
+        var descFinal=descRaw;
+        var mColon=descRaw.match(/^([\w\-\.:]+):(.*)$/);
+        if(mColon){
+          partNum=mColon[1].trim();
+          descFinal=mColon[2].trim();
+        } else {
+          // Sinon : la ligne suivante pourrait être le Part Number seul
+          var nextLine=rows[idx+1]||'';
+          if(/^[A-Z0-9][\w\-]+$/.test(nextLine)&&nextLine.length>5&&nextLine.length<80){
+            partNum=nextLine;
+          }
+        }
+        lines.push({qte:qte,ref:partNum,desc:descFinal,pu:puVal,ext:extVal});
       }
     });
-  } else if(hasPartNumber && hasUnitPrice){
-    // === FORMAT B === — lignes potentiellement multi-lignes
-    // Cas à gérer :
-    //   (a) Ligne complète avec description : "1 16 SNG-A9530V3 AMS WIRELESS... 1,443.00 23,088.00"
-    //   (b) Ligne complète SANS description :  "2 16 SNG-A212 49.00 784.00"
-    //   (c) Multi-lignes : "1 16 SNG-A9530V3" puis "AMS WIRELESS..." puis "1,443.00 23,088.00"
-    //   (d) Item # sur ligne séparée (comme en format C)
-    var reB_full=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
-    var reB_noDesc=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]+)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
-    var reB_itemStart=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]{3,})\s*(.*)$/; // début de ligne : item qty partnum [début desc]
+  } else if(hasLOTInTable){
+    // === FORMAT C (Services avec LOT) ===
+    // Réalité pdf.js (PDF 3 AMS Onsite) :
+    //   "1"                                                     ← item # isolé (ligne précédente)
+    //   "1 AO - SVC - A N A - HARDWARE CONFIGURATION 3,480.00"  ← qty partnum desc montant (tirets espacés !)
+    //   "LOT"                                                   ← unit
+    //
+    // Difficulté : "AO - SVC - A N A" est le Part Number mais "- HARDWARE CONFIGURATION" est description.
+    // Heuristique : le Part Number se compose de segments alphanumériques courts (ex: AO, SVC, ANA)
+    // séparés par " - ", et se TERMINE au dernier segment avant une SÉQUENCE DE MOTS ANGLAIS normaux.
+    //
+    // Stratégie de parsing :
+    //   1. Regex large : capture qty + reste + montant
+    //   2. Dans le "reste", on découpe par " - " et on identifie où s'arrête le Part Number
+    //      (en repérant la transition "tokens compacts AZ" -> "mots longs anglais")
 
-    for(var idx=0;idx<rows.length;idx++){
-      var r=rows[idx];
-      // Cas (b) : ligne complète SANS description → à tester AVANT reB_full car plus spécifique
-      var mNoDesc=r.match(reB_noDesc);
-      if(mNoDesc){
-        lines.push({
-          qte:parseInt(mNoDesc[2])||1,
-          ref:mNoDesc[3].trim(),
-          desc:'', // pas de description dans cette ligne
-          pu:parseFloat(mNoDesc[4].replace(/,/g,''))||0,
-          ext:parseFloat(mNoDesc[5].replace(/,/g,''))||0
-        });
-        continue;
-      }
-      // Cas (a) : ligne complète AVEC description
-      var m=r.match(reB_full);
-      if(m){
-        lines.push({
-          qte:parseInt(m[2])||1,
-          ref:m[3].trim(),
-          desc:m[4].trim(),
-          pu:parseFloat(m[5].replace(/,/g,''))||0,
-          ext:parseFloat(m[6].replace(/,/g,''))||0
-        });
-        continue;
-      }
-      // Cas (c) : multi-lignes
-      var ms=r.match(reB_itemStart);
-      if(ms && /^[A-Z][\w\-]{3,}$/.test(ms[3]) && !/^(AMS|MACHINE|WIRELESS|EMERSON|Rosemount|POC|FOR|TRI|UNIT)$/i.test(ms[3])){
-        var qty=parseInt(ms[2])||1;
-        var partnum=ms[3];
-        var descParts=[];
-        if(ms[4])descParts.push(ms[4].trim());
-        var puExt=null;
-        var stopIdx=idx;
-        for(var j=idx+1;j<Math.min(idx+10,rows.length);j++){
-          var rj=rows[j];
-          // Stop conditions : début d'une autre ligne d'article ou "Total Price"
-          if(/^Total\s*Price/i.test(rj))break;
-          // Si cette ligne est déjà un item complet (cas b ou a), on s'arrête — c'est l'item suivant
-          if(reB_noDesc.test(rj)||reB_full.test(rj))break;
-          // Test: la ligne courante contient-elle PU+EXT à la fin ?
-          var mEnd=rj.match(/^(.*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
-          if(mEnd){
-            if(mEnd[1])descParts.push(mEnd[1].trim());
-            puExt={pu:parseFloat(mEnd[2].replace(/,/g,''))||0,ext:parseFloat(mEnd[3].replace(/,/g,''))||0};
-            stopIdx=j;
-            break;
-          }
-          // Test: la ligne est-elle juste 2 nombres séparés ? (PU EXT sur une ligne seule)
-          var mOnly=rj.match(/^([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
-          if(mOnly){
-            puExt={pu:parseFloat(mOnly[1].replace(/,/g,''))||0,ext:parseFloat(mOnly[2].replace(/,/g,''))||0};
-            stopIdx=j;
-            break;
-          }
-          // Sinon : c'est une continuation de description
-          descParts.push(rj);
-        }
-        if(puExt){
-          lines.push({
-            qte:qty,
-            ref:partnum,
-            desc:descParts.join(' ').replace(/\s+/g,' ').trim(),
-            pu:puExt.pu,
-            ext:puExt.ext
-          });
-          idx=stopIdx;
+    var reC_line=/^(\d+)\s+(.+?)\s+([\d,\s]+\.\d{2})\s*$/;
+    rows.forEach(function(r,idx){
+      var m=r.match(reC_line);
+      if(!m)return;
+      // Pour Format C (Services LOT), la quantité est toujours 1 par définition.
+      // Le premier chiffre de la ligne peut être soit le Qty soit l'Item # (pdf.js mélange).
+      // On force donc qty=1 systématiquement.
+      var qty=1;
+      var middle=m[2].trim();
+      var ext=parseNum(m[3]);
+      if(ext<=0)return;
+
+      // Split par " - " ou " -" pour séparer les segments du part number
+      // Normalement : "AO - SVC - A N A - HARDWARE CONFIGURATION"
+      // Tokens (splittés par " - ") : ["AO", "SVC", "A N A", "HARDWARE CONFIGURATION"]
+      var tokens=middle.split(/\s+-\s+/);
+      // Si le DERNIER token contient un mot court (<=4 chars, alphanumérique) suivi d'un texte long,
+      // on le split : le mot court est probablement la fin du Part Number, le reste = description.
+      // Ex: "APA TRAVEL AND LIVING EXPENSES" -> split en ["APA", "TRAVEL AND LIVING EXPENSES"]
+      if(tokens.length>0){
+        var last=tokens[tokens.length-1];
+        var mFirst=last.match(/^([A-Z][A-Z0-9]{1,5})\s+(.+)$/);
+        if(mFirst && /^[A-Z]{4,}/.test(mFirst[2])){
+          // Le 1er mot fait 2-6 caractères majuscules, le reste commence par du texte → split
+          tokens[tokens.length-1]=mFirst[1];
+          tokens.push(mFirst[2]);
         }
       }
-    }
+      // Le Part Number est la séquence des premiers tokens qui sont courts et alphanumériques
+      // On s'arrête dès qu'on trouve un token qui contient un mot long (>=5 chars) et ne commence PAS par un chiffre
+      var pnTokens=[];
+      var descTokens=[];
+      var pnFinished=false;
+      tokens.forEach(function(tk,ti){
+        tk=tk.trim();
+        if(!tk)return;
+        if(!pnFinished){
+          // Caractéristique d'un token de Part Number :
+          //  - Composé de lettres/chiffres avec éventuellement un ou deux espaces internes (ex: "A N A")
+          //  - Court généralement (<=8 chars après retrait des espaces)
+          //  - Tous les "mots" qu'il contient sont courts (<=3 chars) OU alphanumériques courts
+          var compact=tk.replace(/\s+/g,'');
+          var wordsInToken=tk.split(/\s+/);
+          var looksLikePN=(compact.length<=8) || (wordsInToken.every(function(w){return w.length<=3 || /\d/.test(w);}));
+          // MAIS si c'est un mot unique >=5 lettres en MAJUSCULES sans chiffres, c'est probablement description
+          if(/^[A-Z]{5,}$/.test(tk) && !/\d/.test(tk)){looksLikePN=false;}
+          if(looksLikePN){
+            pnTokens.push(compact);
+          } else {
+            pnFinished=true;
+            descTokens.push(tk);
+          }
+        } else {
+          descTokens.push(tk);
+        }
+      });
+      if(pnTokens.length===0)return;
+      var partNum=pnTokens.join('-');
+      // Rejet faux positifs
+      if(!/^[A-Z]/.test(partNum))return;
+      if(partNum.length<3)return;
+      // Le suffixe éventuellement isolé sur les lignes suivantes (ex: "- TRAVEL HOURS (8 HOURS)")
+      var descParts=descTokens.length?[descTokens.join(' - ')]:[];
+
+      // Récupérer lignes adjacentes pour compléter la description
+      // Avant : lignes non-item/non-unit (ex: "ONSITE ENGINEERING SERVICES (10 HOURS)")
+      for(var k=idx-1;k>=Math.max(0,idx-4);k--){
+        var pk=rows[k];
+        if(!pk)continue;
+        if(/^(Item|Qty|Part\s*Number|Description|Extended|Unit|Price|\(AUD\)|Commercial|Expiration|Ultimate|Lead|Payment|Shipping|Freight|Total\s*Price|General|System|This)/i.test(pk))break;
+        if(/^\d+\s*$/.test(pk))break;
+        if(/\d+[\d,\s]*\.\d{2}/.test(pk))break;
+        if(/^LOT$|^Each$|^EACH$/i.test(pk))continue;
+        descParts.unshift(pk);
+      }
+      // Après : lignes qui continuent la description
+      for(var kk=idx+1;kk<Math.min(rows.length,idx+4);kk++){
+        var pkk=rows[kk];
+        if(!pkk)continue;
+        if(/^LOT$|^Each$|^EACH$/i.test(pkk))continue;
+        if(/^\d+\s*$/.test(pkk))break;
+        if(pkk.match(reC_line))break;
+        if(/Total\s*Price/i.test(pkk))break;
+        if(/\d+[\d,\s]*\.\d{2}/.test(pkk))break;
+        descParts.push(pkk);
+      }
+      var fullDesc=descParts.join(' ').replace(/\s+/g,' ').trim();
+
+      lines.push({qte:qty,ref:partNum,desc:fullDesc,pu:qty?(ext/qty):ext,ext:ext});
+    });
   } else {
-    // === FORMAT C (pas de Unit Price séparé) — lignes potentiellement multi-lignes ===
-    // Cas particuliers à gérer :
-    //  a) Ligne complète : "1 1 LOT AO-SVC-ANA DESC 3,480.00"
-    //  b) Ligne splittée  : "1" puis "1 LOT AO-SVC-ANA DESC 3,480.00" (item # seul sur une ligne)
-    //  c) Multi-lignes    : "1" puis "1 LOT AO-SVC-ANA" puis "DESC..." puis "3,480.00"
-    var reC_full=/^(\d+)\s+(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)$/;
-    // reC_splitFull : quand le # d'item est sur la ligne précédente, cette ligne commence par "1 LOT PARTNUM DESC... MONTANT"
-    var reC_splitFull=/^(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)$/;
-    // reC_itemStart : "1 LOT PARTNUM" (sans montant au bout, description sur lignes suivantes)
-    var reC_splitStart=/^(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]{3,})\s*(.*)$/;
-    // Détecte si une ligne est juste un numéro d'item seul (ex: "1", "2", etc.) → on l'utilise comme marqueur
-    var reC_itemOnly=/^(\d+)$/;
+    // === FORMAT B (Standard AMS avec Unit Price et Extended Price séparés) ===
+    // Réalité du texte pdf.js (PDF 2 AMS Wireless Vib) :
+    //   "AMS WIRELESS VIBRATION MONITOR"
+    //   "ADVANCED VERSION TRI AXIAL AND"
+    //   "1 16 SNG - A9530V3 - T03 - AUNZ 1,443.00 23,088.00"   <- ligne principale
+    //   "TEMPERATURE SINGLE UNIT PART NUMBER"                  <- suite desc
+    //   "FOR AUSTRALIA AND NEW ZEALAND"
+    //   "2 16 SNG - A212 49.00 784.00"                          <- item 2 tout sur 1 ligne
+    //
+    // Stratégie : cherche "<item#> <qty> <partnum...> <pu> <ext>" sur UNE ligne.
+    // Puis tente de récupérer la description sur les lignes adjacentes.
+    var reB=/^(\d+)\s+(\d+)\s+([A-Z][A-Z0-9\s\-]{2,}?)\s+([\d,\s]+\.\d{2})\s+([\d,\s]+\.\d{2})\s*$/;
+    rows.forEach(function(r,idx){
+      var m=r.match(reB);
+      if(m){
+        var partnumRaw=m[3];
+        var normPN=normalizePartNum(partnumRaw);
+        if(normPN.length<4)return;
+        // Rejet faux positifs : mot commun sans tiret
+        if(!/[\-\.]/.test(normPN) && normPN.length<6)return;
+        if(/^(AMS|MACHINE|ONSITE|WIRELESS|EMERSON|TRAVEL|HARDWARE|ADVANCED|TEMPERATURE|FOR|AUSTRALIA)$/i.test(normPN))return;
 
-    for(var idxC=0;idxC<rows.length;idxC++){
-      var rC=rows[idxC];
-      // Cas (a) : ligne complète sur 1 seule ligne
-      var mc=rC.match(reC_full);
-      if(mc){
-        var extVal=parseFloat(mc[6].replace(/,/g,''))||0;
-        var qte=parseInt(mc[2])||1;
-        lines.push({qte:qte,ref:mc[4].trim(),desc:mc[5].trim(),pu:qte?(extVal/qte):extVal,ext:extVal});
-        continue;
-      }
-      // Cas où la ligne est juste un numéro d'item seul (ex: "1") ET la ligne suivante commence par "<qty> LOT <PartNum>..."
-      if(reC_itemOnly.test(rC) && idxC+1<rows.length){
-        var next=rows[idxC+1];
-        // Cas (b) : "<qty> LOT <partnum> <desc> <montant>" sur la ligne suivante
-        var mNext=next.match(reC_splitFull);
-        if(mNext){
-          var extB=parseFloat(mNext[5].replace(/,/g,''))||0;
-          var qtyB=parseInt(mNext[1])||1;
-          lines.push({qte:qtyB,ref:mNext[3].trim(),desc:mNext[4].trim(),pu:qtyB?(extB/qtyB):extB,ext:extB});
-          idxC++; // skip la ligne "<qty> LOT ..." déjà traitée
-          continue;
+        var qty=parseInt(m[2])||1;
+        var pu=parseNum(m[4]);
+        var ext=parseNum(m[5]);
+
+        // Récupérer description : lignes avant (jusqu'à qu'on trouve un autre item ou une ligne non-desc)
+        var prefix=[];
+        for(var k=idx-1;k>=Math.max(0,idx-5);k--){
+          var pk=rows[k];
+          if(!pk)continue;
+          if(/^(Item|Qty|Part\s*Number|Description|Unit|Extended|Price|\(AUD\)|Commercial|Expiration|Ultimate|Lead|Payment|Shipping|Freight|Total\s*Price|General\s*Assumptions|System|This)/i.test(pk))break;
+          if(pk.match(reB))break; // un autre item sur cette ligne → stop
+          if(/\d+[\d,\s]*\.\d{2}/.test(pk))break; // ligne contient un montant → stop
+          prefix.unshift(pk);
         }
-        // Cas (c) : "<qty> LOT <partnum>" puis lignes de description puis montant isolé
-        var mStart=next.match(reC_splitStart);
-        if(mStart && /^[A-Z][\w\-]{3,}$/.test(mStart[3]) && !/^(AMS|MACHINE|WIRELESS|EMERSON|Rosemount|ONSITE|TRAVEL|FOR|TRI|UNIT)$/i.test(mStart[3])){
-          var qtyC=parseInt(mStart[1])||1;
-          var partnumC=mStart[3];
-          var descPartsC=[];
-          if(mStart[4])descPartsC.push(mStart[4].trim());
-          var extC=null;
-          var stopIdxC=idxC+1;
-          // Scan limité : on arrête dès qu'on trouve un montant isolé OU une ligne contenant un montant à la fin
-          // OU une autre ligne "<chiffre>" ou "<chiffre> LOT ..." (= début de l'item suivant)
-          for(var jC=idxC+2;jC<Math.min(idxC+10,rows.length);jC++){
-            var rjC=rows[jC];
-            // Si on rencontre "Total Price" ou un numéro d'item seul, on s'arrête (prochain item)
-            if(/^Total\s*Price/i.test(rjC))break;
-            if(reC_itemOnly.test(rjC))break;
-            // Si la ligne contient un montant à la fin ET du texte avant → desc + montant
-            var mEndC=rjC.match(/^(.*?)\s+([\d,]+\.\d{2})\s*$/);
-            if(mEndC && mEndC[1]){
-              descPartsC.push(mEndC[1].trim());
-              extC=parseFloat(mEndC[2].replace(/,/g,''))||0;
-              stopIdxC=jC;
-              break;
-            }
-            // Ligne = juste un montant isolé
-            var mOnlyC=rjC.match(/^([\d,]+\.\d{2})\s*$/);
-            if(mOnlyC){
-              extC=parseFloat(mOnlyC[1].replace(/,/g,''))||0;
-              stopIdxC=jC;
-              break;
-            }
-            // Sinon : continuation de description
-            descPartsC.push(rjC);
-            stopIdxC=jC;
-          }
-          if(extC!=null){
-            lines.push({qte:qtyC,ref:partnumC,desc:descPartsC.join(' ').replace(/\s+/g,' ').trim(),pu:qtyC?(extC/qtyC):extC,ext:extC});
-            idxC=stopIdxC;
-          }
+        // Lignes après (suffixe description)
+        var suffix=[];
+        for(var kk=idx+1;kk<Math.min(rows.length,idx+5);kk++){
+          var pkk=rows[kk];
+          if(!pkk)continue;
+          if(pkk.match(reB))break;
+          if(/Total\s*Price/i.test(pkk))break;
+          if(/\d+[\d,\s]*\.\d{2}/.test(pkk))break;
+          if(/^(Item|Qty|Part\s*Number|Description|Unit|Extended|Price|\(AUD\))/i.test(pkk))break;
+          suffix.push(pkk);
         }
+        var fullDesc=prefix.concat(suffix).join(' ').replace(/\s+/g,' ').trim();
+
+        lines.push({qte:qty,ref:normPN,desc:fullDesc,pu:pu,ext:ext});
       }
-    }
+    });
   }
 
   return {header:header,lines:lines,formatDetected:formatDetected};
