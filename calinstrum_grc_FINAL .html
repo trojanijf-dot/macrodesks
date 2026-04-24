@@ -3229,7 +3229,9 @@ function rBClines(){
         '<td rowspan="'+rowspan+'" style="text-align:center;color:var(--muted);font-weight:700;vertical-align:middle;background:rgba(59,130,246,.04)">'+itemNum+kitBadge+'</td>'+
         '<td><input style="width:110px" value="'+esc(l.ref)+'" data-field="ref" data-idx="'+i+'" placeholder="Réf principale"></td>'+
         '<td><input style="min-width:150px;width:100%" value="'+esc(l.desc)+'" data-field="desc" data-idx="'+i+'" placeholder="Description de l\'item principal (Ex: AMS WIRELESS VIBRATION MONITOR...)"></td>'+
-        '<td><input type="number" style="width:55px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'" title="Qté principale (descriptive : nombre d\'unités livrées)"></td>'+
+        '<td style="display:flex;gap:4px;align-items:center"><input type="number" style="width:55px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'" title="Qté principale (descriptive : nombre d\'unités livrées)">'+
+          (l.subLines.length>0?'<button class="bc-delmain-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer;padding:2px 4px;font-size:13px" title="Supprimer cette ligne principale (la 1ère sous-ligne deviendra la nouvelle ligne principale)">✕</button>':'')+
+        '</td>'+
         '<td rowspan="'+rowspan+'" style="vertical-align:middle;background:rgba(59,130,246,.04)"><input type="number" style="width:80px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'" title="Prix du lot (global)"></td>'+
         '<td rowspan="'+rowspan+'" style="font-weight:700;color:var(--teal);vertical-align:middle;background:rgba(59,130,246,.04)" title="Prix du lot (Kit)">'+fN(lineExt)+'</td>'+
         '<td rowspan="'+rowspan+'" style="white-space:nowrap;vertical-align:middle;background:rgba(59,130,246,.04)">'+
@@ -3332,6 +3334,29 @@ function rBClines(){
           if(document.getElementById('mBC').classList.contains('open'))rBClines();
         });
         bcL[idx].subLines.splice(si,1);
+        rBClines();
+      }
+    });
+  });
+  // Supprimer la LIGNE PRINCIPALE d'un KIT : la 1ère sous-ligne est promue en ligne principale
+  // (permet de supprimer la 1ère ligne sans perdre tout le KIT)
+  tb.querySelectorAll('.bc-delmain-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      if(!isNaN(idx)&&bcL[idx]&&Array.isArray(bcL[idx].subLines)&&bcL[idx].subLines.length>0){
+        var snap=JSON.parse(JSON.stringify(bcL));
+        var removed={ref:bcL[idx].ref,desc:bcL[idx].desc};
+        var lbl='ligne principale « '+(removed.ref||removed.desc||'(vide)')+' »';
+        pushUndo('Suppr. '+lbl,function(){
+          bcL=snap;
+          if(document.getElementById('mBC').classList.contains('open'))rBClines();
+        });
+        // Promouvoir la 1ère sous-ligne comme nouvelle ligne principale
+        var firstSub=bcL[idx].subLines.shift();
+        bcL[idx].ref=firstSub.ref||'';
+        bcL[idx].desc=firstSub.desc||'';
+        bcL[idx].qte=firstSub.qte||1;
+        // Le PU du kit reste inchangé (prix global du lot)
         rBClines();
       }
     });
