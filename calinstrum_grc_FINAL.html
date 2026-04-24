@@ -4322,9 +4322,10 @@ var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;p
 // ========================================================================
 // TÉLÉCHARGEMENT PDF HAUTE DÉFINITION - capture directe de l'aperçu
 // ========================================================================
-// Utilise html2pdf.js pour capturer le DOM de l'aperçu EXACTEMENT tel qu'il
-// s'affiche à l'écran, sans passer par le moteur d'impression du navigateur.
-// Scale 4x = résolution ~400dpi (qualité pro max)
+// Approche : on crée un clone avec largeur FIXE en pixels = largeur A4 entière
+// (pas juste la zone utile), et on incorpore les marges comme du padding dans
+// le clone. Résultat : le canvas généré fait exactement 794px (A4 à 96dpi)
+// et se colle à 0,0 dans le PDF sans aucun calcul intermédiaire.
 function downloadPreviewAsPDF(){
   var c=document.getElementById('prvBody');
   if(!c){alert('Aucun aperçu à télécharger.');return;}
@@ -4336,55 +4337,71 @@ function downloadPreviewAsPDF(){
   var docTitle=titleEl?titleEl.textContent:'CALINSTRUM';
   var filename=docTitle.replace(/[^a-zA-Z0-9_\-]/g,'_').replace(/_+/g,'_')+'.pdf';
 
-  // Récupérer le .doc intérieur (le vrai contenu) plutôt que prvBody qui a du padding/scrollbars
   var docEl=c.querySelector('.doc');
   if(!docEl){alert('Aucun document à exporter.');return;}
 
-  // Cloner proprement en réinitialisant tous les styles de positionnement
-  var clone=docEl.cloneNode(true);
-  // Reset complet de tout ce qui pourrait décaler le contenu
-  clone.style.cssText=[
+  // === Dimensions A4 en pixels à 96 DPI ===
+  // A4 = 210 × 297 mm
+  // À 96 DPI (1 inch = 96px, 1 inch = 25.4mm) :
+  //   largeur = 210 / 25.4 * 96 = 793.7 ≈ 794px
+  //   marges souhaitées = 10mm = 37.8 ≈ 38px de chaque côté
+  //   largeur utile (contenu) = 794 - 2*38 = 718px
+  var A4_FULL_WIDTH_PX = 794;
+  var PAGE_MARGIN_PX   = 38;
+
+  // Conteneur PAGE qui représente la page A4 complète
+  var page=document.createElement('div');
+  page.id='pdfExportPage';
+  page.style.cssText=[
+    'width:'+A4_FULL_WIDTH_PX+'px',
+    'padding:'+PAGE_MARGIN_PX+'px',
     'background:#fff',
-    'width:190mm',              // largeur utile A4 avec marges 10mm
-    'max-width:190mm',
-    'min-height:auto',
-    'padding:0',
     'margin:0',
-    'position:static',           // IMPORTANT : supprimer tout position fixed/absolute hérité
-    'transform:none',
-    'left:auto','top:auto','right:auto','bottom:auto',
     'box-sizing:border-box',
     'font-family:Helvetica,Arial,sans-serif',
     'color:#111',
+    'position:fixed',
+    'top:0','left:-99999px',       // hors écran pour ne pas gêner l'utilisateur
+    'z-index:-1'
+  ].join(';');
+
+  var clone=docEl.cloneNode(true);
+  clone.style.cssText=[
+    'background:#fff',
+    'width:100%',                   // 100% du conteneur page (moins padding)
+    'max-width:100%',
+    'padding:0','margin:0',
+    'position:static',
+    'transform:none',
+    'box-sizing:border-box',
     'display:block',
     'float:none',
     'overflow:visible'
   ].join(';');
 
-  // Forcer les tableaux BC à rester dans la largeur
-  var bcTables=clone.querySelectorAll('.doc-tbl-bc');
-  bcTables.forEach(function(t){
-    t.style.width='100%';
-    t.style.maxWidth='100%';
-    t.style.tableLayout='auto';
+  // Force tables BC à rester dans la largeur
+  clone.querySelectorAll('.doc-tbl-bc').forEach(function(t){
+    t.style.width='100%';t.style.maxWidth='100%';t.style.tableLayout='auto';
   });
-  var bcWraps=clone.querySelectorAll('.bc-table-wrap');
-  bcWraps.forEach(function(w){w.style.width='100%';w.style.maxWidth='100%';w.style.boxSizing='border-box';});
+  clone.querySelectorAll('.bc-table-wrap').forEach(function(w){
+    w.style.width='100%';w.style.maxWidth='100%';w.style.boxSizing='border-box';
+  });
+  clone.querySelectorAll('img').forEach(function(im){
+    im.style.maxWidth='100%';im.style.height='auto';
+  });
 
-  // Forcer toutes les images à rester dans le cadre
-  var imgs=clone.querySelectorAll('img');
-  imgs.forEach(function(im){im.style.maxWidth='100%';im.style.height='auto';});
+  page.appendChild(clone);
+  document.body.appendChild(page);
 
-  // Indicateur de progression
   var loader=document.createElement('div');
   loader.id='pdfLoader';
   loader.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.88);color:#fff;padding:24px 36px;border-radius:8px;z-index:99999;font-size:14px;font-weight:700;font-family:sans-serif;box-shadow:0 10px 30px rgba(0,0,0,0.5);text-align:center';
   loader.innerHTML='🔄 Génération PDF Haute Définition...<br><span style="font-size:11px;font-weight:400;opacity:0.8;display:block;margin-top:6px">Scale 4x / ~400 DPI — patientez 3 à 5 secondes</span>';
   document.body.appendChild(loader);
 
-  // Options html2pdf — qualité MAXIMALE
+  // Options html2pdf : margin = 0 car on a déjà les marges dans le padding du clone
   var opt={
-    margin:       10,                  // 10mm uniformes
+    margin:       0,
     filename:     filename,
     image:        { type: 'png', quality: 1.0 },
     html2canvas:  {
@@ -4394,8 +4411,10 @@ function downloadPreviewAsPDF(){
       allowTaint: false,
       backgroundColor: '#ffffff',
       logging: false,
-      x: 0, y: 0,                      // capture depuis le coin haut-gauche
-      scrollX: 0, scrollY: 0,          // pas de décalage de scroll
+      width: A4_FULL_WIDTH_PX,       // largeur cible exacte A4
+      windowWidth: A4_FULL_WIDTH_PX, // viewport de layout = A4
+      scrollX: 0, scrollY: 0,
+      x: 0, y: 0,
       imageTimeout: 15000,
       removeContainer: true
     },
@@ -4409,16 +4428,17 @@ function downloadPreviewAsPDF(){
     pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
   };
 
-  // Laisser le navigateur faire le layout avant capture
   setTimeout(function(){
-    html2pdf().set(opt).from(clone).save().then(function(){
+    html2pdf().set(opt).from(page).save().then(function(){
       var l=document.getElementById('pdfLoader');if(l)l.remove();
+      var p=document.getElementById('pdfExportPage');if(p)p.remove();
     }).catch(function(err){
       console.error('Erreur génération PDF:',err);
       var l=document.getElementById('pdfLoader');if(l)l.remove();
+      var p=document.getElementById('pdfExportPage');if(p)p.remove();
       alert('Erreur lors de la génération du PDF :\n'+(err.message||err));
     });
-  },200);
+  },250);
 }
 
 function doPrint(){
