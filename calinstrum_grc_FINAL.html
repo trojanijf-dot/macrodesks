@@ -3654,8 +3654,13 @@ function parseEmersonQuoteText(text){
   var formatDetected='inconnu';
 
   // --- HEADER : patterns robustes ---
-  var mProp=text.match(/Emerson\s*Proposal\s*:?\s*(\S+)\s*Ver\s*:?\s*(\S+)/i);
-  if(mProp){header.num=mProp[1].trim();header.ver=mProp[2].trim();}
+  // Ver peut être "Ver:2", "Ver :2", "Ver: 2" - il faut capturer juste le chiffre/identifiant (pas au-delà d'un espace)
+  var mProp=text.match(/Emerson\s*Proposal\s*:?\s*(\S+)\s*Ver\s*:?\s*(\S+?)(?:\s|$)/i);
+  if(mProp){
+    header.num=mProp[1].trim();
+    // Le Ver peut contenir des caractères superflus — on nettoie pour garder l'identifiant version pur
+    header.ver=mProp[2].replace(/[^\w\-\.]/g,'').trim();
+  }
   var mCref=text.match(/(?:Customer\s*Ref\s*#?|Reference)\s*:?\s*(\d{5,})/i);
   if(mCref){header.cref=mCref[1].trim();}
   var mDate=text.match(/Date\s*:?\s*(\d{1,2}[-\/]\w{3}[-\/]\d{2,4})/i);
@@ -3667,13 +3672,25 @@ function parseEmersonQuoteText(text){
     pj=pj.replace(/\s*Expiration\s*Date\s*:.*$/i,'').trim();
     header.project=pj;
   }
+  // Total Price : on cherche "Total Price" suivi éventuellement de "(AUD)" puis LE PLUS GRAND nombre à proximité
+  // (pour éviter de prendre un montant intermédiaire comme le Unit Price d'une ligne)
   var mTotal=text.match(/Total\s*Price\s*(?:\([^)]*\))?\s*([\d,]+\.?\d*)/i);
-  if(mTotal){header.amount=parseFloat(mTotal[1].replace(/,/g,''))||0;}
+  if(mTotal){
+    header.amount=parseFloat(mTotal[1].replace(/,/g,''))||0;
+  }
+  // Fallback : si le montant trouvé est bizarrement petit, on scanne tous les "Total" et on prend le plus grand
+  if(header.amount<100){
+    var allTotals=[];
+    var reTot=/Total\s*Price\s*(?:\([^)]*\))?\s*([\d,]+\.?\d*)/gi;
+    var mm;
+    while((mm=reTot.exec(text))!==null){
+      var v=parseFloat(mm[1].replace(/,/g,''))||0;
+      if(v>0)allTotals.push(v);
+    }
+    if(allTotals.length){header.amount=Math.max.apply(null,allTotals);}
+  }
 
   // --- DÉTECTION FORMAT ---
-  // Format A (Quote classique) : présence de "Cust Line" + "Units" dans l'en-tête de table
-  // Format B (AMS standard) : "Item Qty Part Number Description Unit Price Extended Price"
-  // Format C (Services forfait) : "Item Qty Part Number Description Extended Price" (pas de Unit Price séparé)
   var hasCustLine=/Cust\s*Line\s+Item\s+Qty\s+Units/i.test(text);
   var hasUnitPrice=/Unit\s*Price/i.test(text);
   var hasPartNumber=/Part\s*Number/i.test(text);
@@ -3684,7 +3701,6 @@ function parseEmersonQuoteText(text){
   else {formatDetected='inconnu — extraction best-effort';}
 
   // --- EXTRACTION DES LIGNES ---
-  // Stratégie : on localise la zone Commercial Summary (début de table) et Total Price (fin)
   var tableStart=text.search(/Commercial\s*Summary/i);
   var tableEnd=text.search(/Total\s*Price/i);
   if(tableStart<0)tableStart=0;
@@ -3693,16 +3709,12 @@ function parseEmersonQuoteText(text){
   var rows=tableZone.split(/\n/).map(function(s){return s.trim();}).filter(function(s){return s;});
 
   if(hasCustLine){
-    // === FORMAT A ===
-    // Ligne type: "1 4 Each Rosemount 214C Temperature Sensor 4 weeks 258.00 1,032.00"
-    // Le Part Number est dans la ligne suivante (ex: "214CRTSMB1S3M0170SLAR1C2B1TB")
-    // On match : ^(nb) (qty) (units) (desc) ... (lead time) (unit price) (ext price)
+    // === FORMAT A === — ligne complète sur 1 ligne
     var reA=/^(\d+)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+(\d+\s*weeks?|N\/A|\d+\s*days?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
     rows.forEach(function(r,idx){
       var m=r.match(reA);
       if(m){
         var descRaw=m[4].trim();
-        // La ligne suivante est souvent le Part Number technique
         var nextLine=rows[idx+1]||'';
         var partNum='';
         if(/^[A-Z0-9][\w\-]+$/.test(nextLine) && nextLine.length>5 && nextLine.length<60){
@@ -3718,13 +3730,18 @@ function parseEmersonQuoteText(text){
       }
     });
   } else if(hasPartNumber && hasUnitPrice){
-    // === FORMAT B ===
-    // Ligne type: "1 16 SNG-A9530V3-T03-AUNZ AMS WIRELESS VIBRATION MONITOR... 1,443.00 23,088.00"
-    // Parfois sur plusieurs lignes (description multi-lignes)
-    // Stratégie : on cherche "ITEM QTE PARTNUM <desc> PU EXT" ou partial
+    // === FORMAT B === — lignes potentiellement multi-lignes
+    // Dans ce format la description peut s'étaler sur plusieurs lignes de texte.
+    // Stratégie en 2 passes :
+    //   1. On tente la regex "tout sur 1 ligne" pour les cas simples
+    //   2. Sinon on cherche les patterns "<item> <qty> <partnum>" et on reconstruit la description
+    //      en concaténant les lignes jusqu'à ce qu'on trouve 2 nombres (PU + EXT)
     var reB_full=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
-    var reB_short=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]+)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/; // sans desc (ou desc sur ligne suivante)
-    rows.forEach(function(r,idx){
+    var reB_itemStart=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]{3,})\s*(.*)$/; // début de ligne : item qty partnum [début desc]
+
+    for(var idx=0;idx<rows.length;idx++){
+      var r=rows[idx];
+      // Pass 1 : tout sur 1 ligne
       var m=r.match(reB_full);
       if(m){
         lines.push({
@@ -3734,40 +3751,109 @@ function parseEmersonQuoteText(text){
           pu:parseFloat(m[5].replace(/,/g,''))||0,
           ext:parseFloat(m[6].replace(/,/g,''))||0
         });
-        return;
+        continue;
       }
-      // Fallback : ligne sans description — la desc peut être sur la ligne précédente ou suivante
-      var ms=r.match(reB_short);
-      if(ms){
-        var descNearby=(rows[idx-1]||'')+' '+(rows[idx+1]||'');
-        lines.push({
-          qte:parseInt(ms[2])||1,
-          ref:ms[3].trim(),
-          desc:descNearby.trim().slice(0,200),
-          pu:parseFloat(ms[4].replace(/,/g,''))||0,
-          ext:parseFloat(ms[5].replace(/,/g,''))||0
-        });
+      // Pass 2 : regarde si cette ligne commence par un pattern "item qty partnum"
+      var ms=r.match(reB_itemStart);
+      if(ms && /^[A-Z][\w\-]{3,}$/.test(ms[3]) && !/^(AMS|MACHINE|WIRELESS|EMERSON|Rosemount|POC|FOR|TRI|UNIT)$/i.test(ms[3])){
+        // C'est probablement le début d'une ligne d'article
+        var qty=parseInt(ms[2])||1;
+        var partnum=ms[3];
+        var descParts=[];
+        if(ms[4])descParts.push(ms[4].trim());
+        // On avance jusqu'à trouver une ligne qui se termine par 2 nombres (PU EXT) ou contient 2 nombres
+        var puExt=null;
+        var stopIdx=idx;
+        for(var j=idx+1;j<Math.min(idx+10,rows.length);j++){
+          var rj=rows[j];
+          // Test: la ligne courante contient-elle PU+EXT à la fin ?
+          var mEnd=rj.match(/^(.*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
+          if(mEnd){
+            if(mEnd[1])descParts.push(mEnd[1].trim());
+            puExt={pu:parseFloat(mEnd[2].replace(/,/g,''))||0,ext:parseFloat(mEnd[3].replace(/,/g,''))||0};
+            stopIdx=j;
+            break;
+          }
+          // Test: la ligne est-elle juste 2 nombres séparés ? (PU EXT sur une ligne seule)
+          var mOnly=rj.match(/^([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
+          if(mOnly){
+            puExt={pu:parseFloat(mOnly[1].replace(/,/g,''))||0,ext:parseFloat(mOnly[2].replace(/,/g,''))||0};
+            stopIdx=j;
+            break;
+          }
+          // Sinon : c'est une continuation de description
+          descParts.push(rj);
+        }
+        if(puExt){
+          lines.push({
+            qte:qty,
+            ref:partnum,
+            desc:descParts.join(' ').replace(/\s+/g,' ').trim(),
+            pu:puExt.pu,
+            ext:puExt.ext
+          });
+          idx=stopIdx; // on saute les lignes consommées
+        }
       }
-    });
+    }
   } else {
-    // === FORMAT C (pas de Unit Price séparé) ===
-    // Ligne type: "1 1 LOT AO-SVC-ANA ONSITE ENGINEERING SERVICES... 3,480.00"
-    // ou: "2 1 LOT MHM-MISC-APA TRAVEL AND LIVING EXPENSES 2,000.00"
-    var reC=/^(\d+)\s+(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)$/;
-    rows.forEach(function(r){
-      var m=r.match(reC);
-      if(m){
-        var extVal=parseFloat(m[6].replace(/,/g,''))||0;
-        var qte=parseInt(m[2])||1;
+    // === FORMAT C (pas de Unit Price séparé) — lignes potentiellement multi-lignes ===
+    var reC_full=/^(\d+)\s+(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)$/;
+    var reC_itemStart=/^(\d+)\s*(\d+)?\s*(LOT|Lot|lot|Each|EACH|each)?\s+([A-Z][\w\-\.]{3,})\s*(.*)$/;
+
+    for(var idxC=0;idxC<rows.length;idxC++){
+      var rC=rows[idxC];
+      var mc=rC.match(reC_full);
+      if(mc){
+        var extVal=parseFloat(mc[6].replace(/,/g,''))||0;
+        var qte=parseInt(mc[2])||1;
         lines.push({
           qte:qte,
-          ref:m[4].trim(),
-          desc:m[5].trim(),
+          ref:mc[4].trim(),
+          desc:mc[5].trim(),
           pu:qte?(extVal/qte):extVal,
           ext:extVal
         });
+        continue;
       }
-    });
+      // Multi-lignes : cherche "item qty LOT partnum" puis accumule jusqu'à trouver un montant
+      var mcs=rC.match(reC_itemStart);
+      if(mcs && /^[A-Z][\w\-]{3,}$/.test(mcs[4]) && !/^(AMS|MACHINE|WIRELESS|EMERSON|Rosemount|ONSITE|TRAVEL|FOR|TRI|UNIT)$/i.test(mcs[4])){
+        var qtyC=parseInt(mcs[2])||1;
+        var partnumC=mcs[4];
+        var descPartsC=[];
+        if(mcs[5])descPartsC.push(mcs[5].trim());
+        var extC=null;
+        var stopIdxC=idxC;
+        for(var jC=idxC+1;jC<Math.min(idxC+12,rows.length);jC++){
+          var rjC=rows[jC];
+          var mEndC=rjC.match(/^(.*?)\s+([\d,]+\.\d{2})\s*$/);
+          if(mEndC){
+            if(mEndC[1])descPartsC.push(mEndC[1].trim());
+            extC=parseFloat(mEndC[2].replace(/,/g,''))||0;
+            stopIdxC=jC;
+            break;
+          }
+          var mOnlyC=rjC.match(/^([\d,]+\.\d{2})\s*$/);
+          if(mOnlyC){
+            extC=parseFloat(mOnlyC[1].replace(/,/g,''))||0;
+            stopIdxC=jC;
+            break;
+          }
+          descPartsC.push(rjC);
+        }
+        if(extC){
+          lines.push({
+            qte:qtyC,
+            ref:partnumC,
+            desc:descPartsC.join(' ').replace(/\s+/g,' ').trim(),
+            pu:qtyC?(extC/qtyC):extC,
+            ext:extC
+          });
+          idxC=stopIdxC;
+        }
+      }
+    }
   }
 
   return {header:header,lines:lines,formatDetected:formatDetected};
@@ -3793,8 +3879,9 @@ function renderEimpPreview(formatDetected){
   // Raw text (debug)
   document.getElementById('eimp-raw-text').textContent=eimpState.rawText||'';
   document.getElementById('eimp-raw-wrap').style.display='block';
-  // Activation du bouton import
-  document.getElementById('eimp-confirm-btn').disabled=!(h.num||h.cref)||ls.length===0;
+  // Activation du bouton import : il suffit d'avoir N° proposition OU Customer Ref dans le header
+  // (les lignes peuvent être ajoutées manuellement via le bouton "+ Ajouter ligne")
+  document.getElementById('eimp-confirm-btn').disabled=!(h.num||h.cref);
 }
 
 // === Render des lignes éditables ===
@@ -3827,11 +3914,13 @@ function renderEimpLines(){
 function addEimpLine(){
   eimpState.lines.push({qte:1,ref:'',desc:'',pu:0,ext:0});
   renderEimpLines();
-  document.getElementById('eimp-confirm-btn').disabled=eimpState.lines.length===0;
+  // Bouton Importer : activé dès qu'on a un header (num ou cref)
+  if(eimpState.header){
+    document.getElementById('eimp-confirm-btn').disabled=!(eimpState.header.num||eimpState.header.cref);
+  }
 }
 function delEimpLine(i){
   if(eimpState.lines[i]){eimpState.lines.splice(i,1);renderEimpLines();}
-  document.getElementById('eimp-confirm-btn').disabled=eimpState.lines.length===0;
 }
 
 // === INJECTION : crée la proposition + ajoute les lignes + stocke le PDF ===
