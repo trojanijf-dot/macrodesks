@@ -3750,6 +3750,44 @@ function parseEmersonQuoteText(text){
   var tableZone=text.substring(tableStart,tableEnd);
   var rows=tableZone.split(/\n/).map(function(s){return s.trim();}).filter(function(s){return s;});
 
+  // Normalisation conditionnelle pour Format D :
+  // pdf.js peut extraire les Part Numbers avec des espaces autour des tirets selon la mise en page
+  // du PDF (ex: "SNG - A9530V3 - T03 -" au lieu de "SNG-A9530V3-T03-").
+  // Pour Format D spécifiquement, on pré-normalise les Part Numbers en retirant ces espaces.
+  // On ne touche PAS aux autres formats (A/B/C) car ils ont leurs propres logiques qui marchent.
+  if(hasPocKit){
+    rows=rows.map(function(r){
+      // Pattern Part Number avec espaces : "<LETTRES>(\s*-\s*<LETTRES/CHIFFRES>)+ "
+      // Ex: "SNG - A9530V3 - T03 -" → "SNG-A9530V3-T03-"
+      // Ex: "AO - SVC - ANA" → "AO-SVC-ANA"
+      // Ex: "1 SNG - A43 - 0 AMS..." → "1 SNG-A43-0 AMS..."
+      // On ne touche PAS aux tirets entre un mot long et un autre (ex: "CONCEPT - 10 TRANSMITTER")
+      // en vérifiant que les 2 côtés du tiret sont des tokens courts alphanumériques.
+      return r.replace(/\b([A-Z][A-Z0-9]{0,8})(\s+-\s+)([A-Z0-9][A-Z0-9]{0,10})/g,function(m,a,sep,b){
+        // Ne fusionner que si les deux côtés sont "PN-like" : courts, majuscules/chiffres
+        // Exclure les mots longs anglais (MACHINE, WIRELESS, etc.)
+        if(/^(MACHINE|WIRELESS|MONITOR|TEMPERATURE|ADVANCED|VERSION|CONCEPT|PRICING|SPECIAL|STARTER|GATEWAY|ANTENNA|ENGINEERING|SERVICES|REMOTE|ONSITE|HARDWARE|SOFTWARE|INSTALLATION|TRANSMITTER|FACTORY|PROGRAM|SYSTEM|AMS|EMERSON|ROSEMOUNT|PROOF|USER|LICENSE|SERVER|TAGS|MOUNTING|PAD|THREAD|HOLE|TRAVEL|HOURS|WORKS|DAYS|MONTHS|AUNZ|AUSTRALIA|ZEALAND|ORDER|UNIT|SINGLE|PART|NUMBER|TRI|AXIAL|AND|FOR|OF|TO|NEW|SHOULD|WITH|THE|OR|IN|ON|BY|AT|IS|IT|HAS|BEEN|BE|AS|ARE|MAY|HAVE|OUR|YOU|YOUR|ALL|NOT|NET|LOT|EACH|INCO|DDP|FCA|ARO|USD|AUD)$/i.test(a))return m;
+        if(/^(MACHINE|WIRELESS|MONITOR|TEMPERATURE|ADVANCED|VERSION|CONCEPT|PRICING|SPECIAL|STARTER|GATEWAY|ANTENNA|ENGINEERING|SERVICES|REMOTE|ONSITE|HARDWARE|SOFTWARE|INSTALLATION|TRANSMITTER|FACTORY|PROGRAM|SYSTEM|AMS|EMERSON|ROSEMOUNT|PROOF|USER|LICENSE|SERVER|TAGS|MOUNTING|PAD|THREAD|HOLE|TRAVEL|HOURS|WORKS|DAYS|MONTHS|AUSTRALIA|ZEALAND|ORDER|UNIT|SINGLE|PART|NUMBER|TRI|AXIAL|AND|FOR|OF|TO|NEW|SHOULD|WITH|THE|OR|IN|ON|BY|AT|IS|IT|HAS|BEEN|BE|AS|ARE|MAY|HAVE|OUR|YOU|YOUR|ALL|NOT|NET|LOT|EACH|INCO|DDP|FCA|ARO|USD|AUD)$/i.test(b))return m;
+        return a+'-'+b;
+      });
+    });
+    // 2ème passe pour les cas "A-B - C" où 2 fusions de suite sont possibles
+    rows=rows.map(function(r){
+      return r.replace(/([A-Z][A-Z0-9\-]{0,15})(\s+-\s+)([A-Z0-9][A-Z0-9]{0,10})/g,function(m,a,sep,b){
+        // Même règle : les 2 côtés doivent être PN-like (pas de mots anglais)
+        var lastSeg=a.split('-').pop();
+        if(/^(MACHINE|WIRELESS|MONITOR|TEMPERATURE|ADVANCED|VERSION|CONCEPT|PRICING|SPECIAL|STARTER|GATEWAY|ANTENNA|ENGINEERING|SERVICES|REMOTE|ONSITE|HARDWARE|SOFTWARE|INSTALLATION|TRANSMITTER|FACTORY|PROGRAM|SYSTEM|AMS|EMERSON|ROSEMOUNT|PROOF|USER|LICENSE|SERVER|TAGS|MOUNTING|PAD|THREAD|HOLE|TRAVEL|HOURS|WORKS|DAYS|MONTHS|AUSTRALIA|ZEALAND|ORDER|UNIT|SINGLE|PART|NUMBER|TRI|AXIAL|AND|FOR|OF|TO|NEW)$/i.test(lastSeg))return m;
+        if(/^(MACHINE|WIRELESS|MONITOR|TEMPERATURE|ADVANCED|VERSION|CONCEPT|PRICING|SPECIAL|STARTER|GATEWAY|ANTENNA|ENGINEERING|SERVICES|REMOTE|ONSITE|HARDWARE|SOFTWARE|INSTALLATION|TRANSMITTER|FACTORY|PROGRAM|SYSTEM|AMS|EMERSON|ROSEMOUNT|PROOF|USER|LICENSE|SERVER|TAGS|MOUNTING|PAD|THREAD|HOLE|TRAVEL|HOURS|WORKS|DAYS|MONTHS|AUSTRALIA|ZEALAND|ORDER|UNIT|SINGLE|PART|NUMBER|TRI|AXIAL|AND|FOR|OF|TO|NEW)$/i.test(b))return m;
+        return a+'-'+b;
+      });
+    });
+    // 3ème passe : coller le tiret orphelin en fin de ligne au PN
+    // Ex: "SNG-A9530V3-T03 -" → "SNG-A9530V3-T03-" (tiret final = continuation attendue)
+    rows=rows.map(function(r){
+      return r.replace(/([A-Z][A-Z0-9\-]{2,})\s+-$/,'$1-');
+    });
+  }
+
   if(hasCustLine){
     // === FORMAT A ===
     // Part Number sur la ligne suivante (ex: "214CRTSSB1S3M0170WAAF1C2B1GP2TB")
