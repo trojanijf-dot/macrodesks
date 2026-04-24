@@ -4365,19 +4365,49 @@ function downloadPreviewAsPDF(){
       imageTimeout:       20000,
       removeContainer:    true,
       onclone: function(clonedDoc){
-        // Dans le doc cloné par html2canvas, on s'assure que le fond est blanc
-        // (supprime la grille filigrane qui vient de body::before)
+        // Dans le doc cloné par html2canvas :
+        // 1. Supprimer la grille filigrane (body::before)
+        // 2. Compacter le document pour qu'il tienne sur 1 page A4
         var style=clonedDoc.createElement('style');
         style.textContent=
+          // === Suppression grille filigrane ===
           'html,body{background:#fff!important;background-image:none!important;}'+
           'body::before,body::after,html::before,html::after{display:none!important;content:none!important;background:none!important;}'+
           '*{background-image:none!important;}'+
+          // === Préservation des fonds colorés légitimes ===
           '.doc-info-bar{background:#eef2f7!important;background-image:none!important;}'+
           '.doc-tbl-bc thead th{background:#1e3a5f!important;background-image:none!important;}'+
           '.doc-tbl-bc .bc-section{background:#e8eff7!important;background-image:none!important;}'+
           '.doc-tbl-bc .bc-ext{background:#f8fafc!important;background-image:none!important;}'+
           '.bc-sig-header{background:#1e3a5f!important;background-image:none!important;}'+
-          '.doc-footer-bar{background:#1e3a5f!important;background-image:none!important;}';
+          '.doc-footer-bar{background:#1e3a5f!important;background-image:none!important;}'+
+          // === COMPACTAGE POUR TENIR SUR 1 PAGE A4 ===
+          // Réduction des tailles de police et paddings pour gagner en hauteur verticale
+          '.doc{font-size:10px!important;}'+
+          '.doc-head{margin-bottom:6px!important;padding-bottom:5px!important;}'+
+          '.doc-title{font-size:17px!important;}'+
+          '.doc-head img{max-height:45px!important;}'+
+          '.doc-info-bar{padding:6px 9px!important;margin-bottom:6px!important;}'+
+          '.doc-info-bar .dlbl{font-size:9px!important;}'+
+          '.doc-info-bar strong{font-size:11px!important;}'+
+          '.doc-parties{margin-bottom:6px!important;gap:14px!important;}'+
+          '.doc-party h4{font-size:11px!important;margin-bottom:3px!important;padding-bottom:2px!important;}'+
+          '.doc-party p{font-size:10px!important;line-height:1.4!important;}'+
+          // Tableau BC : padding réduit
+          '.doc-tbl-bc{font-size:10.5px!important;}'+
+          '.doc-tbl-bc thead th{padding:7px 8px!important;font-size:10.5px!important;}'+
+          '.doc-tbl-bc tbody td{padding:6px 8px!important;font-size:10.5px!important;}'+
+          '.doc-tbl-bc .bc-section{padding:6px 10px!important;font-size:11px!important;}'+
+          '.bc-table-wrap{margin-bottom:8px!important;}'+
+          // Footer : compacté
+          '.bc-footer-grid{margin-top:10px!important;gap:16px!important;}'+
+          '.bc-left-top,.bc-right-top{min-height:75px!important;}'+
+          '.bc-sig-header{padding:6px 10px!important;font-size:10.5px!important;}'+
+          '.bc-totals{font-size:11px!important;}'+
+          '.bc-totals td{padding:5px 7px!important;}'+
+          '.bc-total-row{font-size:13px!important;padding:8px 7px 2px 7px!important;min-height:32px!important;}'+
+          '.bc-refs{font-size:10px!important;padding:7px 5px 2px 5px!important;min-height:32px!important;}'+
+          '.doc-footer-bar{font-size:9px!important;padding:4px 8mm!important;margin-top:6px!important;}';
         clonedDoc.head.appendChild(style);
       }
     },
