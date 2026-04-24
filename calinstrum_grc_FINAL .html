@@ -171,6 +171,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .doc-tbl-bc .bc-pu{text-align:right;white-space:nowrap;font-size:11.5px;color:#111;font-variant-numeric:tabular-nums;font-weight:400;vertical-align:middle}
 .doc-tbl-bc .bc-ext{text-align:right;white-space:nowrap;font-weight:700;font-size:12px;color:#111;background:#f8fafc;font-variant-numeric:tabular-nums;vertical-align:middle;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .doc-tbl-bc .bc-section{text-align:left;background:#e8eff7;font-weight:700;font-size:12px;color:#1e3a5f;letter-spacing:.04em;padding:8px 11px;border:1px solid #cbd5e1;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+/* Bandeau bleu clair pour grouper les lignes d'une même proposition Emerson */
+.doc-tbl-bc .bc-prop-header{text-align:left;background:#dbeafe;font-weight:700;font-size:10.5px;color:#1e40af;letter-spacing:.03em;padding:6px 11px;border:1px solid #bfdbfe;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .bc-footer-grid{display:flex;flex-direction:row;gap:20px;margin-top:14px;align-items:stretch;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}
 .bc-footer-left{flex:1 1 50%;display:flex;flex-direction:column}
 .bc-footer-right{flex:1 1 50%;display:flex;flex-direction:column}
@@ -846,13 +848,16 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <button class="btn btn-ghost btn-sm" id="bcUndoBtn" onclick="doUndo()" title="Annuler la dernière suppression" disabled style="opacity:0.5;color:#fcd34d;border-color:rgba(252,211,77,0.3)">↶ Annuler suppression</button>
       <span style="font-size:9px;color:var(--muted);font-style:italic">Les titres regroupent visuellement les lignes (ex: « AMS WIRELESS VIBRATION MONITOR POC STARTER KIT »)</span>
     </div>
-    <table class="items-tbl"><thead><tr><th>#</th><th>Réf.</th><th style="min-width:170px">Description</th><th>Qté</th><th>PU</th><th>Montant</th><th></th></tr></thead>
+    <table class="items-tbl"><thead><tr><th>#</th><th>Réf.</th><th style="min-width:170px">Description</th><th>Qté</th><th>PU</th><th>Montant</th><th style="min-width:140px" title="Proposition Emerson associée à cette ligne">Prop.</th><th></th></tr></thead>
     <tbody id="bcLN"></tbody></table>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
       <div>
         <div style="font-weight:700;color:var(--teal);font-size:11px;margin-bottom:8px">✍️ Signature & Références</div>
         <div class="form-group"><label>Customer Ref #</label><input class="form-input" id="bc-cref2" placeholder="ex: 3276945832769458"></div>
-        <div class="form-group"><label>Emerson Proposal N° / Ver.</label><input class="form-input" id="bc-prop2" placeholder="ex: 29429380 Ver:2"></div>
+        <div class="form-group"><label>Propositions Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(un PO peut regrouper plusieurs propositions)</span></label>
+          <div id="bc-emerson-props-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
+          <button type="button" class="btn btn-ghost" style="font-size:11px;padding:5px 10px" onclick="addEmersonProp()">+ Ajouter proposition Emerson</button>
+        </div>
         <div class="form-group"><label>Remarques / Notes BC</label><textarea class="form-textarea" id="bc-notes" rows="2" placeholder="Notes internes..."></textarea></div>
       </div>
       <div>
@@ -1221,7 +1226,7 @@ function draftSaveTick(){
   try{
     var bcOpen=document.getElementById('mBC');
     if(bcOpen&&bcOpen.classList.contains('open')&&typeof bcL!=='undefined'&&(bcL.length||gvg('bc-num'))){
-      var draft={ts:new Date().toISOString(),id:(typeof eBCid!=='undefined'?eBCid:null),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),prop2:gvg('bc-prop2'),notes:gvg('bc-notes'),lines:bcL};
+      var draft={ts:new Date().toISOString(),id:(typeof eBCid!=='undefined'?eBCid:null),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:(typeof bcProps!=='undefined'?JSON.parse(JSON.stringify(bcProps)):[]),notes:gvg('bc-notes'),lines:bcL};
       localStorage.setItem('ci_grc3_draft_bc',JSON.stringify(draft));
     }
     var dvOpen=document.getElementById('mDV');
@@ -1271,7 +1276,13 @@ function checkDraftRecovery(){
               om('mBC');
               gv('bc-num',bcDraft.num||'');gv('bc-date',bcDraft.date||td());gv('bc-devise',bcDraft.devise||'AUD');
               gv('bc-status',bcDraft.status||'En attente');gv('bc-client-final',bcDraft.clientFinal||'');
-              gv('bc-cref2',bcDraft.cref2||bcDraft.cref||'');gv('bc-prop2',bcDraft.prop2||bcDraft.prop||'');gv('bc-notes',bcDraft.notes||'');
+              gv('bc-cref2',bcDraft.cref2||bcDraft.cref||'');
+              // Restaurer la liste props (ou migration depuis l'ancien prop2/prop)
+              if(Array.isArray(bcDraft.props)&&bcDraft.props.length){bcProps=JSON.parse(JSON.stringify(bcDraft.props));}
+              else if(bcDraft.prop2||bcDraft.prop){var pg=parseLegacyProp(bcDraft.prop2||bcDraft.prop||'');bcProps=[{num:pg.num,ver:pg.ver,amount:0}];}
+              else{bcProps=[];}
+              ensurePropIds();renderEmersonProps();
+              gv('bc-notes',bcDraft.notes||'');
               if(typeof populateBCDevisSelect==='function')populateBCDevisSelect();
               rBClines();
               sv('mBCtitle','Brouillon restauré — '+(bcDraft.num||'BC'));
@@ -3118,9 +3129,22 @@ function openBC(id){
   eBCid=id||null;bcL=[];rebuildAllParamSelects();
   if(id){
     var b=DB.bcs.find(function(x){return x.id===id;});
-    if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:(b.cref||''));gv('bc-prop2',b.prop2!=null?b.prop2:(b.prop||''));gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
+    if(b){gv('bc-num',b.num);gv('bc-date',b.date);gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:(b.cref||''));
+    // Migration : props (nouveau format liste) sinon prop2/prop (ancien format unique)
+    if(Array.isArray(b.props)&&b.props.length){bcProps=JSON.parse(JSON.stringify(b.props));}
+    else if(b.prop2||b.prop){
+      // Parse l'ancien format libre "27453702 Ver:2" en {num, ver}
+      var legacy=b.prop2||b.prop||'';
+      var parsed=parseLegacyProp(legacy);
+      bcProps=[{num:parsed.num,ver:parsed.ver,amount:0}];
+    } else {bcProps=[];}
+    ensurePropIds();
+    renderEmersonProps();
+    gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
-    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');gv('bc-prop2','');gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');sv('mBCtitle','Nouveau BC — Emerson');
+    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');
+    bcProps=[];renderEmersonProps();
+    gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');sv('mBCtitle','Nouveau BC — Emerson');
   }
   rBClines();om('mBC');
 }
@@ -3206,7 +3230,7 @@ function rBClines(){
       return'<tr style="background:rgba(45,212,191,0.08);border-top:2px solid rgba(244,63,94,0.5);border-bottom:2px solid rgba(244,63,94,0.5)">'+
         '<td style="text-align:center;color:var(--red);font-weight:700" title="Titre de section">▸</td>'+
         '<td colspan="3"><input style="width:100%;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.08em" value="'+esc(l.desc||'')+'" data-field="desc" data-idx="'+i+'" placeholder="Ex: AMS WIRELESS VIBRATION MONITOR POC STARTER KIT"></td>'+
-        '<td colspan="2" style="text-align:center"><button onclick="toggleBCHeaderMode('+i+')" title="Basculer entre mode Kit (1 prix pour toute la section) et mode Items (1 prix par item)" style="padding:3px 9px;border-radius:4px;font-size:9.5px;font-weight:700;cursor:pointer;background:'+modeBtnColor+';border-width:1px;border-style:solid">'+modeBtnLabel+'</button></td>'+
+        '<td colspan="3" style="text-align:center"><button onclick="toggleBCHeaderMode('+i+')" title="Basculer entre mode Kit (1 prix pour toute la section) et mode Items (1 prix par item)" style="padding:3px 9px;border-radius:4px;font-size:9.5px;font-weight:700;cursor:pointer;background:'+modeBtnColor+';border-width:1px;border-style:solid">'+modeBtnLabel+'</button></td>'+
         '<td style="white-space:nowrap">'+
           '<button class="bc-up-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Monter">▲</button>'+
           '<button class="bc-down-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Descendre">▼</button>'+
@@ -3232,6 +3256,7 @@ function rBClines(){
         '</td>'+
         '<td rowspan="'+rowspan+'" style="vertical-align:middle;background:rgba(59,130,246,.04)"><input type="number" style="width:80px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'" title="Prix du lot (global)"></td>'+
         '<td rowspan="'+rowspan+'" style="font-weight:700;color:var(--teal);vertical-align:middle;background:rgba(59,130,246,.04)" title="Prix du lot (Kit)">'+fN(lineExt)+'</td>'+
+        '<td rowspan="'+rowspan+'" style="vertical-align:middle;background:rgba(59,130,246,.04)"><select class="form-input bc-prop-select" style="width:100%;font-size:11px;padding:4px 6px" data-prop-link="'+i+'" title="Proposition Emerson pour tout le KIT">'+buildPropSelectOptions(l.propId||'')+'</select></td>'+
         '<td rowspan="'+rowspan+'" style="white-space:nowrap;vertical-align:middle;background:rgba(59,130,246,.04)">'+
           '<button class="bc-up-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Monter">▲</button>'+
           '<button class="bc-down-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Descendre">▼</button>'+
@@ -3261,6 +3286,7 @@ function rBClines(){
       '<td><input type="number" style="width:55px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'"></td>'+
       '<td><input type="number" style="width:80px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'"></td>'+
       '<td style="font-weight:700;color:var(--teal)" title="Qté × PU">'+fN(lineExt)+'</td>'+
+      '<td><select class="form-input bc-prop-select" style="width:100%;font-size:11px;padding:4px 6px" data-prop-link="'+i+'">'+buildPropSelectOptions(l.propId||'')+'</select></td>'+
       '<td style="white-space:nowrap">'+
         '<button class="bc-up-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Monter">▲</button>'+
         '<button class="bc-down-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 3px" title="Descendre">▼</button>'+
@@ -3317,6 +3343,18 @@ function rBClines(){
   });
   tb.querySelectorAll('.bc-addsub-btn').forEach(function(btn){
     btn.addEventListener('click',function(){var idx=parseInt(this.getAttribute('data-idx'));if(!isNaN(idx))addBCKitSubLine(idx);});
+  });
+  // Changement de la proposition Emerson associée à une ligne (ou à un KIT entier)
+  tb.querySelectorAll('.bc-prop-select').forEach(function(sel){
+    sel.addEventListener('change',function(){
+      var idx=parseInt(this.getAttribute('data-prop-link'));
+      if(!isNaN(idx)&&bcL[idx]){
+        var newId=this.value||'';
+        if(newId) bcL[idx].propId=newId;
+        else delete bcL[idx].propId;
+        // Pas de rBClines() pour éviter de perdre le focus — le select a déjà la bonne valeur visuellement
+      }
+    });
   });
   // Supprimer une sous-ligne d'un KIT (avec undo)
   tb.querySelectorAll('.bc-delsub-btn').forEach(function(btn){
@@ -3437,7 +3475,7 @@ function cBCtot(){
   sv('bcDeviseLbl','Total Amount ('+dv+')');
   return{sub:sub,disc:discAmt,sales:salesAmt,other:other,ship:ship,total:total};
 }
-function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),prop2:gvg('bc-prop2'),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr')};}
+function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;ensurePropIds();return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr')};}
 function populateBCDevisSelect(){
   var sel=document.getElementById('bc-devis-lie');
   if(!sel)return;
@@ -3462,6 +3500,93 @@ function onBCDevisLie(){
   var lDevis=document.getElementById('bc-link-devis');
   if(lDevis&&!lDevis.value)lDevis.value=d.num||'';
 }
+// Parse un ancien champ Emerson Proposal libre "27453702 Ver:2" en {num, ver}
+function parseLegacyProp(str){
+  if(!str)return{num:'',ver:''};
+  var s=String(str).trim();
+  // Cherche un pattern "XXXX Ver:Y" ou "XXXX v:Y" ou "XXXX Version Y"
+  var m=s.match(/^(.+?)\s+(?:ver|v)\s*[:.\s]\s*(.+)$/i);
+  if(m) return{num:m[1].trim(),ver:m[2].trim()};
+  return{num:s,ver:''};
+}
+// ===============================================================
+// Gestion de la liste des propositions Emerson (multi-props par PO)
+// ===============================================================
+// State : bcProps = [{num:'27453702', ver:'2', amount:3480}, ...]
+var bcProps=[];
+
+// Rend la liste des propositions dans le formulaire (inputs éditables)
+function renderEmersonProps(){
+  var list=document.getElementById('bc-emerson-props-list');
+  if(!list)return;
+  if(!bcProps||bcProps.length===0){
+    list.innerHTML='<div style="color:var(--muted);font-size:11px;font-style:italic;padding:4px 0">Aucune proposition Emerson. Cliquez sur « + Ajouter » ci-dessous.</div>';
+    return;
+  }
+  var html='';
+  bcProps.forEach(function(p,i){
+    html+='<div style="display:flex;gap:6px;align-items:center">'+
+      '<input class="form-input" style="flex:2" placeholder="N° proposition (ex: 27453702)" value="'+esc(p.num||'')+'" data-prop-field="num" data-prop-idx="'+i+'">'+
+      '<input class="form-input" style="flex:1" placeholder="Ver. (ex: 2)" value="'+esc(p.ver||'')+'" data-prop-field="ver" data-prop-idx="'+i+'">'+
+      '<input type="number" class="form-input" style="flex:1" placeholder="Montant" value="'+(p.amount!=null?p.amount:'')+'" data-prop-field="amount" data-prop-idx="'+i+'">'+
+      '<button type="button" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:15px;padding:4px 8px" title="Supprimer cette proposition" onclick="delEmersonProp('+i+')">✕</button>'+
+    '</div>';
+  });
+  list.innerHTML=html;
+  // Listeners pour mise à jour en live
+  list.querySelectorAll('input[data-prop-field]').forEach(function(inp){
+    inp.addEventListener('input',function(){
+      var idx=parseInt(this.getAttribute('data-prop-idx'));
+      var field=this.getAttribute('data-prop-field');
+      if(isNaN(idx)||!bcProps[idx])return;
+      if(field==='amount'){bcProps[idx][field]=parseFloat(this.value)||0;}
+      else{bcProps[idx][field]=this.value;}
+      // Rafraîchir les selects dans le tableau (pour refléter le changement de label)
+      refreshPropSelects();
+    });
+  });
+}
+function addEmersonProp(){
+  bcProps.push({num:'',ver:'',amount:0});
+  renderEmersonProps();
+  refreshPropSelects();
+}
+function delEmersonProp(idx){
+  if(bcProps[idx]){
+    // Si une ligne du tableau est associée à cette proposition, on enlève l'association
+    var removedId=bcProps[idx].id;
+    (bcL||[]).forEach(function(l){
+      if(l.propId===removedId) delete l.propId;
+      if(Array.isArray(l.subLines)) l.subLines.forEach(function(s){if(s.propId===removedId) delete s.propId;});
+    });
+    bcProps.splice(idx,1);
+    renderEmersonProps();
+    rBClines();
+  }
+}
+// Donne à chaque proposition un ID unique (pour les associer aux lignes)
+function ensurePropIds(){
+  bcProps.forEach(function(p,i){if(!p.id) p.id='prop_'+Date.now()+'_'+i+'_'+Math.random().toString(36).slice(2,7);});
+}
+// Rafraîchit tous les <select> dans le tableau BC pour refléter les propositions courantes
+function refreshPropSelects(){
+  ensurePropIds();
+  var selects=document.querySelectorAll('select.bc-prop-select');
+  selects.forEach(function(sel){
+    var currentVal=sel.value;
+    sel.innerHTML=buildPropSelectOptions(currentVal);
+  });
+}
+// Construit les <option> pour un select de proposition
+function buildPropSelectOptions(selectedId){
+  var opts='<option value="">— Aucune —</option>';
+  bcProps.forEach(function(p){
+    var label=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
+    opts+='<option value="'+esc(p.id)+'"'+(p.id===selectedId?' selected':'')+'>'+esc(label)+'</option>';
+  });
+  return opts;
+}
+
 function saveBC(){
   var b=getBC();if(!b.num){alert('N° PO manquant');return;}
   var wasNew=!eBCid;
@@ -3945,23 +4070,58 @@ function bFA(f){
 }
 
 function bBC(b){
+  // Liste des propositions Emerson du BC (nouveau format multi-props)
+  var propsList=Array.isArray(b.props)?b.props:[];
+  // Fallback migration : si pas de liste mais un ancien champ prop2/prop, on crée une liste à 1 élément
+  if(propsList.length===0 && (b.prop2||b.prop)){
+    var legacyStr=b.prop2||b.prop||'';
+    var m=legacyStr.match(/^(.+?)\s+(?:ver|v)\s*[:.\s]\s*(.+)$/i);
+    if(m) propsList=[{id:'legacy',num:m[1].trim(),ver:m[2].trim(),amount:0}];
+    else propsList=[{id:'legacy',num:legacyStr,ver:'',amount:0}];
+  }
+  // Dictionnaire id → proposition pour lookup rapide
+  var propById={};
+  propsList.forEach(function(p){if(p.id)propById[p.id]=p;});
+
+  // === REGROUPEMENT des lignes par proposition associée ===
+  // On traverse b.lines dans l'ordre d'origine. Quand on rencontre une ligne qui a un propId
+  // différent de la proposition courante (et non vide), on insère une ligne d'en-tête de proposition.
+  // Les lignes sans propId restent dans la section courante.
   var itemNum=0;
   var currentMode='items';
-  var rows=(b.lines||[]).map(function(l,i){
+  var currentPropId=null;
+  var rowsArr=[];
+
+  (b.lines||[]).forEach(function(l){
     if(l.type==='header'){
       currentMode=l.mode||'items';
-      return'<tr class="bc-section-row"><td class="bc-section" colspan="6">'+esc(l.desc||'')+'</td></tr>';
+      // Section utilisateur : respecte son layout existant (colspan 6)
+      rowsArr.push('<tr class="bc-section-row"><td class="bc-section" colspan="6">'+esc(l.desc||'')+'</td></tr>');
+      return;
     }
+    // Vérifier si cette ligne introduit un nouveau groupe de proposition
+    var linePropId=l.propId||'';
+    // N'affiche un en-tête que si la ligne a un propId valide ET que ce propId est différent du courant
+    if(propsList.length>0 && linePropId && linePropId!==currentPropId){
+      var p=propById[linePropId];
+      if(p){
+        var lbl=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
+        rowsArr.push('<tr class="bc-prop-row"><td class="bc-prop-header" colspan="6">📋 EMERSON PROPOSAL : '+esc(lbl)+(p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'')+'</td></tr>');
+        currentPropId=linePropId;
+      }
+    }
+
     itemNum++;
     var total=(currentMode==='kit')?(Number(l.pu)||0):((Number(l.qte)||0)*(Number(l.pu)||0));
+
     if(currentMode==='kit'){
       var subs=Array.isArray(l.subLines)?l.subLines:[];
       if(!Array.isArray(l.subLines) && l.desc && l.desc.indexOf('\n')>=0){
         var allLines=l.desc.split(/\r?\n/).filter(function(s){return s.trim().length>0;});
         var mainDescFallback=allLines[0]||'';
         subs=allLines.slice(1).map(function(s){
-          var m=s.match(/^\s*(\d+)\s+(\S+)\s+(.+)$/);
-          if(m) return {qte:+m[1], ref:m[2], desc:m[3]};
+          var m2=s.match(/^\s*(\d+)\s+(\S+)\s+(.+)$/);
+          if(m2) return {qte:+m2[1], ref:m2[2], desc:m2[3]};
           return {qte:'', ref:'', desc:s.trim()};
         });
         var tmpL=Object.assign({},l,{desc:mainDescFallback});
@@ -3983,17 +4143,32 @@ function bBC(b){
           '<td class="bc-sub-desc">'+esc(sub.desc||'')+'</td>'+
         '</tr>';
       });
-      return html;
+      rowsArr.push(html);
+      return;
     }
-    return'<tr class="bc-item-row">'+
+    rowsArr.push('<tr class="bc-item-row">'+
       '<td class="bc-item">'+itemNum+'</td>'+
       '<td class="bc-qty">'+(l.qte||0)+'</td>'+
       '<td class="bc-ref">'+esc(l.ref||'')+'</td>'+
       '<td class="bc-desc">'+esc(l.desc||'')+'</td>'+
       '<td class="bc-pu">'+fN(l.pu)+'</td>'+
       '<td class="bc-ext">'+fN(total)+'</td>'+
-    '</tr>';
-  }).join('');
+    '</tr>');
+  });
+  var rows=rowsArr.join('');
+
+  // === Bloc récap des propositions Emerson (sous la signature) ===
+  // Chaque proposition listée avec son N°, Version et Montant
+  var propsHtml='';
+  if(propsList.length>0){
+    propsHtml+='<strong>Emerson Proposals:</strong>';
+    propsList.forEach(function(p){
+      var lbl=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
+      var amt=p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'';
+      propsHtml+='<br>&nbsp;&nbsp;• '+esc(lbl)+amt;
+    });
+  }
+
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   return'<div class="doc">'+
     '<div class="doc-head" style="align-items:flex-end"><div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div><div style="width:50%;text-align:right"><div class="doc-title">PURCHASE ORDER</div></div></div>'+
@@ -4023,9 +4198,10 @@ function bBC(b){
           '<div class="bc-sig-cell"></div>'+
         '</div>'+
         '<div class="bc-refs">'+
-          // Affichage du Customer Ref # et Emerson Proposal (avec fallback sur l'ancien champ pour les BC historiques)
+          // Customer Ref # (avec fallback sur l'ancien champ)
           ((b.cref2||b.cref)?'<strong>Customer Ref #:</strong> '+esc(b.cref2||b.cref)+'<br>':'')+
-          ((b.prop2||b.prop)?'<strong>Emerson Proposal:</strong> '+esc(b.prop2||b.prop):'')+
+          // Liste des Emerson Proposals (multi-props) — chacune avec N° Ver:X et Montant
+          propsHtml+
         '</div>'+
       '</div>'+
       '<div class="bc-footer-right">'+
@@ -4468,6 +4644,8 @@ function downloadPreviewAsPDF(){
           '.doc-tbl-bc .bc-desc,.doc-tbl-bc .bc-sub-desc{vertical-align:top!important;padding-top:8px!important;line-height:1.4!important;}'+
           '.doc-tbl-bc .bc-item,.doc-tbl-bc .bc-qty,.doc-tbl-bc .bc-sub-qty,.doc-tbl-bc .bc-ref,.doc-tbl-bc .bc-sub-ref,.doc-tbl-bc .bc-pu,.doc-tbl-bc .bc-ext{vertical-align:middle!important;}'+
           '.doc-tbl-bc .bc-section{padding:5px 9px!important;font-size:11px!important;}'+
+          // Bandeau bleu clair pour grouper les lignes d'une même proposition Emerson
+          '.doc-tbl-bc .bc-prop-header{background:#dbeafe!important;color:#1e40af!important;font-weight:700!important;font-size:10px!important;padding:5px 9px!important;border:1px solid #bfdbfe!important;}'+
           '.bc-table-wrap{margin-bottom:14px!important;}'+
           // Footer : compacté MAIS avec air entre tableau et footer
           '.bc-footer-grid{margin-top:16px!important;gap:14px!important;}'+
@@ -4708,6 +4886,8 @@ function doPrint(){
     .doc-tbl-bc .bc-ext{text-align:right!important;white-space:nowrap!important;font-weight:700!important;font-size:12px!important;color:#111!important;background:#f8fafc!important;font-variant-numeric:tabular-nums!important;vertical-align:middle!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
     /* Bandeau de section (colspan=6) */
     .doc-tbl-bc .bc-section{text-align:left!important;background:#e8eff7!important;font-weight:700!important;font-size:12px!important;color:#1e3a5f!important;letter-spacing:.04em!important;padding:8px 11px!important;border:1px solid #cbd5e1!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
+    /* Bandeau bleu clair pour grouper les lignes d'une même proposition Emerson */
+    .doc-tbl-bc .bc-prop-header{text-align:left!important;background:#dbeafe!important;font-weight:700!important;font-size:10.5px!important;color:#1e40af!important;letter-spacing:.03em!important;padding:6px 11px!important;border:1px solid #bfdbfe!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
 
     /* ==== Footer BC : 2 colonnes, chacune découpée en [top flex:1] + [bottom fixe],
        pour aligner PARFAITEMENT les séparateurs (les 2 lignes rouges/bleues) ==== */
