@@ -4323,10 +4323,8 @@ var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;p
 // TÉLÉCHARGEMENT PDF HAUTE DÉFINITION - capture directe de l'aperçu
 // ========================================================================
 // Utilise html2pdf.js pour capturer le DOM de l'aperçu EXACTEMENT tel qu'il
-// s'affiche à l'écran, sans passer par le moteur d'impression du navigateur
-// (qui re-layoute et dégrade la qualité).
+// s'affiche à l'écran, sans passer par le moteur d'impression du navigateur.
 // Scale 4x = résolution ~400dpi (qualité pro max)
-// Format PNG (pas de compression) + largeur forcée 190mm pour tenir dans A4
 function downloadPreviewAsPDF(){
   var c=document.getElementById('prvBody');
   if(!c){alert('Aucun aperçu à télécharger.');return;}
@@ -4338,35 +4336,44 @@ function downloadPreviewAsPDF(){
   var docTitle=titleEl?titleEl.textContent:'CALINSTRUM';
   var filename=docTitle.replace(/[^a-zA-Z0-9_\-]/g,'_').replace(/_+/g,'_')+'.pdf';
 
-  // === Préparation du clone avec largeur A4 forcée ===
-  // A4 portrait = 210mm. Avec marges 10mm de chaque côté → largeur utile = 190mm
-  // À 96 DPI (standard écran), 190mm = 718px
-  // On force la largeur pour que le layout tienne PARFAITEMENT dans la page sans débordement.
-  var A4_WIDTH_PX = 718; // 190mm * 96/25.4
+  // Récupérer le .doc intérieur (le vrai contenu) plutôt que prvBody qui a du padding/scrollbars
+  var docEl=c.querySelector('.doc');
+  if(!docEl){alert('Aucun document à exporter.');return;}
 
-  // Créer un conteneur temporaire qu'on ajoutera au DOM (nécessaire pour que html2canvas mesure correctement)
-  var wrapper=document.createElement('div');
-  wrapper.id='pdfExportWrapper';
-  wrapper.style.cssText='position:fixed;top:-99999px;left:0;width:'+A4_WIDTH_PX+'px;background:#fff;font-family:Helvetica,Arial,sans-serif;z-index:-1;';
+  // Cloner proprement en réinitialisant tous les styles de positionnement
+  var clone=docEl.cloneNode(true);
+  // Reset complet de tout ce qui pourrait décaler le contenu
+  clone.style.cssText=[
+    'background:#fff',
+    'width:190mm',              // largeur utile A4 avec marges 10mm
+    'max-width:190mm',
+    'min-height:auto',
+    'padding:0',
+    'margin:0',
+    'position:static',           // IMPORTANT : supprimer tout position fixed/absolute hérité
+    'transform:none',
+    'left:auto','top:auto','right:auto','bottom:auto',
+    'box-sizing:border-box',
+    'font-family:Helvetica,Arial,sans-serif',
+    'color:#111',
+    'display:block',
+    'float:none',
+    'overflow:visible'
+  ].join(';');
 
-  var clone=c.cloneNode(true);
-  // Forcer le clone à prendre TOUTE la largeur du wrapper (A4 utile)
-  clone.style.cssText='background:#fff;width:100%;max-width:100%;padding:0;margin:0;box-sizing:border-box;font-family:Helvetica,Arial,sans-serif;';
-
-  // Dans le clone, forcer les tableaux BC à utiliser 100% de la largeur disponible
-  // et réduire les tailles qui pourraient causer un débordement
-  var bcTables=clone.querySelectorAll('.doc-tbl-bc,.bc-table-wrap');
+  // Forcer les tableaux BC à rester dans la largeur
+  var bcTables=clone.querySelectorAll('.doc-tbl-bc');
   bcTables.forEach(function(t){
     t.style.width='100%';
     t.style.maxWidth='100%';
-    t.style.tableLayout='fixed';
+    t.style.tableLayout='auto';
   });
+  var bcWraps=clone.querySelectorAll('.bc-table-wrap');
+  bcWraps.forEach(function(w){w.style.width='100%';w.style.maxWidth='100%';w.style.boxSizing='border-box';});
+
   // Forcer toutes les images à rester dans le cadre
   var imgs=clone.querySelectorAll('img');
   imgs.forEach(function(im){im.style.maxWidth='100%';im.style.height='auto';});
-
-  wrapper.appendChild(clone);
-  document.body.appendChild(wrapper);
 
   // Indicateur de progression
   var loader=document.createElement('div');
@@ -4377,19 +4384,19 @@ function downloadPreviewAsPDF(){
 
   // Options html2pdf — qualité MAXIMALE
   var opt={
-    margin:       [10, 10, 10, 10], // marges uniformes 10mm (égales de chaque côté)
+    margin:       10,                  // 10mm uniformes
     filename:     filename,
-    image:        { type: 'png', quality: 1.0 }, // PNG = pas de compression = texte plus net que JPEG
+    image:        { type: 'png', quality: 1.0 },
     html2canvas:  {
-      scale: 4,                    // 4x = ~400 DPI (qualité imprimante pro)
+      scale: 4,
       useCORS: true,
       letterRendering: true,
       allowTaint: false,
       backgroundColor: '#ffffff',
       logging: false,
-      windowWidth: A4_WIDTH_PX,    // force le viewport à la largeur A4 pour que le layout soit calculé correctement
-      width: A4_WIDTH_PX,          // largeur du canvas = largeur cible exacte
-      imageTimeout: 15000,         // laisser le temps aux images de charger
+      x: 0, y: 0,                      // capture depuis le coin haut-gauche
+      scrollX: 0, scrollY: 0,          // pas de décalage de scroll
+      imageTimeout: 15000,
       removeContainer: true
     },
     jsPDF:        {
@@ -4406,14 +4413,12 @@ function downloadPreviewAsPDF(){
   setTimeout(function(){
     html2pdf().set(opt).from(clone).save().then(function(){
       var l=document.getElementById('pdfLoader');if(l)l.remove();
-      var w=document.getElementById('pdfExportWrapper');if(w)w.remove();
     }).catch(function(err){
       console.error('Erreur génération PDF:',err);
       var l=document.getElementById('pdfLoader');if(l)l.remove();
-      var w=document.getElementById('pdfExportWrapper');if(w)w.remove();
       alert('Erreur lors de la génération du PDF :\n'+(err.message||err));
     });
-  },150);
+  },200);
 }
 
 function doPrint(){
