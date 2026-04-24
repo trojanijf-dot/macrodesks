@@ -3793,76 +3793,35 @@ function parseEmersonQuoteText(text){
       }
     });
   } else if(hasPocKit){
-    // === FORMAT D v2 (POC Starter Kit avec sections et KIT groupé) ===
+    // === FORMAT D v3 (POC Starter Kit) — VERSION MINIMALISTE ===
     //
-    // Stratégie : ANCRAGE PAR LES MONTANTS.
+    // Philosophie : ce format (PDF AUNZ2620346) est trop complexe pour extraire
+    // proprement descriptions / sections / KIT. On se concentre sur l'essentiel :
+    //  - Trouver les lignes-ancres avec montants (PU+EXT ou EXT seul)
+    //  - Extraire Qté et Part Number de chaque ancre
+    //  - Laisser la description VIDE (l'utilisateur complète dans le preview avant import)
+    //  - Ne pas tenter de détecter sections/KITs
     //
-    // 1. On identifie TOUTES les lignes-ancres (lignes qui contiennent un PU+EXT ou juste EXT en fin)
-    //    Ces ancres sont les "items" du tableau.
-    // 2. Pour chaque ancre, on remonte dans les lignes précédentes pour reconstituer :
-    //    - Le Part Number (fragments type "SNG - A9530V3 - T03 -" + "AUNZ")
-    //    - La quantité (peut être dans la ligne ancre OU juste avant)
-    //    - La description (lignes non-PN, non-section, non-item)
-    //    - La section courante (bandeau majuscule juste au-dessus)
-    // 3. Pour un KIT : plusieurs ancres partagent un seul montant global.
-    //    Détection : si entre deux ancres il y a plusieurs Part Numbers sans montants propres,
-    //    ces items sont des sous-lignes du KIT (qui a le montant).
-    //
-    // Test cible : PDF AUNZ2620346 (4 items, 3 sections, KIT avec 4 sous-lignes, somme = 21230)
+    // Objectif : livrer des lignes PROPRES avec montants corrects, plutôt que des
+    // extractions approximatives que l'utilisateur devra corriger partout.
 
-    // --- Helper : reconstruire un Part Number à partir de plusieurs lignes adjacentes ---
-    // Cas : "SNG - A9530V3 - T03 -" puis "AUNZ" → "SNG-A9530V3-T03-AUNZ"
-    // Cas : "SNG - A9530V3 - T00 -" puis "AUNZ" → "SNG-A9530V3-T00-AUNZ"
-    function isPartNumberFragment(s){
+    // Helpers locaux (redéfinis ici car fonction séparée)
+    function isPartNumberFragmentD(s){
       if(!s)return false;
       var t=s.trim();
-      // Un fragment de PN : commence par 2-6 lettres majuscules, contient des tirets (éventuellement espacés)
-      // Accepter avec ou sans "-" terminal (signe de continuation)
-      // Ex: "SNG - A9530V3 - T03 -" (continuation attendue) OU "SNG - A43 - 0" (complet)
-      if(/^[A-Z]{2,6}(\s*-\s*[A-Z0-9]+)+\s*-?\s*$/.test(t))return true;
-      return false;
+      return /^[A-Z]{2,6}(\s*-\s*[A-Z0-9]+)+\s*-?\s*$/.test(t);
     }
-    // Dit si un fragment attend une continuation (se termine par "-")
-    function needsPartNumberContinuation(s){
-      if(!s)return false;
-      return /\-\s*$/.test(s.trim());
-    }
-    function isPartNumberContinuation(s){
+    function isPartNumberContinuationD(s){
       if(!s)return false;
       var t=s.trim();
       return /^[A-Z][A-Z0-9]{1,10}$/.test(t);
     }
 
-    // --- Helper : détecter un bandeau de section ---
-    function isSectionBanner(s){
-      if(!s)return false;
-      var t=s.trim();
-      if(t.length<12||t.length>100)return false;
-      if(/[\d,]+\.\d{2}/.test(t))return false;
-      if(isPartNumberFragment(t))return false;
-      if(/[a-z]/.test(t))return false;
-      var words=t.split(/\s+/);
-      if(words.length<3)return false;
-      if(/^(ITEM|QTY|PART|DESCRIPTION|UNIT|EXTENDED|PRICE|AUD|COMMERCIAL|TOTAL|LOT|EACH|FAX_INFO|FINAL|RETURN|CALINSTRUM|NOUMEA|REFERENCE|EMERSON|PROJECT|TO|FROM|PHONE|MOBILE|EMAIL|TABLE|PAGE|NOTE|SUMMARY|ADVANCED|TEMPERATURE|FOR|TRI|AXIAL)\b/i.test(t))return false;
-      if(/^\d+\s+\d+\s/.test(t))return false;
-      if(/\*/.test(t))return false;
-      if(/\s-\s/.test(t))return false;
-      // Un section banner DOIT contenir au moins un des mots thématiques d'une catégorie
-      // (SYSTEM, KIT, GATEWAY, ANTENNA, SERVICES, HARDWARE, ENGINEERING, MONITOR, SOFTWARE, MACHINE)
-      if(!/\b(SYSTEM|KIT|GATEWAY|ANTENNA|SERVICES|HARDWARE|ENGINEERING|MONITOR|SOFTWARE|MACHINE|STARTER|WIRELESS|PROCESS)\b/i.test(t))return false;
-      return true;
-    }
-
-    // --- Helper : trouve tous les index de "lignes-ancres" avec montants ---
-    // Type d'ancre :
-    //   'PU_EXT' : ligne contient 2 montants (PU et EXT), ex: "1 9,126.00 9,126.00" ou "2 6 SNG... 1,740.00 10,440.00"
-    //   'EXT_only' : ligne contient 1 montant seul (LOT item), ex: "4 1 LOT AO - SVC - ANA ( 4 HOURS) 880.00"
+    // 1. Identifier toutes les lignes-ancres avec montants
     var anchors=[];
     for(var ai=0;ai<rows.length;ai++){
       var ar=rows[ai];
-      // Deux montants à la fin ?
       var mTwo=ar.match(/([\d,\s]+\.\d{2})\s+([\d,\s]+\.\d{2})\s*$/);
-      // Un seul montant à la fin ?
       var mOne=ar.match(/([\d,\s]+\.\d{2})\s*$/);
       if(mTwo){
         anchors.push({idx:ai,type:'PU_EXT',pu:parseNum(mTwo[1]),ext:parseNum(mTwo[2]),row:ar});
@@ -3871,303 +3830,151 @@ function parseEmersonQuoteText(text){
       }
     }
 
-    // --- Pour chaque ancre, reconstituer l'item ---
-    var lastSectionPushed=null; // pour éviter de pousser 2 fois la même section
+    // 2. Pour chaque ancre, extraire Qté + PartNumber (description laissée vide)
     anchors.forEach(function(anc,ancIdx){
-      // Zone de remontée : depuis l'ancre précédente (exclusive) jusqu'à celle-ci (inclusive)
-      var startIdx=(ancIdx>0?anchors[ancIdx-1].idx+1:0);
-      var endIdx=anc.idx;
-      var zone=rows.slice(startIdx,endIdx+1);
-      // La dernière ligne de zone = ligne ancre elle-même
-      // On va décomposer :
-      //  - sectionTitle éventuel (au début de zone)
-      //  - qty (cherché dans zone)
-      //  - Part Number (fragments dans zone)
-      //  - desc (reste)
+      var row=anc.row;
+      var ancStripped=row
+        .replace(/[\d,\s]+\.\d{2}\s+[\d,\s]+\.\d{2}\s*$/,'')
+        .replace(/[\d,\s]+\.\d{2}\s*$/,'')
+        .trim();
 
-      // a) Chercher le titre de section dans la zone (on prend la dernière section trouvée)
-      var sectionInZone=null;
-      zone.forEach(function(z){if(isSectionBanner(z))sectionInZone=z;});
-      if(sectionInZone && sectionInZone!==lastSectionPushed){
-        lines.push({type:'header',mode:'items',desc:sectionInZone});
-        lastSectionPushed=sectionInZone;
-      }
-
-      // b) Extraire la qty : priorité à la ligne ancre elle-même
-      // Cas "PU_EXT" : "2 6 SNG-... 1,740.00 10,440.00" → qty est le 2ème nombre (6)
-      //               OU "1 9,126.00 9,126.00" → ligne finale KIT : pas de qty ici, qty=1 par défaut
-      // Cas "EXT_only" : "4 1 LOT AO-SVC-ANA ... 880.00" → qty=1 (2ème nombre)
       var qty=1;
-      var ancRowStripped=anc.row.replace(/[\d,\s]+\.\d{2}\s*$/g,'').replace(/[\d,\s]+\.\d{2}\s*$/g,'').trim();
-      var mQ=ancRowStripped.match(/^(\d+)\s+(\d+)/);
-      if(mQ){qty=parseInt(mQ[2])||1;}
-
-      // c) Extraire le Part Number
-      //   Stratégie : chercher dans la zone les fragments de PN et les concaténer
-      //   Un fragment de PN = "SNG - A9530V3 - T03 -" (se termine par "-" signifiant continuation)
-      //   Continuation = ligne isolée "AUNZ", "T03", etc.
-      //   OU le PN est sur la ligne ancre elle-même (cas ligne complète type B)
       var partNum='';
-      var descParts=[];
-
-      // Tente d'abord : PN sur la ligne ancre
-      // Ex: "2 6 SNG - A9530V3 - T00 - AUNZ FOR ORDER... 1,740.00 10,440.00"
-      //     ou "3 1 6 SNG - A212 MOUNTING PAD 1/4 - 28 THREAD HOLE 49.00 784.00"
-      var ancStripped=anc.row.replace(/[\d,\s]+\.\d{2}\s+[\d,\s]+\.\d{2}\s*$/,'').replace(/[\d,\s]+\.\d{2}\s*$/,'').trim();
-      // Retire le préfixe chiffre(s) (item#, qty)
-      var ancNoLead=ancStripped.replace(/^\d+(\s+\d+)?(\s+\d+)?\s*/,'').trim();
-      // ancNoLead = "SNG - A9530V3 - T00 - AUNZ FOR ORDER QTY 1 - 9 FOR AUSTRALIA..."
-      //             "SNG - A212 MOUNTING PAD 1/4 - 28 THREAD HOLE"
-      //             "LOT AO - SVC - ANA ( 4 HOURS)"
-
-      if(ancNoLead){
-        // Retirer "LOT" en tête si présent
-        ancNoLead=ancNoLead.replace(/^LOT\s+/i,'');
-        // Tokeniser par ' - '
-        var tokens=ancNoLead.split(/\s+-\s+/);
-        // Fix 1 : pour CHAQUE token, si on trouve "mot court + texte long en majuscules", splitter
-        // Ex: "A212 MOUNTING PAD 1/4" → ["A212", "MOUNTING PAD 1/4"]
-        // Ex: "APA TRAVEL AND LIVING EXPENSES" → ["APA", "TRAVEL AND LIVING EXPENSES"]
-        var expandedTokens=[];
-        tokens.forEach(function(tk){
-          tk=tk.trim();if(!tk){return;}
-          // Split sur mot court + texte long en majuscules OU + "(" OU + chiffre
-          // Ex: "A212 MOUNTING PAD 1/4" → ["A212", "MOUNTING PAD 1/4"]
-          // Ex: "APA TRAVEL AND LIVING EXPENSES" → ["APA", "TRAVEL AND LIVING EXPENSES"]
-          // Ex: "ANA ( 4 HOURS)" → ["ANA", "( 4 HOURS)"]
-          var mSplit=tk.match(/^([A-Z][A-Z0-9]{0,6})\s+([A-Z(].*)$/);
-          if(mSplit && (/^[A-Z]{4,}/.test(mSplit[2])||/^\(/.test(mSplit[2])) && expandedTokens.length<5){
-            expandedTokens.push(mSplit[1]);
-            expandedTokens.push(mSplit[2]);
+      var ancNoLead=ancStripped;
+      // Cas possibles de chiffres en tête de la ligne ancre :
+      //   "2 6 SNG-A9530V3-T00 ..." → item# qty (2 chiffres)
+      //   "3 1 6 SNG-A212 ..." → item# + qty découpé en 2 morceaux (1 et 6 = "16")
+      //   "4 1 LOT AO-SVC ..." → item# qty LOT
+      //   "1" seul → cas KIT final, on complète plus tard
+      // Stratégie : extraire TOUS les chiffres en tête et garder le DERNIER comme qty
+      // (si 2 chiffres, 2e = qty ; si 3 chiffres, 2e+3e = qty fusionnée)
+      var mHeadNums=ancStripped.match(/^((?:\d+\s+){1,3})(.*)$/);
+      if(mHeadNums){
+        var headNums=mHeadNums[1].trim().split(/\s+/).map(Number);
+        ancNoLead=mHeadNums[2].trim();
+        if(headNums.length===2){
+          // item# qty
+          qty=headNums[1]||1;
+        } else if(headNums.length===3){
+          // item# qty_part1 qty_part2 (ex: "3 1 6" → item=3, qty=16)
+          // La qty réelle peut être qty_part1 seule OU la fusion
+          // Ici on prend la fusion si les 2 parts sont petits (ex: "1 6" → 16)
+          // Sinon on prend la 2e valeur seule (cas "item# qty qty3items")
+          var partA=headNums[1];
+          var partB=headNums[2];
+          // Test : si partA<10 et partB<100, on fusionne
+          if(partA<10 && partB<100){
+            qty=parseInt(String(partA)+String(partB))||1;
           } else {
-            expandedTokens.push(tk);
+            qty=partB||1;
+          }
+        } else {
+          // 1 seul chiffre : cas KIT final, qty=1 par défaut
+          qty=1;
+        }
+      }
+      ancNoLead=ancNoLead.replace(/^LOT\s+/i,'');
+
+      // Extraire le Part Number depuis ancNoLead
+      if(ancNoLead){
+        var tokens=ancNoLead.split(/\s+-\s+/);
+        // Pour CHAQUE token, si on trouve "mot court PN + texte long", garder juste le mot court
+        // Ex: "A212 MOUNTING PAD 1/4" → "A212"
+        // Ex: "AUNZ FOR ORDER QTY" → "AUNZ"
+        // Ex: "ANA ( 4 HOURS)" → "ANA"
+        var extractedTokens=[];
+        tokens.forEach(function(tk){
+          tk=tk.trim();if(!tk){extractedTokens.push('');return;}
+          // Si le token commence par un mot court [A-Z][A-Z0-9]{0,7} suivi d'un espace, on extrait juste le mot court
+          var mSplit=tk.match(/^([A-Z][A-Z0-9]{0,7})(?:\s+|$)/);
+          if(mSplit && mSplit[1].length<=8 && tk.length>mSplit[1].length+1){
+            extractedTokens.push(mSplit[1]);
+          } else {
+            extractedTokens.push(tk);
           }
         });
-        tokens=expandedTokens;
+        tokens=extractedTokens;
         var pnToks=[];
-        var descToks=[];
-        var pnDone=false;
         tokens.forEach(function(tk){
           tk=tk.trim();if(!tk)return;
-          if(!pnDone){
-            var compact=tk.replace(/\s+/g,'');
-            var words=tk.split(/\s+/);
-            // Un vrai token de Part Number : uniquement lettres/chiffres (pas de parenthèses, barres obliques, etc.)
-            var hasSpecial=/[\(\)\/\*\{\}\[\]]/.test(tk);
-            // Part number token : compact (<=10 chars) OU chaque mot très court (<=3) OU contient chiffre
-            var looksLikePN=!hasSpecial && ((compact.length<=10) || words.every(function(w){return w.length<=3 || /\d/.test(w);}));
-            // Sauf si c'est un mot long de description
-            if(/^[A-Z]{5,}$/.test(tk) && !/\d/.test(tk))looksLikePN=false;
-            if(looksLikePN){
-              pnToks.push(compact);
-            } else {
-              pnDone=true;
-              descToks.push(tk);
-            }
-          } else {
-            descToks.push(tk);
+          if(/[\(\)\/\*\{\}\[\]]/.test(tk))return;
+          var compact=tk.replace(/\s+/g,'');
+          if(compact.length<=10 && /^[A-Z][A-Z0-9]*$/.test(compact)){
+            pnToks.push(compact);
           }
         });
         if(pnToks.length>0){
           partNum=pnToks.join('-');
-          // Détecte si le PN a besoin d'une continuation :
-          //   - Le PN extrait se termine par un tiret explicite OU
-          //   - La partie originale du PN (avant tokenisation) finissait par "- " (pdf.js fragmentation)
-          // Ex: "SNG - A9530V3 - T00 -" puis "AUNZ" → le PN fragmenté a "-" en fin
-          var needsCont=/\-$/.test(partNum);
-          if(!needsCont){
-            // Inspection ancNoLead pour détecter "mot - " en fin de PN
-            // Ex: "SNG - A9530V3 - T00 - AUNZ TEMPERATURE..." → AUNZ est déjà inclus
-            // Ex: "SNG - A9530V3 - T00 -" se finit avec "- " (tiret suivi d'espace)
-            // Le test plus robuste : est-ce que le premier token (PN) de l'ancNoLead finissait par " - " directement ?
-            // Heuristique : si le ancNoLead a un tiret suivi d'espace avant un mot court non-PN, on considère needsCont
-            // Plus simple : vérifier si la ligne originale contient un pattern "PN-PART - \s*(mot court)\s*$" avant les montants
-            // On accepte une recherche systématique : SI après l'ancre il y a une ligne-continuation isolée, on teste si elle fait partie du PN
-          }
-          if(needsCont || true){ // on cherche TOUJOURS une continuation potentielle après l'ancre
-            var foundCont=false;
-            // D'abord dans la zone (hors ligne ancre)
-            for(var zfi=0;zfi<zone.length-1;zfi++){
-              var zfr=zone[zfi].trim();
-              if(isPartNumberContinuation(zfr) && !isPartNumberFragment(zfr) && needsCont){
-                partNum=partNum+zfr;
-                foundCont=true;
-                break;
-              }
-            }
-            // Chercher après l'ancre : la ligne juste après peut être la continuation,
-            // OU il peut y avoir des lignes de description entre-temps
-            if(!foundCont){
-              var nextAnchorIdx=ancIdx<anchors.length-1?anchors[ancIdx+1].idx:rows.length;
-              var maxAfter=Math.min(rows.length,anc.idx+6,nextAnchorIdx);
-              var scanned=0;
-              for(var ai2=anc.idx+1;ai2<maxAfter && scanned<5;ai2++,scanned++){
-                var afr=rows[ai2].trim();
-                if(isPartNumberContinuation(afr) && !isPartNumberFragment(afr)){
-                  if(partNum.split('-').indexOf(afr)<0){
-                    partNum=partNum+(partNum.endsWith('-')?'':'-')+afr;
-                  }
-                  break;
-                }
-                // Ligne de description courante : on continue à scanner
-                if(/[\d,\s]+\.\d{2}/.test(afr))break; // montant = prochain item
-              }
-            }
-          }
-        }
-        if(descToks.length>0){
-          descParts.push(descToks.join(' - '));
         }
       }
 
-      // Si pas de PN trouvé sur la ligne ancre, chercher dans les lignes de zone (cas KIT final "1 9126 9126")
-      // Dans ce cas, on cherche le DERNIER fragment PN de la zone + sa continuation
+      // Si pas de PN trouvé (cas KIT final "1 9126 9126"), chercher le fragment PN en amont
       if(!partNum){
-        // Parcours arrière des lignes de zone (sans la ligne ancre)
-        for(var zi=zone.length-2;zi>=0;zi--){
-          var zRow=zone[zi];
-          if(isPartNumberFragment(zRow)){
-            // Vérifier si la ligne suivante est une continuation
-            var pnBuilt=zRow.trim();
-            for(var zj=zi+1;zj<zone.length-1;zj++){
-              var zNext=zone[zj];
-              if(isPartNumberContinuation(zNext)){
-                pnBuilt+=' - '+zNext.trim();
-              } else {
+        var startScan=(ancIdx>0?anchors[ancIdx-1].idx+1:0);
+        for(var ki=anc.idx-1;ki>=startScan;ki--){
+          var kr=rows[ki];
+          if(isPartNumberFragmentD(kr)){
+            var pnAcc=kr.trim();
+            var needsContK=/\-$/.test(pnAcc);
+            var scanned=0;
+            // Phase 1 : scan entre le fragment et l'ancre (cas KIT où AUNZ est AVANT l'ancre)
+            for(var kj=ki+1;kj<anc.idx && scanned<6;kj++,scanned++){
+              var krj=rows[kj];
+              if(isPartNumberContinuationD(krj)&&!isPartNumberFragmentD(krj)){
+                pnAcc+=(needsContK?'':' - ')+krj.trim();
+                needsContK=/\-$/.test(pnAcc);
+                if(!needsContK)break;
+              } else if(/[\d,\s]+\.\d{2}/.test(krj)){
                 break;
               }
             }
-            partNum=normalizePartNum(pnBuilt);
+            // Phase 2 : si toujours besoin de continuation, scan APRÈS l'ancre
+            //   (cas item normal comme SNG-A9530V3-T00 : fragment avant l'ancre mais AUNZ après)
+            if(needsContK){
+              var nextAIdx=ancIdx<anchors.length-1?anchors[ancIdx+1].idx:rows.length;
+              var maxAfterFb=Math.min(rows.length,anc.idx+6,nextAIdx);
+              for(var kja=anc.idx+1;kja<maxAfterFb;kja++){
+                var krja=rows[kja].trim();
+                if(isPartNumberContinuationD(krja)&&!isPartNumberFragmentD(krja)){
+                  pnAcc+=(needsContK?'':' - ')+krja;
+                  needsContK=/\-$/.test(pnAcc);
+                  if(!needsContK)break;
+                }
+              }
+            }
+            partNum=normalizePartNum(pnAcc);
+            // Cherche qty juste avant le fragment
+            for(var kq=ki-1;kq>=startScan;kq--){
+              var kqr=rows[kq].trim();
+              if(/^\d+$/.test(kqr)){qty=parseInt(kqr);break;}
+              var mQL=kqr.match(/^(\d+)\s+[A-Z]/);
+              if(mQL){qty=parseInt(mQL[1]);break;}
+              if(isPartNumberFragmentD(kqr))break;
+            }
             break;
           }
         }
       }
 
-      // d) Collecter description des lignes restantes de zone
-      // (lignes non-section, non-PN-fragment, non-continuation, non-qty-seul)
-      var descFromZone=[];
-      // Regex pour détecter une ligne qui fait partie des labels du header de tableau
-      // Ex: "Commercial Summary", "Unit Extended", "Item Qty Part Number Description", "Price Price", "(AUD) (AUD)"
-      var reTableLabel=/^(Commercial\s*Summary|Unit(\s+Extended)?|Item\s+Qty|Part\s*Number|Description|Price(\s+Price)?|\(AUD\)(\s*\(AUD\))?|Extended(\s+Price)?|Qty\s+Part\s*Number|Extended\s+Price)$/i;
-      for(var di=0;di<zone.length-1;di++){
-        var dz=zone[di];
-        if(!dz)continue;
-        if(isSectionBanner(dz))continue;
-        if(isPartNumberFragment(dz))continue;
-        if(isPartNumberContinuation(dz))continue;
-        if(/^\d+\s*$/.test(dz))continue; // qty ou item# seul
-        if(/[\d,\s]+\.\d{2}/.test(dz))continue; // contient un montant (autre ancre)
-        if(reTableLabel.test(dz.trim()))continue; // Commercial Summary / Unit Extended / etc.
-        // Lignes qui sont des labels collés (ex: "Commercial Summary Unit Extended Item Qty Part Number Description Price Price (AUD) (AUD)")
-        if(/^(Commercial\s*Summary\s+Unit|Unit\s+Extended\s+Item|Item\s+Qty\s+Part|Price\s+Price\s*\(AUD\))/i.test(dz.trim()))continue;
-        descFromZone.push(dz);
-      }
-      // Nettoyer : retirer les préfixes numériques "10 TEMPERATURE" → "TEMPERATURE"
-      descFromZone=descFromZone.map(function(d){return d.replace(/^\d+\s+(?=[A-Z])/,'').trim();});
-      descParts=descFromZone.concat(descParts);
-      var descFinal=descParts.join(' ').replace(/\s+/g,' ').trim();
-
-      // e) Cas KIT : si l'ancre est un KIT final (row type "N PU EXT" avec juste 3 nombres sans PN)
-      //    alors on doit regrouper les PN précédents comme sous-lignes
-      var isKitFinal=/^(\d+)\s+[\d,\s]+\.\d{2}\s+[\d,\s]+\.\d{2}\s*$/.test(anc.row.trim()) && !partNum;
-      if(isKitFinal){
-        // On reparse la zone pour extraire TOUS les blocs PN
-        // Un "bloc PN" = une séquence: [qty sur ligne] + fragment PN + [continuations] + [desc lignes]
-        var kitItems=[];
-        var zi2=0;
-        while(zi2<zone.length-1){ // -1 pour exclure la ligne ancre
-          var zr=zone[zi2];
-          // Détection d'un bloc : ligne qty seule OU ligne qty+... OU fragment PN
-          // On cherche un fragment PN comme point d'ancrage du bloc
-          if(isPartNumberFragment(zr)){
-            // Lire qty depuis la ligne précédente (souvent un chiffre seul)
-            var blockQty=1;
-            if(zi2>0){
-              var prev=zone[zi2-1].trim();
-              if(/^\d+$/.test(prev))blockQty=parseInt(prev);
-              // ou ligne type "10 TEMPERATURE" → qty=10
-              var mQL=prev.match(/^(\d+)\s+[A-Z]/);
-              if(mQL)blockQty=parseInt(mQL[1]);
-            }
-            // Construire le PN avec continuations (tolère des lignes non-continuation entre-temps,
-            // car pdf.js peut intercaler des fragments de description entre la fin du PN et sa continuation)
-            var pnBuilt2=zr.trim();
-            var zi3=zi2+1;
-            var needsCont2=/\-$/.test(pnBuilt2);
-            var linesScanned=0;
-            while(zi3<zone.length-1 && linesScanned<5){
-              var zNext=zone[zi3];
-              if(isPartNumberContinuation(zNext) && !isPartNumberFragment(zNext)){
-                pnBuilt2+=' - '+zNext.trim();
-                zi3++;
-                needsCont2=/\-$/.test(pnBuilt2);
-                if(!needsCont2)break; // PN complet, on arrête
-                continue;
-              }
-              // Si on a encore besoin d'une continuation, on saute les lignes "description" courantes
-              // (qty+mot, texte descriptif, etc.) pour chercher plus loin
-              if(needsCont2 && !/[\d,\s]+\.\d{2}/.test(zNext) && !isPartNumberFragment(zNext)){
-                zi3++;
-                linesScanned++;
-                continue;
-              }
+      if(partNum && partNum.length>=3){
+        // Si le PN se termine par un tiret orphelin, chercher continuation APRÈS l'ancre
+        if(/\-$/.test(partNum)){
+          var nextAnchorIdx2=ancIdx<anchors.length-1?anchors[ancIdx+1].idx:rows.length;
+          var maxAfter=Math.min(rows.length,anc.idx+5,nextAnchorIdx2);
+          for(var aj=anc.idx+1;aj<maxAfter;aj++){
+            var arj=rows[aj].trim();
+            if(isPartNumberContinuationD(arj)&&!isPartNumberFragmentD(arj)){
+              partNum=partNum+arj;
               break;
             }
-            var normPN_k=normalizePartNum(pnBuilt2);
-            // Collecter description après ce PN jusqu'au prochain PN ou fin
-            var blockDesc=[];
-            while(zi3<zone.length-1){
-              var zz=zone[zi3];
-              if(isPartNumberFragment(zz))break;
-              if(/^\d+$/.test(zz.trim()))break; // prochain qty
-              if(/[\d,\s]+\.\d{2}/.test(zz))break;
-              if(isSectionBanner(zz))break;
-              // "X AMS MACHINE WORKS..." → retirer le chiffre en tête
-              blockDesc.push(zz.replace(/^\d+\s+(?=[A-Z])/,'').trim());
-              zi3++;
-            }
-            kitItems.push({qte:blockQty,ref:normPN_k,desc:blockDesc.join(' ').replace(/\s+/g,' ').trim()});
-            zi2=zi3;
-            continue;
           }
-          // Cas spécial : ligne "1 SNG - A43 - 0 AMS MACHINE WORKS 180 DAYS (6 MONTHS)"
-          // (qty + PN + desc sur une seule ligne)
-          var mInline=zr.match(/^(\d+)\s+([A-Z]{2,6}(?:\s*-\s*[A-Z0-9]+)+)\s+(.+)$/);
-          if(mInline){
-            var iq=parseInt(mInline[1])||1;
-            var iPN=normalizePartNum(mInline[2]);
-            var iDesc=mInline[3].trim();
-            if(iPN.length>=4 && /-/.test(iPN)){
-              kitItems.push({qte:iq,ref:iPN,desc:iDesc});
-            }
-            zi2++;
-            continue;
-          }
-          zi2++;
         }
+        partNum=normalizePartNum(partNum);
 
-        if(kitItems.length>0){
-          // Le 1er item est la ligne principale, les autres sont subLines
-          var mainK=kitItems[0];
-          var subK=kitItems.slice(1);
-          lines.push({
-            ref:mainK.ref,
-            desc:mainK.desc,
-            qte:mainK.qte,
-            pu:anc.pu,
-            ext:anc.ext,
-            subLines:subK.map(function(s){return {qte:s.qte,ref:s.ref,desc:s.desc};})
-          });
-          return;
-        }
-      }
-
-      // f) Item normal (non-KIT)
-      if(partNum){
         lines.push({
-          ref:partNum,
-          desc:descFinal,
           qte:qty,
+          ref:partNum,
+          desc:'', // VIDE — l'utilisateur complète dans le preview si besoin
           pu:anc.pu,
           ext:anc.ext
         });
