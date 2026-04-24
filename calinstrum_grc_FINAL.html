@@ -6,6 +6,13 @@
 <title>CALINSTRUM — GRC Commercial</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+// Configuration du worker pdf.js (obligatoire pour l'extraction de texte)
+if(typeof pdfjsLib!=='undefined'){
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@700;800&display=swap');
 :root{
@@ -853,10 +860,15 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
       <div>
         <div style="font-weight:700;color:var(--teal);font-size:11px;margin-bottom:8px">✍️ Signature & Références</div>
-        <div class="form-group"><label>Customer Ref #</label><input class="form-input" id="bc-cref2" placeholder="ex: 3276945832769458"></div>
-        <div class="form-group"><label>Propositions Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(un PO peut regrouper plusieurs propositions)</span></label>
+        <!-- Champ caché : conservé pour la rétro-compatibilité avec les anciens BC mais plus affiché -->
+        <input type="hidden" id="bc-cref2">
+        <div class="form-group"><label>Propositions Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(un PO peut regrouper plusieurs propositions, chacune avec son Customer Ref)</span></label>
           <div id="bc-emerson-props-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
-          <button type="button" class="btn btn-ghost" style="font-size:11px;padding:5px 10px" onclick="addEmersonProp()">+ Ajouter proposition Emerson</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn btn-ghost" style="font-size:11px;padding:5px 10px" onclick="addEmersonProp()">+ Ajouter proposition Emerson</button>
+            <button type="button" class="btn btn-ghost" style="font-size:11px;padding:5px 10px;border-color:var(--teal);color:var(--teal)" onclick="triggerEmersonPdfImport()" title="Importer un devis Emerson depuis un PDF : analyse automatique + preview éditable">📤 Importer devis Emerson (PDF)</button>
+            <input type="file" id="bc-emerson-pdf-input" accept=".pdf,application/pdf" style="display:none" onchange="handleEmersonPdfSelected(event)">
+          </div>
         </div>
         <div class="form-group"><label>Remarques / Notes BC</label><textarea class="form-textarea" id="bc-notes" rows="2" placeholder="Notes internes..."></textarea></div>
       </div>
@@ -1036,6 +1048,46 @@ tr:hover td{background:rgba(255,255,255,.02)}
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mART')">Annuler</button>
     <button class="btn btn-teal" onclick="saveART()">✓ Enregistrer</button>
+  </div>
+</div></div>
+
+<!-- IMPORT DEVIS EMERSON (PDF) -->
+<div class="modal-overlay" id="mEIMP">
+<div class="modal modal-lg" style="max-width:900px">
+  <div class="modal-header"><h3>📤 Import devis Emerson (PDF) — Preview</h3><button class="modal-close" onclick="cm('mEIMP')">✕</button></div>
+  <div class="modal-body">
+    <div id="eimp-status" style="margin-bottom:12px;color:var(--muted);font-size:12px"></div>
+    <div id="eimp-header-preview" style="display:none;background:rgba(45,212,191,.06);border:1px solid rgba(45,212,191,.3);border-radius:6px;padding:12px;margin-bottom:14px">
+      <div style="font-weight:700;color:var(--teal);font-size:12px;margin-bottom:8px">📋 Infos extraites du devis</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:12px">
+        <div>N° proposition : <strong id="eimp-num"></strong></div>
+        <div>Version : <strong id="eimp-ver"></strong></div>
+        <div>Customer Ref # : <strong id="eimp-cref"></strong></div>
+        <div>Montant total : <strong id="eimp-amount"></strong></div>
+        <div>Date : <strong id="eimp-date"></strong></div>
+        <div>Projet : <strong id="eimp-project"></strong></div>
+      </div>
+      <div style="margin-top:8px;font-size:10.5px;color:var(--muted);font-style:italic" id="eimp-format-detected"></div>
+    </div>
+    <div id="eimp-lines-wrap" style="display:none">
+      <div style="font-weight:700;font-size:12px;margin-bottom:6px;color:var(--text)">Lignes extraites <span style="color:var(--muted);font-weight:400;font-size:10.5px">(tu peux modifier avant import)</span></div>
+      <div style="font-size:10.5px;color:var(--muted);margin-bottom:8px">💡 Astuce : passe cette section en <strong>Kit</strong> ou <strong>Items</strong> après import selon le besoin. Les lignes seront associées automatiquement à la nouvelle proposition.</div>
+      <table class="items-tbl" style="margin-bottom:10px">
+        <thead><tr><th>Item</th><th>Qté</th><th style="min-width:120px">Part Number</th><th style="min-width:200px">Description</th><th>PU</th><th>Montant</th><th></th></tr></thead>
+        <tbody id="eimp-lines-tbody"></tbody>
+      </table>
+      <button type="button" class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="addEimpLine()">+ Ajouter ligne manuellement</button>
+    </div>
+    <div id="eimp-raw-wrap" style="display:none;margin-top:12px">
+      <details style="font-size:11px;color:var(--muted)">
+        <summary style="cursor:pointer">🔍 Voir le texte brut extrait du PDF (debug)</summary>
+        <pre id="eimp-raw-text" style="background:rgba(0,0,0,.2);padding:10px;border-radius:4px;max-height:200px;overflow:auto;font-family:var(--mono);font-size:10.5px;white-space:pre-wrap;margin-top:6px"></pre>
+      </details>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mEIMP')">Annuler</button>
+    <button class="btn btn-teal" id="eimp-confirm-btn" onclick="confirmEmersonImport()" disabled>✓ Importer dans le BC</button>
   </div>
 </div></div>
 
@@ -3136,8 +3188,11 @@ function openBC(id){
       // Parse l'ancien format libre "27453702 Ver:2" en {num, ver}
       var legacy=b.prop2||b.prop||'';
       var parsed=parseLegacyProp(legacy);
-      bcProps=[{num:parsed.num,ver:parsed.ver,amount:0}];
+      bcProps=[{num:parsed.num,ver:parsed.ver,amount:0,cref:''}];
     } else {bcProps=[];}
+    // Migration legacy : l'ancien Customer Ref # global est injecté dans la 1ère proposition si elle n'en a pas
+    var legacyCref=b.cref2||b.cref||'';
+    if(legacyCref && bcProps.length>0 && !bcProps[0].cref){bcProps[0].cref=legacyCref;}
     ensurePropIds();
     renderEmersonProps();
     gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
@@ -3500,6 +3555,412 @@ function onBCDevisLie(){
   var lDevis=document.getElementById('bc-link-devis');
   if(lDevis&&!lDevis.value)lDevis.value=d.num||'';
 }
+
+// ========================================================================
+// EMERSON PDF IMPORT — Parser avec détection auto de format + preview editable
+// ========================================================================
+// État global du preview en cours (reset à chaque nouvel import)
+var eimpState={header:null,lines:[],pdfFile:null,pdfBytes:null,rawText:''};
+
+// Ouvre le file picker pour choisir le PDF
+function triggerEmersonPdfImport(){
+  var inp=document.getElementById('bc-emerson-pdf-input');
+  if(inp){inp.value='';inp.click();}
+}
+
+// Handler quand l'utilisateur a choisi un PDF
+function handleEmersonPdfSelected(event){
+  var f=event.target.files&&event.target.files[0];
+  if(!f)return;
+  if(typeof pdfjsLib==='undefined'){
+    alert('La bibliothèque pdf.js n\'est pas chargée. Vérifie ta connexion internet.');
+    return;
+  }
+  // Reset du state
+  eimpState={header:null,lines:[],pdfFile:f,pdfBytes:null,rawText:''};
+  // Ouvre le modal preview
+  om('mEIMP');
+  setEimpStatus('⏳ Lecture du PDF en cours...');
+  document.getElementById('eimp-header-preview').style.display='none';
+  document.getElementById('eimp-lines-wrap').style.display='none';
+  document.getElementById('eimp-raw-wrap').style.display='none';
+  document.getElementById('eimp-confirm-btn').disabled=true;
+
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var arr=new Uint8Array(e.target.result);
+      eimpState.pdfBytes=arr.slice(0); // clone pour stockage ultérieur
+      extractEmersonPdf(arr).then(function(result){
+        eimpState.header=result.header;
+        eimpState.lines=result.lines;
+        eimpState.rawText=result.rawText;
+        renderEimpPreview(result.formatDetected);
+      }).catch(function(err){
+        console.error('Parse error:',err);
+        setEimpStatus('❌ Erreur lors de l\'analyse : '+(err.message||err));
+      });
+    }catch(ex){
+      console.error(ex);
+      setEimpStatus('❌ Erreur lors de la lecture du fichier : '+(ex.message||ex));
+    }
+  };
+  reader.onerror=function(){setEimpStatus('❌ Impossible de lire le fichier.');};
+  reader.readAsArrayBuffer(f);
+}
+function setEimpStatus(msg){
+  var el=document.getElementById('eimp-status');
+  if(el)el.innerHTML=msg;
+}
+
+// === Extraction du texte brut du PDF via pdf.js ===
+function extractEmersonPdf(uint8arr){
+  return pdfjsLib.getDocument({data:uint8arr}).promise.then(function(pdf){
+    var pages=[];
+    var tasks=[];
+    for(var i=1;i<=pdf.numPages;i++){
+      tasks.push(pdf.getPage(i).then(function(page){
+        return page.getTextContent().then(function(tc){
+          // Reconstruit les lignes en regroupant les items par coordonnée Y (transform[5])
+          var lineMap={};
+          tc.items.forEach(function(it){
+            if(!it.str||!it.transform)return;
+            var y=Math.round(it.transform[5]);
+            var x=it.transform[4];
+            if(!lineMap[y])lineMap[y]=[];
+            lineMap[y].push({x:x,str:it.str});
+          });
+          var ys=Object.keys(lineMap).map(Number).sort(function(a,b){return b-a;}); // top→bottom (Y grand d'abord)
+          var lines=ys.map(function(y){
+            return lineMap[y].sort(function(a,b){return a.x-b.x;}).map(function(o){return o.str;}).join(' ').replace(/\s+/g,' ').trim();
+          }).filter(function(s){return s.length;});
+          return lines.join('\n');
+        });
+      }));
+    }
+    return Promise.all(tasks).then(function(pageTexts){
+      var rawText=pageTexts.join('\n\n---PAGE BREAK---\n\n');
+      var parsed=parseEmersonQuoteText(rawText);
+      parsed.rawText=rawText;
+      return parsed;
+    });
+  });
+}
+
+// === Parser intelligent : détecte le format A/B/C et extrait header+lignes ===
+function parseEmersonQuoteText(text){
+  var header={num:'',ver:'',cref:'',amount:0,date:'',project:''};
+  var lines=[];
+  var formatDetected='inconnu';
+
+  // --- HEADER : patterns robustes ---
+  var mProp=text.match(/Emerson\s*Proposal\s*:?\s*(\S+)\s*Ver\s*:?\s*(\S+)/i);
+  if(mProp){header.num=mProp[1].trim();header.ver=mProp[2].trim();}
+  var mCref=text.match(/(?:Customer\s*Ref\s*#?|Reference)\s*:?\s*(\d{5,})/i);
+  if(mCref){header.cref=mCref[1].trim();}
+  var mDate=text.match(/Date\s*:?\s*(\d{1,2}[-\/]\w{3}[-\/]\d{2,4})/i);
+  if(mDate){header.date=mDate[1].trim();}
+  var mProject=text.match(/Project\s*:?\s*([^\n\r]{2,80})/i);
+  if(mProject){
+    var pj=mProject[1].trim();
+    // On enlève les artefacts (ex: "Wi-Fi temperature Expiration Date:")
+    pj=pj.replace(/\s*Expiration\s*Date\s*:.*$/i,'').trim();
+    header.project=pj;
+  }
+  var mTotal=text.match(/Total\s*Price\s*(?:\([^)]*\))?\s*([\d,]+\.?\d*)/i);
+  if(mTotal){header.amount=parseFloat(mTotal[1].replace(/,/g,''))||0;}
+
+  // --- DÉTECTION FORMAT ---
+  // Format A (Quote classique) : présence de "Cust Line" + "Units" dans l'en-tête de table
+  // Format B (AMS standard) : "Item Qty Part Number Description Unit Price Extended Price"
+  // Format C (Services forfait) : "Item Qty Part Number Description Extended Price" (pas de Unit Price séparé)
+  var hasCustLine=/Cust\s*Line\s+Item\s+Qty\s+Units/i.test(text);
+  var hasUnitPrice=/Unit\s*Price/i.test(text);
+  var hasPartNumber=/Part\s*Number/i.test(text);
+
+  if(hasCustLine){formatDetected='A (Quote classique avec Cust Line/Units)';}
+  else if(hasPartNumber && hasUnitPrice){formatDetected='B (AMS standard)';}
+  else if(hasPartNumber && !hasUnitPrice){formatDetected='C (Services forfait, pas de Unit Price séparé)';}
+  else {formatDetected='inconnu — extraction best-effort';}
+
+  // --- EXTRACTION DES LIGNES ---
+  // Stratégie : on localise la zone Commercial Summary (début de table) et Total Price (fin)
+  var tableStart=text.search(/Commercial\s*Summary/i);
+  var tableEnd=text.search(/Total\s*Price/i);
+  if(tableStart<0)tableStart=0;
+  if(tableEnd<0)tableEnd=text.length;
+  var tableZone=text.substring(tableStart,tableEnd);
+  var rows=tableZone.split(/\n/).map(function(s){return s.trim();}).filter(function(s){return s;});
+
+  if(hasCustLine){
+    // === FORMAT A ===
+    // Ligne type: "1 4 Each Rosemount 214C Temperature Sensor 4 weeks 258.00 1,032.00"
+    // Le Part Number est dans la ligne suivante (ex: "214CRTSMB1S3M0170SLAR1C2B1TB")
+    // On match : ^(nb) (qty) (units) (desc) ... (lead time) (unit price) (ext price)
+    var reA=/^(\d+)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+(\d+\s*weeks?|N\/A|\d+\s*days?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
+    rows.forEach(function(r,idx){
+      var m=r.match(reA);
+      if(m){
+        var descRaw=m[4].trim();
+        // La ligne suivante est souvent le Part Number technique
+        var nextLine=rows[idx+1]||'';
+        var partNum='';
+        if(/^[A-Z0-9][\w\-]+$/.test(nextLine) && nextLine.length>5 && nextLine.length<60){
+          partNum=nextLine;
+        }
+        lines.push({
+          qte:parseInt(m[2])||1,
+          ref:partNum,
+          desc:descRaw,
+          pu:parseFloat(m[6].replace(/,/g,''))||0,
+          ext:parseFloat(m[7].replace(/,/g,''))||0
+        });
+      }
+    });
+  } else if(hasPartNumber && hasUnitPrice){
+    // === FORMAT B ===
+    // Ligne type: "1 16 SNG-A9530V3-T03-AUNZ AMS WIRELESS VIBRATION MONITOR... 1,443.00 23,088.00"
+    // Parfois sur plusieurs lignes (description multi-lignes)
+    // Stratégie : on cherche "ITEM QTE PARTNUM <desc> PU EXT" ou partial
+    var reB_full=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
+    var reB_short=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]+)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/; // sans desc (ou desc sur ligne suivante)
+    rows.forEach(function(r,idx){
+      var m=r.match(reB_full);
+      if(m){
+        lines.push({
+          qte:parseInt(m[2])||1,
+          ref:m[3].trim(),
+          desc:m[4].trim(),
+          pu:parseFloat(m[5].replace(/,/g,''))||0,
+          ext:parseFloat(m[6].replace(/,/g,''))||0
+        });
+        return;
+      }
+      // Fallback : ligne sans description — la desc peut être sur la ligne précédente ou suivante
+      var ms=r.match(reB_short);
+      if(ms){
+        var descNearby=(rows[idx-1]||'')+' '+(rows[idx+1]||'');
+        lines.push({
+          qte:parseInt(ms[2])||1,
+          ref:ms[3].trim(),
+          desc:descNearby.trim().slice(0,200),
+          pu:parseFloat(ms[4].replace(/,/g,''))||0,
+          ext:parseFloat(ms[5].replace(/,/g,''))||0
+        });
+      }
+    });
+  } else {
+    // === FORMAT C (pas de Unit Price séparé) ===
+    // Ligne type: "1 1 LOT AO-SVC-ANA ONSITE ENGINEERING SERVICES... 3,480.00"
+    // ou: "2 1 LOT MHM-MISC-APA TRAVEL AND LIVING EXPENSES 2,000.00"
+    var reC=/^(\d+)\s+(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)$/;
+    rows.forEach(function(r){
+      var m=r.match(reC);
+      if(m){
+        var extVal=parseFloat(m[6].replace(/,/g,''))||0;
+        var qte=parseInt(m[2])||1;
+        lines.push({
+          qte:qte,
+          ref:m[4].trim(),
+          desc:m[5].trim(),
+          pu:qte?(extVal/qte):extVal,
+          ext:extVal
+        });
+      }
+    });
+  }
+
+  return {header:header,lines:lines,formatDetected:formatDetected};
+}
+
+// === Render du preview dans le modal ===
+function renderEimpPreview(formatDetected){
+  var h=eimpState.header;
+  var ls=eimpState.lines;
+  setEimpStatus((ls.length>0?'✅ ':'⚠️ ')+ls.length+' ligne(s) extraite(s). Vérifie et corrige si nécessaire avant import.');
+  // Header
+  document.getElementById('eimp-num').textContent=h.num||'—';
+  document.getElementById('eimp-ver').textContent=h.ver||'—';
+  document.getElementById('eimp-cref').textContent=h.cref||'—';
+  document.getElementById('eimp-amount').textContent=h.amount?(fN(h.amount)+' AUD'):'—';
+  document.getElementById('eimp-date').textContent=h.date||'—';
+  document.getElementById('eimp-project').textContent=h.project||'—';
+  document.getElementById('eimp-format-detected').textContent='Format détecté : '+formatDetected;
+  document.getElementById('eimp-header-preview').style.display='block';
+  // Lignes
+  document.getElementById('eimp-lines-wrap').style.display='block';
+  renderEimpLines();
+  // Raw text (debug)
+  document.getElementById('eimp-raw-text').textContent=eimpState.rawText||'';
+  document.getElementById('eimp-raw-wrap').style.display='block';
+  // Activation du bouton import
+  document.getElementById('eimp-confirm-btn').disabled=!(h.num||h.cref)||ls.length===0;
+}
+
+// === Render des lignes éditables ===
+function renderEimpLines(){
+  var tb=document.getElementById('eimp-lines-tbody');
+  if(!tb)return;
+  var html='';
+  eimpState.lines.forEach(function(l,i){
+    html+='<tr>'+
+      '<td style="text-align:center;color:var(--muted);font-weight:700">'+(i+1)+'</td>'+
+      '<td><input type="number" style="width:55px" value="'+(l.qte||1)+'" data-eimp-f="qte" data-eimp-i="'+i+'"></td>'+
+      '<td><input style="width:130px;font-family:var(--mono);font-size:11px" value="'+esc(l.ref||'')+'" data-eimp-f="ref" data-eimp-i="'+i+'"></td>'+
+      '<td><input style="min-width:200px;width:100%" value="'+esc(l.desc||'')+'" data-eimp-f="desc" data-eimp-i="'+i+'"></td>'+
+      '<td><input type="number" style="width:80px" value="'+(l.pu||0)+'" data-eimp-f="pu" data-eimp-i="'+i+'"></td>'+
+      '<td style="font-weight:700;color:var(--teal);text-align:right">'+fN(((+l.qte)||0)*((+l.pu)||0))+'</td>'+
+      '<td><button type="button" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px" title="Supprimer cette ligne" onclick="delEimpLine('+i+')">✕</button></td>'+
+    '</tr>';
+  });
+  tb.innerHTML=html;
+  tb.querySelectorAll('input[data-eimp-f]').forEach(function(inp){
+    inp.addEventListener('input',function(){
+      var i=parseInt(this.getAttribute('data-eimp-i'));
+      var f=this.getAttribute('data-eimp-f');
+      if(isNaN(i)||!eimpState.lines[i])return;
+      if(f==='qte'||f==='pu'){eimpState.lines[i][f]=parseFloat(this.value)||0;renderEimpLines();}
+      else{eimpState.lines[i][f]=this.value;}
+    });
+  });
+}
+function addEimpLine(){
+  eimpState.lines.push({qte:1,ref:'',desc:'',pu:0,ext:0});
+  renderEimpLines();
+  document.getElementById('eimp-confirm-btn').disabled=eimpState.lines.length===0;
+}
+function delEimpLine(i){
+  if(eimpState.lines[i]){eimpState.lines.splice(i,1);renderEimpLines();}
+  document.getElementById('eimp-confirm-btn').disabled=eimpState.lines.length===0;
+}
+
+// === INJECTION : crée la proposition + ajoute les lignes + stocke le PDF ===
+function confirmEmersonImport(){
+  var h=eimpState.header;
+  var ls=eimpState.lines;
+  if(!h||ls.length===0){alert('Aucune donnée à importer.');return;}
+
+  // 1. Créer une nouvelle proposition Emerson dans bcProps
+  var newProp={
+    num:h.num||'',
+    ver:h.ver||'',
+    amount:h.amount||0,
+    cref:h.cref||''
+  };
+  bcProps.push(newProp);
+  ensurePropIds();
+  var newPropId=bcProps[bcProps.length-1].id;
+
+  // 2. Si le projet est renseigné, on ajoute un header de section AVANT les lignes
+  if(h.project){
+    bcL.push({type:'header',mode:'items',desc:h.project.toUpperCase()});
+  }
+
+  // 3. Ajouter les lignes au tableau, associées à la nouvelle proposition
+  ls.forEach(function(l){
+    bcL.push({
+      ref:l.ref||'',
+      desc:l.desc||'',
+      qte:l.qte||1,
+      pu:l.pu||0,
+      propId:newPropId
+    });
+  });
+
+  // 4. Stocker le PDF en IndexedDB (attaché au BC courant)
+  if(eimpState.pdfBytes && eimpState.pdfFile){
+    storeBCAttachment({
+      bcId:eBCid||('temp_'+Date.now()),
+      filename:eimpState.pdfFile.name,
+      propNum:h.num||'',
+      propVer:h.ver||'',
+      bytes:eimpState.pdfBytes,
+      savedAt:new Date().toISOString()
+    }).catch(function(e){console.warn('Stockage PDF échoué (non bloquant):',e);});
+  }
+
+  // 5. Refresh UI
+  renderEmersonProps();
+  rBClines();
+  cm('mEIMP');
+
+  // 6. Toast de confirmation
+  showBCSaveToast('✓ Import devis Emerson réussi ('+ls.length+' ligne(s))');
+}
+
+// ========================================================================
+// IndexedDB — Stockage local des PDF devis Emerson attachés aux BC
+// ========================================================================
+var BC_ATTACH_DB_NAME='calinstrum_attachments';
+var BC_ATTACH_STORE='bc_pdfs';
+function openAttachDB(){
+  return new Promise(function(resolve,reject){
+    var req=indexedDB.open(BC_ATTACH_DB_NAME,1);
+    req.onupgradeneeded=function(e){
+      var db=e.target.result;
+      if(!db.objectStoreNames.contains(BC_ATTACH_STORE)){
+        var store=db.createObjectStore(BC_ATTACH_STORE,{keyPath:'id',autoIncrement:true});
+        store.createIndex('bcId','bcId',{unique:false});
+      }
+    };
+    req.onsuccess=function(e){resolve(e.target.result);};
+    req.onerror=function(e){reject(e.target.error);};
+  });
+}
+function storeBCAttachment(att){
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(BC_ATTACH_STORE,'readwrite');
+      var store=tx.objectStore(BC_ATTACH_STORE);
+      // On convertit Uint8Array en Blob pour stockage efficace
+      var blob=new Blob([att.bytes],{type:'application/pdf'});
+      var record={bcId:String(att.bcId),filename:att.filename,propNum:att.propNum,propVer:att.propVer,savedAt:att.savedAt,blob:blob};
+      var req=store.add(record);
+      req.onsuccess=function(){resolve(req.result);};
+      req.onerror=function(e){reject(e.target.error);};
+    });
+  });
+}
+// Liste les PDF attachés à un BC donné (retourne [{id, filename, propNum, propVer, savedAt, blob}, ...])
+function listBCAttachments(bcId){
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(BC_ATTACH_STORE,'readonly');
+      var store=tx.objectStore(BC_ATTACH_STORE);
+      var idx=store.index('bcId');
+      var req=idx.getAll(String(bcId));
+      req.onsuccess=function(){resolve(req.result||[]);};
+      req.onerror=function(e){reject(e.target.error);};
+    });
+  });
+}
+// Télécharge un PDF attaché (déclenche un download dans le navigateur)
+function downloadBCAttachment(id){
+  openAttachDB().then(function(db){
+    var tx=db.transaction(BC_ATTACH_STORE,'readonly');
+    var req=tx.objectStore(BC_ATTACH_STORE).get(id);
+    req.onsuccess=function(){
+      var rec=req.result;
+      if(!rec)return;
+      var url=URL.createObjectURL(rec.blob);
+      var a=document.createElement('a');a.href=url;a.download=rec.filename||'devis.pdf';
+      document.body.appendChild(a);a.click();
+      setTimeout(function(){URL.revokeObjectURL(url);a.remove();},500);
+    };
+  });
+}
+// Supprime un PDF attaché
+function deleteBCAttachment(id){
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(BC_ATTACH_STORE,'readwrite');
+      var req=tx.objectStore(BC_ATTACH_STORE).delete(id);
+      req.onsuccess=function(){resolve();};
+      req.onerror=function(e){reject(e.target.error);};
+    });
+  });
+}
+
 // Parse un ancien champ Emerson Proposal libre "27453702 Ver:2" en {num, ver}
 function parseLegacyProp(str){
   if(!str)return{num:'',ver:''};
@@ -3525,11 +3986,19 @@ function renderEmersonProps(){
   }
   var html='';
   bcProps.forEach(function(p,i){
-    html+='<div style="display:flex;gap:6px;align-items:center">'+
-      '<input class="form-input" style="flex:2" placeholder="N° proposition (ex: 27453702)" value="'+esc(p.num||'')+'" data-prop-field="num" data-prop-idx="'+i+'">'+
-      '<input class="form-input" style="flex:1" placeholder="Ver. (ex: 2)" value="'+esc(p.ver||'')+'" data-prop-field="ver" data-prop-idx="'+i+'">'+
-      '<input type="number" class="form-input" style="flex:1" placeholder="Montant" value="'+(p.amount!=null?p.amount:'')+'" data-prop-field="amount" data-prop-idx="'+i+'">'+
-      '<button type="button" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:15px;padding:4px 8px" title="Supprimer cette proposition" onclick="delEmersonProp('+i+')">✕</button>'+
+    // Chaque proposition est un bloc-carte avec 2 lignes : [N°, Ver, Montant, ✕] + [Customer Ref #]
+    html+='<div style="border:1px solid rgba(45,212,191,.25);border-radius:6px;padding:8px 10px;background:rgba(45,212,191,.04);display:flex;flex-direction:column;gap:6px;position:relative">'+
+      '<div style="display:flex;gap:6px;align-items:center">'+
+        '<span style="color:var(--muted);font-size:10px;font-weight:700;min-width:18px">#'+(i+1)+'</span>'+
+        '<input class="form-input" style="flex:2" placeholder="N° proposition (ex: 27453702)" value="'+esc(p.num||'')+'" data-prop-field="num" data-prop-idx="'+i+'">'+
+        '<input class="form-input" style="flex:1" placeholder="Ver. (ex: 2)" value="'+esc(p.ver||'')+'" data-prop-field="ver" data-prop-idx="'+i+'">'+
+        '<input type="number" class="form-input" style="flex:1" placeholder="Montant" value="'+(p.amount!=null?p.amount:'')+'" data-prop-field="amount" data-prop-idx="'+i+'">'+
+        '<button type="button" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:15px;padding:4px 8px" title="Supprimer cette proposition" onclick="delEmersonProp('+i+')">✕</button>'+
+      '</div>'+
+      '<div style="display:flex;gap:6px;align-items:center">'+
+        '<span style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em;min-width:95px" title="Customer Ref # associé à cette proposition">Customer Ref #</span>'+
+        '<input class="form-input" style="flex:1" placeholder="ex: 3276945832769458" value="'+esc(p.cref||'')+'" data-prop-field="cref" data-prop-idx="'+i+'">'+
+      '</div>'+
     '</div>';
   });
   list.innerHTML=html;
@@ -3542,12 +4011,12 @@ function renderEmersonProps(){
       if(field==='amount'){bcProps[idx][field]=parseFloat(this.value)||0;}
       else{bcProps[idx][field]=this.value;}
       // Rafraîchir les selects dans le tableau (pour refléter le changement de label)
-      refreshPropSelects();
+      if(field==='num'||field==='ver')refreshPropSelects();
     });
   });
 }
 function addEmersonProp(){
-  bcProps.push({num:'',ver:'',amount:0});
+  bcProps.push({num:'',ver:'',amount:0,cref:''});
   renderEmersonProps();
   refreshPropSelects();
 }
@@ -4106,7 +4575,9 @@ function bBC(b){
       var p=propById[linePropId];
       if(p){
         var lbl=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
-        rowsArr.push('<tr class="bc-prop-row"><td class="bc-prop-header" colspan="6">📋 EMERSON PROPOSAL : '+esc(lbl)+(p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'')+'</td></tr>');
+        var hdrContent='📋 EMERSON PROPOSAL : '+esc(lbl)+(p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'');
+        if(p.cref) hdrContent+=' &nbsp;&nbsp;<span style="font-weight:400;font-size:9.5px;opacity:0.85">(Customer Ref #: '+esc(p.cref)+')</span>';
+        rowsArr.push('<tr class="bc-prop-row"><td class="bc-prop-header" colspan="6">'+hdrContent+'</td></tr>');
         currentPropId=linePropId;
       }
     }
@@ -4158,7 +4629,7 @@ function bBC(b){
   var rows=rowsArr.join('');
 
   // === Bloc récap des propositions Emerson (sous la signature) ===
-  // Chaque proposition listée avec son N°, Version et Montant
+  // Chaque proposition listée avec son N°, Version, Montant et Customer Ref associé
   var propsHtml='';
   if(propsList.length>0){
     propsHtml+='<strong>Emerson Proposals:</strong>';
@@ -4166,7 +4637,11 @@ function bBC(b){
       var lbl=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
       var amt=p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'';
       propsHtml+='<br>&nbsp;&nbsp;• '+esc(lbl)+amt;
+      if(p.cref) propsHtml+='<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#64748b;font-size:9px">Customer Ref #: '+esc(p.cref)+'</span>';
     });
+  } else if(b.cref2||b.cref){
+    // Fallback pour BC historiques sans propositions mais avec un ancien Customer Ref global
+    propsHtml='<strong>Customer Ref #:</strong> '+esc(b.cref2||b.cref);
   }
 
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
@@ -4198,9 +4673,7 @@ function bBC(b){
           '<div class="bc-sig-cell"></div>'+
         '</div>'+
         '<div class="bc-refs">'+
-          // Customer Ref # (avec fallback sur l'ancien champ)
-          ((b.cref2||b.cref)?'<strong>Customer Ref #:</strong> '+esc(b.cref2||b.cref)+'<br>':'')+
-          // Liste des Emerson Proposals (multi-props) — chacune avec N° Ver:X et Montant
+          // Chaque proposition Emerson liste maintenant son propre Customer Ref (nouveau format multi-props)
           propsHtml+
         '</div>'+
       '</div>'+
