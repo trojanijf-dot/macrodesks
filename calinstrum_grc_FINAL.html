@@ -3672,23 +3672,17 @@ function parseEmersonQuoteText(text){
     pj=pj.replace(/\s*Expiration\s*Date\s*:.*$/i,'').trim();
     header.project=pj;
   }
-  // Total Price : on cherche "Total Price" suivi éventuellement de "(AUD)" puis LE PLUS GRAND nombre à proximité
-  // (pour éviter de prendre un montant intermédiaire comme le Unit Price d'une ligne)
-  var mTotal=text.match(/Total\s*Price\s*(?:\([^)]*\))?\s*([\d,]+\.?\d*)/i);
-  if(mTotal){
-    header.amount=parseFloat(mTotal[1].replace(/,/g,''))||0;
+  // Total Price : on scanne TOUS les "Total Price" du document et on garde LE PLUS GRAND
+  // (les devis Emerson ont souvent plusieurs "Total Price" : sous-totaux + total final)
+  // En prenant le max, on est sûr de capturer le grand total et pas un intermédiaire.
+  var allTotals=[];
+  var reTot=/Total\s*Price\s*(?:\([^)]*\))?\s*([\d,]+\.?\d*)/gi;
+  var mm;
+  while((mm=reTot.exec(text))!==null){
+    var v=parseFloat(mm[1].replace(/,/g,''))||0;
+    if(v>0)allTotals.push(v);
   }
-  // Fallback : si le montant trouvé est bizarrement petit, on scanne tous les "Total" et on prend le plus grand
-  if(header.amount<100){
-    var allTotals=[];
-    var reTot=/Total\s*Price\s*(?:\([^)]*\))?\s*([\d,]+\.?\d*)/gi;
-    var mm;
-    while((mm=reTot.exec(text))!==null){
-      var v=parseFloat(mm[1].replace(/,/g,''))||0;
-      if(v>0)allTotals.push(v);
-    }
-    if(allTotals.length){header.amount=Math.max.apply(null,allTotals);}
-  }
+  if(allTotals.length){header.amount=Math.max.apply(null,allTotals);}
 
   // --- DÉTECTION FORMAT ---
   var hasCustLine=/Cust\s*Line\s+Item\s+Qty\s+Units/i.test(text);
@@ -3731,17 +3725,30 @@ function parseEmersonQuoteText(text){
     });
   } else if(hasPartNumber && hasUnitPrice){
     // === FORMAT B === — lignes potentiellement multi-lignes
-    // Dans ce format la description peut s'étaler sur plusieurs lignes de texte.
-    // Stratégie en 2 passes :
-    //   1. On tente la regex "tout sur 1 ligne" pour les cas simples
-    //   2. Sinon on cherche les patterns "<item> <qty> <partnum>" et on reconstruit la description
-    //      en concaténant les lignes jusqu'à ce qu'on trouve 2 nombres (PU + EXT)
+    // Cas à gérer :
+    //   (a) Ligne complète avec description : "1 16 SNG-A9530V3 AMS WIRELESS... 1,443.00 23,088.00"
+    //   (b) Ligne complète SANS description :  "2 16 SNG-A212 49.00 784.00"
+    //   (c) Multi-lignes : "1 16 SNG-A9530V3" puis "AMS WIRELESS..." puis "1,443.00 23,088.00"
+    //   (d) Item # sur ligne séparée (comme en format C)
     var reB_full=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
+    var reB_noDesc=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]+)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
     var reB_itemStart=/^(\d+)\s+(\d+)\s+([A-Z][\w\-\.]{3,})\s*(.*)$/; // début de ligne : item qty partnum [début desc]
 
     for(var idx=0;idx<rows.length;idx++){
       var r=rows[idx];
-      // Pass 1 : tout sur 1 ligne
+      // Cas (b) : ligne complète SANS description → à tester AVANT reB_full car plus spécifique
+      var mNoDesc=r.match(reB_noDesc);
+      if(mNoDesc){
+        lines.push({
+          qte:parseInt(mNoDesc[2])||1,
+          ref:mNoDesc[3].trim(),
+          desc:'', // pas de description dans cette ligne
+          pu:parseFloat(mNoDesc[4].replace(/,/g,''))||0,
+          ext:parseFloat(mNoDesc[5].replace(/,/g,''))||0
+        });
+        continue;
+      }
+      // Cas (a) : ligne complète AVEC description
       var m=r.match(reB_full);
       if(m){
         lines.push({
@@ -3753,19 +3760,21 @@ function parseEmersonQuoteText(text){
         });
         continue;
       }
-      // Pass 2 : regarde si cette ligne commence par un pattern "item qty partnum"
+      // Cas (c) : multi-lignes
       var ms=r.match(reB_itemStart);
       if(ms && /^[A-Z][\w\-]{3,}$/.test(ms[3]) && !/^(AMS|MACHINE|WIRELESS|EMERSON|Rosemount|POC|FOR|TRI|UNIT)$/i.test(ms[3])){
-        // C'est probablement le début d'une ligne d'article
         var qty=parseInt(ms[2])||1;
         var partnum=ms[3];
         var descParts=[];
         if(ms[4])descParts.push(ms[4].trim());
-        // On avance jusqu'à trouver une ligne qui se termine par 2 nombres (PU EXT) ou contient 2 nombres
         var puExt=null;
         var stopIdx=idx;
         for(var j=idx+1;j<Math.min(idx+10,rows.length);j++){
           var rj=rows[j];
+          // Stop conditions : début d'une autre ligne d'article ou "Total Price"
+          if(/^Total\s*Price/i.test(rj))break;
+          // Si cette ligne est déjà un item complet (cas b ou a), on s'arrête — c'est l'item suivant
+          if(reB_noDesc.test(rj)||reB_full.test(rj))break;
           // Test: la ligne courante contient-elle PU+EXT à la fin ?
           var mEnd=rj.match(/^(.*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
           if(mEnd){
@@ -3792,65 +3801,85 @@ function parseEmersonQuoteText(text){
             pu:puExt.pu,
             ext:puExt.ext
           });
-          idx=stopIdx; // on saute les lignes consommées
+          idx=stopIdx;
         }
       }
     }
   } else {
     // === FORMAT C (pas de Unit Price séparé) — lignes potentiellement multi-lignes ===
+    // Cas particuliers à gérer :
+    //  a) Ligne complète : "1 1 LOT AO-SVC-ANA DESC 3,480.00"
+    //  b) Ligne splittée  : "1" puis "1 LOT AO-SVC-ANA DESC 3,480.00" (item # seul sur une ligne)
+    //  c) Multi-lignes    : "1" puis "1 LOT AO-SVC-ANA" puis "DESC..." puis "3,480.00"
     var reC_full=/^(\d+)\s+(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)$/;
-    var reC_itemStart=/^(\d+)\s*(\d+)?\s*(LOT|Lot|lot|Each|EACH|each)?\s+([A-Z][\w\-\.]{3,})\s*(.*)$/;
+    // reC_splitFull : quand le # d'item est sur la ligne précédente, cette ligne commence par "1 LOT PARTNUM DESC... MONTANT"
+    var reC_splitFull=/^(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]+)\s+(.+?)\s+([\d,]+\.?\d*)$/;
+    // reC_itemStart : "1 LOT PARTNUM" (sans montant au bout, description sur lignes suivantes)
+    var reC_splitStart=/^(\d+)\s+(LOT|Lot|lot|Each|EACH|each)\s+([A-Z][\w\-\.]{3,})\s*(.*)$/;
+    // Détecte si une ligne est juste un numéro d'item seul (ex: "1", "2", etc.) → on l'utilise comme marqueur
+    var reC_itemOnly=/^(\d+)$/;
 
     for(var idxC=0;idxC<rows.length;idxC++){
       var rC=rows[idxC];
+      // Cas (a) : ligne complète sur 1 seule ligne
       var mc=rC.match(reC_full);
       if(mc){
         var extVal=parseFloat(mc[6].replace(/,/g,''))||0;
         var qte=parseInt(mc[2])||1;
-        lines.push({
-          qte:qte,
-          ref:mc[4].trim(),
-          desc:mc[5].trim(),
-          pu:qte?(extVal/qte):extVal,
-          ext:extVal
-        });
+        lines.push({qte:qte,ref:mc[4].trim(),desc:mc[5].trim(),pu:qte?(extVal/qte):extVal,ext:extVal});
         continue;
       }
-      // Multi-lignes : cherche "item qty LOT partnum" puis accumule jusqu'à trouver un montant
-      var mcs=rC.match(reC_itemStart);
-      if(mcs && /^[A-Z][\w\-]{3,}$/.test(mcs[4]) && !/^(AMS|MACHINE|WIRELESS|EMERSON|Rosemount|ONSITE|TRAVEL|FOR|TRI|UNIT)$/i.test(mcs[4])){
-        var qtyC=parseInt(mcs[2])||1;
-        var partnumC=mcs[4];
-        var descPartsC=[];
-        if(mcs[5])descPartsC.push(mcs[5].trim());
-        var extC=null;
-        var stopIdxC=idxC;
-        for(var jC=idxC+1;jC<Math.min(idxC+12,rows.length);jC++){
-          var rjC=rows[jC];
-          var mEndC=rjC.match(/^(.*?)\s+([\d,]+\.\d{2})\s*$/);
-          if(mEndC){
-            if(mEndC[1])descPartsC.push(mEndC[1].trim());
-            extC=parseFloat(mEndC[2].replace(/,/g,''))||0;
-            stopIdxC=jC;
-            break;
-          }
-          var mOnlyC=rjC.match(/^([\d,]+\.\d{2})\s*$/);
-          if(mOnlyC){
-            extC=parseFloat(mOnlyC[1].replace(/,/g,''))||0;
-            stopIdxC=jC;
-            break;
-          }
-          descPartsC.push(rjC);
+      // Cas où la ligne est juste un numéro d'item seul (ex: "1") ET la ligne suivante commence par "<qty> LOT <PartNum>..."
+      if(reC_itemOnly.test(rC) && idxC+1<rows.length){
+        var next=rows[idxC+1];
+        // Cas (b) : "<qty> LOT <partnum> <desc> <montant>" sur la ligne suivante
+        var mNext=next.match(reC_splitFull);
+        if(mNext){
+          var extB=parseFloat(mNext[5].replace(/,/g,''))||0;
+          var qtyB=parseInt(mNext[1])||1;
+          lines.push({qte:qtyB,ref:mNext[3].trim(),desc:mNext[4].trim(),pu:qtyB?(extB/qtyB):extB,ext:extB});
+          idxC++; // skip la ligne "<qty> LOT ..." déjà traitée
+          continue;
         }
-        if(extC){
-          lines.push({
-            qte:qtyC,
-            ref:partnumC,
-            desc:descPartsC.join(' ').replace(/\s+/g,' ').trim(),
-            pu:qtyC?(extC/qtyC):extC,
-            ext:extC
-          });
-          idxC=stopIdxC;
+        // Cas (c) : "<qty> LOT <partnum>" puis lignes de description puis montant isolé
+        var mStart=next.match(reC_splitStart);
+        if(mStart && /^[A-Z][\w\-]{3,}$/.test(mStart[3]) && !/^(AMS|MACHINE|WIRELESS|EMERSON|Rosemount|ONSITE|TRAVEL|FOR|TRI|UNIT)$/i.test(mStart[3])){
+          var qtyC=parseInt(mStart[1])||1;
+          var partnumC=mStart[3];
+          var descPartsC=[];
+          if(mStart[4])descPartsC.push(mStart[4].trim());
+          var extC=null;
+          var stopIdxC=idxC+1;
+          // Scan limité : on arrête dès qu'on trouve un montant isolé OU une ligne contenant un montant à la fin
+          // OU une autre ligne "<chiffre>" ou "<chiffre> LOT ..." (= début de l'item suivant)
+          for(var jC=idxC+2;jC<Math.min(idxC+10,rows.length);jC++){
+            var rjC=rows[jC];
+            // Si on rencontre "Total Price" ou un numéro d'item seul, on s'arrête (prochain item)
+            if(/^Total\s*Price/i.test(rjC))break;
+            if(reC_itemOnly.test(rjC))break;
+            // Si la ligne contient un montant à la fin ET du texte avant → desc + montant
+            var mEndC=rjC.match(/^(.*?)\s+([\d,]+\.\d{2})\s*$/);
+            if(mEndC && mEndC[1]){
+              descPartsC.push(mEndC[1].trim());
+              extC=parseFloat(mEndC[2].replace(/,/g,''))||0;
+              stopIdxC=jC;
+              break;
+            }
+            // Ligne = juste un montant isolé
+            var mOnlyC=rjC.match(/^([\d,]+\.\d{2})\s*$/);
+            if(mOnlyC){
+              extC=parseFloat(mOnlyC[1].replace(/,/g,''))||0;
+              stopIdxC=jC;
+              break;
+            }
+            // Sinon : continuation de description
+            descPartsC.push(rjC);
+            stopIdxC=jC;
+          }
+          if(extC!=null){
+            lines.push({qte:qtyC,ref:partnumC,desc:descPartsC.join(' ').replace(/\s+/g,' ').trim(),pu:qtyC?(extC/qtyC):extC,ext:extC});
+            idxC=stopIdxC;
+          }
         }
       }
     }
@@ -3927,7 +3956,9 @@ function delEimpLine(i){
 function confirmEmersonImport(){
   var h=eimpState.header;
   var ls=eimpState.lines;
-  if(!h||ls.length===0){alert('Aucune donnée à importer.');return;}
+  // Validation : on doit avoir AU MOINS un N° de proposition OU un Customer Ref pour créer une proposition.
+  // Les lignes sont optionnelles (l'utilisateur peut les ajouter manuellement après l'import).
+  if(!h || (!h.num && !h.cref)){alert('Impossible d\'importer : ni N° de proposition ni Customer Ref # n\'ont été détectés dans le PDF.');return;}
 
   // 1. Créer une nouvelle proposition Emerson dans bcProps
   var newProp={
