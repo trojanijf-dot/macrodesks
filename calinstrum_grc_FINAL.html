@@ -5358,10 +5358,11 @@ function bBC(b){
       '</tr></thead>';
     }
 
-    // Wrapper du bloc : tous les blocs ont la classe .bc-prop-block avec page-break-inside:avoid
-    // (CSS injecté). Si une prop ne tient pas en bas de page, elle bascule entière sur la suivante.
-    // Pas de saut forcé entre blocs : on laisse le moteur PDF gérer naturellement le placement.
-    var blockClass='bc-prop-block';
+    // Wrapper du bloc :
+    //  - Bloc 1 : juste .bc-prop-block (pas de saut, suit l'en-tête CALINSTRUM/Vendor/Customer)
+    //  - Blocs 2+ : .bc-prop-block-break en plus → saut de page FORCÉ AVANT
+    //    (chaque proposition Emerson démarre sur sa propre page)
+    var blockClass=blockIdx===0 ? 'bc-prop-block' : 'bc-prop-block bc-prop-block-break';
     return '<div class="'+blockClass+'">'+
       propBanner+
       '<div class="bc-table-wrap"><table class="doc-tbl-bc">'+tableHead+
@@ -5838,13 +5839,11 @@ function downloadPreviewAsPDF(){
     ".bc-sig-header{background:#1e3a5f!important;color:#fff!important;}"+
     ".doc-footer-bar{background:#1e3a5f!important;color:#fff!important;}"+
     // === Saut de page entre propositions Emerson ===
-    // Empêcher la coupure d'un bloc proposition entier.
-    // IMPORTANT : avoid doit être appliqué SUR LE WRAPPER ET SUR LE TABLEAU INTERNE.
-    // Le tableau a sa propre logique de pagination dans html2pdf, et sans cette double règle,
-    // le bandeau + section header peuvent se retrouver isolés en bas de page tandis que les
-    // <tr> items basculent sur la page suivante (bug "bandeau orphelin").
-    ".bc-prop-block{display:block!important;page-break-inside:avoid!important;break-inside:avoid!important;}"+
-    ".bc-prop-block .doc-tbl-bc{page-break-inside:avoid!important;break-inside:avoid!important;}"+
+    // bc-prop-block : display:block pour que le saut de page CSS s'applique correctement.
+    // Pas de page-break-inside:avoid : ça causait la disparition de l'en-tête CALINSTRUM
+    // (html2pdf décalait tout vers le haut pour faire entrer le bloc complet).
+    // Le saut de page entre blocs est géré par .bc-prop-block-break (classe ajoutée sur blocs 2+).
+    ".bc-prop-block{display:block!important;}"+
     ".bc-prop-block-break{page-break-before:always!important;break-before:page!important;}"
   ) : '';
 
