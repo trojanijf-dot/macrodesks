@@ -1107,8 +1107,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
   <div class="modal-body" id="prvBody"></div>
   <div class="modal-footer no-print">
     <button class="btn btn-ghost" onclick="cm('mPRV')">Fermer</button>
-    <button class="btn btn-ghost" onclick="om('mSTAMP');initStampCanvas()" title="Choisir, dessiner ou charger une signature à apposer sur l'aperçu avant impression">✍️ Tampon / Signature</button>
-    <button class="btn btn-teal" onclick="doPrint()" title="Génère le PDF haute qualité avec pagination automatique multi-page (chaque proposition Emerson sur sa propre page) — Choisir 'Enregistrer au format PDF' dans le dialogue d'impression">📄 Export PDF HD</button>
+    <button class="btn btn-ghost" onclick="om('mSTAMP');initStampCanvas()" title="Choisir, dessiner ou charger une signature à apposer sur l'aperçu">✍️ Tampon / Signature</button>
+    <button class="btn btn-teal" onclick="downloadPreviewAsPDF()" title="Télécharge directement le PDF haute qualité avec pagination automatique multi-page">📄 Export PDF HD</button>
   </div>
 </div></div>
 <script>
@@ -1510,7 +1510,9 @@ function onStampFile(input){
   };
   r.readAsDataURL(input.files[0]);
 }
-function applyStampAndPrint(){
+// Appose la signature sur l'aperçu en cours (#prvBody) sans déclencher d'impression.
+// L'utilisateur cliquera ensuite sur "📄 Export PDF HD" pour générer le fichier.
+function applyStamp(){
   var c=document.getElementById('stampCanvas');
 
   var pb=document.getElementById('prvBody');
@@ -1573,7 +1575,7 @@ function applyStampAndPrint(){
         cell.appendChild(sigImg);
       });
       cm('mSTAMP');
-      setTimeout(function(){doPrint();},300);
+      showBCSaveToast('✓ Signature apposée sur l\'aperçu');
     };
     sigImgProbe.onerror=function(){
       // Fallback : pas de crop, insertion directe
@@ -1585,20 +1587,23 @@ function applyStampAndPrint(){
         cell.appendChild(sigImg);
       });
       cm('mSTAMP');
-      setTimeout(function(){doPrint();},300);
+      showBCSaveToast('✓ Signature apposée sur l\'aperçu');
     };
     sigImgProbe.src=sigSrc;
-    return; // on attendra le onload pour déclencher doPrint
+    return; // on attendra le onload de l'image
   } else {
-    // Pas de BC dans l'aperçu ou pas de sig : nettoyer quand même
+    // Pas de BC dans l'aperçu ou pas de sig : nettoyer quand même les anciennes sigs
     bcSigCells.forEach(function(cell){
       var prev=cell.querySelector('.sig-img');if(prev)prev.remove();
     });
   }
 
   cm('mSTAMP');
-  setTimeout(function(){doPrint();},300);
+  if(sigSrc) showBCSaveToast('✓ Signature apposée sur l\'aperçu');
 }
+
+// Alias rétro-compatible (au cas où d'anciens appels existent)
+function applyStampAndPrint(){applyStamp();}
 
 function cropSigEdges(img){
   try{
@@ -5770,6 +5775,14 @@ var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;p
 // Scale 5x = 480 DPI pour un rendu bitmap ultra-net, identique à l'aperçu écran.
 // Cette approche contourne le moteur d'impression Chrome (source des bugs de
 // rendu gras à petite taille et épaisseur de lignes irrégulières).
+// === EXPORT PDF HD : Téléchargement direct via html2pdf ===
+// Stratégie :
+//   - html2pdf capture le .doc visible dans l'aperçu (avec sigantures déjà apposées)
+//   - Mode 'css' pour respecter les sauts de page (.bc-prop-block-break)
+//   - CSS injecté dans le clone pour reproduire le style print du BC :
+//     police Inter, couleurs nettes, bandeaux Emerson Proposal, sub-totaux bleu foncé
+//   - Téléchargement automatique du fichier .pdf via pdf.save(filename)
+//   - Scale 3x pour rendu net sans surcharger la mémoire
 function downloadPreviewAsPDF(){
   var c=document.getElementById('prvBody');
   if(!c){alert('Aucun aperçu à télécharger.');return;}
@@ -5781,7 +5794,10 @@ function downloadPreviewAsPDF(){
   var docTitle=titleEl?titleEl.textContent:'CALINSTRUM';
   var filename=docTitle.replace(/[^a-zA-Z0-9_\-]/g,'_').replace(/_+/g,'_')+'.pdf';
 
-  // Cible l'élément .doc directement visible (pas de clone - c'est ce qui marche en capture écran)
+  // Détection du type de document (BC ou autre)
+  var isBCDoc=docTitle && /^BC\s|Purchase\s*Order|^PO\s/i.test(docTitle);
+  var isDevisDoc=docTitle && /^Devis\s/i.test(docTitle);
+
   var docEl=c.querySelector('.doc');
   if(!docEl){alert('Aucun document à exporter.');return;}
 
@@ -5789,16 +5805,42 @@ function downloadPreviewAsPDF(){
   var loader=document.createElement('div');
   loader.id='pdfLoader';
   loader.style.cssText='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.88);color:#fff;padding:24px 36px;border-radius:8px;z-index:99999;font-size:14px;font-weight:700;font-family:sans-serif;box-shadow:0 10px 30px rgba(0,0,0,0.5);text-align:center';
-  loader.innerHTML='🔄 Génération PDF Haute Définition...<br><span style="font-size:11px;font-weight:400;opacity:0.8;display:block;margin-top:6px">Scale 5x / ~480 DPI — patientez 5 à 8 secondes</span>';
+  loader.innerHTML='🔄 Génération PDF Haute Définition...<br><span style="font-size:11px;font-weight:400;opacity:0.8;display:block;margin-top:6px">Patientez 3 à 8 secondes — le fichier se téléchargera automatiquement</span>';
   document.body.appendChild(loader);
 
-  // Options html2pdf — capture directe de l'aperçu
+  // CSS spécifique BC à injecter dans le clone html2canvas
+  var bcCssOverrides=isBCDoc ? (
+    "body,.doc,.doc *{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif!important;-webkit-font-smoothing:antialiased!important;}"+
+    ".doc{font-size:11.5px!important;}"+
+    ".doc-title{font-size:18px!important;font-weight:800!important;}"+
+    ".doc-info-bar{background:#eef2f7!important;}"+
+    ".doc-info-bar strong{font-size:12px!important;font-weight:700!important;color:#111!important;}"+
+    ".doc-party h4{font-size:12px!important;font-weight:700!important;}"+
+    ".doc-party p{font-size:10.5px!important;line-height:1.5!important;color:#111!important;font-weight:400!important;}"+
+    ".doc-party p strong{font-weight:600!important;color:#111!important;}"+
+    ".doc-tbl-bc{font-size:12px!important;border-collapse:collapse!important;width:100%!important;}"+
+    ".doc-tbl-bc thead th{background:#1e3a5f!important;color:#fff!important;font-weight:700!important;text-transform:uppercase!important;padding:7px 9px!important;}"+
+    ".doc-tbl-bc tbody td{padding:6px 9px!important;}"+
+    ".doc-tbl-bc .bc-section{background:#e8eff7!important;color:#1e3a5f!important;font-weight:700!important;padding:6px 10px!important;}"+
+    ".doc-tbl-bc .bc-ext{background:#f8fafc!important;}"+
+    ".bc-prop-banner{background:#dbeafe!important;color:#1e40af!important;font-weight:700!important;font-size:11px!important;padding:7px 11px!important;border:1px solid #bfdbfe!important;}"+
+    ".bc-prop-subtotal-row td{background:#1e3a5f!important;color:#fff!important;font-weight:800!important;font-size:12px!important;padding:7px 10px!important;}"+
+    ".bc-prop-subtotal-lbl{text-align:right!important;}"+
+    ".bc-prop-subtotal-val{text-align:right!important;font-size:13px!important;}"+
+    ".bc-sig-header{background:#1e3a5f!important;color:#fff!important;}"+
+    ".doc-footer-bar{background:#1e3a5f!important;color:#fff!important;}"+
+    // === Saut de page entre propositions Emerson ===
+    ".bc-prop-block{display:block!important;page-break-inside:auto!important;break-inside:auto!important;}"+
+    ".bc-prop-block-break{page-break-before:always!important;break-before:page!important;}"
+  ) : '';
+
+  // Options html2pdf
   var opt={
     margin:       [10, 10, 10, 10],
     filename:     filename,
     image:        { type: 'jpeg', quality: 0.98 },
     html2canvas:  {
-      scale:              5,
+      scale:              3,
       useCORS:            true,
       letterRendering:    true,
       allowTaint:         true,
@@ -5809,55 +5851,14 @@ function downloadPreviewAsPDF(){
       imageTimeout:       20000,
       removeContainer:    true,
       onclone: function(clonedDoc){
-        // Dans le doc cloné par html2canvas :
-        // 1. Supprimer la grille filigrane (body::before)
-        // 2. Compacter le document pour qu'il tienne sur 1 page A4
+        // Suppression grille filigrane + injection CSS du document
         var style=clonedDoc.createElement('style');
         style.textContent=
-          // === Suppression grille filigrane ===
           'html,body{background:#fff!important;background-image:none!important;}'+
           'body::before,body::after,html::before,html::after{display:none!important;content:none!important;background:none!important;}'+
           '*{background-image:none!important;}'+
-          // === Préservation des fonds colorés légitimes ===
-          '.doc-info-bar{background:#eef2f7!important;background-image:none!important;}'+
-          '.doc-tbl-bc thead th{background:#1e3a5f!important;background-image:none!important;}'+
-          '.doc-tbl-bc .bc-section{background:#e8eff7!important;background-image:none!important;}'+
-          '.doc-tbl-bc .bc-ext{background:#f8fafc!important;background-image:none!important;}'+
-          '.bc-sig-header{background:#1e3a5f!important;background-image:none!important;}'+
-          '.doc-footer-bar{background:#1e3a5f!important;background-image:none!important;}'+
-          // === COMPACTAGE POUR TENIR SUR 1 PAGE A4 ===
-          // Réduction des tailles de police et paddings pour gagner en hauteur verticale
-          '.doc{font-size:10px!important;}'+
-          '.doc-head{margin-bottom:5px!important;padding-bottom:4px!important;}'+
-          '.doc-title{font-size:16px!important;}'+
-          '.doc-head img{max-height:42px!important;}'+
-          '.doc-info-bar{padding:5px 8px!important;margin-bottom:5px!important;}'+
-          '.doc-info-bar .dlbl{font-size:9px!important;}'+
-          '.doc-info-bar strong{font-size:11px!important;}'+
-          '.doc-parties{margin-bottom:5px!important;gap:12px!important;}'+
-          '.doc-party h4{font-size:11px!important;margin-bottom:2px!important;padding-bottom:2px!important;}'+
-          '.doc-party p{font-size:10px!important;line-height:1.35!important;}'+
-          // Tableau BC : padding réduit
-          '.doc-tbl-bc{font-size:10.5px!important;}'+
-          '.doc-tbl-bc thead th{padding:6px 7px!important;font-size:10.5px!important;}'+
-          '.doc-tbl-bc tbody td{padding:7px 7px!important;font-size:10.5px!important;}'+
-          // Descriptions : texte collé en haut de la cellule (évite troncature visuelle quand texte multi-lignes)
-          '.doc-tbl-bc .bc-desc,.doc-tbl-bc .bc-sub-desc{vertical-align:top!important;padding-top:8px!important;line-height:1.4!important;}'+
-          '.doc-tbl-bc .bc-item,.doc-tbl-bc .bc-qty,.doc-tbl-bc .bc-sub-qty,.doc-tbl-bc .bc-ref,.doc-tbl-bc .bc-sub-ref,.doc-tbl-bc .bc-pu,.doc-tbl-bc .bc-ext{vertical-align:middle!important;}'+
-          '.doc-tbl-bc .bc-section{padding:5px 9px!important;font-size:11px!important;}'+
-          // Bandeau bleu clair pour grouper les lignes d'une même proposition Emerson
-          '.doc-tbl-bc .bc-prop-header{background:#dbeafe!important;color:#1e40af!important;font-weight:700!important;font-size:10px!important;padding:5px 9px!important;border:1px solid #bfdbfe!important;}'+
-          '.bc-table-wrap{margin-bottom:14px!important;}'+
-          // Footer : compacté MAIS avec air entre tableau et footer
-          '.bc-footer-grid{margin-top:16px!important;gap:14px!important;}'+
-          '.bc-left-top,.bc-right-top{min-height:65px!important;}'+
-          '.bc-sig-header{padding:5px 9px!important;font-size:10.5px!important;}'+
-          '.bc-sig-cell{min-height:40px!important;}'+
-          '.bc-totals{font-size:10.5px!important;}'+
-          '.bc-totals td{padding:4px 6px!important;}'+
-          '.bc-total-row{font-size:13px!important;padding:7px 6px 2px 6px!important;min-height:28px!important;}'+
-          '.bc-refs{font-size:10px!important;padding:6px 5px 2px 5px!important;min-height:28px!important;}'+
-          '.doc-footer-bar{font-size:9px!important;padding:3px 8mm!important;margin-top:5px!important;}';
+          // CSS spécifique BC (police Inter, couleurs, sauts de page)
+          bcCssOverrides;
         clonedDoc.head.appendChild(style);
       }
     },
@@ -5865,35 +5866,24 @@ function downloadPreviewAsPDF(){
       unit:        'mm',
       format:      'a4',
       orientation: 'portrait',
-      compress:    true,
-      hotfixes:    ['px_scaling']
+      compress:    true
     },
-    // Force 1 SEULE page A4 : html2pdf ignore les coupures et tout le contenu
-    // est scalé pour tenir dans une unique page
-    pagebreak:    { mode: [] },
+    // === PAGINATION CSS RESPECTÉE ===
+    // mode 'css' : html2pdf découpe le PDF aux endroits où le CSS demande un page-break
+    // (avant les .bc-prop-block-break). 'avoid-all' = évite de couper les éléments si possible.
+    pagebreak: { mode: ['css', 'avoid-all'], before: '.bc-prop-block-break' },
     enableLinks:  false
   };
 
-  // Sauvegarder le scroll actuel et remonter en haut pour la capture
+  // Sauvegarde scroll
   var prevScroll=window.scrollY;
   window.scrollTo(0,0);
 
-  // === APPROCHE FORCE SINGLE PAGE ===
-  // On utilise html2pdf en mode "canvas direct" : on capture l'élément,
-  // puis on crée manuellement un PDF A4 avec l'image scalée pour tenir sur 1 seule page.
-  html2pdf().set(opt).from(docEl).toPdf().get('pdf').then(function(pdf){
-    // Récupère la taille totale du PDF généré
-    var totalPages=pdf.internal.getNumberOfPages();
-    // Si html2pdf a créé plusieurs pages, on supprime toutes celles au-delà de la 1ère
-    if(totalPages>1){
-      for(var i=totalPages;i>1;i--){
-        pdf.deletePage(i);
-      }
-    }
-    // Sauvegarde le PDF (1 seule page)
-    pdf.save(filename);
+  // Génération + téléchargement direct
+  html2pdf().set(opt).from(docEl).save().then(function(){
     var l=document.getElementById('pdfLoader');if(l)l.remove();
     window.scrollTo(0,prevScroll);
+    showBCSaveToast('✓ PDF téléchargé : '+filename);
   }).catch(function(err){
     console.error('Erreur génération PDF:',err);
     var l=document.getElementById('pdfLoader');if(l)l.remove();
@@ -6379,7 +6369,7 @@ document.addEventListener('DOMContentLoaded',function(){
   </div>
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mSTAMP')">Annuler</button>
-    <button class="btn btn-teal" onclick="applyStampAndPrint()">🖨 Appliquer & Imprimer</button>
+    <button class="btn btn-teal" onclick="applyStamp()" title="Appose la signature sélectionnée sur l'aperçu (utilise ensuite « Export PDF HD » pour télécharger)">✓ Appliquer la signature</button>
   </div>
 </div>
 </div>
