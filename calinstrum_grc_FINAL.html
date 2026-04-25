@@ -3793,37 +3793,22 @@ function parseEmersonQuoteText(text){
         lines.push({qte:qte,ref:partNum,desc:descFinal,pu:puVal,ext:extVal});
       }
     });
-    // (signifie que la dernière ligne d'item n'avait pas de montant — incohérent)
   } else if(hasPocKit){
     // === FORMAT D v4 — POC STARTER KIT ===
-    //
-    // Ce parser fonctionne sur le texte pdf.js compact. Pour les PDFs où pdf.js extrait
-    // le texte avec des espaces autour des tirets dans les Part Numbers
-    // (ex: "SNG - A9530V3 - T03 -" au lieu de "SNG-A9530V3-T03-"),
-    // on applique une pré-normalisation AVANT de parser.
+    // Parser qui fonctionne sur les 2 variantes de texte pdf.js (compact et espacé).
 
-    // ============== PRÉ-NORMALISATION pour variante "espacée" ==============
+    // ============== PRÉ-NORMALISATION ==============
 
-    // Étape 1 : Fusionner les tokens de Part Number séparés par " - "
-    // "SNG - A9530V3 - T03 -" → "SNG-A9530V3-T03-"
-    // "AO - SVC - ANA ( 4 HOURS)" → "AO-SVC-ANA (4 HOURS)"
-    // "SNG - A43 - 0 AMS MACHINE WORKS" → "SNG-A43-0 AMS MACHINE WORKS"
+    // Étape 1 : Collapse des espaces autour des tirets dans les PN
     rows=rows.map(function(r){
-      // Collapse PN sequences: 2+ courts tokens alphanumériques séparés par " - "
       return r.replace(/\b([A-Z][A-Z0-9]{0,10})(\s+-\s+[A-Z0-9][A-Z0-9]{0,10})+/g,function(m){
         return m.replace(/\s+-\s+/g,'-');
       });
     });
-    // Nettoyer le tiret orphelin en fin : "SNG-A9530V3-T03 -" → "SNG-A9530V3-T03-"
     rows=rows.map(function(r){return r.replace(/([A-Z][A-Z0-9\-]{2,})\s+-\s*$/,'$1-');});
-    // Espaces dans parenthèses : "( 4 HOURS)" → "(4 HOURS)"
     rows=rows.map(function(r){return r.replace(/\(\s+/g,'(').replace(/\s+\)/g,')');});
 
-    // Étape 2 : Fusionner ligne "<PNfragment->" + ligne suivante "<continuation>"
-    // Ex: ["SNG-A9530V3-T03-", "AUNZ"] → ["SNG-A9530V3-T03-AUNZ"]
-    // Ex: ["SNG-A9530V3-T00-", "AUNZ"] → ["SNG-A9530V3-T00-AUNZ"]
-    // MAIS on attend que ce soit la ligne IMMÉDIATEMENT suivante qui soit la continuation
-    // (conservateur pour éviter de casser d'autres formats).
+    // Étape 2 : Fusion immédiate fragment + continuation
     var fused=[];
     for(var fi=0;fi<rows.length;fi++){
       var cur=rows[fi];
@@ -3838,49 +3823,29 @@ function parseEmersonQuoteText(text){
     }
     rows=fused;
 
-    // Étape 2b : Fusion PN avec tolérance — si un fragment PN finit par "-" et dans les
-    // 3 lignes suivantes il y a une ligne "continuation" pure (4-10 lettres/chiffres),
-    // on fusionne les deux ensemble. La ligne continuation est RETIRÉE, le fragment reçoit
-    // le suffixe. Les lignes intermédiaires restent en place.
-    //
-    // Cas typique pdf.js espacé :
-    //   [SNG-A9530V3-T03-]     ← fragment
-    //   [10 TEMPERATURE]        ← ligne intermédiaire
-    //   [AUNZ]                  ← continuation
-    // Devient :
-    //   [SNG-A9530V3-T03-AUNZ]  ← fusionné
-    //   [10 TEMPERATURE]        ← reste
+    // Étape 2b : Fusion avec tolérance (continuation jusqu'à 4 lignes après)
     var fused2=rows.slice();
     for(var fj=0;fj<fused2.length;fj++){
       var cf=fused2[fj];
       if(!cf)continue;
-      var endsWithDash=/-\s*$/.test(cf.trim());
-      if(!endsWithDash)continue;
-      var fragLooksPN=/^[A-Z]{2,6}(-[A-Z0-9]+)+-\s*$/.test(cf.trim());
-      if(!fragLooksPN)continue;
-      // Chercher continuation dans les 3 lignes qui suivent (ou 4 si on traverse une ligne avec montants)
+      if(!/^[A-Z]{2,6}(-[A-Z0-9]+)+-\s*$/.test(cf.trim()))continue;
       for(var fk=fj+1;fk<=Math.min(fused2.length-1,fj+4);fk++){
         var candidate=fused2[fk];
         if(!candidate)continue;
         var candTrim=candidate.trim();
-        // La continuation : 3-10 chars alphanumériques purs
         var isContinuation=/^[A-Z][A-Z0-9]{2,10}$/.test(candTrim);
         if(isContinuation){
           fused2[fj]=cf.trim()+candTrim;
-          fused2[fk]=''; // retirer la continuation
+          fused2[fk]='';
           break;
         }
-        // Si on tombe sur un autre fragment PN avec tiret (nouveau début d'item), on arrête
         if(/^[A-Z]{2,6}(-[A-Z0-9]+)+-\s*$/.test(candTrim))break;
-        // Si on tombe sur une section, on arrête
         if(/^[A-Z][A-Z\s]{10,}$/.test(candTrim) && !/\d/.test(candTrim))break;
       }
     }
     rows=fused2.filter(function(r){return r&&r.trim();});
 
-    // Étape 3 : fusionner ligne "<qty>" (chiffre seul) + ligne commençant par PN
-    // Ex: ["10", "SNG-A9530V3-T03-AUNZ"] → ["10 SNG-A9530V3-T03-AUNZ"]
-    // Ex: ["2 6", "SNG-A9530V3-T00-AUNZ"] → ["2 6 SNG-A9530V3-T00-AUNZ"]
+    // Étape 3 : qty isolée + PN suivant → fusion
     var merged=[];
     for(var mi=0;mi<rows.length;mi++){
       var c=rows[mi].trim();
@@ -3900,8 +3865,6 @@ function parseEmersonQuoteText(text){
 
     function isPNFragmentD(s){return /^[A-Z]{2,6}(-[A-Z0-9]+)+-?$/.test(s.trim());}
     function isPNContinuationD(s){return /^[A-Z][A-Z0-9]{1,10}$/.test(s.trim());}
-    // Pattern montant : nombre avec virgules/milliers + point décimal + 2 chiffres
-    // Ex: "9,126.00", "21,230.00", "880.00" (SANS espace dans le nombre lui-même pour éviter "1 9,126.00")
     var reMontantStrict='(?:\\d{1,3}(?:,\\d{3})*|\\d+)\\.\\d{2}';
     function hasMontantAtEndD(s){return new RegExp(reMontantStrict+'\\s*$').test(s);}
     function hasPUEXTD(s){return new RegExp(reMontantStrict+'\\s+'+reMontantStrict+'\\s*$').test(s);}
@@ -3927,7 +3890,6 @@ function parseEmersonQuoteText(text){
 
     // ÉTAPE 1 : Identifier les ancres
     var anchors=[];
-    var reStrictM=new RegExp('('+reMontantStrict+')');
     var reStrict2=new RegExp('('+reMontantStrict+')\\s+('+reMontantStrict+')\\s*$');
     var reStrict1=new RegExp('('+reMontantStrict+')\\s*$');
     var reIsoTwo=new RegExp('^\\s*(?:\\d+\\s+)?('+reMontantStrict+')\\s+('+reMontantStrict+')\\s*$');
@@ -3958,7 +3920,6 @@ function parseEmersonQuoteText(text){
       }
     }
 
-    // Helper : parse une ligne inline "1 SNG-A43-0 AMS MACHINE WORKS 180 DAYS (6 MONTHS)"
     function parseInlinePNLineD(line){
       var t=line.trim();
       if(hasMontantAtEndD(t))return null;
@@ -3983,7 +3944,7 @@ function parseEmersonQuoteText(text){
 
       var row=anc.row;
       var qty=1;
-      var qtyFromAnchor=false; // flag : a-t-on déjà trouvé qty sur la ligne ancre ?
+      var qtyFromAnchor=false;
       var partNum='';
 
       if(anc.type==='inline2' || anc.type==='inline1'){
@@ -4017,14 +3978,14 @@ function parseEmersonQuoteText(text){
         var scanStart=prevAnchorIdx+1;
         for(var ki=anc.idx-1;ki>=scanStart;ki--){
           var kr=rows[ki].trim();
-          // Cas 0 : "4 1 LOT AO-SVC-ANA" ou variante normalisée
+          // Cas 0 : "4 1 LOT AO-SVC-ANA"
           var mLot=kr.match(/^(\d+)\s+(\d+)\s+LOT\s+([A-Z][\w\-]+)$/i);
           if(mLot){
             if(!qtyFromAnchor)qty=parseInt(mLot[2])||1;
             partNum=mLot[3];
             break;
           }
-          // Cas 1 : "10 SNG-A9530V3-T03-AUNZ" ou "2 6 SNG-A9530V3-T00-AUNZ" (qty + PN complet)
+          // Cas 1 : "10 SNG-A9530V3-T03-AUNZ" (qty + PN complet)
           var mQN=kr.match(/^(\d+(?:\s+\d+)?)\s+([A-Z]{2,6}(?:-[A-Z0-9]+){1,8})$/);
           if(mQN){
             if(!qtyFromAnchor){
@@ -4035,7 +3996,7 @@ function parseEmersonQuoteText(text){
             partNum=mQN[2];
             break;
           }
-          // Cas 2 : "<qty> <PNfragment>" avec tiret final (PN tronqué)
+          // Cas 2 : "<qty> <PNfragment>" avec tiret final
           var mQF=kr.match(/^(\d+)\s+([A-Z]{2,6}(?:-[A-Z0-9]+)+-?)$/);
           if(mQF){
             if(!qtyFromAnchor)qty=parseInt(mQF[1])||qty;
@@ -4052,7 +4013,7 @@ function parseEmersonQuoteText(text){
             partNum=pnAcc.replace(/-+/g,'-').replace(/^-|-$/g,'');
             break;
           }
-          // Cas 3 : fragment PN avec tiret final uniquement (PN tronqué, continuation attendue)
+          // Cas 3 : fragment PN avec tiret final uniquement
           if(isPNFragmentD(kr) && /-$/.test(kr)){
             var pnAcc2=kr;
             var needsCont2=/-$/.test(pnAcc2);
@@ -4070,7 +4031,6 @@ function parseEmersonQuoteText(text){
                 var mQ2=kqr.match(/^(\d+)\s+(\d+)$/);
                 if(mQ2){qty=parseInt(mQ2[2])||qty;break;}
                 if(/^\d+$/.test(kqr)){qty=parseInt(kqr);break;}
-                // Ligne "<qty> <mot descriptif>" (ex: "10 TEMPERATURE")
                 var mQDesc=kqr.match(/^(\d+)\s+[A-Z]/);
                 if(mQDesc){qty=parseInt(mQDesc[1])||qty;break;}
                 if(isPNFragmentD(kqr))break;
@@ -4079,30 +4039,22 @@ function parseEmersonQuoteText(text){
             partNum=pnAcc2.replace(/-+/g,'-').replace(/^-|-$/g,'');
             break;
           }
-          // Cas 4 : PN complet sur une ligne seule (ex: "SNG-A9530V3-T03-AUNZ" tout seul)
-          // Chercher qty dans les lignes précédentes (y compris celles avec mots descriptifs)
+          // Cas 4 : PN complet sur ligne seule (priorité aux lignes intercalées pour qty)
           var mBarePN=kr.match(/^([A-Z]{2,6}(?:-[A-Z0-9]+){1,8})$/);
           if(mBarePN){
             partNum=mBarePN[1];
             if(!qtyFromAnchor){
-              // D'abord : chercher qty dans les lignes ENTRE le PN et l'ancre (lignes intercalées)
-              // Ex: "SNG-A9530V3-T03-AUNZ" (ki) / "10 TEMPERATURE" / ... / "1 9,126.00" (anc.idx)
               var foundQty=false;
               for(var kqf=ki+1;kqf<anc.idx;kqf++){
                 var kqrf=rows[kqf].trim();
                 var mQDescF=kqrf.match(/^(\d+)\s+[A-Z]/);
                 if(mQDescF){
-                  var candQ=parseInt(mQDescF[1]);
-                  // Ignorer si la ligne est un montant en fin (c'est une autre ancre)
                   if(hasMontantAtEndD(kqrf))continue;
-                  // Ignorer si c'est la ligne ancre elle-même
-                  if(kqf===anc.idx)continue;
-                  qty=candQ||qty;
+                  qty=parseInt(mQDescF[1])||qty;
                   foundQty=true;
                   break;
                 }
               }
-              // Sinon : chercher avant le PN (lignes précédentes)
               if(!foundQty){
                 for(var kq2=ki-1;kq2>=scanStart;kq2--){
                   var kqr2=rows[kq2].trim();
@@ -4123,7 +4075,7 @@ function parseEmersonQuoteText(text){
 
       if(!partNum || partNum.length<3)return;
 
-      // KIT detection : sub-lignes inline après l'ancre (jusqu'à la prochaine ancre ou section)
+      // KIT detection : sub-lignes après l'ancre
       var subLines=[];
       var nextAncIdx=ai<anchors.length-1?anchors[ai+1].idx:rows.length;
       for(var sk=anc.idx+1;sk<nextAncIdx;sk++){
