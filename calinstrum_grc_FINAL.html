@@ -180,6 +180,11 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .doc-tbl-bc .bc-section{text-align:left;background:#e8eff7;font-weight:700;font-size:12px;color:#1e3a5f;letter-spacing:.04em;padding:8px 11px;border:1px solid #cbd5e1;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 /* Bandeau bleu clair pour grouper les lignes d'une même proposition Emerson */
 .doc-tbl-bc .bc-prop-header{text-align:left;background:#dbeafe;font-weight:700;font-size:10.5px;color:#1e40af;letter-spacing:.03em;padding:6px 11px;border:1px solid #bfdbfe;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+/* Bandeau bleu clair en HEADER de bloc-proposition (au-dessus de la table) */
+.bc-prop-banner{background:#dbeafe;color:#1e40af;font-weight:700;font-size:11px;padding:7px 11px;border:1px solid #bfdbfe;border-bottom:none;letter-spacing:.03em;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.bc-prop-block{margin-bottom:8px}
+.bc-prop-block .bc-table-wrap{margin-bottom:0}
+.bc-prop-block:has(.bc-prop-banner) .bc-table-wrap{border-top:none}
 /* Sous-total par proposition Emerson (affiché en bas de chaque page d'impression quand multi-prop) */
 .doc-tbl-bc .bc-prop-subtotal-row td{background:#1e3a5f;color:#fff;font-weight:700;font-size:11.5px;padding:6px 10px;border:1px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}
 .doc-tbl-bc .bc-prop-subtotal-lbl{text-align:right;letter-spacing:.02em}
@@ -5199,14 +5204,22 @@ function bBC(b){
   var propById={};
   propsList.forEach(function(p){if(p.id)propById[p.id]=p;});
 
-  // === REGROUPEMENT des lignes par proposition associée ===
-  // On traverse b.lines dans l'ordre d'origine. Quand on rencontre une ligne qui a un propId
-  // différent de la proposition courante (et non vide), on insère une ligne d'en-tête de proposition.
-  // Les lignes sans propId restent dans la section courante.
-  // PAGINATION : à chaque changement de proposition, on insère un sous-total de la prop précédente
-  // suivi d'un saut de page (via classe .bc-page-break-after en print).
+  // === REGROUPEMENT par proposition pour pagination FIABLE ===
+  // Au lieu d'une grande table monolithique avec page-break sur <tr> (capricieux dans Chrome),
+  // on découpe en N "blocs proposition", chacun rendu comme une table indépendante dans un <div>
+  // qui peut accueillir un page-break-before naturel.
+  //
+  // Stratégie :
+  //   1. Pré-calculer les sous-totaux par proposition (déjà fait)
+  //   2. Grouper les lignes b.lines par propId : pour chaque ligne, l'attribuer au "bloc" de sa prop
+  //      (les sections type:'header' rejoignent le bloc de la PROCHAINE ligne avec propId)
+  //   3. Pour chaque bloc : générer un <div class="bc-prop-block"> avec :
+  //      - bandeau EMERSON PROPOSAL en haut
+  //      - table HTML (header + body avec sections + items + sub-lines)
+  //      - sous-total en bas (sauf pour le dernier bloc, qui laisse la place au footer global)
+  //   4. CSS : .bc-prop-block:not(:first-child){page-break-before:always}
 
-  // Pré-calcul des sous-totaux par proposition (pour affichage en bas de chaque page)
+  // Pré-calcul des sous-totaux par proposition
   var propSubtotals={};  // propId -> {sub, count}
   var flagsForSub=computeBCKitFlags(b.lines||[]);
   (b.lines||[]).forEach(function(l,i){
@@ -5217,116 +5230,139 @@ function bBC(b){
     propSubtotals[pid].count++;
   });
 
-  var itemNum=0;
-  var currentMode='items';
-  var currentPropId=null;
-  var rowsArr=[];
-
-  // Helper : génère la ligne HTML de sous-total pour une proposition
-  function makePropSubtotalRow(pid){
-    if(!pid || !propSubtotals[pid] || propSubtotals[pid].count===0)return '';
-    var p=propById[pid];
-    var subVal=propSubtotals[pid].sub;
-    var lbl=p?((p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'')):'';
-    return '<tr class="bc-prop-subtotal-row">'+
-      '<td colspan="5" class="bc-prop-subtotal-lbl">Subtotal '+(lbl?'— '+esc(lbl):'proposition')+' ('+esc(b.devise||'')+')</td>'+
-      '<td class="bc-prop-subtotal-val">'+fN(subVal)+'</td>'+
-    '</tr>';
-  }
-
+  // Étape 1 : grouper les lignes par bloc-proposition.
+  // Une "section" (type:'header') appartient au bloc de la prochaine ligne avec un propId.
+  // S'il n'y a pas de propId du tout dans b.lines (BC manuel sans import PDF), on met tout dans un bloc unique sans propId.
+  var blocks=[];  // [{propId:'p1', lines:[...]}, ...]
+  var pendingHeaders=[];
+  var currentBlock=null;
   (b.lines||[]).forEach(function(l){
     if(l.type==='header'){
-      currentMode=l.mode||'items';
-      // Section utilisateur : respecte son layout existant (colspan 6)
-      rowsArr.push('<tr class="bc-section-row"><td class="bc-section" colspan="6">'+esc(l.desc||'')+'</td></tr>');
+      pendingHeaders.push(l);
       return;
     }
-    // Vérifier si cette ligne introduit un nouveau groupe de proposition
-    var linePropId=l.propId||'';
-    // N'affiche un en-tête que si la ligne a un propId valide ET que ce propId est différent du courant
-    if(propsList.length>0 && linePropId && linePropId!==currentPropId){
-      var p=propById[linePropId];
-      if(p){
-        // Si on change de proposition (et qu'il y avait une prop précédente),
-        // injecter le sous-total de la prop précédente + saut de page
-        var prevSubtotalHtml='';
-        if(currentPropId){
-          prevSubtotalHtml=makePropSubtotalRow(currentPropId);
-        }
-        var lbl=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
-        var hdrContent='📋 EMERSON PROPOSAL : '+esc(lbl)+(p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'');
-        if(p.cref) hdrContent+=' &nbsp;&nbsp;<span style="font-weight:400;font-size:9.5px;opacity:0.85">(Customer Ref #: '+esc(p.cref)+')</span>';
-        // Classe bc-prop-row-break sur les nouvelles props (pas la 1ère) pour forcer un saut de page en impression
-        var rowClass=currentPropId ? 'bc-prop-row bc-prop-row-break' : 'bc-prop-row';
-        var propRowHtml='<tr class="'+rowClass+'"><td class="bc-prop-header" colspan="6">'+hdrContent+'</td></tr>';
-        // Le bandeau "EMERSON PROPOSAL" doit chapeauter TOUTES les sections de cette proposition.
-        // On l'insère AVANT la dernière section poussée si elle existe et appartient à cette proposition
-        // (cas typique : le parser PDF a poussé une section juste avant le 1er item de la prop).
-        // Logique : on remonte dans rowsArr pour trouver la 1ère section consécutive en partant de la fin.
-        var insertAt=rowsArr.length;
-        for(var ri=rowsArr.length-1;ri>=0;ri--){
-          if(rowsArr[ri].indexOf('bc-section-row')>=0){
-            insertAt=ri;
-          } else {
-            break;
-          }
-        }
-        // Insérer dans cet ordre : [sous-total prop précédente] + [bandeau EMERSON PROP nouveau]
-        // Le sous-total va AVANT le bandeau (donc à la fin de la page précédente).
-        if(prevSubtotalHtml){
-          rowsArr.splice(insertAt,0,prevSubtotalHtml,propRowHtml);
-        } else {
-          rowsArr.splice(insertAt,0,propRowHtml);
-        }
-        currentPropId=linePropId;
-      }
+    var pid=l.propId||'';
+    if(!currentBlock || currentBlock.propId!==pid){
+      // Nouveau bloc pour cette prop
+      currentBlock={propId:pid, lines:[]};
+      blocks.push(currentBlock);
+    }
+    // Vider les sections pendantes dans ce bloc
+    pendingHeaders.forEach(function(h){currentBlock.lines.push(h);});
+    pendingHeaders=[];
+    currentBlock.lines.push(l);
+  });
+  // S'il reste des sections orphelines (pas suivies d'item), les pousser dans le dernier bloc
+  // (sinon créer un bloc vide pour les afficher)
+  if(pendingHeaders.length>0){
+    if(!currentBlock){currentBlock={propId:'',lines:[]};blocks.push(currentBlock);}
+    pendingHeaders.forEach(function(h){currentBlock.lines.push(h);});
+  }
+
+  // Étape 2 : pour chaque bloc, rendre un <div class="bc-prop-block"> avec table interne
+  var itemNum=0;
+  function renderBlock(block, blockIdx, totalBlocks){
+    var pid=block.propId;
+    var p=propById[pid];
+
+    // Bandeau EMERSON PROPOSAL (seulement si on a une proposition associée)
+    var propBanner='';
+    if(p){
+      var lbl=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
+      var hdrContent='📋 EMERSON PROPOSAL : '+esc(lbl)+(p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'');
+      if(p.cref) hdrContent+=' &nbsp;&nbsp;<span style="font-weight:400;font-size:9.5px;opacity:0.85">(Customer Ref #: '+esc(p.cref)+')</span>';
+      propBanner='<div class="bc-prop-banner">'+hdrContent+'</div>';
     }
 
-    itemNum++;
-    var total=(currentMode==='kit')?(Number(l.pu)||0):((Number(l.qte)||0)*(Number(l.pu)||0));
+    // Sous-total de fin de bloc (toutes les pages sauf la dernière, sinon doublon avec le total global)
+    var subtotalRow='';
+    var isLastBlock=(blockIdx===totalBlocks-1);
+    if(!isLastBlock && pid && propSubtotals[pid] && propSubtotals[pid].count>0){
+      var subVal=propSubtotals[pid].sub;
+      var lblSub=p?((p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'')):'';
+      subtotalRow='<tr class="bc-prop-subtotal-row">'+
+        '<td colspan="5" class="bc-prop-subtotal-lbl">Subtotal '+(lblSub?'— '+esc(lblSub):'proposition')+' ('+esc(b.devise||'')+')</td>'+
+        '<td class="bc-prop-subtotal-val">'+fN(subVal)+'</td>'+
+      '</tr>';
+    }
 
-    if(currentMode==='kit'){
-      var subs=Array.isArray(l.subLines)?l.subLines:[];
-      if(!Array.isArray(l.subLines) && l.desc && l.desc.indexOf('\n')>=0){
-        var allLines=l.desc.split(/\r?\n/).filter(function(s){return s.trim().length>0;});
-        var mainDescFallback=allLines[0]||'';
-        subs=allLines.slice(1).map(function(s){
-          var m2=s.match(/^\s*(\d+)\s+(\S+)\s+(.+)$/);
-          if(m2) return {qte:+m2[1], ref:m2[2], desc:m2[3]};
-          return {qte:'', ref:'', desc:s.trim()};
-        });
-        var tmpL=Object.assign({},l,{desc:mainDescFallback});
-        l=tmpL;
+    // Rendu des lignes du bloc
+    var rows='';
+    var currentMode='items';
+    block.lines.forEach(function(l){
+      if(l.type==='header'){
+        currentMode=l.mode||'items';
+        rows+='<tr class="bc-section-row"><td class="bc-section" colspan="6">'+esc(l.desc||'')+'</td></tr>';
+        return;
       }
-      var rowspan=1+subs.length;
-      var html='<tr class="bc-item-row">'+
-        '<td class="bc-item"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+itemNum+'</td>'+
+      itemNum++;
+      var total=(currentMode==='kit')?(Number(l.pu)||0):((Number(l.qte)||0)*(Number(l.pu)||0));
+      if(currentMode==='kit'){
+        var subs=Array.isArray(l.subLines)?l.subLines:[];
+        if(!Array.isArray(l.subLines) && l.desc && l.desc.indexOf('\n')>=0){
+          var allLines=l.desc.split(/\r?\n/).filter(function(s){return s.trim().length>0;});
+          var mainDescFallback=allLines[0]||'';
+          subs=allLines.slice(1).map(function(s){
+            var m2=s.match(/^\s*(\d+)\s+(\S+)\s+(.+)$/);
+            if(m2) return {qte:+m2[1], ref:m2[2], desc:m2[3]};
+            return {qte:'', ref:'', desc:s.trim()};
+          });
+          var tmpL=Object.assign({},l,{desc:mainDescFallback});
+          l=tmpL;
+        }
+        var rowspan=1+subs.length;
+        rows+='<tr class="bc-item-row">'+
+          '<td class="bc-item"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+itemNum+'</td>'+
+          '<td class="bc-qty">'+(l.qte||0)+'</td>'+
+          '<td class="bc-ref">'+esc(l.ref||'')+'</td>'+
+          '<td class="bc-desc">'+esc(l.desc||'')+'</td>'+
+          '<td class="bc-pu"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+fN(l.pu)+'</td>'+
+          '<td class="bc-ext"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+fN(total)+'</td>'+
+        '</tr>';
+        subs.forEach(function(sub){
+          rows+='<tr class="bc-subline-row">'+
+            '<td class="bc-sub-qty">'+esc(sub.qte!=null?String(sub.qte):'')+'</td>'+
+            '<td class="bc-sub-ref">'+esc(sub.ref||'')+'</td>'+
+            '<td class="bc-sub-desc">'+esc(sub.desc||'')+'</td>'+
+          '</tr>';
+        });
+        return;
+      }
+      rows+='<tr class="bc-item-row">'+
+        '<td class="bc-item">'+itemNum+'</td>'+
         '<td class="bc-qty">'+(l.qte||0)+'</td>'+
         '<td class="bc-ref">'+esc(l.ref||'')+'</td>'+
         '<td class="bc-desc">'+esc(l.desc||'')+'</td>'+
-        '<td class="bc-pu"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+fN(l.pu)+'</td>'+
-        '<td class="bc-ext"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+fN(total)+'</td>'+
+        '<td class="bc-pu">'+fN(l.pu)+'</td>'+
+        '<td class="bc-ext">'+fN(total)+'</td>'+
       '</tr>';
-      subs.forEach(function(sub){
-        html+='<tr class="bc-subline-row">'+
-          '<td class="bc-sub-qty">'+esc(sub.qte!=null?String(sub.qte):'')+'</td>'+
-          '<td class="bc-sub-ref">'+esc(sub.ref||'')+'</td>'+
-          '<td class="bc-sub-desc">'+esc(sub.desc||'')+'</td>'+
-        '</tr>';
-      });
-      rowsArr.push(html);
-      return;
-    }
-    rowsArr.push('<tr class="bc-item-row">'+
-      '<td class="bc-item">'+itemNum+'</td>'+
-      '<td class="bc-qty">'+(l.qte||0)+'</td>'+
-      '<td class="bc-ref">'+esc(l.ref||'')+'</td>'+
-      '<td class="bc-desc">'+esc(l.desc||'')+'</td>'+
-      '<td class="bc-pu">'+fN(l.pu)+'</td>'+
-      '<td class="bc-ext">'+fN(total)+'</td>'+
-    '</tr>');
+    });
+
+    // En-tête de table (répété sur chaque page-bloc)
+    var tableHead='<thead><tr>'+
+      '<th class="th-item">Item</th>'+
+      '<th class="th-qty">Qty</th>'+
+      '<th class="th-ref">Part Number</th>'+
+      '<th class="th-desc">Description</th>'+
+      '<th class="th-pu">Unit Price<br>('+esc(b.devise||'')+')</th>'+
+      '<th class="th-ext">Extended Price<br>('+esc(b.devise||'')+')</th>'+
+    '</tr></thead>';
+
+    // Wrapper du bloc : le 1er n'a pas de page-break, les suivants oui (forcés par classe)
+    var blockClass=blockIdx===0 ? 'bc-prop-block' : 'bc-prop-block bc-prop-block-break';
+    return '<div class="'+blockClass+'">'+
+      propBanner+
+      '<div class="bc-table-wrap"><table class="doc-tbl-bc">'+tableHead+
+        '<tbody>'+rows+subtotalRow+'</tbody>'+
+      '</table></div>'+
+    '</div>';
+  }
+
+  // Construire le HTML de tous les blocs
+  var allBlocksHtml='';
+  blocks.forEach(function(blk,i){
+    allBlocksHtml+=renderBlock(blk, i, blocks.length);
   });
-  var rows=rowsArr.join('');
 
   // === Bloc récap des propositions Emerson (sous la signature) ===
   // Chaque proposition listée avec son N°, Version, Montant et Customer Ref associé
@@ -5356,16 +5392,7 @@ function bBC(b){
       '<div class="doc-party"><h4>VENDOR</h4><p><strong>Emerson Process Management Australia Pty Ltd</strong><br>Contact: '+esc(b.vcont||'')+'<br>'+esc(b.vaddr||'')+(b.vphone?'<br>Tél: '+esc(b.vphone):'')+'<br>'+esc(b.vemail||'')+'</p></div>'+
       '<div class="doc-party"><h4>CUSTOMER</h4><p><strong>'+CI.nom+'</strong><br>Contact: Fabrice RIZZO<br>'+ci_adr+'<br>'+CI.tel+'<br>'+CI.email+'</p></div>'+
     '</div>'+
-    '<div class="bc-table-wrap"><table class="doc-tbl-bc">'+
-      '<thead><tr>'+
-        '<th class="th-item">Item</th>'+
-        '<th class="th-qty">Qty</th>'+
-        '<th class="th-ref">Part Number</th>'+
-        '<th class="th-desc">Description</th>'+
-        '<th class="th-pu">Unit Price<br>('+esc(b.devise||'')+')</th>'+
-        '<th class="th-ext">Extended Price<br>('+esc(b.devise||'')+')</th>'+
-      '</tr></thead>'+
-    '<tbody>'+rows+'</tbody></table></div>'+
+    allBlocksHtml+
     '<div class="bc-footer-grid">'+
       '<div class="bc-footer-left">'+
         '<div class="bc-left-top">'+
@@ -5930,15 +5957,35 @@ function doPrint(){
     /* === PAGINATION PAR PROPOSITION EMERSON ===
        Quand un BC contient plusieurs propositions, chaque nouvelle proposition (sauf la 1ère)
        commence sur une nouvelle page, avec un sous-total de la proposition précédente en bas
-       de la page sortante. */
-    .bc-prop-row-break{
+       de la page sortante.
+       Stratégie : chaque proposition est rendue dans un <div class="bc-prop-block"> indépendant
+       (avec sa propre table). Le saut de page est appliqué au div, pas au tr (Chrome est plus fiable). */
+    .bc-prop-block{
+      page-break-inside:auto!important;
+      break-inside:auto!important;
+    }
+    .bc-prop-block-break{
       page-break-before:always!important;
       break-before:page!important;
+      -webkit-column-break-before:always!important;
     }
-    .bc-prop-subtotal-row{
-      display:table-row!important;
+    .bc-prop-banner{
+      background:#dbeafe!important;
+      color:#1e40af!important;
+      font-weight:700!important;
+      font-size:11px!important;
+      padding:7px 11px!important;
+      border:1px solid #bfdbfe!important;
+      margin-bottom:0!important;
+      letter-spacing:.03em!important;
+      -webkit-print-color-adjust:exact!important;
+      print-color-adjust:exact!important;
       page-break-after:avoid!important;
       break-after:avoid!important;
+    }
+    .bc-prop-subtotal-row{
+      page-break-inside:avoid!important;
+      break-inside:avoid!important;
     }
     .bc-prop-subtotal-row td{
       background:#1e3a5f!important;
