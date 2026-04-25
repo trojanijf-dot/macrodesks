@@ -5358,8 +5358,10 @@ function bBC(b){
       '</tr></thead>';
     }
 
-    // Wrapper du bloc : le 1er n'a pas de page-break, les suivants oui (forcés par classe)
-    var blockClass=blockIdx===0 ? 'bc-prop-block' : 'bc-prop-block bc-prop-block-break';
+    // Wrapper du bloc : tous les blocs ont la classe .bc-prop-block avec page-break-inside:avoid
+    // (CSS injecté). Si une prop ne tient pas en bas de page, elle bascule entière sur la suivante.
+    // Pas de saut forcé entre blocs : on laisse le moteur PDF gérer naturellement le placement.
+    var blockClass='bc-prop-block';
     return '<div class="'+blockClass+'">'+
       propBanner+
       '<div class="bc-table-wrap"><table class="doc-tbl-bc">'+tableHead+
@@ -5894,8 +5896,23 @@ function downloadPreviewAsPDF(){
   var prevScroll=window.scrollY;
   window.scrollTo(0,0);
 
-  // Génération + téléchargement direct
-  html2pdf().set(opt).from(docEl).save().then(function(){
+  // Pipeline html2pdf en 3 étapes :
+  //  1. Générer le PDF (toPdf)
+  //  2. Récupérer l'instance jsPDF pour ajouter les numéros de page "X / Y"
+  //  3. Sauvegarder (déclenche le téléchargement)
+  html2pdf().set(opt).from(docEl).toPdf().get('pdf').then(function(pdf){
+    var totalPages=pdf.internal.getNumberOfPages();
+    var pageW=pdf.internal.pageSize.getWidth();
+    var pageH=pdf.internal.pageSize.getHeight();
+    for(var i=1;i<=totalPages;i++){
+      pdf.setPage(i);
+      pdf.setFontSize(9);
+      pdf.setTextColor(100,100,100);
+      var label=i+' / '+totalPages;
+      // Position : centrée en bas de page, à 7mm du bord inférieur
+      pdf.text(label, pageW/2, pageH-7, {align:'center'});
+    }
+    pdf.save(filename);
     var l=document.getElementById('pdfLoader');if(l)l.remove();
     window.scrollTo(0,prevScroll);
     showBCSaveToast('✓ PDF téléchargé : '+filename);
