@@ -5358,9 +5358,15 @@ function bBC(b){
     '</div>';
   }
 
-  // Construire le HTML de tous les blocs
+  // Construire le HTML de tous les blocs.
+  // Entre chaque bloc (sauf avant le 1er), on insère un séparateur HTML zéro-hauteur
+  // qui force le saut de page (technique très robuste cross-browser).
   var allBlocksHtml='';
   blocks.forEach(function(blk,i){
+    if(i>0){
+      // Séparateur de page explicite : div vide avec style inline (priorité maximale)
+      allBlocksHtml+='<div class="bc-page-break-spacer" style="page-break-before:always;break-before:page;display:block;height:0;overflow:hidden;"></div>';
+    }
     allBlocksHtml+=renderBlock(blk, i, blocks.length);
   });
 
@@ -5958,9 +5964,13 @@ function doPrint(){
        Quand un BC contient plusieurs propositions, chaque nouvelle proposition (sauf la 1ère)
        commence sur une nouvelle page, avec un sous-total de la proposition précédente en bas
        de la page sortante.
-       Stratégie : chaque proposition est rendue dans un <div class="bc-prop-block"> indépendant
-       (avec sa propre table). Le saut de page est appliqué au div, pas au tr (Chrome est plus fiable). */
+       Stratégie multi-couches pour fiabilité maximale :
+         1. Séparateur HTML explicite zéro-hauteur entre les blocs (style inline page-break-before:always)
+         2. Classe .bc-prop-block-break sur le wrapper de la 2e prop+
+         3. Display:block forcé sur le wrapper (Chrome ignore parfois les sauts sur display:flex/grid)
+       Le 1er bloc n'a aucun saut. Les suivants : tous les 3 mécanismes combinés. */
     .bc-prop-block{
+      display:block!important;
       page-break-inside:auto!important;
       break-inside:auto!important;
     }
@@ -5968,6 +5978,15 @@ function doPrint(){
       page-break-before:always!important;
       break-before:page!important;
       -webkit-column-break-before:always!important;
+    }
+    .bc-page-break-spacer{
+      display:block!important;
+      page-break-before:always!important;
+      break-before:page!important;
+      -webkit-column-break-before:always!important;
+      height:0!important;
+      overflow:hidden!important;
+      visibility:hidden!important;
     }
     .bc-prop-banner{
       background:#dbeafe!important;
@@ -5998,6 +6017,33 @@ function doPrint(){
     }
     .bc-prop-subtotal-lbl{text-align:right!important;letter-spacing:.02em!important;}
     .bc-prop-subtotal-val{text-align:right!important;font-size:13px!important;}
+
+    /* === DOUBLE COUCHE @media print === */
+    /* Certains navigateurs (Chrome notamment) appliquent les sauts de page UNIQUEMENT
+       quand les règles sont dans un @media print explicite. On les redéclare ici. */
+    @media print {
+      .bc-prop-block{
+        display:block!important;
+        page-break-inside:auto!important;
+        break-inside:auto!important;
+      }
+      .bc-prop-block-break,
+      .bc-page-break-spacer{
+        page-break-before:always!important;
+        break-before:page!important;
+        -webkit-column-break-before:always!important;
+        display:block!important;
+      }
+      .bc-page-break-spacer{
+        height:0!important;
+        overflow:hidden!important;
+        visibility:hidden!important;
+      }
+      .bc-prop-banner{
+        page-break-after:avoid!important;
+        break-after:avoid!important;
+      }
+    }
   ` : '';
 
   var extraCSS=pageRule+bcDocOverrides+`
