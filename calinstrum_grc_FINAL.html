@@ -4472,11 +4472,18 @@ function confirmEmersonImport(){
     }
     // Item avec sub-lines = mode KIT
     if(Array.isArray(l.subLines) && l.subLines.length>0){
-      // Ouvrir une section KIT avec un titre dérivé de la description ou de la ref
-      var kitTitle=(l.desc && l.desc.length>5 && l.desc.length<80)
-        ? l.desc.toUpperCase()
-        : ('KIT — '+(l.ref||'').toUpperCase());
-      bcL.push({type:'header',mode:'kit',desc:kitTitle});
+      // Si la dernière ligne ajoutée est un header de section, on la transforme en mode KIT
+      // au lieu de créer un nouveau bandeau redondant.
+      var lastIdx=bcL.length-1;
+      if(lastIdx>=0 && bcL[lastIdx].type==='header' && bcL[lastIdx].mode!=='kit'){
+        bcL[lastIdx].mode='kit';
+      } else {
+        // Pas de section parente : créer un bandeau KIT dérivé du PN ou de la desc
+        var kitTitle=(l.desc && l.desc.length>5 && l.desc.length<80)
+          ? l.desc.toUpperCase()
+          : ('KIT — '+(l.ref||'').toUpperCase());
+        bcL.push({type:'header',mode:'kit',desc:kitTitle});
+      }
       // L'item principal du kit
       bcL.push({
         ref:l.ref||'',
@@ -4488,8 +4495,8 @@ function confirmEmersonImport(){
       });
       nbLignesAjoutees++;
       // Réouvrir le mode "items" après le KIT pour les items suivants
-      // (sauf si la prochaine ligne est elle-même un header de section)
-      // Note : l'utilisateur peut ajouter manuellement +Titre de section au besoin
+      // (on ajoute un mini-séparateur invisible : pas nécessaire car la prochaine section parser
+      // aura son propre header en mode items)
       return;
     }
     // Item normal
@@ -5213,7 +5220,21 @@ function bBC(b){
         var lbl=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
         var hdrContent='📋 EMERSON PROPOSAL : '+esc(lbl)+(p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'');
         if(p.cref) hdrContent+=' &nbsp;&nbsp;<span style="font-weight:400;font-size:9.5px;opacity:0.85">(Customer Ref #: '+esc(p.cref)+')</span>';
-        rowsArr.push('<tr class="bc-prop-row"><td class="bc-prop-header" colspan="6">'+hdrContent+'</td></tr>');
+        var propRowHtml='<tr class="bc-prop-row"><td class="bc-prop-header" colspan="6">'+hdrContent+'</td></tr>';
+        // Le bandeau "EMERSON PROPOSAL" doit chapeauter TOUTES les sections de cette proposition.
+        // On l'insère AVANT la dernière section poussée si elle existe et appartient à cette proposition
+        // (cas typique : le parser PDF a poussé une section juste avant le 1er item de la prop).
+        // Logique : on remonte dans rowsArr pour trouver la 1ère section consécutive en partant de la fin
+        // (cad sans item entre cette section et la fin), et on insère le bandeau juste avant.
+        var insertAt=rowsArr.length;
+        for(var ri=rowsArr.length-1;ri>=0;ri--){
+          if(rowsArr[ri].indexOf('bc-section-row')>=0){
+            insertAt=ri;
+          } else {
+            break; // dès qu'on rencontre autre chose qu'une section, on stoppe la remontée
+          }
+        }
+        rowsArr.splice(insertAt,0,propRowHtml);
         currentPropId=linePropId;
       }
     }
