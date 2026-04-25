@@ -5869,9 +5869,14 @@ function downloadPreviewAsPDF(){
       compress:    true
     },
     // === PAGINATION CSS RESPECTÉE ===
-    // mode 'css' : html2pdf découpe le PDF aux endroits où le CSS demande un page-break
-    // (avant les .bc-prop-block-break). 'avoid-all' = évite de couper les éléments si possible.
-    pagebreak: { mode: ['css', 'avoid-all'], before: '.bc-prop-block-break' },
+    // mode 'css' : html2pdf découpe le PDF aux endroits où le CSS demande un page-break.
+    // La règle .bc-prop-block-break{page-break-before:always} dans bcCssOverrides force le saut.
+    //
+    // ⚠️ NE PAS utiliser 'before:' option : testé empiriquement, html2pdf insère un saut
+    // mais positionne aussi le contenu suivant à sa coordonnée d'origine, ce qui crée
+    // de gros espaces vides en haut des pages 2+. mode:'css' seul lit la règle CSS injectée
+    // et fait le bon saut au bon endroit.
+    pagebreak: { mode: 'css' },
     enableLinks:  false
   };
 
