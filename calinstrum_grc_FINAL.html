@@ -5291,16 +5291,24 @@ function bBC(b){
     }
 
     // Rendu des lignes du bloc
+    // pendingSectionAttach : flag levé après chaque <tr class="bc-section-row"> ;
+    //   force la classe "bc-section-first-item" sur la PROCHAINE ligne d'article.
+    //   Couplé avec le CSS print, cela empêche le bandeau de section ("WI-FI TEMPERATURE", etc.)
+    //   de finir orphelin en bas d'une page sans sa première ligne d'article.
     var rows='';
     var currentMode='items';
+    var pendingSectionAttach=false;
     block.lines.forEach(function(l){
       if(l.type==='header'){
         currentMode=l.mode||'items';
         rows+='<tr class="bc-section-row"><td class="bc-section" colspan="6">'+esc(l.desc||'')+'</td></tr>';
+        pendingSectionAttach=true;
         return;
       }
       itemNum++;
       var total=(currentMode==='kit')?(Number(l.pu)||0):((Number(l.qte)||0)*(Number(l.pu)||0));
+      var firstItemCls=pendingSectionAttach?' bc-section-first-item':'';
+      pendingSectionAttach=false;
       if(currentMode==='kit'){
         var subs=Array.isArray(l.subLines)?l.subLines:[];
         if(!Array.isArray(l.subLines) && l.desc && l.desc.indexOf('\n')>=0){
@@ -5315,7 +5323,7 @@ function bBC(b){
           l=tmpL;
         }
         var rowspan=1+subs.length;
-        rows+='<tr class="bc-item-row">'+
+        rows+='<tr class="bc-item-row'+firstItemCls+'">'+
           '<td class="bc-item"'+(subs.length?' rowspan="'+rowspan+'"':'')+'>'+itemNum+'</td>'+
           '<td class="bc-qty">'+(l.qte||0)+'</td>'+
           '<td class="bc-ref">'+esc(l.ref||'')+'</td>'+
@@ -5332,7 +5340,7 @@ function bBC(b){
         });
         return;
       }
-      rows+='<tr class="bc-item-row">'+
+      rows+='<tr class="bc-item-row'+firstItemCls+'">'+
         '<td class="bc-item">'+itemNum+'</td>'+
         '<td class="bc-qty">'+(l.qte||0)+'</td>'+
         '<td class="bc-ref">'+esc(l.ref||'')+'</td>'+
@@ -5844,7 +5852,17 @@ function downloadPreviewAsPDF(){
     // (html2pdf décalait tout vers le haut pour faire entrer le bloc complet).
     // Le saut de page entre blocs est géré par .bc-prop-block-break (classe ajoutée sur blocs 2+).
     ".bc-prop-block{display:block!important;}"+
-    ".bc-prop-block-break{page-break-before:always!important;break-before:page!important;}"
+    ".bc-prop-block-break{page-break-before:always!important;break-before:page!important;}"+
+    // === Anti-orphelin de bandeau de section ("WI-FI TEMPERATURE", "AMS ONSITE SERVICES", etc.) ===
+    // Sans ces règles, html2pdf peut couper la page juste APRÈS un bandeau de section,
+    // laissant le titre seul en bas et ses articles en haut de la page suivante.
+    // Mécanisme :
+    //   1. .bc-section-row : interdit la coupure APRÈS le bandeau
+    //   2. .bc-section-first-item : interdit la coupure AVANT la première ligne d'article
+    //      (classe ajoutée par renderBlock via le flag pendingSectionAttach)
+    // Les deux ensemble forcent le bandeau + sa première ligne à rester sur la même page.
+    ".bc-section-row{page-break-after:avoid!important;break-after:avoid!important;page-break-inside:avoid!important;break-inside:avoid!important;}"+
+    ".bc-section-first-item{page-break-before:avoid!important;break-before:avoid!important;}"
   ) : '';
 
   // Options html2pdf
@@ -5997,6 +6015,17 @@ function doPrint(){
       break-before:page!important;
       -webkit-column-break-before:always!important;
     }
+    /* === Anti-orphelin de bandeau de section (cf. bcCssOverrides pour explications) === */
+    .bc-section-row{
+      page-break-after:avoid!important;
+      break-after:avoid!important;
+      page-break-inside:avoid!important;
+      break-inside:avoid!important;
+    }
+    .bc-section-first-item{
+      page-break-before:avoid!important;
+      break-before:avoid!important;
+    }
     .bc-prop-banner{
       background:#dbeafe!important;
       color:#1e40af!important;
@@ -6039,6 +6068,16 @@ function doPrint(){
         break-before:page!important;
         -webkit-column-break-before:always!important;
         display:block!important;
+      }
+      .bc-section-row{
+        page-break-after:avoid!important;
+        break-after:avoid!important;
+        page-break-inside:avoid!important;
+        break-inside:avoid!important;
+      }
+      .bc-section-first-item{
+        page-break-before:avoid!important;
+        break-before:avoid!important;
       }
     }
   ` : '';
