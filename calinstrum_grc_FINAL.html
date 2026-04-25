@@ -180,6 +180,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .doc-tbl-bc .bc-section{text-align:left;background:#e8eff7;font-weight:700;font-size:12px;color:#1e3a5f;letter-spacing:.04em;padding:8px 11px;border:1px solid #cbd5e1;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 /* Bandeau bleu clair pour grouper les lignes d'une même proposition Emerson */
 .doc-tbl-bc .bc-prop-header{text-align:left;background:#dbeafe;font-weight:700;font-size:10.5px;color:#1e40af;letter-spacing:.03em;padding:6px 11px;border:1px solid #bfdbfe;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+/* Sous-total par proposition Emerson (affiché en bas de chaque page d'impression quand multi-prop) */
+.doc-tbl-bc .bc-prop-subtotal-row td{background:#1e3a5f;color:#fff;font-weight:700;font-size:11.5px;padding:6px 10px;border:1px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}
+.doc-tbl-bc .bc-prop-subtotal-lbl{text-align:right;letter-spacing:.02em}
+.doc-tbl-bc .bc-prop-subtotal-val{text-align:right;font-variant-numeric:tabular-nums}
 .bc-footer-grid{display:flex;flex-direction:row;gap:20px;margin-top:14px;align-items:stretch;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}
 .bc-footer-left{flex:1 1 50%;display:flex;flex-direction:column}
 .bc-footer-right{flex:1 1 50%;display:flex;flex-direction:column}
@@ -5199,10 +5203,36 @@ function bBC(b){
   // On traverse b.lines dans l'ordre d'origine. Quand on rencontre une ligne qui a un propId
   // différent de la proposition courante (et non vide), on insère une ligne d'en-tête de proposition.
   // Les lignes sans propId restent dans la section courante.
+  // PAGINATION : à chaque changement de proposition, on insère un sous-total de la prop précédente
+  // suivi d'un saut de page (via classe .bc-page-break-after en print).
+
+  // Pré-calcul des sous-totaux par proposition (pour affichage en bas de chaque page)
+  var propSubtotals={};  // propId -> {sub, count}
+  var flagsForSub=computeBCKitFlags(b.lines||[]);
+  (b.lines||[]).forEach(function(l,i){
+    if(l.type==='header')return;
+    var pid=l.propId||'__unbound__';
+    if(!propSubtotals[pid])propSubtotals[pid]={sub:0,count:0};
+    propSubtotals[pid].sub+=bcLineExtended(l, flagsForSub[i]);
+    propSubtotals[pid].count++;
+  });
+
   var itemNum=0;
   var currentMode='items';
   var currentPropId=null;
   var rowsArr=[];
+
+  // Helper : génère la ligne HTML de sous-total pour une proposition
+  function makePropSubtotalRow(pid){
+    if(!pid || !propSubtotals[pid] || propSubtotals[pid].count===0)return '';
+    var p=propById[pid];
+    var subVal=propSubtotals[pid].sub;
+    var lbl=p?((p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'')):'';
+    return '<tr class="bc-prop-subtotal-row">'+
+      '<td colspan="5" class="bc-prop-subtotal-lbl">Subtotal '+(lbl?'— '+esc(lbl):'proposition')+' ('+esc(b.devise||'')+')</td>'+
+      '<td class="bc-prop-subtotal-val">'+fN(subVal)+'</td>'+
+    '</tr>';
+  }
 
   (b.lines||[]).forEach(function(l){
     if(l.type==='header'){
@@ -5217,24 +5247,37 @@ function bBC(b){
     if(propsList.length>0 && linePropId && linePropId!==currentPropId){
       var p=propById[linePropId];
       if(p){
+        // Si on change de proposition (et qu'il y avait une prop précédente),
+        // injecter le sous-total de la prop précédente + saut de page
+        var prevSubtotalHtml='';
+        if(currentPropId){
+          prevSubtotalHtml=makePropSubtotalRow(currentPropId);
+        }
         var lbl=(p.num||'(sans n°)')+(p.ver?' Ver:'+p.ver:'');
         var hdrContent='📋 EMERSON PROPOSAL : '+esc(lbl)+(p.amount?' — '+fN(p.amount)+' '+esc(b.devise||''):'');
         if(p.cref) hdrContent+=' &nbsp;&nbsp;<span style="font-weight:400;font-size:9.5px;opacity:0.85">(Customer Ref #: '+esc(p.cref)+')</span>';
-        var propRowHtml='<tr class="bc-prop-row"><td class="bc-prop-header" colspan="6">'+hdrContent+'</td></tr>';
+        // Classe bc-prop-row-break sur les nouvelles props (pas la 1ère) pour forcer un saut de page en impression
+        var rowClass=currentPropId ? 'bc-prop-row bc-prop-row-break' : 'bc-prop-row';
+        var propRowHtml='<tr class="'+rowClass+'"><td class="bc-prop-header" colspan="6">'+hdrContent+'</td></tr>';
         // Le bandeau "EMERSON PROPOSAL" doit chapeauter TOUTES les sections de cette proposition.
         // On l'insère AVANT la dernière section poussée si elle existe et appartient à cette proposition
         // (cas typique : le parser PDF a poussé une section juste avant le 1er item de la prop).
-        // Logique : on remonte dans rowsArr pour trouver la 1ère section consécutive en partant de la fin
-        // (cad sans item entre cette section et la fin), et on insère le bandeau juste avant.
+        // Logique : on remonte dans rowsArr pour trouver la 1ère section consécutive en partant de la fin.
         var insertAt=rowsArr.length;
         for(var ri=rowsArr.length-1;ri>=0;ri--){
           if(rowsArr[ri].indexOf('bc-section-row')>=0){
             insertAt=ri;
           } else {
-            break; // dès qu'on rencontre autre chose qu'une section, on stoppe la remontée
+            break;
           }
         }
-        rowsArr.splice(insertAt,0,propRowHtml);
+        // Insérer dans cet ordre : [sous-total prop précédente] + [bandeau EMERSON PROP nouveau]
+        // Le sous-total va AVANT le bandeau (donc à la fin de la page précédente).
+        if(prevSubtotalHtml){
+          rowsArr.splice(insertAt,0,prevSubtotalHtml,propRowHtml);
+        } else {
+          rowsArr.splice(insertAt,0,propRowHtml);
+        }
         currentPropId=linePropId;
       }
     }
@@ -5884,6 +5927,30 @@ function doPrint(){
     .doc-tbl-bc tbody td{padding:6px 9px!important;}
     .doc-tbl-bc thead th{padding:7px 9px!important;}
     .bc-section{padding:6px 10px!important;}
+    /* === PAGINATION PAR PROPOSITION EMERSON ===
+       Quand un BC contient plusieurs propositions, chaque nouvelle proposition (sauf la 1ère)
+       commence sur une nouvelle page, avec un sous-total de la proposition précédente en bas
+       de la page sortante. */
+    .bc-prop-row-break{
+      page-break-before:always!important;
+      break-before:page!important;
+    }
+    .bc-prop-subtotal-row{
+      display:table-row!important;
+      page-break-after:avoid!important;
+      break-after:avoid!important;
+    }
+    .bc-prop-subtotal-row td{
+      background:#1e3a5f!important;
+      color:#fff!important;
+      font-weight:800!important;
+      font-size:12px!important;
+      padding:7px 10px!important;
+      -webkit-print-color-adjust:exact!important;
+      print-color-adjust:exact!important;
+    }
+    .bc-prop-subtotal-lbl{text-align:right!important;letter-spacing:.02em!important;}
+    .bc-prop-subtotal-val{text-align:right!important;font-size:13px!important;}
   ` : '';
 
   var extraCSS=pageRule+bcDocOverrides+`
