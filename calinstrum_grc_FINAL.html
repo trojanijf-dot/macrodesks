@@ -5342,15 +5342,21 @@ function bBC(b){
       '</tr>';
     });
 
-    // En-tête de table (répété sur chaque page-bloc)
-    var tableHead='<thead><tr>'+
-      '<th class="th-item">Item</th>'+
-      '<th class="th-qty">Qty</th>'+
-      '<th class="th-ref">Part Number</th>'+
-      '<th class="th-desc">Description</th>'+
-      '<th class="th-pu">Unit Price<br>('+esc(b.devise||'')+')</th>'+
-      '<th class="th-ext">Extended Price<br>('+esc(b.devise||'')+')</th>'+
-    '</tr></thead>';
+    // En-tête de table : SEULEMENT sur le 1er bloc proposition.
+    // Pour les blocs 2+, le thead serait redondant (mêmes colonnes Item/Qty/Part Number/Description/Unit Price/Extended Price)
+    // et créait des bugs de coupure : html2pdf le dupliquait à mi-chemin (en-tête fantôme tronqué en haut de page).
+    // Économie : ~40px de hauteur par bloc sans thead.
+    var tableHead='';
+    if(blockIdx===0){
+      tableHead='<thead><tr>'+
+        '<th class="th-item">Item</th>'+
+        '<th class="th-qty">Qty</th>'+
+        '<th class="th-ref">Part Number</th>'+
+        '<th class="th-desc">Description</th>'+
+        '<th class="th-pu">Unit Price<br>('+esc(b.devise||'')+')</th>'+
+        '<th class="th-ext">Extended Price<br>('+esc(b.devise||'')+')</th>'+
+      '</tr></thead>';
+    }
 
     // Wrapper du bloc : le 1er n'a pas de page-break, les suivants oui (forcés par classe)
     var blockClass=blockIdx===0 ? 'bc-prop-block' : 'bc-prop-block bc-prop-block-break';
