@@ -5359,14 +5359,10 @@ function bBC(b){
   }
 
   // Construire le HTML de tous les blocs.
-  // Entre chaque bloc (sauf avant le 1er), on insère un séparateur HTML zéro-hauteur
-  // qui force le saut de page (technique très robuste cross-browser).
+  // Le saut de page entre blocs est porté par la classe .bc-prop-block-break sur le 2e+
+  // (gérée en CSS print) — pas de séparateur HTML intercalaire pour éviter les sauts parasites.
   var allBlocksHtml='';
   blocks.forEach(function(blk,i){
-    if(i>0){
-      // Séparateur de page explicite : div vide avec style inline (priorité maximale)
-      allBlocksHtml+='<div class="bc-page-break-spacer" style="page-break-before:always;break-before:page;display:block;height:0;overflow:hidden;"></div>';
-    }
     allBlocksHtml+=renderBlock(blk, i, blocks.length);
   });
 
@@ -5979,15 +5975,6 @@ function doPrint(){
       break-before:page!important;
       -webkit-column-break-before:always!important;
     }
-    .bc-page-break-spacer{
-      display:block!important;
-      page-break-before:always!important;
-      break-before:page!important;
-      -webkit-column-break-before:always!important;
-      height:0!important;
-      overflow:hidden!important;
-      visibility:hidden!important;
-    }
     .bc-prop-banner{
       background:#dbeafe!important;
       color:#1e40af!important;
@@ -6027,17 +6014,11 @@ function doPrint(){
         page-break-inside:auto!important;
         break-inside:auto!important;
       }
-      .bc-prop-block-break,
-      .bc-page-break-spacer{
+      .bc-prop-block-break{
         page-break-before:always!important;
         break-before:page!important;
         -webkit-column-break-before:always!important;
         display:block!important;
-      }
-      .bc-page-break-spacer{
-        height:0!important;
-        overflow:hidden!important;
-        visibility:hidden!important;
       }
       .bc-prop-banner{
         page-break-after:avoid!important;
@@ -6221,8 +6202,10 @@ function doPrint(){
   } else {
     content=c.innerHTML;
   }
-  // Wrap doc-footer-bar and doc-legal in a fixed container (only for non-paginated docs)
-  if(!isDevisDoc){
+  // Wrap doc-footer-bar and doc-legal in a fixed container (only for non-paginated, non-BC docs).
+  // Pour les BC : on laisse le footer en flux normal pour qu'il se positionne bien sur la dernière page
+  // (avec le multi-page par proposition, position:fixed casserait le layout).
+  if(!isDevisDoc && !isBCDoc){
     content=content.replace(
       /(<div class="doc-footer-bar">[\s\S]*?<\/div>)\s*(<p class="doc-legal">[\s\S]*?<\/p>)/,
       '<div class="doc-fixed-footer">$1$2</div>'
