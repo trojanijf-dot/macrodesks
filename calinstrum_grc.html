@@ -916,6 +916,8 @@ tr:hover td{background:rgba(255,255,255,.02)}
         <button class="btn btn-ghost btn-sm" onclick="addFAL('prod')">+ Produit</button>
         <button class="btn btn-ghost btn-sm" onclick="addFAL('svc')">+ Prestation</button>
         <button class="btn btn-ghost btn-sm" onclick="addFAL('lot')">+ Lot forfait</button>
+        <button class="btn btn-ghost btn-sm" onclick="addFASection()" style="border-color:rgba(244,63,94,.4);color:#f43f5e">+ Section</button>
+        <button class="btn btn-ghost btn-sm" onclick="addFAKitSection()" style="border-color:rgba(59,130,246,.4);color:#3b82f6">+ KIT (1 prix global)</button>
       </div>
       <table class="items-tbl"><thead><tr><th style="min-width:170px">Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th>PU(XPF)</th><th>Total HT</th><th></th></tr></thead>
       <tbody id="faLN"></tbody></table>
@@ -4789,54 +4791,101 @@ function buildFactureNumFromBC(bc){
 // (status, phase, dateEncaissement, versements) que l'opérateur a pu modifier.
 //
 // Retourne un objet {action: 'created'|'updated'|'linked'|'noop', faNum, faId}
+// Copie structurelle BC → lignes facture, en préservant sections/KIT/TASK et en
+// convertissant les prix dans la devise XPF si le BC est en devise étrangère.
+// Chaque ligne BC garde ses flags/structure :
+//   - {type:'header', mode:'kit'/'items'/'task', desc:'...'}  → bandeau de section
+//   - ligne normale {ref, designation/desc, qte/qty, pu, ...}
+//   - ligne KIT (porteuse) avec subLines:[...]
+//
+// Conversion : si bc.devise === 'AUD', applique le taux AUD→XPF stocké dans le BC
+// (bc.tauxAUD ou DEFAULT_TAUX_AUD = 74.5). Sinon laisse les prix tels quels.
+//
+// La marge éventuelle est laissée à l'opérateur (modifie les prix unitaires manuellement).
+function copyBCLinesToFacture(bc){
+  var bcLines=Array.isArray(bc.lines)?bc.lines:[];
+  var taux=(bc.devise==='AUD')?getTauxAUD(bc):1;
+  return bcLines.map(function(l){
+    if(!l)return null;
+    // Bandeau de section : copier tel quel (pas de conversion à faire)
+    if(l.type==='header'){
+      return {
+        type:'header',
+        mode:l.mode||'items',
+        desc:l.desc||l.designation||''
+      };
+    }
+    // Ligne normale ou KIT principale ou TASK porteuse
+    var newLine={
+      ref:l.ref||'',
+      designation:l.desc||l.designation||'',
+      tgc:0,                                  // SLN exo : 0% TGC (mention 506-2)
+      unite:l.unite||'U',
+      qte:Number(l.qty||l.qte||1),
+      pu:Math.round((Number(l.unitPriceXPF||l.pu||0))*taux)
+    };
+    // Préserver subLines (KIT ou TASK)
+    if(Array.isArray(l.subLines)&&l.subLines.length>0){
+      newLine.subLines=l.subLines.map(function(sl){
+        return {
+          ref:sl.ref||'',
+          designation:sl.desc||sl.designation||'',
+          tgc:0,
+          unite:sl.unite||'U',
+          qte:Number(sl.qty||sl.qte||1),
+          pu:Math.round((Number(sl.unitPriceXPF||sl.pu||0))*taux)
+        };
+      });
+    }
+    // Préserver le flag _isTaskMain (pour rendu PDF)
+    if(l._isTaskMain)newLine._isTaskMain=true;
+    return newLine;
+  }).filter(Boolean);
+}
+
 function syncBCToFacture(bc){
   if(!bc||bc.status!=='Confirmé')return {action:'noop'};
   var faNum=buildFactureNumFromBC(bc);
   if(!faNum)return {action:'noop',reason:'PO sans suffixe /NNN'};
-  // === DÉTERMINATION DU MONTANT FACTURE CLIENT ===
-  // PRIORITÉ : prix de vente du devis lié (= ce qui sera réellement facturé au client)
-  // FALLBACK : coût Emerson converti en XPF (placeholder, à ajuster manuellement)
+  // === DÉTERMINATION DES LIGNES ET DU MONTANT ===
+  // PRIORITÉ 1 : lignes du devis lié (vrai prix de vente avec marge déjà appliquée)
+  // PRIORITÉ 2 : lignes du BC converties en XPF (placeholder, marge à ajouter manuellement)
   var dvLie=null;
   if(bc.devisLieId)dvLie=(DB.devis||[]).find(function(d){return d.id===bc.devisLieId;});
   var ttc=0;
   var faLines=[];
   if(dvLie){
-    // Reprendre les lignes du devis (Fourniture + Service + Fret) pour construire la facture
+    // Reprendre les lignes structurées du devis (3 catégories) en gardant headers/KIT
     var lf=dvLie.lines||{};
     var allDvLines=[].concat(lf.fourniture||[],lf.service||[],lf.fret||[]);
-    faLines=allDvLines.map(function(l){return Object.assign({},l);});
-    ttc=Number(dvLie.ttc)||allDvLines.reduce(function(s,l){
-      var ht=(Number(l.qte)||0)*(Number(l.pu)||0);
-      var tgcPct=Number(l.tgc)||0;
-      return s+ht*(1+tgcPct/100);
-    },0);
+    faLines=allDvLines.map(function(l){return JSON.parse(JSON.stringify(l));});
+    ttc=Number(dvLie.ttc)||0;
+    // Si pas de ttc figé, recalculer
+    if(!ttc){
+      ttc=allDvLines.reduce(function(s,l){
+        if(l.type==='header')return s;
+        var ht=(Number(l.qte)||0)*(Number(l.pu)||0);
+        var tgcPct=Number(l.tgc)||0;
+        return s+ht*(1+tgcPct/100);
+      },0);
+    }
     ttc=Math.round(ttc);
   } else {
-    // Pas de devis lié : utiliser le total BC comme placeholder
-    var totalXPF=getBCCoutXPF(bc);
-    ttc=Math.round(totalXPF||bc.total||0);
-    var bcLines=Array.isArray(bc.lines)?bc.lines:[];
-    faLines=bcLines.filter(function(l){return l&&!l.isHeader&&!l.isKitHeader;}).map(function(l){
-      return {
-        ref:l.ref||'',
-        designation:l.desc||l.designation||'(ligne BC)',
-        tgc:0,
-        unite:l.unite||'U',
-        qte:Number(l.qty||l.qte||1),
-        pu:Number(l.unitPriceXPF||l.pu||0)
-      };
-    });
-    if(!faLines.length){
-      faLines=[{
-        ref:bc.num||'',
-        designation:'BC Emerson '+(bc.num||'')+(bc.clientFinal?' — '+bc.clientFinal:''),
-        tgc:0,unite:'forfait',qte:1,pu:ttc
-      }];
-    }
+    // Pas de devis lié : copier la structure BC en convertissant les prix
+    faLines=copyBCLinesToFacture(bc);
+    // Recalculer le TTC à partir des lignes converties (somme des qte*pu, hors headers)
+    ttc=faLines.reduce(function(s,l){
+      if(!l||l.type==='header')return s;
+      // Pour KIT : compter la ligne principale (qte*pu = prix global du KIT)
+      // Pour TASK : compter les subLines (qte*pu de chaque sub) car la mère a qte=0
+      if(l._isTaskMain&&Array.isArray(l.subLines)){
+        return s+l.subLines.reduce(function(s2,sl){return s2+(Number(sl.qte)||0)*(Number(sl.pu)||0);},0);
+      }
+      return s+(Number(l.qte)||0)*(Number(l.pu)||0);
+    },0);
+    ttc=Math.round(ttc);
   }
   // === DÉTERMINATION DU CLIENT ===
-  // PRIORITÉ : devis lié (client + contact + adresse + email déjà renseignés)
-  // FALLBACK : champ clientFinal du BC (parsing format "SLN - Nom Prénom")
   var clientShort='SLN';
   var contact='';
   var adresse='';
@@ -4852,7 +4901,6 @@ function syncBCToFacture(bc){
     dvNum=dvLie.num||'';
   } else {
     var clientFinal=bc.clientFinal||'SLN';
-    // Cleanup : "SLN - Christopher HONAKOKO" → client="SLN", contact="Christopher HONAKOKO"
     var mClient=clientFinal.match(/^([^\-]+?)\s*-\s*(.+)$/);
     if(mClient){
       clientShort=mClient[1].trim();
@@ -4866,11 +4914,6 @@ function syncBCToFacture(bc){
   var existing=(DB.factures||[]).find(function(f){return f._fromBC===bc.id||(f.num||'').toLowerCase()===faNum.toLowerCase();});
   if(existing){
     // === MISE À JOUR (idempotente) ===
-    // On NE TOUCHE PAS aux champs métier que l'opérateur a peut-être modifiés :
-    //   - status (En attente / Payée / Partiel), phase (Backlog / Livré / etc.)
-    //   - dateEncaissement, versements, paye
-    //   - dateButoir
-    // On met à jour : lignes, ttc, ht (uniquement si la facture est encore "vierge")
     var hasBeenEdited=existing.status==='Payée'||existing.status==='Partiel'||(existing.versements&&existing.versements.length);
     if(!hasBeenEdited){
       existing.lines=faLines;
@@ -4913,17 +4956,17 @@ function syncBCToFacture(bc){
     email:email,
     objet:objet,
     dvlie:dvNum,
-    type:'Fourniture',                     // BC Emerson = toujours Fourniture
+    type:'Fourniture',
     status:'En attente',
-    tgcM:'506-2',                          // SLN = exo
+    tgcM:'506-2',
     delai:'Paiement sous 30 jours à reception de la facture',
     paye:0,
     versements:[],
-    notes:'Facture pré-facturée générée automatiquement depuis le BC '+(bc.num||'')+'. À émettre lors de la livraison client.',
+    notes:'Facture pré-facturée générée automatiquement depuis le BC '+(bc.num||'')+'. À émettre lors de la livraison client. Marge et fret à ajuster manuellement.',
     dateEncaissement:'',
     lines:faLines,
     ht:ttc,tgc:0,ttc:ttc,
-    phase:'emerson',                       // ← Backlog Emerson AUS (en production)
+    phase:'emerson',
     _fromBC:bc.id,
     _fromBCNum:bc.num
   };
@@ -9597,13 +9640,65 @@ function addFAL(t){
   var d={prod:{designation:'',tgc:0,unite:'U',qte:1,pu:0},svc:{designation:'',tgc:0,unite:'H sup',qte:1,pu:0},lot:{designation:'',tgc:0,unite:'Lot',qte:1,pu:0}};
   faL.push(Object.assign({},d[t]||d.prod));rFAlines();
 }
+function addFASection(){
+  // Ajoute un bandeau de section (titre regroupant les lignes suivantes, comme dans le devis)
+  var title=prompt('Titre de la section :','NOUVELLE SECTION');
+  if(!title)return;
+  faL.push({type:'header',mode:'items',desc:title});
+  rFAlines();
+}
+function addFAKitSection(){
+  // Ajoute un bandeau KIT + sa ligne porteuse (1 prix global) avec 2 sub-lignes vides
+  var title=prompt('Titre du KIT (1 prix global) :','NOUVEAU KIT');
+  if(!title)return;
+  faL.push({type:'header',mode:'kit',desc:title});
+  faL.push({ref:'',designation:'(prix global du KIT)',tgc:0,unite:'Lot',qte:1,pu:0,subLines:[
+    {ref:'',designation:'',tgc:0,unite:'U',qte:1,pu:0},
+    {ref:'',designation:'',tgc:0,unite:'U',qte:1,pu:0}
+  ]});
+  rFAlines();
+}
+// Modifie la désignation/qte/pu/etc. d'une sous-ligne KIT
+function updateFASubLine(parentIdx,subIdx,field,value){
+  if(!faL[parentIdx]||!Array.isArray(faL[parentIdx].subLines))return;
+  var sub=faL[parentIdx].subLines[subIdx];
+  if(!sub)return;
+  if(field==='qte'||field==='pu'||field==='tgc')value=Number(value)||0;
+  sub[field]=value;
+  cFAtot();
+}
+function addFAKitSubLine(parentIdx){
+  if(!faL[parentIdx])return;
+  if(!Array.isArray(faL[parentIdx].subLines))faL[parentIdx].subLines=[];
+  faL[parentIdx].subLines.push({ref:'',designation:'',tgc:0,unite:'U',qte:1,pu:0});
+  rFAlines();
+}
+function delFAKitSubLine(parentIdx,subIdx){
+  if(!faL[parentIdx]||!Array.isArray(faL[parentIdx].subLines))return;
+  faL[parentIdx].subLines.splice(subIdx,1);
+  rFAlines();
+}
 function rFAlines(){
   var tb=document.getElementById('faLN');if(!tb)return;
   tb.innerHTML=faL.map(function(l,i){
+    // === BANDEAU DE SECTION (type:'header') ===
+    if(l&&l.type==='header'){
+      var modeColor=l.mode==='kit'?'#3b82f6':l.mode==='task'?'#a78bfa':'#f43f5e';
+      var modeLabel=l.mode==='kit'?'KIT (1 prix global)':l.mode==='task'?'TÂCHE':'SECTION';
+      return '<tr style="background:rgba(244,63,94,.08);border-top:2px solid '+modeColor+'80;border-bottom:2px solid '+modeColor+'80">'+
+        '<td colspan="5"><input style="width:100%;font-weight:700;color:'+modeColor+';text-transform:uppercase;letter-spacing:.06em;background:transparent;border:none;font-size:11.5px" value="'+esc(l.desc||'')+'" data-field="desc" data-idx="'+i+'" placeholder="Titre de section"></td>'+
+        '<td style="text-align:right;font-size:9.5px;color:'+modeColor+';font-style:italic">'+modeLabel+'</td>'+
+        '<td><button class="fa-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer" title="Supprimer cette section">✕</button></td>'+
+      '</tr>';
+    }
+    // === LIGNE NORMALE / KIT PRINCIPALE ===
     var tgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(l.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
     var uteOpts=['U','Lot','H sup','H tech','Forfait'].map(function(v){return'<option'+(l.unite===v?' selected':'')+'>'+v+'</option>';}).join('');
-    return'<tr>'+
-      '<td><textarea rows="1" style="width:100%;min-width:150px;resize:vertical;font-family:inherit;font-size:inherit;line-height:1.3;padding:4px 6px" data-field="designation" data-idx="'+i+'">'+esc(l.designation)+'</textarea></td>'+
+    var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
+    var kitBadge=hasSubLines?' <span style="display:inline-block;background:rgba(59,130,246,.15);color:#3b82f6;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700">KIT</span>':'';
+    var rowBg=hasSubLines?'background:rgba(59,130,246,.04)':'';
+    var html='<tr style="'+rowBg+'">'+
+      '<td><textarea rows="1" style="width:100%;min-width:150px;resize:vertical;font-family:inherit;font-size:inherit;line-height:1.3;padding:4px 6px" data-field="designation" data-idx="'+i+'">'+esc(l.designation||'')+'</textarea>'+kitBadge+'</td>'+
       '<td><select data-field="tgc" data-idx="'+i+'">'+tgcOpts+'</select></td>'+
       '<td><select data-field="unite" data-idx="'+i+'">'+uteOpts+'</select></td>'+
       '<td><input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'"></td>'+
@@ -9611,11 +9706,39 @@ function rFAlines(){
       '<td style="font-weight:700;color:var(--teal)">'+fN(Math.round((l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100)))+'</td>'+
       '<td><button class="fa-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
       '</tr>';
+    // === SOUS-LIGNES KIT (descriptives + qte) ===
+    if(hasSubLines){
+      l.subLines.forEach(function(sub,si){
+        html+='<tr style="background:rgba(59,130,246,.02);font-size:11px">'+
+          '<td style="padding-left:24px;color:var(--muted)">'+
+            '<span style="color:#3b82f6;font-weight:700;margin-right:4px">└</span>'+
+            '<input style="width:30%;background:transparent;border:1px solid rgba(255,255,255,.05);padding:2px 4px;font-size:10px;font-family:monospace" value="'+esc(sub.ref||'')+'" placeholder="Réf" oninput="updateFASubLine('+i+','+si+',\'ref\',this.value)">'+
+            ' <input style="width:60%;background:transparent;border:1px solid rgba(255,255,255,.05);padding:2px 4px;font-size:10.5px" value="'+esc(sub.designation||'')+'" placeholder="Désignation" oninput="updateFASubLine('+i+','+si+',\'designation\',this.value)">'+
+          '</td>'+
+          '<td></td>'+
+          '<td style="text-align:center;font-size:10px;color:var(--muted)">'+esc(sub.unite||'U')+'</td>'+
+          '<td><input type="number" style="width:50px;font-size:11px" value="'+(sub.qte||1)+'" oninput="updateFASubLine('+i+','+si+',\'qte\',this.value)"></td>'+
+          '<td style="text-align:right;font-size:10.5px;color:var(--muted);font-style:italic">— inclus dans KIT —</td>'+
+          '<td></td>'+
+          '<td><button onclick="delFAKitSubLine('+i+','+si+')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px" title="Supprimer cette sous-ligne">✕</button></td>'+
+        '</tr>';
+      });
+      // Bouton ajouter sous-ligne
+      html+='<tr><td colspan="7" style="padding:2px 0 6px 24px"><button onclick="addFAKitSubLine('+i+')" style="background:rgba(59,130,246,.1);border:1px dashed rgba(59,130,246,.4);color:#3b82f6;padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer">+ Sous-ligne KIT</button></td></tr>';
+    }
+    return html;
   }).join('');
-  tb.querySelectorAll('input,select,textarea').forEach(function(inp){
+  tb.querySelectorAll('input[data-field],select[data-field],textarea[data-field]').forEach(function(inp){
     inp.addEventListener('input',function(){
       var idx=parseInt(this.getAttribute('data-idx')),field=this.getAttribute('data-field');
-      if(!isNaN(idx)&&field){faL[idx][field]=field==='tgc'||field==='qte'||field==='pu'?+this.value:this.value;cFAtot();}
+      if(!isNaN(idx)&&field){
+        // Champs numériques convertis en nombre
+        var val=field==='tgc'||field==='qte'||field==='pu'?+this.value:this.value;
+        faL[idx][field]=val;
+        // Si c'est la désignation/qte/pu d'une ligne normale, recalculer le total ; pour les
+        // headers, juste sauvegarder la modif sans recalcul
+        if(faL[idx].type!=='header')cFAtot();
+      }
     });
   });
   tb.querySelectorAll('.fa-del-btn').forEach(function(btn){
@@ -9637,7 +9760,20 @@ function rFAlines(){
 }
 function cFAtot(){
   var ht=0,tgcTotal=0;
-  faL.forEach(function(l){var h=(l.qte||0)*(l.pu||0);ht+=h;tgcTotal+=h*(Number(l.tgc)||0)/100;});
+  faL.forEach(function(l){
+    if(!l||l.type==='header')return; // les bandeaux de section ne comptent pas
+    // Pour TASK : la ligne porteuse a qte=0, le total vient des subLines
+    if(l._isTaskMain&&Array.isArray(l.subLines)){
+      l.subLines.forEach(function(sub){
+        var h=(Number(sub.qte)||0)*(Number(sub.pu)||0);
+        ht+=h;tgcTotal+=h*(Number(sub.tgc)||0)/100;
+      });
+      return;
+    }
+    // Pour KIT (subLines purement descriptives) ou ligne normale : qte*pu de la ligne
+    var h=(Number(l.qte)||0)*(Number(l.pu)||0);
+    ht+=h;tgcTotal+=h*(Number(l.tgc)||0)/100;
+  });
   sv('faTHT',fN(ht)+' XPF');sv('faTGC',fN(tgcTotal)+' XPF');sv('faTTTC',fN(ht+tgcTotal)+' XPF');
   var r=document.getElementById('faRowTGC');if(r)r.style.display=tgcTotal>0?'flex':'none';
   rVersements();
@@ -13042,29 +13178,104 @@ function bDV(d){
 function bFA(f){
   var isExo=isClientExo(f.client);
   var clientDetail=getClientDetail(f.client);
-  var rows=(f.lines||[]).map(function(l){
+  // Construction des lignes du tableau facture en respectant la structure
+  // (sections type:'header', KITs avec subLines, lignes normales)
+  var rowsHtml='';
+  (f.lines||[]).forEach(function(l,idx){
+    if(!l)return;
+    // === BANDEAU DE SECTION ===
+    if(l.type==='header'){
+      var sectionColor=l.mode==='kit'?'#3b82f6':l.mode==='task'?'#a78bfa':'#1e3a5f';
+      rowsHtml+='<tr><td colspan="6" style="background:#e8eef5;color:'+sectionColor+';font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-top:1px solid #c8d1de;border-bottom:1px solid #c8d1de">'+
+        escNL(l.desc||'')+
+        (l.mode==='kit'?' <span style="font-size:9px;color:#3b82f6;font-weight:600;text-transform:none;letter-spacing:0">— KIT (1 prix global)</span>':'')+
+        '</td></tr>';
+      return;
+    }
+    var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
     var tgcDisplay=(l.tgc||0)+'%';
     var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
-    return'<tr><td>'+escNL(l.designation||'')+'</td><td style="text-align:center">'+tgcDisplay+'</td>'+
-      '<td style="text-align:center">'+(l.unite||'U')+'</td><td style="text-align:center">'+(l.qte||0)+'</td>'+
+    // === LIGNE PRINCIPALE (KIT ou normale) ===
+    rowsHtml+='<tr>'+
+      '<td>'+(l.ref?'<span style="font-family:monospace;font-size:10px;color:#64748b">'+esc(l.ref)+'</span><br>':'')+escNL(l.designation||'')+'</td>'+
+      '<td style="text-align:center">'+tgcDisplay+'</td>'+
+      '<td style="text-align:center">'+(l.unite||'U')+'</td>'+
+      '<td style="text-align:center">'+(l.qte||0)+'</td>'+
       '<td style="text-align:right">'+fN(l.pu)+'</td>'+
-      '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td></tr>';
-  }).join('');
-  var adr=(f.adresse||'').replace(/\n/g,'<br>');
+      '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td>'+
+    '</tr>';
+    // === SOUS-LIGNES KIT (descriptives, sans prix) ===
+    if(hasSubLines){
+      l.subLines.forEach(function(sub){
+        rowsHtml+='<tr style="background:rgba(59,130,246,.04)">'+
+          '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
+            '<span style="color:#3b82f6;margin-right:4px">└</span>'+
+            (sub.ref?'<span style="font-family:monospace;font-size:9.5px;color:#64748b">'+esc(sub.ref)+'</span> — ':'')+
+            escNL(sub.designation||'')+
+          '</td>'+
+          '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
+          '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
+          '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
+          '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
+        '</tr>';
+      });
+    }
+  });
+  var rows=rowsHtml;
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
-  var cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
-  var cliTel=clientDetail.tel||'';
-  var cliEmail=clientDetail.email||f.email||'';
+  // === ADRESSE CLIENT — règle spéciale SLN ===
+  // Pour le client SLN (Société Le Nickel - ERAMET), on utilise toujours l'adresse
+  // achats générique de Doniambo + l'email du service achats SLN, AVEC le contact
+  // dynamique de la facture (qui change selon le BC : Yannick PAKORO, Christopher
+  // HONAKOKO, Yohann DOUEPERE, etc.).
+  // Pour les autres clients (PRNC, etc.), on garde le comportement classique :
+  // adresse depuis le client en base ou depuis la facture.
+  var isSLN=(f.client||'').toUpperCase()==='SLN';
+  var cliAddr,cliTel,cliEmail,cliCompany;
+  if(isSLN){
+    cliCompany='SOCIETE LE NICKEL — ERAMET-SLN';
+    cliAddr='Magasin Général, 2 Rue Desjardins<br>Doniambo BP E5 98845 NOUMEA CEDEX<br>NOUVELLE-CALÉDONIE';
+    cliTel='+687 245446';
+    cliEmail='gen_sct.dbo@eramet-sln.com';
+  } else {
+    var adr=(f.adresse||'').replace(/\n/g,'<br>');
+    cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
+    cliTel=clientDetail.tel||'';
+    cliEmail=clientDetail.email||f.email||'';
+    cliCompany='';
+  }
   // Recalculate TTC with exo flag applied
   var ttcDisp=isExo?(f.ht||0):(f.ttc||0);
+  // === BLOC PARTIES (CALINSTRUM + CLIENT) ===
+  // Astuce alignement : on aligne tous les <p> sur le même nombre de lignes (gap supprimé
+  // entre Téléphone et Email côté CALINSTRUM pour que les blocs restent alignés visuellement).
+  // Ligne 1 : titre RIDET / À M. <contact>
+  // Ligne 2 : adresse multi-lignes
+  // Ligne 3 : Tél
+  // Ligne 4 : Email
   return'<div class="doc">'+
     '<div class="doc-head">'+
       '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
       '<div style="width:50%;text-align:right"><div class="doc-title">FACTURE N° '+esc(f.num||'')+'</div><div class="doc-meta">Le : '+fD(f.date)+'</div></div>'+
     '</div>'+
     '<div class="doc-parties">'+
-      '<div class="doc-party"><h4>CALINSTRUM SARL</h4><p>RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+'<br>'+CI.email+'</p></div>'+
-      '<div class="doc-party"><h4>CLIENT</h4><p>À M. <strong>'+esc(f.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
+      '<div class="doc-party">'+
+        '<h4>CALINSTRUM SARL</h4>'+
+        '<p>RIDET: '+CI.ridet+'<br>'+
+          ci_adr+'<br>'+
+          'Tél: '+CI.tel+'<br>'+
+          CI.email+
+        '</p>'+
+      '</div>'+
+      '<div class="doc-party">'+
+        '<h4>CLIENT</h4>'+
+        '<p>'+
+          (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>À M. <strong>'+esc(f.contact||'')+'</strong><br>':'À M. <strong>'+esc(f.contact||'')+'</strong><br>')+
+          cliAddr+'<br>'+
+          (cliTel?'Tél: '+esc(cliTel)+'<br>':'')+
+          esc(cliEmail)+
+        '</p>'+
+      '</div>'+
     '</div>'+
     '<p style="font-size:13px;margin-bottom:6px"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+
     '<p style="font-size:11px;margin-bottom:8px"><strong>Facture N° :</strong> '+esc(f.num||'')+(f.dvlie?' — Devis N° '+esc(f.dvlie):'')+'</p>'+
