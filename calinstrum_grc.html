@@ -201,6 +201,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
    - thead : se répète automatiquement en haut de chaque page                             */
 .doc-tbl tr,.doc-tbl tbody tr{page-break-inside:avoid!important;break-inside:avoid!important}
 .doc-tbl thead{display:table-header-group}
+/* fa-group : un <tbody> par "unité indivisible" (bandeau+1ère ligne, ligne+subLines KIT, etc.)
+   page-break-inside:avoid sur <tbody> est respecté par html2pdf ET par window.print de Chrome,
+   contrairement à la même règle sur <tr> qui est ignorée dans certains contextes.            */
+.doc-tbl tbody.fa-group{page-break-inside:avoid!important;break-inside:avoid!important}
 /* Bloc final (totaux + signatures + bandeau footer) toujours groupé en bas de la dernière page */
 .doc-final-block{page-break-inside:avoid;break-inside:avoid}
 .doc-totals{margin-left:auto;width:280px;border-collapse:collapse;font-size:11px}
@@ -4923,12 +4927,49 @@ function syncBCToFacture(bc){
   var existing=(DB.factures||[]).find(function(f){return f._fromBC===bc.id||(f.num||'').toLowerCase()===faNum.toLowerCase();});
   if(existing){
     // === MISE À JOUR (idempotente) ===
-    var hasBeenEdited=existing.status==='Payée'||existing.status==='Partiel'||(existing.versements&&existing.versements.length);
-    if(!hasBeenEdited){
+    // Plusieurs niveaux de protection contre l'écrasement involontaire :
+    //   1. Si la facture a été éditée manuellement (saveFA → _manuallyEditedAt) : on
+    //      DEMANDE l'autorisation avant d'écraser. Si l'utilisateur refuse, on ne touche
+    //      QUE le lien (_fromBC) et on retourne.
+    //   2. Si Payée/Partiel/versements existants : on ne touche jamais aux lignes
+    //      (logique d'origine).
+    //   3. Sinon : on écrase, MAIS on push un undo qui restaure l'état précédent.
+    var wasManuallyEdited=!!existing._manuallyEditedAt;
+    var hasFinancialActivity=existing.status==='Payée'||existing.status==='Partiel'||(existing.versements&&existing.versements.length);
+    var shouldOverwrite=!hasFinancialActivity;
+    if(wasManuallyEdited&&shouldOverwrite){
+      // Demander explicitement
+      var msg='⚠ La facture '+existing.num+' a été modifiée manuellement '+
+        (existing._manuallyEditedAt?'(le '+(new Date(existing._manuallyEditedAt)).toLocaleString('fr-FR')+')':'')+'.\n\n'+
+        'Voulez-vous écraser ces modifications avec le contenu actuel du BC ?\n\n'+
+        '[OK] = Écraser (un undo sera créé pour revenir en arrière)\n'+
+        '[Annuler] = Garder la facture telle quelle, juste mettre à jour le lien BC ↔ Facture';
+      if(!confirm(msg)){
+        // L'utilisateur refuse l'écrasement : on garde la facture intacte, juste lien
+        existing._fromBC=bc.id;
+        bc.linkFactureId=existing.id;
+        return {action:'linked',faNum:existing.num,faId:existing.id,note:'Modifications manuelles préservées'};
+      }
+    }
+    if(shouldOverwrite){
+      // Snapshot pour undo AVANT modification (toujours, pas seulement si manuellyEdited)
+      var snapshotBefore=JSON.parse(JSON.stringify(existing));
       existing.lines=faLines;
       existing.ttc=ttc;
       existing.ht=ttc;
       existing.tgc=0;
+      // Reset le flag manuel après écrasement volontaire
+      delete existing._manuallyEditedAt;
+      // Push undo : permet de restaurer la facture telle qu'elle était avant le sync
+      pushUndo('Sync BC → facture « '+existing.num+' » (écrasement)',function(){
+        var idx=DB.factures.findIndex(function(x){return x.id===snapshotBefore.id;});
+        if(idx>=0)DB.factures[idx]=snapshotBefore;
+        saveDB();
+        if(typeof renderFA==='function')renderFA();
+        if(typeof rDash==='function')rDash();
+        if(typeof renderHist==='function')renderHist();
+        if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+      });
     }
     if(!existing.client||existing.client==='SLN')existing.client=clientShort;
     if(contact&&!existing.contact)existing.contact=contact;
@@ -10586,6 +10627,16 @@ function deleteAcompte(id){
 
 function saveFA(){
   var f=getFA();if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
+  // Snapshot pour undo : si on modifie une facture existante, on garde son ancien état
+  var prevSnapshot=null;
+  if(eFAid){
+    var prev=DB.factures.find(function(x){return x.id===eFAid;});
+    if(prev)prevSnapshot=JSON.parse(JSON.stringify(prev));
+  }
+  // Marqueur de modification manuelle : empêche que syncBCToFacture écrase nos changements
+  // au prochain save BC. Si f._fromBC est posé, on suppose que toute modification subséquente
+  // par l'utilisateur est volontaire et doit primer sur le contenu BC d'origine.
+  f._manuallyEditedAt=new Date().toISOString();
   if(eFAid){var i=DB.factures.findIndex(function(x){return x.id===eFAid;});if(i>=0)DB.factures[i]=f;else DB.factures.push(f);}
   else DB.factures.push(f);
   // Sync vers Suivi Factures (DB.invoices) : créer ou mettre à jour l'entrée miroir
@@ -10595,6 +10646,17 @@ function saveFA(){
   if(fi>=0) DB.factures[fi]=f;
   saveDB();cm('mFA');renderFA();rDash();renderHist();
   if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){console.warn('renderSuivi skipped:',e.message);}}
+  // Push undo si on modifiait une facture existante (pas si nouvelle création)
+  if(prevSnapshot){
+    var lbl='Modif. facture « '+(f.num||'')+' »';
+    pushUndo(lbl,function(){
+      var idx=DB.factures.findIndex(function(x){return x.id===prevSnapshot.id;});
+      if(idx>=0)DB.factures[idx]=prevSnapshot;
+      else DB.factures.push(prevSnapshot);
+      saveDB();renderFA();rDash();renderHist();
+      if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+    });
+  }
 }
 
 // Synchronise une facture GRC vers le Suivi Factures (DB.invoices)
@@ -13223,50 +13285,77 @@ function bDV(d){
 function bFA(f){
   var isExo=isClientExo(f.client);
   var clientDetail=getClientDetail(f.client);
-  // Construction des lignes du tableau facture en respectant la structure
-  // (sections type:'header', KITs avec subLines, lignes normales)
-  var rowsHtml='';
-  (f.lines||[]).forEach(function(l,idx){
-    if(!l)return;
-    // === BANDEAU DE SECTION ===
+  // === CONSTRUCTION DU CORPS DE LA TABLE — STRUCTURE TBODY COHÉRENTE ===
+  // Pour empêcher les coupures de lignes entre pages PDF (html2pdf et window.print
+  // ignorent les page-break-inside:avoid sur <tr> dans certaines versions de Chrome),
+  // on regroupe chaque "unité indivisible" dans son propre <tbody class="fa-group">.
+  //
+  // Une unité indivisible = soit :
+  //   - Un bandeau de section SEUL groupé avec la 1ère ligne suivante (évite bandeau orphelin)
+  //   - Une ligne principale + ses subLines KIT (toutes ensemble : pas de KIT coupé)
+  //   - Une ligne normale toute seule (insécable si 1 seule ligne)
+  //
+  // CSS associé (.fa-group{page-break-inside:avoid}) appliqué sur <tbody> est respecté
+  // par html2pdf et par window.print de Chrome.
+  var lines=f.lines||[];
+  var groups=[];   // Array<{rowsHtml: string}>
+  var i=0;
+  while(i<lines.length){
+    var l=lines[i];
+    if(!l){i++;continue;}
+    var groupHtml='';
+    // Si c'est un bandeau de section, on le pose et on attache la PROCHAINE ligne avec lui
+    // (évite un bandeau orphelin en bas de page)
     if(l.type==='header'){
       var sectionColor=l.mode==='kit'?'#3b82f6':l.mode==='task'?'#a78bfa':'#1e3a5f';
-      rowsHtml+='<tr><td colspan="6" style="background:#e8eef5;color:'+sectionColor+';font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-top:1px solid #c8d1de;border-bottom:1px solid #c8d1de">'+
+      groupHtml+='<tr><td colspan="6" style="background:#e8eef5;color:'+sectionColor+';font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-top:1px solid #c8d1de;border-bottom:1px solid #c8d1de">'+
         escNL(l.desc||'')+
         (l.mode==='kit'?' <span style="font-size:9px;color:#3b82f6;font-weight:600;text-transform:none;letter-spacing:0">— KIT (1 prix global)</span>':'')+
         '</td></tr>';
-      return;
+      i++;
+      // Si la prochaine ligne est encore un header, on commit ce groupe seul et on continue
+      if(i<lines.length&&lines[i]&&lines[i].type==='header'){
+        groups.push({rowsHtml:groupHtml});
+        continue;
+      }
+      // Sinon attacher la prochaine ligne dans CE même groupe (ne pas incrémenter i ici, tomber dans le bloc suivant)
     }
-    var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
-    var tgcDisplay=(l.tgc||0)+'%';
-    var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
-    // === LIGNE PRINCIPALE (KIT ou normale) ===
-    rowsHtml+='<tr>'+
-      '<td>'+(l.ref?'<span style="font-family:monospace;font-size:10px;color:#64748b">'+esc(l.ref)+'</span><br>':'')+escNL(l.designation||'')+'</td>'+
-      '<td style="text-align:center">'+tgcDisplay+'</td>'+
-      '<td style="text-align:center">'+(l.unite||'U')+'</td>'+
-      '<td style="text-align:center">'+(l.qte||0)+'</td>'+
-      '<td style="text-align:right">'+fN(l.pu)+'</td>'+
-      '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td>'+
-    '</tr>';
-    // === SOUS-LIGNES KIT (descriptives, sans prix) ===
-    if(hasSubLines){
-      l.subLines.forEach(function(sub){
-        rowsHtml+='<tr style="background:rgba(59,130,246,.04)">'+
-          '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
-            '<span style="color:#3b82f6;margin-right:4px">└</span>'+
-            (sub.ref?'<span style="font-family:monospace;font-size:9.5px;color:#64748b">'+esc(sub.ref)+'</span> — ':'')+
-            escNL(sub.designation||'')+
-          '</td>'+
-          '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
-          '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
-          '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
-          '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
-        '</tr>';
-      });
+    // À ce point, lines[i] est une ligne normale ou KIT principale
+    if(i<lines.length&&lines[i]&&lines[i].type!=='header'){
+      var ll=lines[i];
+      var hasSubLines=Array.isArray(ll.subLines)&&ll.subLines.length>0;
+      var tgcDisplay=(ll.tgc||0)+'%';
+      var tot=Math.round((ll.qte||0)*(ll.pu||0)*(1+(isExo?0:Number(ll.tgc)||0)/100));
+      groupHtml+='<tr>'+
+        '<td>'+(ll.ref?'<span style="font-family:monospace;font-size:10px;color:#64748b">'+esc(ll.ref)+'</span><br>':'')+escNL(ll.designation||'')+'</td>'+
+        '<td style="text-align:center">'+tgcDisplay+'</td>'+
+        '<td style="text-align:center">'+(ll.unite||'U')+'</td>'+
+        '<td style="text-align:center">'+(ll.qte||0)+'</td>'+
+        '<td style="text-align:right">'+fN(ll.pu)+'</td>'+
+        '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td>'+
+      '</tr>';
+      // Sous-lignes KIT — ATTACHÉES dans le même groupe (un KIT ne se coupe jamais)
+      if(hasSubLines){
+        ll.subLines.forEach(function(sub){
+          groupHtml+='<tr style="background:rgba(59,130,246,.04)">'+
+            '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
+              '<span style="color:#3b82f6;margin-right:4px">└</span>'+
+              (sub.ref?'<span style="font-family:monospace;font-size:9.5px;color:#64748b">'+esc(sub.ref)+'</span> — ':'')+
+              escNL(sub.designation||'')+
+            '</td>'+
+            '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
+            '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
+            '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
+            '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
+          '</tr>';
+        });
+      }
+      i++;
     }
-  });
-  var rows=rowsHtml;
+    groups.push({rowsHtml:groupHtml});
+  }
+  // Construire le HTML : un <tbody class="fa-group"> par groupe
+  var tbodiesHtml=groups.map(function(g){return '<tbody class="fa-group">'+g.rowsHtml+'</tbody>';}).join('');
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   // === ADRESSE CLIENT — règle spéciale SLN ===
   // Pour le client SLN (Société Le Nickel - ERAMET), on utilise toujours l'adresse
@@ -13336,7 +13425,7 @@ function bFA(f){
     '<p style="font-size:11px;margin-bottom:8px"><strong>Facture N° :</strong> '+esc(f.num||'')+(f.dvlie?' — Devis N° '+esc(f.dvlie):'')+'</p>'+
     '<table class="doc-tbl">'+
       '<thead><tr><th>Désignation</th><th>TGC%</th><th>Unité</th><th>Quantité</th><th style="text-align:right">Prix unitaire</th><th style="text-align:right">TOTAL HT</th></tr></thead>'+
-      '<tbody>'+rows+'</tbody>'+
+      tbodiesHtml+
     '</table>'+
     // Bloc final groupé avec page-break-inside:avoid pour qu'il reste cohérent en bas de la dernière page
     '<div class="doc-final-block">'+
