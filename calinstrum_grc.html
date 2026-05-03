@@ -1297,7 +1297,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="form-row">
       <div class="form-group"><label>Statut</label>
-        <select class="form-select" id="bc-status"><option>En attente</option><option>Confirmé</option><option>Livré</option><option>Annulé</option></select>
+        <select class="form-select" id="bc-status" onchange="onBCStatusChange()"><option>En attente</option><option>Confirmé</option><option>Livré</option><option>Annulé</option></select>
       </div>
       <div class="form-group">
         <label>🔗 Devis lié <span style="color:var(--muted);font-weight:400;font-size:10px">(auto-remplit le client final)</span></label>
@@ -4699,7 +4699,263 @@ function avisRegApply(){
   alert(msg);
 }
 
-// ===== DASHBOARD =====
+// =============================================================================
+// SYNCHRONISATION BC EMERSON → FACTURE PRÉ-FACTURÉE
+// =============================================================================
+// Logique métier CALINSTRUM :
+//   - Le PO CALINSTRUM a la forme "<DDMMYYYY>/<NNN>"
+//   - Le NNN après le slash = numéro de la facture qui sera émise au final.
+//     Ex : PO "05052026/098" → facture "SLN-F098"
+//   - Quand le BC passe en "Confirmé", on crée automatiquement la facture
+//     pré-facturée correspondante (phase "Backlog Emerson AUS", statut "En attente").
+//   - L'opérateur fera évoluer la phase manuellement (Transit → Douane → Livré)
+//     et marquera la facture comme payée via l'avis de règlement client.
+//
+// Numérotation :
+//   - Le compteur GRC pour les BC (DB.nid.bc) et pour les factures (DB.nid.fa)
+//     sont historiquement indépendants. La logique métier impose maintenant
+//     un mapping 1:1 PO/NNN ↔ SLN-FNNN.
+//   - getNextSharedNumber() retourne le max(nid.bc, nid.fa, dernière facture, dernier BC) + 1
+//     pour ne JAMAIS réutiliser un numéro déjà pris.
+//
+// Idempotence :
+//   - Si le BC est re-sauvegardé en Confirmé, la facture liée est mise à jour
+//     (pas dupliquée). Le lien se fait via b.linkFactureId et f._fromBC.
+//   - Si l'opérateur a manuellement édité la facture après création, on ne touche
+//     PAS aux champs édités (date d'envoi, dateEncaissement, status, versements).
+//     Seuls le montant et les lignes sont mis à jour si le BC a été modifié.
+//
+// Suppression :
+//   - delDoc('bcs', id) demande maintenant si la facture pré-facturée liée
+//     doit aussi être supprimée.
+
+// Extrait le suffixe NNN d'un numéro de PO "<date>/<NNN>" → "098" → entier 98
+function parsePOSuffix(numBC){
+  if(!numBC)return null;
+  var m=String(numBC).match(/\/0*(\d+)/);
+  if(!m)return null;
+  var n=parseInt(m[1],10);
+  return isNaN(n)?null:n;
+}
+
+// Calcule le prochain numéro partagé BC/Facture (pour suggérer un PO cohérent)
+// Le numéro proposé = max(toutes les sources) + 1, garantissant aucune collision.
+function getNextSharedNumber(){
+  var maxN=0;
+  // Compteurs nid (peuvent retarder en cas de doublons effacés)
+  if(DB.nid){
+    if(DB.nid.fa)maxN=Math.max(maxN,DB.nid.fa-1);
+    if(DB.nid.bc)maxN=Math.max(maxN,DB.nid.bc-1);
+  }
+  // Numéros effectivement utilisés dans DB.factures (SLN-Fxxx)
+  (DB.factures||[]).forEach(function(f){
+    var m=(f.num||'').match(/SLN-F0*(\d+)/i);
+    if(m){var n=parseInt(m[1],10);if(!isNaN(n))maxN=Math.max(maxN,n);}
+  });
+  // Numéros utilisés dans DB.invoices (Suivi)
+  (DB.invoices||[]).forEach(function(inv){
+    var m=(inv.num||'').match(/SLN-F0*(\d+)/i);
+    if(m){var n=parseInt(m[1],10);if(!isNaN(n))maxN=Math.max(maxN,n);}
+  });
+  // Numéros utilisés dans DB.bcs (suffixes /NNN)
+  (DB.bcs||[]).forEach(function(b){
+    var n=parsePOSuffix(b.num);
+    if(n!==null)maxN=Math.max(maxN,n);
+  });
+  return maxN+1;
+}
+
+// Suggère un nouveau numéro de PO basé sur la date du jour + prochain numéro partagé
+function suggestPONumber(){
+  var d=new Date();
+  var dd=String(d.getDate()).padStart(2,'0');
+  var mm=String(d.getMonth()+1).padStart(2,'0');
+  var yyyy=d.getFullYear();
+  var n=getNextSharedNumber();
+  return dd+mm+yyyy+'/'+pad(n);
+}
+
+// Construit le N° facture cible à partir d'un BC : "<date>/098" → "SLN-F098"
+function buildFactureNumFromBC(bc){
+  var n=parsePOSuffix(bc.num);
+  if(n===null)return null;
+  return 'SLN-F'+pad(n);
+}
+
+// Synchronise un BC Emerson vers une facture pré-facturée.
+// Appelée depuis saveBC() quand le BC passe en "Confirmé".
+// Crée la facture si elle n'existe pas, met à jour les champs structurels
+// (montant, lignes, contact, type, devisLie) sans toucher aux champs métier
+// (status, phase, dateEncaissement, versements) que l'opérateur a pu modifier.
+//
+// Retourne un objet {action: 'created'|'updated'|'linked'|'noop', faNum, faId}
+function syncBCToFacture(bc){
+  if(!bc||bc.status!=='Confirmé')return {action:'noop'};
+  var faNum=buildFactureNumFromBC(bc);
+  if(!faNum)return {action:'noop',reason:'PO sans suffixe /NNN'};
+  // === DÉTERMINATION DU MONTANT FACTURE CLIENT ===
+  // PRIORITÉ : prix de vente du devis lié (= ce qui sera réellement facturé au client)
+  // FALLBACK : coût Emerson converti en XPF (placeholder, à ajuster manuellement)
+  var dvLie=null;
+  if(bc.devisLieId)dvLie=(DB.devis||[]).find(function(d){return d.id===bc.devisLieId;});
+  var ttc=0;
+  var faLines=[];
+  if(dvLie){
+    // Reprendre les lignes du devis (Fourniture + Service + Fret) pour construire la facture
+    var lf=dvLie.lines||{};
+    var allDvLines=[].concat(lf.fourniture||[],lf.service||[],lf.fret||[]);
+    faLines=allDvLines.map(function(l){return Object.assign({},l);});
+    ttc=Number(dvLie.ttc)||allDvLines.reduce(function(s,l){
+      var ht=(Number(l.qte)||0)*(Number(l.pu)||0);
+      var tgcPct=Number(l.tgc)||0;
+      return s+ht*(1+tgcPct/100);
+    },0);
+    ttc=Math.round(ttc);
+  } else {
+    // Pas de devis lié : utiliser le total BC comme placeholder
+    var totalXPF=getBCCoutXPF(bc);
+    ttc=Math.round(totalXPF||bc.total||0);
+    var bcLines=Array.isArray(bc.lines)?bc.lines:[];
+    faLines=bcLines.filter(function(l){return l&&!l.isHeader&&!l.isKitHeader;}).map(function(l){
+      return {
+        ref:l.ref||'',
+        designation:l.desc||l.designation||'(ligne BC)',
+        tgc:0,
+        unite:l.unite||'U',
+        qte:Number(l.qty||l.qte||1),
+        pu:Number(l.unitPriceXPF||l.pu||0)
+      };
+    });
+    if(!faLines.length){
+      faLines=[{
+        ref:bc.num||'',
+        designation:'BC Emerson '+(bc.num||'')+(bc.clientFinal?' — '+bc.clientFinal:''),
+        tgc:0,unite:'forfait',qte:1,pu:ttc
+      }];
+    }
+  }
+  // === DÉTERMINATION DU CLIENT ===
+  // PRIORITÉ : devis lié (client + contact + adresse + email déjà renseignés)
+  // FALLBACK : champ clientFinal du BC (parsing format "SLN - Nom Prénom")
+  var clientShort='SLN';
+  var contact='';
+  var adresse='';
+  var email='';
+  var objet='';
+  var dvNum='';
+  if(dvLie){
+    clientShort=dvLie.client||'SLN';
+    contact=dvLie.contact||'';
+    adresse=dvLie.adresse||'';
+    email=dvLie.email||'';
+    objet=dvLie.objet||('Fourniture matériel BC '+(bc.num||''));
+    dvNum=dvLie.num||'';
+  } else {
+    var clientFinal=bc.clientFinal||'SLN';
+    // Cleanup : "SLN - Christopher HONAKOKO" → client="SLN", contact="Christopher HONAKOKO"
+    var mClient=clientFinal.match(/^([^\-]+?)\s*-\s*(.+)$/);
+    if(mClient){
+      clientShort=mClient[1].trim();
+      contact=mClient[2].trim();
+    } else {
+      clientShort=clientFinal;
+    }
+    objet='Fourniture matériel BC '+(bc.num||'');
+  }
+  // Chercher facture existante (par num OU par lien _fromBC)
+  var existing=(DB.factures||[]).find(function(f){return f._fromBC===bc.id||(f.num||'').toLowerCase()===faNum.toLowerCase();});
+  if(existing){
+    // === MISE À JOUR (idempotente) ===
+    // On NE TOUCHE PAS aux champs métier que l'opérateur a peut-être modifiés :
+    //   - status (En attente / Payée / Partiel), phase (Backlog / Livré / etc.)
+    //   - dateEncaissement, versements, paye
+    //   - dateButoir
+    // On met à jour : lignes, ttc, ht (uniquement si la facture est encore "vierge")
+    var hasBeenEdited=existing.status==='Payée'||existing.status==='Partiel'||(existing.versements&&existing.versements.length);
+    if(!hasBeenEdited){
+      existing.lines=faLines;
+      existing.ttc=ttc;
+      existing.ht=ttc;
+      existing.tgc=0;
+    }
+    if(!existing.client||existing.client==='SLN')existing.client=clientShort;
+    if(contact&&!existing.contact)existing.contact=contact;
+    if(adresse&&!existing.adresse)existing.adresse=adresse;
+    if(email&&!existing.email)existing.email=email;
+    if(dvNum&&!existing.dvlie)existing.dvlie=dvNum;
+    if(!existing.type)existing.type='Fourniture';
+    existing._fromBC=bc.id;
+    bc.linkFactureId=existing.id;
+    if(typeof syncFactureToSuivi==='function')syncFactureToSuivi(existing);
+    return {action:'updated',faNum:existing.num,faId:existing.id};
+  }
+  // === DÉTECTION FACTURE EXISTANTE NON LIÉE (cas import Excel) ===
+  var bareExisting=(DB.factures||[]).find(function(f){return (f.num||'').toLowerCase()===faNum.toLowerCase();});
+  if(bareExisting){
+    bareExisting._fromBC=bc.id;
+    bc.linkFactureId=bareExisting.id;
+    return {action:'linked',faNum:bareExisting.num,faId:bareExisting.id,note:'Facture pré-existante liée (import antérieur)'};
+  }
+  var bareInv=(DB.invoices||[]).find(function(inv){return (inv.num||'').toLowerCase()===faNum.toLowerCase();});
+  if(bareInv){
+    bareInv._fromBC=bc.id;
+    bc.linkFactureId=bareInv.id;
+    return {action:'linked',faNum:bareInv.num,faId:bareInv.id,note:'Entrée Suivi pré-existante liée (import antérieur)'};
+  }
+  // === CRÉATION ===
+  var newFa={
+    id:Date.now()+Math.floor(Math.random()*1000),
+    num:faNum,
+    date:bc.date||td(),
+    client:clientShort,
+    contact:contact,
+    adresse:adresse,
+    email:email,
+    objet:objet,
+    dvlie:dvNum,
+    type:'Fourniture',                     // BC Emerson = toujours Fourniture
+    status:'En attente',
+    tgcM:'506-2',                          // SLN = exo
+    delai:'Paiement sous 30 jours à reception de la facture',
+    paye:0,
+    versements:[],
+    notes:'Facture pré-facturée générée automatiquement depuis le BC '+(bc.num||'')+'. À émettre lors de la livraison client.',
+    dateEncaissement:'',
+    lines:faLines,
+    ht:ttc,tgc:0,ttc:ttc,
+    phase:'emerson',                       // ← Backlog Emerson AUS (en production)
+    _fromBC:bc.id,
+    _fromBCNum:bc.num
+  };
+  if(!Array.isArray(DB.factures))DB.factures=[];
+  DB.factures.push(newFa);
+  bc.linkFactureId=newFa.id;
+  if(typeof syncFactureToSuivi==='function')syncFactureToSuivi(newFa);
+  return {action:'created',faNum:newFa.num,faId:newFa.id};
+}
+
+// Hook UI : suggère un numéro PO si vide quand l'utilisateur passe en Confirmé
+// Branché sur le onchange du select bc-status (voir HTML)
+function onBCStatusChange(){
+  var statut=gvg('bc-status');
+  if(statut!=='Confirmé')return;
+  var current=gvg('bc-num')||'';
+  if(!current.trim()){
+    // Auto-remplir avec un PO suggéré
+    var suggested=suggestPONumber();
+    gv('bc-num',suggested);
+    return;
+  }
+  // PO existant : vérifier que le suffixe est valide
+  var n=parsePOSuffix(current);
+  if(n===null){
+    // Pas de /NNN dans le PO : proposer d'ajouter le suffixe suggéré
+    var suff=pad(getNextSharedNumber());
+    if(confirm('⚠ Le PO "'+current+'" n\'a pas de suffixe /NNN.\n\nLa logique CALINSTRUM impose un PO au format "DDMMYYYY/NNN" pour pouvoir générer la facture SLN-F'+suff+'.\n\nAjouter automatiquement "/'+suff+'" à votre PO ?')){
+      gv('bc-num',current.replace(/\/+$/,'')+'/'+suff);
+    }
+  }
+}
 function rDash(){
   var dv=DB.devis,fa=DB.factures;
   // BUG FIX : Le champ x.ttc figé sur le devis peut être obsolète si le devis
@@ -12044,15 +12300,40 @@ function buildPropSelectOptions(selectedId){
 function saveBC(){
   var b=getBC();if(!b.num){alert('N° PO manquant');return;}
   var wasNew=!eBCid;
+  // Détecter le précédent statut (pour savoir si on vient de passer en Confirmé)
+  var prevStatus=null;
+  if(eBCid){
+    var prev=DB.bcs.find(function(x){return x.id===eBCid;});
+    if(prev)prevStatus=prev.status||null;
+  }
   if(eBCid){var i=DB.bcs.findIndex(function(x){return x.id===eBCid;});if(i>=0)DB.bcs[i]=b;else DB.bcs.push(b);}
   else {DB.bcs.push(b);eBCid=b.id;} // IMPORTANT : mémoriser l'ID pour que re-sauvegarder ne crée pas de doublon
+  // === SYNC BC → FACTURE PRÉ-FACTURÉE ===
+  // Déclenche la création/maj de la facture SLN-Fxxx liée si statut Confirmé
+  // (et au passage on remet à jour si déjà confirmé pour propager d'éventuelles modifs de lignes/montants)
+  var syncResult={action:'noop'};
+  if(b.status==='Confirmé'){
+    syncResult=syncBCToFacture(b);
+  }
   saveDB();clearBCDraft();
   // Si c'était un nouveau BC, on met à jour le titre du modal (passe de "Nouveau..." à "Modifier...")
   if(wasNew) sv('mBCtitle','Modifier BC — '+b.num);
   // Rafraîchir les listes en arrière-plan sans fermer le modal
   renderBC();rDash();renderHist();
-  // Petit toast de confirmation en haut à droite
-  showBCSaveToast(wasNew?'BC créé ✓':'Modifications enregistrées ✓');
+  if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
+  if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+  // Petit toast de confirmation en haut à droite (avec info sync facture si applicable)
+  var toastMsg=wasNew?'BC créé ✓':'Modifications enregistrées ✓';
+  if(syncResult.action==='created')toastMsg+=' • Facture '+syncResult.faNum+' créée 📄';
+  else if(syncResult.action==='updated')toastMsg+=' • Facture '+syncResult.faNum+' synchronisée 🔄';
+  else if(syncResult.action==='linked')toastMsg+=' • '+syncResult.faNum+' liée 🔗';
+  showBCSaveToast(toastMsg);
+  // Si passage frais en Confirmé avec création, afficher une alerte plus explicite
+  if(prevStatus!=='Confirmé'&&b.status==='Confirmé'&&syncResult.action==='created'){
+    setTimeout(function(){
+      alert('✅ BC confirmé !\n\n📄 Facture pré-facturée créée : '+syncResult.faNum+'\n• Phase opérationnelle : Backlog Emerson AUS (en production)\n• Statut : En attente\n• Visible dans Suivi Factures et page Factures\n\nÀ faire ensuite quand le matériel arrive :\n  1. Phase → Transit / Douane / Livré client\n  2. À réception du paiement client → "💰 Importer avis de règlement"');
+    },300);
+  }
 }
 // Toast temporaire de confirmation (disparaît automatiquement)
 function showBCSaveToast(msg){
@@ -12420,6 +12701,8 @@ function delDoc(col,id){
   var removedIdx=idx;
   var removedSuivi=null;
   var removedSuiviIdx=-1;
+  var removedFacture=null;       // pour le cas BC qui a généré une facture
+  var removedFactureIdx=-1;
   // Si c'est une facture GRC avec un suivi lié, demander si on le supprime aussi
   if(col==='factures'){
     var f=DB.factures.find(function(x){return x.id===id;});
@@ -12435,6 +12718,47 @@ function delDoc(col,id){
       }
     }
   }
+  // Si c'est un BC qui a généré une facture pré-facturée, demander cascade
+  if(col==='bcs'){
+    var bc=DB.bcs.find(function(x){return x.id===id;});
+    if(bc && bc.linkFactureId){
+      var faLinked=(DB.factures||[]).find(function(x){return x.id===bc.linkFactureId;});
+      if(faLinked){
+        var prebilled=faLinked.phase==='emerson'||faLinked.phase==='transit'||faLinked.phase==='douane';
+        var notEmitted=faLinked.status!=='Payée'&&faLinked.status!=='Partiel';
+        var canDelete=prebilled&&notEmitted;
+        var msg='Ce BC est lié à la facture '+faLinked.num+' ('+fN(faLinked.ttc||0)+' XPF).\n\n';
+        if(canDelete){
+          msg+='Statut facture : '+(faLinked.status||'En attente')+' • Phase : '+(faLinked.phase||'-')+'\n\n';
+          msg+='Souhaitez-vous aussi supprimer cette facture pré-facturée ?\n\n';
+          msg+='[OK] = Supprimer le BC ET la facture liée\n';
+          msg+='[Annuler] = Supprimer seulement le BC, garder la facture';
+        } else {
+          msg+='⚠ Cette facture a déjà été émise / partiellement payée — elle ne peut PAS être supprimée automatiquement.\n\n';
+          msg+='Le BC sera supprimé mais la facture restera (trace comptable).\n\n';
+          msg+='[OK] pour confirmer';
+        }
+        if(canDelete&&confirm(msg)){
+          removedFactureIdx=DB.factures.findIndex(function(x){return x.id===faLinked.id;});
+          removedFacture=JSON.parse(JSON.stringify(faLinked));
+          // Supprimer aussi son éventuelle entrée Suivi miroir
+          if(faLinked.suiviId){
+            var suiviLinked=(DB.invoices||[]).find(function(x){return x.id===faLinked.suiviId;});
+            if(suiviLinked){
+              removedSuiviIdx=DB.invoices.findIndex(function(x){return x.id===faLinked.suiviId;});
+              removedSuivi=JSON.parse(JSON.stringify(suiviLinked));
+              DB.invoices=DB.invoices.filter(function(x){return x.id!==faLinked.suiviId;});
+              invoices=DB.invoices;
+            }
+          }
+          DB.factures=DB.factures.filter(function(x){return x.id!==faLinked.id;});
+        } else if(!canDelete){
+          // Juste prévenir, pas de cascade possible
+          alert(msg);
+        }
+      }
+    }
+  }
   var docLabel=removedDoc.num||('doc #'+id);
   var colLabel={devis:'Devis',factures:'Facture',bcs:'BC',bls:'BL',articles:'Article'}[col]||col;
   pushUndo('Suppr. '+colLabel+' « '+docLabel+' »',function(){
@@ -12445,8 +12769,13 @@ function delDoc(col,id){
       DB.invoices.splice(si,0,removedSuivi);
       invoices=DB.invoices;
     }
+    if(removedFacture){
+      var fi=Math.min(removedFactureIdx>=0?removedFactureIdx:DB.factures.length,DB.factures.length);
+      DB.factures.splice(fi,0,removedFacture);
+    }
     saveDB();
     if(col==='devis')renderDV();if(col==='factures')renderFA();if(col==='bcs')renderBC();if(col==='bls')renderBL();if(col==='articles')renderART();
+    if(removedFacture&&typeof renderFA==='function'){try{renderFA();}catch(e){}}
     rDash();
     if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
     if(typeof renderHist==='function'){try{renderHist();}catch(e){}}
