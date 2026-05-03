@@ -194,6 +194,18 @@ tr:hover td{background:rgba(255,255,255,.02)}
 /* Pas d'alternance zebra : on garde une palette uniforme alignée sur le BC.
    Anciennement : .doc-tbl tbody tr:nth-child(even) td{background:#f9fafb} */
 .doc-tbl tfoot td{padding:6px 8px;font-weight:800;font-size:12px;color:#1e3a5f;border-top:2px solid #1e3a5f}
+/* === Print : empêcher la coupure d'une ligne entre deux pages =====================
+   Sans ces règles, Chrome/Edge coupent visuellement le texte d'une ligne qui chevauche
+   la fin d'une page A4. Le résultat : "Freight & Handling" tronqué, ou la moitié d'une
+   ligne disparaît. La règle page-break-inside:avoid garde chaque <tr> entier.
+   - thead : se répète automatiquement en haut de chaque page
+   - tfoot : se répète automatiquement en bas de chaque page (pour le sous-total)        */
+.doc-tbl tr,.doc-tbl tbody tr{page-break-inside:avoid!important;break-inside:avoid!important}
+.doc-tbl thead{display:table-header-group}
+.doc-tbl tfoot{display:table-footer-group}
+.doc-tbl tfoot.doc-tbl-running td{background:#f1f5f9;color:#475569;font-weight:600;font-size:10.5px;font-style:italic;border-top:1px solid #cbd5e1;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+/* Bloc final (totaux + signatures + bandeau footer) toujours groupé en bas de la dernière page */
+.doc-final-block{page-break-inside:avoid;break-inside:avoid}
 .doc-totals{margin-left:auto;width:280px;border-collapse:collapse;font-size:11px}
 .doc-totals td{padding:3px 6px}
 .doc-totals td:last-child{text-align:right;font-weight:600}
@@ -9697,8 +9709,10 @@ function rFAlines(){
     var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
     var kitBadge=hasSubLines?' <span style="display:inline-block;background:rgba(59,130,246,.15);color:#3b82f6;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700">KIT</span>':'';
     var rowBg=hasSubLines?'background:rgba(59,130,246,.04)':'';
+    // Champ ref optionnel affiché au-dessus de la désignation
+    var refHtml=l.ref?'<input style="width:100%;font-family:monospace;font-size:10px;color:#94a3b8;background:transparent;border:1px solid rgba(255,255,255,.06);padding:2px 4px;margin-bottom:2px" value="'+esc(l.ref)+'" data-field="ref" data-idx="'+i+'" placeholder="Réf">':'';
     var html='<tr style="'+rowBg+'">'+
-      '<td><textarea rows="1" style="width:100%;min-width:150px;resize:vertical;font-family:inherit;font-size:inherit;line-height:1.3;padding:4px 6px" data-field="designation" data-idx="'+i+'">'+esc(l.designation||'')+'</textarea>'+kitBadge+'</td>'+
+      '<td>'+refHtml+'<textarea rows="1" style="width:100%;min-width:150px;resize:vertical;font-family:inherit;font-size:inherit;line-height:1.3;padding:4px 6px" data-field="designation" data-idx="'+i+'">'+esc(l.designation||'')+'</textarea>'+kitBadge+'</td>'+
       '<td><select data-field="tgc" data-idx="'+i+'">'+tgcOpts+'</select></td>'+
       '<td><select data-field="unite" data-idx="'+i+'">'+uteOpts+'</select></td>'+
       '<td><input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'"></td>'+
@@ -9707,53 +9721,87 @@ function rFAlines(){
       '<td><button class="fa-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
       '</tr>';
     // === SOUS-LIGNES KIT (descriptives + qte) ===
+    // Utilise data-sub-field/data-sub-idx comme les autres pour un listener uniforme.
     if(hasSubLines){
       l.subLines.forEach(function(sub,si){
         html+='<tr style="background:rgba(59,130,246,.02);font-size:11px">'+
-          '<td style="padding-left:24px;color:var(--muted)">'+
-            '<span style="color:#3b82f6;font-weight:700;margin-right:4px">└</span>'+
-            '<input style="width:30%;background:transparent;border:1px solid rgba(255,255,255,.05);padding:2px 4px;font-size:10px;font-family:monospace" value="'+esc(sub.ref||'')+'" placeholder="Réf" oninput="updateFASubLine('+i+','+si+',\'ref\',this.value)">'+
-            ' <input style="width:60%;background:transparent;border:1px solid rgba(255,255,255,.05);padding:2px 4px;font-size:10.5px" value="'+esc(sub.designation||'')+'" placeholder="Désignation" oninput="updateFASubLine('+i+','+si+',\'designation\',this.value)">'+
+          '<td style="padding-left:24px">'+
+            '<div style="color:#3b82f6;font-weight:700;display:inline-block;margin-right:4px">└</div>'+
+            '<input style="width:32%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10px;font-family:monospace;color:var(--text)" value="'+esc(sub.ref||'')+'" data-sub-field="ref" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Réf">'+
+            ' <input style="width:60%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10.5px;color:var(--text)" value="'+esc(sub.designation||'')+'" data-sub-field="designation" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Désignation">'+
           '</td>'+
           '<td></td>'+
           '<td style="text-align:center;font-size:10px;color:var(--muted)">'+esc(sub.unite||'U')+'</td>'+
-          '<td><input type="number" style="width:50px;font-size:11px" value="'+(sub.qte||1)+'" oninput="updateFASubLine('+i+','+si+',\'qte\',this.value)"></td>'+
+          '<td><input type="number" style="width:50px;font-size:11px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
           '<td style="text-align:right;font-size:10.5px;color:var(--muted);font-style:italic">— inclus dans KIT —</td>'+
           '<td></td>'+
-          '<td><button onclick="delFAKitSubLine('+i+','+si+')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px" title="Supprimer cette sous-ligne">✕</button></td>'+
+          '<td><button class="fa-subdel-btn" data-idx="'+i+'" data-sub-idx="'+si+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px" title="Supprimer cette sous-ligne">✕</button></td>'+
         '</tr>';
       });
       // Bouton ajouter sous-ligne
-      html+='<tr><td colspan="7" style="padding:2px 0 6px 24px"><button onclick="addFAKitSubLine('+i+')" style="background:rgba(59,130,246,.1);border:1px dashed rgba(59,130,246,.4);color:#3b82f6;padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer">+ Sous-ligne KIT</button></td></tr>';
+      html+='<tr><td colspan="7" style="padding:2px 0 6px 24px"><button class="fa-subadd-btn" data-idx="'+i+'" style="background:rgba(59,130,246,.1);border:1px dashed rgba(59,130,246,.4);color:#3b82f6;padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer">+ Sous-ligne KIT</button></td></tr>';
     }
     return html;
   }).join('');
-  tb.querySelectorAll('input[data-field],select[data-field],textarea[data-field]').forEach(function(inp){
-    inp.addEventListener('input',function(){
-      var idx=parseInt(this.getAttribute('data-idx')),field=this.getAttribute('data-field');
-      if(!isNaN(idx)&&field){
-        // Champs numériques convertis en nombre
-        var val=field==='tgc'||field==='qte'||field==='pu'?+this.value:this.value;
-        faL[idx][field]=val;
-        // Si c'est la désignation/qte/pu d'une ligne normale, recalculer le total ; pour les
-        // headers, juste sauvegarder la modif sans recalcul
-        if(faL[idx].type!=='header')cFAtot();
+  // === LISTENER UNIFIÉ POUR TOUS LES INPUTS DE LIGNES ===
+  // Sélectionne TOUS les éléments avec data-field OU data-sub-field, et écoute 'input' + 'change'
+  // (input ne se déclenche pas sur les <select> dans tous les navigateurs).
+  tb.querySelectorAll('[data-field],[data-sub-field]').forEach(function(inp){
+    var evt=(inp.tagName==='SELECT')?'change':'input';
+    inp.addEventListener(evt,function(){
+      var idx=parseInt(this.getAttribute('data-idx'),10);
+      if(isNaN(idx)||!faL[idx])return;
+      var subIdx=this.getAttribute('data-sub-idx');
+      // SOUS-LIGNE KIT
+      if(subIdx!==null&&subIdx!==undefined&&subIdx!==''){
+        var subI=parseInt(subIdx,10);
+        if(isNaN(subI)||!faL[idx].subLines||!faL[idx].subLines[subI])return;
+        var sf=this.getAttribute('data-sub-field');
+        if(!sf)return;
+        var sval=(sf==='qte'||sf==='pu'||sf==='tgc')?(Number(this.value)||0):this.value;
+        faL[idx].subLines[subI][sf]=sval;
+        cFAtot();
+        return;
       }
+      // LIGNE PRINCIPALE
+      var f=this.getAttribute('data-field');
+      if(!f)return;
+      var val=(f==='tgc'||f==='qte'||f==='pu')?(Number(this.value)||0):this.value;
+      faL[idx][f]=val;
+      // Pour le bandeau de section (type:'header'), pas de recalcul total
+      if(faL[idx].type!=='header')cFAtot();
     });
   });
+  // Boutons supprimer ligne principale
   tb.querySelectorAll('.fa-del-btn').forEach(function(btn){
     btn.addEventListener('click',function(){
-      var idx=parseInt(this.getAttribute('data-idx'));
-      if(!isNaN(idx)){
-        var snap=JSON.parse(JSON.stringify(faL));
-        var removed=faL[idx];
-        var lbl='ligne facture « '+((removed&&(removed.ref||removed.desc||removed.designation))||'(vide)')+' »';
-        pushUndo('Suppr. '+lbl,function(){
-          faL=snap;
-          if(document.getElementById('mFA').classList.contains('open'))rFAlines();
-        });
-        faL.splice(idx,1);rFAlines();
-      }
+      var idx=parseInt(this.getAttribute('data-idx'),10);
+      if(isNaN(idx))return;
+      var snap=JSON.parse(JSON.stringify(faL));
+      var removed=faL[idx];
+      var lbl='ligne facture « '+((removed&&(removed.ref||removed.desc||removed.designation))||'(vide)')+' »';
+      pushUndo('Suppr. '+lbl,function(){
+        faL=snap;
+        if(document.getElementById('mFA').classList.contains('open'))rFAlines();
+      });
+      faL.splice(idx,1);rFAlines();
+    });
+  });
+  // Boutons supprimer sous-ligne KIT
+  tb.querySelectorAll('.fa-subdel-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'),10);
+      var subI=parseInt(this.getAttribute('data-sub-idx'),10);
+      if(isNaN(idx)||isNaN(subI))return;
+      delFAKitSubLine(idx,subI);
+    });
+  });
+  // Boutons ajouter sous-ligne KIT
+  tb.querySelectorAll('.fa-subadd-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'),10);
+      if(isNaN(idx))return;
+      addFAKitSubLine(idx);
     });
   });
   cFAtot();
@@ -13226,11 +13274,21 @@ function bFA(f){
   // === ADRESSE CLIENT — règle spéciale SLN ===
   // Pour le client SLN (Société Le Nickel - ERAMET), on utilise toujours l'adresse
   // achats générique de Doniambo + l'email du service achats SLN, AVEC le contact
-  // dynamique de la facture (qui change selon le BC : Yannick PAKORO, Christopher
-  // HONAKOKO, Yohann DOUEPERE, etc.).
-  // Pour les autres clients (PRNC, etc.), on garde le comportement classique :
-  // adresse depuis le client en base ou depuis la facture.
-  var isSLN=(f.client||'').toUpperCase()==='SLN';
+  // dynamique de la facture (Yannick PAKORO, Christopher HONAKOKO, Yohann DOUEPERE...).
+  //
+  // Détection multi-critères très tolérante : on examine TOUS les champs de la facture
+  // (client, contact, adresse, email, objet) — si l'un d'eux contient "SLN", "ERAMET",
+  // "Le Nickel" ou un email @eramet-sln.com, c'est une facture SLN.
+  var clientStr=String(f.client||'').trim();
+  var ctxStr=(clientStr+' '+(f.contact||'')+' '+(f.adresse||'')+' '+(f.email||'')+' '+(f.objet||'')).toLowerCase();
+  var isSLN=/(\bsln\b|\beramet\b|le\s+nickel|@eramet-sln\.com)/i.test(ctxStr);
+  // Extraire un éventuel contact embarqué dans le champ client (héritage : "SLN - Yohann DOUEPERE")
+  var contactFromClient='';
+  if(isSLN&&!f.contact){
+    var mC=clientStr.match(/^SLN\s*[-\s]\s*(.+)$/i);
+    if(mC)contactFromClient=mC[1].trim();
+  }
+  var displayContact=f.contact||contactFromClient||'';
   var cliAddr,cliTel,cliEmail,cliCompany;
   if(isSLN){
     cliCompany='SOCIETE LE NICKEL — ERAMET-SLN';
@@ -13270,7 +13328,7 @@ function bFA(f){
       '<div class="doc-party">'+
         '<h4>CLIENT</h4>'+
         '<p>'+
-          (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>À M. <strong>'+esc(f.contact||'')+'</strong><br>':'À M. <strong>'+esc(f.contact||'')+'</strong><br>')+
+          (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>À M. <strong>'+esc(displayContact)+'</strong><br>':'À M. <strong>'+esc(displayContact)+'</strong><br>')+
           cliAddr+'<br>'+
           (cliTel?'Tél: '+esc(cliTel)+'<br>':'')+
           esc(cliEmail)+
@@ -13279,8 +13337,16 @@ function bFA(f){
     '</div>'+
     '<p style="font-size:13px;margin-bottom:6px"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+
     '<p style="font-size:11px;margin-bottom:8px"><strong>Facture N° :</strong> '+esc(f.num||'')+(f.dvlie?' — Devis N° '+esc(f.dvlie):'')+'</p>'+
-    '<table class="doc-tbl"><thead><tr><th>Désignation</th><th>TGC%</th><th>Unité</th><th>Quantité</th><th style="text-align:right">Prix unitaire</th><th style="text-align:right">TOTAL HT</th></tr></thead>'+
-    '<tbody>'+rows+'</tbody></table>'+
+    '<table class="doc-tbl">'+
+      '<thead><tr><th>Désignation</th><th>TGC%</th><th>Unité</th><th>Quantité</th><th style="text-align:right">Prix unitaire</th><th style="text-align:right">TOTAL HT</th></tr></thead>'+
+      // Le tfoot "running" se répète automatiquement en bas de chaque page A4 imprimée.
+      // Il affiche le total HT cumulé. Sur la dernière page il sera remplacé visuellement
+      // par le bloc des totaux complets (qui suit le tableau).
+      '<tfoot class="doc-tbl-running"><tr><td colspan="5" style="text-align:right">Sous-total HT (XPF) — Report page suivante</td><td style="text-align:right;font-weight:700">'+fN(f.ht||0)+'</td></tr></tfoot>'+
+      '<tbody>'+rows+'</tbody>'+
+    '</table>'+
+    // Bloc final groupé avec page-break-inside:avoid pour qu'il reste cohérent en bas de la dernière page
+    '<div class="doc-final-block">'+
     buildFATotsHtml(f,isExo)+
     '<div class="doc-notes"><strong>Montant en lettres :</strong> '+toLtr(ttcDisp)+'<br>'+
       '<strong>Délai :</strong> '+esc(f.delai||'Paiement sous 30 jours à réception de la facture')+
@@ -13292,6 +13358,7 @@ function bFA(f){
     '</div>'+
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
     '<p class="doc-legal">'+getMention(isExo?f.tgcM:'tgc')+'</p>'+
+    '</div>'+ // fin doc-final-block
   '</div>';
 }
 
