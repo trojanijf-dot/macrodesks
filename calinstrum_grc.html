@@ -2705,10 +2705,11 @@ function setBCPaidEmerson(bcId,paid){
 }
 // Lier un BC Emerson à une facture du Suivi
 function linkBCToInvoice(invId,bcId){
+  console.log('[linkBC] CALLED with invId='+invId+' bcId='+bcId);
   // Recherche dans la VRAIE source de vérité (DB.factures puis DB.invoices)
   // au lieu de la variable globale `invoices` qui peut contenir des objets virtuels.
   var target=null;
-  var targetSource='';  // 'factures' ou 'invoices'
+  var targetSource='';
   if(Array.isArray(DB.factures)){
     target=DB.factures.find(function(x){return x.id===invId;});
     if(target)targetSource='factures';
@@ -2718,29 +2719,32 @@ function linkBCToInvoice(invId,bcId){
     if(target)targetSource='invoices';
   }
   if(!target){
-    // Fallback : peut-être un id virtuel généré depuis DB.factures via getSuiviSource (factureId|invoiceId)
-    // On cherche dans la variable invoices puis on retombe sur DB.factures via grcFactureId
     var virt=(typeof invoices!=='undefined')?invoices.find(function(x){return x.id===invId;}):null;
+    console.log('[linkBC] virt found:', virt);
     if(virt){
       var grcId=virt._factureId||virt.grcFactureId;
       if(grcId)target=DB.factures.find(function(x){return x.id===grcId;});
       if(target)targetSource='factures';
     }
   }
+  console.log('[linkBC] target=', target, 'source=', targetSource);
   if(!target){
-    console.error('linkBCToInvoice: aucune facture trouvée pour id='+invId);
+    console.error('[linkBC] FAIL: aucune facture trouvée pour id='+invId);
     alert('❌ Facture introuvable (id '+invId+'). Le lien n\'a pas été créé.');
     return;
   }
   if(!target.linkedBCs)target.linkedBCs=[];
   if(target.linkedBCs.indexOf(bcId)<0){
     target.linkedBCs.push(bcId);
+    console.log('[linkBC] BC '+bcId+' ajouté à '+target.num+'. linkedBCs=', target.linkedBCs);
+  } else {
+    console.log('[linkBC] BC déjà présent dans linkedBCs');
   }
   saveDB();
-  // Re-render des vues impactées
   if(typeof renderBCLinker==='function')renderBCLinker();
   if(typeof renderSuivi==='function')renderSuivi();
   if(typeof rDash==='function')rDash();
+  console.log('[linkBC] DONE');
 }
 function unlinkBCFromInvoice(invId,bcId){
   // Même logique : on cherche dans la source de vérité
@@ -2859,7 +2863,7 @@ function renderBCLinker(){
             '<div style="font-size:11px;font-weight:700">'+fN(b.total||0)+' '+(b.devise||'AUD')+'</div>'+
             '<div style="font-size:9.5px;color:var(--muted)">≈ '+fN(coutXPF)+' XPF</div>'+
           '</div>'+
-          '<button class="btn btn-teal btn-sm" onclick="event.stopPropagation();linkBCToInvoice('+bcLinkerInvId+','+b.id+');renderBCLinker();">+ Lier</button>'+
+          '<button class="btn btn-teal btn-sm" onclick="event.stopPropagation();console.log(\'[+Lier CLICKED] invId=\','+bcLinkerInvId+',\' bcId=\','+b.id+');linkBCToInvoice('+bcLinkerInvId+','+b.id+');renderBCLinker();">+ Lier</button>'+
         '</div>';
       }).join('')+'</div>';
     }
