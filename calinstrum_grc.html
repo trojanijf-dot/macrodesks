@@ -436,9 +436,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
            Récupère taux de change AUD→XPF auto, applique marge commerciale, ajoute fret/assurance. -->
       <input type="file" id="dv-import-emerson-file" accept="application/pdf" style="display:none" onchange="importEmersonAsDevis(this.files[0])">
       <button class="btn btn-ghost no-print" onclick="document.getElementById('dv-import-emerson-file').click()" title="Importer un devis Emerson PDF (en AUD) et le convertir en devis CALINSTRUM (en XPF) avec marge + taux de change + fret/assurance">📥 Importer devis Emerson (→ XPF)</button>
-      <button class="btn btn-ghost no-print" onclick="uploadExcelSyncStandard()" title="Synchronise depuis votre fichier Excel multi-clients (format unifié SLN+PRNC). Détection automatique du client via le préfixe du N° facture. Anti-doublon strict." style="border-color:rgba(34,197,94,.5);color:#22c55e;font-weight:700">📥 Excel multi-clients</button>
-      <button class="btn btn-ghost no-print" onclick="uploadExcelSync()" title="Synchronise les devis ET factures du fichier Excel SLN 2026 (upload depuis votre PC). Anti-doublon strict : ignore les entrées déjà importées." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📥 Excel SLN</button>
-      <button class="btn btn-ghost no-print" onclick="uploadExcelSyncPRNC()" title="Synchronise les devis ET factures du fichier Excel PRNC (format spécifique PRNC). Anti-doublon strict." style="border-color:rgba(244,114,182,.4);color:#f472b6">📥 Excel PRNC</button>
+      <button class="btn btn-ghost no-print" onclick="uploadExcelSync()" title="Synchronise les devis ET factures du fichier Excel SLN 2026 (upload depuis votre PC). Anti-doublon strict : ignore les entrées déjà importées." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📥 Synchroniser depuis Excel</button>
       <button class="btn btn-ghost no-print" onclick="generateCadreFromInvoices()" title="Scanne toutes les factures Fourniture déjà importées, extrait les références Emerson uniques, et génère automatiquement un devis cadre avec ces articles. Évite de retaper la grille tarifaire manuellement." style="border-color:rgba(56,189,248,.4);color:#38bdf8">🪄 Auto-générer devis cadre</button>
       <button class="btn btn-teal no-print" onclick="openDV()">+ Nouveau devis</button>
     </div>
@@ -558,9 +556,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <button class="filter-btn" onclick="setFilter('late',this)">⚠ En retard <span class="filter-count" id="cnt-late"></span></button>
       <button class="filter-btn" onclick="setFilter('prebilled',this)" style="border-color:#a78bfa;color:#a78bfa">📦 Backlog <span class="filter-count" id="cnt-prebilled"></span></button>
       <input class="search-input" id="search-input" placeholder="Rechercher..." oninput="renderTable()" style="margin-left:auto;max-width:200px">
-      <button class="btn btn-ghost btn-sm no-print" onclick="uploadExcelSyncStandard()" title="Synchronise depuis votre fichier Excel multi-clients (format unifié SLN+PRNC). Détection automatique du client via le préfixe du N° facture (SLN-F.../PRNC-F...). Anti-doublon strict." style="border-color:rgba(34,197,94,.5);color:#22c55e;font-weight:700">📥 Excel multi-clients</button>
-      <button class="btn btn-ghost btn-sm no-print" onclick="uploadExcelSync()" title="Synchronise depuis votre fichier Excel SLN 2026 (upload). Importe factures + devis simultanément, anti-doublon strict." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📥 Excel SLN</button>
-      <button class="btn btn-ghost btn-sm no-print" onclick="uploadExcelSyncPRNC()" title="Synchronise depuis votre fichier Excel PRNC (upload). Format spécifique PRNC : Intitulé / N°Devis / Montant / N°PO / Date PO / N°Facture / Date envoi / État / Date paiement. Anti-doublon strict." style="border-color:rgba(244,114,182,.4);color:#f472b6">📥 Excel PRNC</button>
+      <button class="btn btn-ghost btn-sm no-print" onclick="uploadExcelSync()" title="Synchronise depuis votre fichier Excel SLN 2026 (upload). Importe factures + devis simultanément, anti-doublon strict." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📥 Synchroniser depuis Excel</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadBCSLNPdf()" title="Importe un PDF de BC SLN GMAO. Matche automatiquement les articles avec votre grille tarifaire (devis cadre) et crée la facture pré-remplie." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Import BC SLN (PDF)</button>
       <!-- Importer un avis de règlement client (PDF ou texte collé) :
            parse la liste des factures réglées + date virement, propose un aperçu validable
@@ -4045,330 +4041,7 @@ function processExcelSheet(ws,fileName){
   performImport(factures,devisExtracted,fileName);
 }
 
-// =============================================================================
-// IMPORT PRNC SPÉCIFIQUE (format différent du SLN)
-// =============================================================================
-// Le fichier PRNC a un mapping de colonnes différent du fichier SLN :
-//   A=Intitulé, B=N°Devis, C=MontantDevis, D=N°PO, E=DatePO,
-//   F=N°Facture, G=DateEnvoi, H=État30j, I=DatePaiement
-//
-// Cas particuliers gérés :
-//   - Lignes sans devis (ex PRNC-F037) : facture "héritée" du devis de la ligne précédente
-//     (cas "1 devis = 2 factures" pour acomptes/soldes)
-//   - Statuts "payéé"/"PAYEE"/"payé" → tolérance accents/casse → 'paid'
-//   - Statut "EN COURS" → 'pending'
-//   - Pas de date envoi → préfacturé (statut 'pending', phase 'emerson')
-//   - Le client est figé à "PRNC" pour tout import via cette fonction
-function uploadExcelSyncPRNC(){
-  if(typeof XLSX==='undefined'){
-    alert('❌ La librairie XLSX (SheetJS) n\'est pas chargée.\n\nLa synchronisation Excel nécessite l\'inclusion de la librairie. Contactez l\'administrateur.');
-    return;
-  }
-  var input=document.createElement('input');
-  input.type='file';
-  input.accept='.xlsx,.xls';
-  input.style.display='none';
-  input.onchange=function(e){
-    var file=e.target.files[0];
-    if(!file)return;
-    var reader=new FileReader();
-    reader.onload=function(evt){
-      try{
-        var data=new Uint8Array(evt.target.result);
-        var wb=XLSX.read(data,{type:'array',cellDates:true});
-        var sheetName=wb.SheetNames[0];
-        var ws=wb.Sheets[sheetName];
-        if(!ws){alert('❌ Aucune feuille trouvée dans le fichier Excel.');return;}
-        processPRNCExcelSheet(ws,file.name);
-      }catch(err){
-        console.error('Erreur parsing Excel PRNC:',err);
-        alert('❌ Erreur lors de la lecture du fichier :\n\n'+err.message);
-      }
-    };
-    reader.onerror=function(){alert('❌ Impossible de lire le fichier.');};
-    reader.readAsArrayBuffer(file);
-  };
-  document.body.appendChild(input);
-  input.click();
-  setTimeout(function(){document.body.removeChild(input);},1000);
-}
-
-function processPRNCExcelSheet(ws,fileName){
-  var range=XLSX.utils.decode_range(ws['!ref']);
-  var factures=[];
-  var devisExtracted=[];
-  // Le devis "courant" : chaque ligne sans devis hérite du devis de la dernière ligne qui en avait un
-  // (cas PRNC-F037 ligne 4 : pas de num devis mais c'est le 2e versement de PRNC-DV022REV1)
-  var lastDevisNum='';
-  var lastDevisIntitule='';
-  var lastDevisType='Fourniture';
-  for(var R=range.s.r+1;R<=range.e.r;R++){
-    var cellA=ws[XLSX.utils.encode_cell({r:R,c:0})]; // Intitulé
-    var cellB=ws[XLSX.utils.encode_cell({r:R,c:1})]; // N° devis
-    var cellC=ws[XLSX.utils.encode_cell({r:R,c:2})]; // Montant devis
-    var cellD=ws[XLSX.utils.encode_cell({r:R,c:3})]; // N° PO
-    var cellE=ws[XLSX.utils.encode_cell({r:R,c:4})]; // Date PO
-    var cellF=ws[XLSX.utils.encode_cell({r:R,c:5})]; // N° facture
-    var cellG=ws[XLSX.utils.encode_cell({r:R,c:6})]; // Date envoi facture
-    var cellH=ws[XLSX.utils.encode_cell({r:R,c:7})]; // État 30j
-    var cellI=ws[XLSX.utils.encode_cell({r:R,c:8})]; // Date paiement
-    if(!cellF||!cellF.v)continue; // pas de N° facture = ligne vide, skip
-    var factNum=String(cellF.v).trim();
-    if(!factNum)continue;
-    var intitule=cellA?String(cellA.v||'').trim():'';
-    var dvNum=cellB?String(cellB.v||'').trim():'';
-    var montantDevis=cellC?Number(cellC.v)||0:0;
-    var po=cellD?String(cellD.v||'').trim():'';
-    var dateEnvoi=cellG?excelDateToISO(cellG.v):'';
-    var datePaiement=cellI?excelDateToISO(cellI.v):'';
-    var etat=cellH?String(cellH.v||'').toLowerCase().trim():'';
-    // Type : tout PRNC est par défaut Fourniture (ajustable manuellement après import)
-    // Détection contextuelle : si l'intitulé mentionne "installation" / "chantier" → Prestation
-    var type='Fourniture';
-    var ll=intitule.toLowerCase();
-    if(/installation|chantier|prestation|main d.oeuvre|maintenance|pose/.test(ll)){
-      type='Prestation de service';
-    }
-    // Statut : tolérance accents/casse — "payé", "payée", "payéé", "PAYEE", "PAID" → paid
-    // Si "en cours" → pending, autre → pending par défaut
-    var statut='pending';
-    var etatNorm=etat.replace(/[éèê]/g,'e');
-    if(/pay[ée]+/.test(etat)||/paye/.test(etatNorm)||/paid/.test(etatNorm))statut='paid';
-    // Si pas de date envoi : facture pas encore émise → on garde pending (déjà default)
-    // Numéro de devis : si vide, hériter du devis précédent (cas multi-factures sur 1 devis)
-    var inheritedDevis=false;
-    if(!dvNum){
-      if(lastDevisNum){dvNum=lastDevisNum;intitule=intitule||('Suite '+lastDevisIntitule);type=lastDevisType;inheritedDevis=true;}
-    } else {
-      lastDevisNum=dvNum;
-      lastDevisIntitule=intitule;
-      lastDevisType=type;
-    }
-    // Le commentaire de la facture inclut info utiles pour traçabilité
-    var commentParts=[];
-    if(po)commentParts.push('PO: '+po);
-    if(datePaiement)commentParts.push('Payée le '+datePaiement);
-    if(inheritedDevis)commentParts.push('Liée à '+dvNum+' (multi-factures)');
-    var fullComment=commentParts.join(' | ');
-    // Construire la facture
-    factures.push({
-      num:factNum,
-      type:type,
-      intitule:intitule,
-      // Si pas de "montant devis" sur cette ligne (cas ligne 4), on garde 0 — le montant sera celui de la facture
-      // qui est en col C ici aussi (le fichier PRNC met le montant facture dans la même col que le montant devis)
-      montant:montantDevis,
-      po:po,
-      dateEnvoi:dateEnvoi,
-      datePaiement:datePaiement,
-      statut:statut,
-      comment:fullComment,
-      _devisLie:dvNum
-    });
-    // Construire le devis correspondant (seulement si la ligne a un VRAI numéro de devis non hérité)
-    if(dvNum&&!inheritedDevis){
-      var dateDevisPO=cellE?excelDateToISO(cellE.v):'';
-      devisExtracted.push({
-        num:dvNum,
-        type:type,
-        ttc:montantDevis,
-        objet:intitule,
-        factureLiee:factNum,
-        date:dateDevisPO||dateEnvoi||'',
-        status:'Facturé'
-      });
-    }
-  }
-  // Effectuer l'import en passant client="PRNC"
-  performImport(factures,devisExtracted,fileName,'PRNC');
-}
-
-// =============================================================================
-// IMPORT STANDARD MULTI-CLIENTS (format unifié)
-// =============================================================================
-// Format colonnes (fixé) :
-//   A=Intitulé, B=N°Devis, C=N°Facture, D=Montant, E=N°PO, F=DatePO,
-//   G=DateEnvoi, H=État, I=Commentaire
-//
-// Détection client : préfixe du N° facture (col C)
-//   - "SLN-F..." → client SLN
-//   - "PRNC-F..." → client PRNC
-//   - autres préfixes → utilise le préfixe tel quel comme nom de client
-//
-// Détection type : couleur rouge cellule A → Fourniture, sinon Prestation
-// Si pas de couleur, fallback sur détection contextuelle de l'intitulé
-//
-// États supportés :
-//   - "PAYEE"/"PAYÉE"/"PAYÉ"/"PAID" → paid
-//   - "EN COURS" → pending
-//   - "Chantier non démarré" → pending + phase chantier_attente
-//   - autre / vide → pending
-//
-// Multi-factures sur 1 devis : ligne sans col B hérite du devis de la ligne précédente
-// (gardé du code PRNC : cas acomptes/soldes)
-//
-// N° de devis avec préfixe : "DEVIS N° PRNC-DV026" → extraction "PRNC-DV026"
-function uploadExcelSyncStandard(){
-  if(typeof XLSX==='undefined'){
-    alert('❌ La librairie XLSX (SheetJS) n\'est pas chargée.\n\nLa synchronisation Excel nécessite l\'inclusion de la librairie. Contactez l\'administrateur.');
-    return;
-  }
-  var input=document.createElement('input');
-  input.type='file';
-  input.accept='.xlsx,.xls';
-  input.style.display='none';
-  input.onchange=function(e){
-    var file=e.target.files[0];
-    if(!file)return;
-    var reader=new FileReader();
-    reader.onload=function(evt){
-      try{
-        var data=new Uint8Array(evt.target.result);
-        // cellStyles=true → conserver les couleurs de fond (pour détection Fourniture/Prestation)
-        var wb=XLSX.read(data,{type:'array',cellStyles:true,cellDates:true});
-        var sheetName=wb.SheetNames[0];
-        var ws=wb.Sheets[sheetName];
-        if(!ws){alert('❌ Aucune feuille trouvée dans le fichier Excel.');return;}
-        processStandardExcelSheet(ws,file.name);
-      }catch(err){
-        console.error('Erreur parsing Excel standard:',err);
-        alert('❌ Erreur lors de la lecture du fichier :\n\n'+err.message);
-      }
-    };
-    reader.onerror=function(){alert('❌ Impossible de lire le fichier.');};
-    reader.readAsArrayBuffer(file);
-  };
-  document.body.appendChild(input);
-  input.click();
-  setTimeout(function(){document.body.removeChild(input);},1000);
-}
-
-// Extrait le numéro de devis "propre" depuis une cellule qui peut contenir
-// "DEVIS N° PRNC-DV026" ou "PRNC-DV026" ou "Customer Ref ... PRNC-DV023"
-function cleanDevisNumFromCell(raw){
-  if(!raw)return '';
-  var s=String(raw).trim();
-  // Chercher un pattern <PREFIX>-DV<num>(REV<num>)? n'importe où dans la chaîne
-  var m=s.match(/\b([A-Z]+-DV\d+(?:REV\d+)?)\b/i);
-  if(m)return m[1].toUpperCase();
-  return s;
-}
-
-function processStandardExcelSheet(ws,fileName){
-  var range=XLSX.utils.decode_range(ws['!ref']);
-  var factures=[];
-  var devisExtracted=[];
-  var lastDevisNum='';
-  var lastDevisIntitule='';
-  var lastDevisType='Fourniture';
-  var lastDevisClient='';
-  for(var R=range.s.r+1;R<=range.e.r;R++){
-    var cellA=ws[XLSX.utils.encode_cell({r:R,c:0})]; // Intitulé
-    var cellB=ws[XLSX.utils.encode_cell({r:R,c:1})]; // N° devis
-    var cellC=ws[XLSX.utils.encode_cell({r:R,c:2})]; // N° facture
-    var cellD=ws[XLSX.utils.encode_cell({r:R,c:3})]; // Montant facture
-    var cellE=ws[XLSX.utils.encode_cell({r:R,c:4})]; // N° PO
-    var cellF=ws[XLSX.utils.encode_cell({r:R,c:5})]; // Date PO
-    var cellG=ws[XLSX.utils.encode_cell({r:R,c:6})]; // Date envoi
-    var cellH=ws[XLSX.utils.encode_cell({r:R,c:7})]; // État
-    var cellI=ws[XLSX.utils.encode_cell({r:R,c:8})]; // Commentaire
-    if(!cellC||!cellC.v)continue;
-    var factNum=String(cellC.v).trim();
-    if(!factNum)continue;
-    // === DÉTECTION CLIENT via le préfixe du N° facture ===
-    // Pattern attendu : "<CLIENT>-F<num>(rev<num>)?"
-    var clientMatch=factNum.match(/^([A-Z]+)-F\d+/i);
-    var clientFromNum=clientMatch?clientMatch[1].toUpperCase():'';
-    if(!clientFromNum){
-      console.warn('Ligne '+R+' : impossible de déterminer le client depuis "'+factNum+'" (préfixe attendu : SLN-F, PRNC-F, etc.). Ligne ignorée.');
-      continue;
-    }
-    var intitule=cellA?String(cellA.v||'').trim():'';
-    var dvNumRaw=cellB?String(cellB.v||'').trim():'';
-    var dvNum=cleanDevisNumFromCell(dvNumRaw);
-    var montant=cellD?Number(cellD.v)||0:0;
-    var po=cellE?String(cellE.v||'').trim():'';
-    var dateEnvoi=cellG?excelDateToISO(cellG.v):'';
-    var datePO=cellF?excelDateToISO(cellF.v):'';
-    var etatRaw=cellH?String(cellH.v||'').trim():'';
-    var etat=etatRaw.toLowerCase();
-    var commentaire=cellI?String(cellI.v||'').trim():'';
-    // === DÉTECTION TYPE ===
-    // Priorité 1 : couleur rouge sur cellule A (intitulé) = Fourniture
-    // Priorité 2 : détection contextuelle de l'intitulé
-    var isRed=detectRedCell(cellA);
-    var type;
-    if(isRed){
-      type='Fourniture';
-    } else {
-      var ll=intitule.toLowerCase();
-      if(/installation|chantier|prestation|main d.oeuvre|maintenance|d[eé]placement|tirage|pose|remplacement/.test(ll)){
-        type='Prestation de service';
-      } else {
-        type='Fourniture';
-      }
-    }
-    // === DÉTECTION STATUT ===
-    var statut='pending';
-    var phase=null;
-    var etatNorm=etat.replace(/[éèê]/g,'e');
-    if(/pay[eé]+/.test(etat)||/paye/.test(etatNorm)||/paid/.test(etatNorm)){
-      statut='paid';
-    } else if(/chantier.*non.*d[eé]marr|pas.*commenc|en.*attente/i.test(etatNorm)){
-      statut='pending';
-      phase='chantier_attente';
-    }
-    // === HÉRITAGE DEVIS pour multi-factures ===
-    var inheritedDevis=false;
-    if(!dvNum){
-      if(lastDevisNum&&lastDevisClient===clientFromNum){
-        dvNum=lastDevisNum;
-        intitule=intitule||('Suite '+lastDevisIntitule);
-        type=lastDevisType;
-        inheritedDevis=true;
-      }
-    } else {
-      lastDevisNum=dvNum;
-      lastDevisIntitule=intitule;
-      lastDevisType=type;
-      lastDevisClient=clientFromNum;
-    }
-    // === COMMENTAIRE ENRICHI ===
-    var commentParts=[];
-    if(commentaire)commentParts.push(commentaire);
-    if(po&&!commentaire.match(/po\s*:/i))commentParts.push('PO: '+po);
-    if(inheritedDevis)commentParts.push('Liée à '+dvNum+' (multi-factures)');
-    var fullComment=commentParts.join(' | ');
-    factures.push({
-      num:factNum,
-      client:clientFromNum,
-      type:type,
-      intitule:intitule,
-      montant:montant,
-      po:po,
-      dateEnvoi:dateEnvoi,
-      statut:statut,
-      phase:phase,
-      comment:fullComment,
-      _devisLie:dvNum
-    });
-    if(dvNum&&!inheritedDevis){
-      devisExtracted.push({
-        num:dvNum,
-        client:clientFromNum,
-        type:type,
-        ttc:montant,
-        objet:intitule,
-        factureLiee:factNum,
-        date:datePO||dateEnvoi||'',
-        status:'Facturé'
-      });
-    }
-  }
-  // performImport accepte un client global qui sert de fallback ; ici chaque ligne a déjà son
-  // propre champ "client", donc le fallback n'est utilisé que pour les lignes sans préfixe (rare).
-  performImport(factures,devisExtracted,fileName,'AUTRE');
-}
+// Convertit une cellule Excel (date/serial) en ISO YYYY-MM-DD
 function excelDateToISO(v){
   if(!v)return '';
   // Si déjà string format date
@@ -4420,10 +4093,7 @@ function extractDevisNum(intitule,factNum){
 }
 
 // Effectue l'import effectif (anti-doublon strict)
-function performImport(factures,devis,fileName,clientName){
-  // Le clientName est par défaut "SLN" pour rétrocompatibilité avec l'import SLN existant.
-  // L'import PRNC passe explicitement "PRNC" en 4ème argument.
-  if(!clientName)clientName='SLN';
+function performImport(factures,devis,fileName){
   // === Anti-doublon FACTURES ===
   var existingFactNums={};
   invoices.forEach(function(x){if(x.num)existingFactNums[x.num.toUpperCase()]=true;});
@@ -4488,8 +4158,6 @@ function performImport(factures,devis,fileName,clientName){
     DB.invoices.push({
       id:baseFactId+i,
       num:row.num,
-      // Client : prioritairement celui défini sur la ligne (mode multi-clients), sinon le clientName global
-      client:row.client||clientName,
       intitule:row.intitule,
       montant:row.montant||0,
       po:row.po||'',
@@ -4497,11 +4165,9 @@ function performImport(factures,devis,fileName,clientName){
       dateButoir:add30Days(row.dateEnvoi),
       statut:row.statut||'pending',
       pct:row.statut==='paid'?100:0,
-      phase:row.phase||phase,
+      phase:phase,
       type:row.type||'Fourniture',
-      comment:row.comment||'',
-      // Si la facture a une date de paiement explicite, la stocker pour le calcul des délais
-      dateEncaissement:row.datePaiement||(row.statut==='paid'?row.dateEnvoi:'')
+      comment:row.comment||''
     });
   });
 
@@ -4511,7 +4177,7 @@ function performImport(factures,devis,fileName,clientName){
     DB.devis.push({
       id:baseDevId+i,
       num:d.num,rev:'',date:d.date||'',
-      type:d.type,client:d.client||clientName,contact:'',email:'',adresse:'',
+      type:d.type,client:'SLN',contact:'',email:'',adresse:'',
       objet:d.objet,status:d.status,bcClientSLN:'',
       lines:{fourniture:[],service:[],fret:[]},
       ht:d.ttc,t11:0,t22:0,t6:0,fr:0,ttc:d.ttc,
