@@ -2705,19 +2705,61 @@ function setBCPaidEmerson(bcId,paid){
 }
 // Lier un BC Emerson à une facture du Suivi
 function linkBCToInvoice(invId,bcId){
-  var inv=invoices.find(function(x){return x.id===invId;});
-  if(!inv)return;
-  if(!inv.linkedBCs)inv.linkedBCs=[];
-  if(inv.linkedBCs.indexOf(bcId)<0)inv.linkedBCs.push(bcId);
-  commitInvoiceChange(inv);
-  saveDB();renderSuivi();rDash();
+  // Recherche dans la VRAIE source de vérité (DB.factures puis DB.invoices)
+  // au lieu de la variable globale `invoices` qui peut contenir des objets virtuels.
+  var target=null;
+  var targetSource='';  // 'factures' ou 'invoices'
+  if(Array.isArray(DB.factures)){
+    target=DB.factures.find(function(x){return x.id===invId;});
+    if(target)targetSource='factures';
+  }
+  if(!target&&Array.isArray(DB.invoices)){
+    target=DB.invoices.find(function(x){return x.id===invId;});
+    if(target)targetSource='invoices';
+  }
+  if(!target){
+    // Fallback : peut-être un id virtuel généré depuis DB.factures via getSuiviSource (factureId|invoiceId)
+    // On cherche dans la variable invoices puis on retombe sur DB.factures via grcFactureId
+    var virt=(typeof invoices!=='undefined')?invoices.find(function(x){return x.id===invId;}):null;
+    if(virt){
+      var grcId=virt._factureId||virt.grcFactureId;
+      if(grcId)target=DB.factures.find(function(x){return x.id===grcId;});
+      if(target)targetSource='factures';
+    }
+  }
+  if(!target){
+    console.error('linkBCToInvoice: aucune facture trouvée pour id='+invId);
+    alert('❌ Facture introuvable (id '+invId+'). Le lien n\'a pas été créé.');
+    return;
+  }
+  if(!target.linkedBCs)target.linkedBCs=[];
+  if(target.linkedBCs.indexOf(bcId)<0){
+    target.linkedBCs.push(bcId);
+  }
+  saveDB();
+  // Re-render des vues impactées
+  if(typeof renderBCLinker==='function')renderBCLinker();
+  if(typeof renderSuivi==='function')renderSuivi();
+  if(typeof rDash==='function')rDash();
 }
 function unlinkBCFromInvoice(invId,bcId){
-  var inv=invoices.find(function(x){return x.id===invId;});
-  if(!inv||!inv.linkedBCs)return;
-  inv.linkedBCs=inv.linkedBCs.filter(function(id){return id!==bcId;});
-  commitInvoiceChange(inv);
-  saveDB();renderBCLinker();renderSuivi();rDash();
+  // Même logique : on cherche dans la source de vérité
+  var target=null;
+  if(Array.isArray(DB.factures))target=DB.factures.find(function(x){return x.id===invId;});
+  if(!target&&Array.isArray(DB.invoices))target=DB.invoices.find(function(x){return x.id===invId;});
+  if(!target){
+    var virt=(typeof invoices!=='undefined')?invoices.find(function(x){return x.id===invId;}):null;
+    if(virt){
+      var grcId=virt._factureId||virt.grcFactureId;
+      if(grcId)target=DB.factures.find(function(x){return x.id===grcId;});
+    }
+  }
+  if(!target||!target.linkedBCs)return;
+  target.linkedBCs=target.linkedBCs.filter(function(id){return id!==bcId;});
+  saveDB();
+  if(typeof renderBCLinker==='function')renderBCLinker();
+  if(typeof renderSuivi==='function')renderSuivi();
+  if(typeof rDash==='function')rDash();
 }
 
 // === MODALE DE LIAISON BC EMERSON ↔ FACTURE ===
