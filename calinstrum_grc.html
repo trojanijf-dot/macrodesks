@@ -1294,6 +1294,13 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <h4 style="margin:14px 0 8px 0;color:var(--teal);font-size:12px">📦 BC Emerson liés à cette facture</h4>
     <div id="bclink-linked-list"></div>
     <h4 style="margin:18px 0 8px 0;color:var(--muted);font-size:12px">🔍 BC Emerson disponibles</h4>
+    <!-- Bouton import Acknowledgement Emerson : parse un PDF Order Acknowledgement et auto-détecte
+         si le BC existe déjà (par N° PO Calinstrum) pour mettre à jour, sinon en crée un nouveau.
+         Le BC créé/mis à jour est automatiquement lié à la facture en cours. -->
+    <div style="margin-bottom:10px">
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('bclink-emerson-ack-file').click()" style="border-color:rgba(56,189,248,.5);color:#38bdf8;font-weight:700" title="Importer un PDF d'Order Acknowledgement Emerson. Auto-détection : si le N° PO Calinstrum existe déjà comme BC, met à jour ; sinon crée un nouveau BC. Le BC est automatiquement lié à cette facture.">📄 Importer Acknowledgement Emerson (PDF)</button>
+      <input type="file" id="bclink-emerson-ack-file" accept="application/pdf" style="display:none" onchange="importEmersonAckForBCLink(this.files[0])">
+    </div>
     <div style="margin-bottom:8px">
       <input class="form-input" id="bclink-search" placeholder="🔍 Rechercher par N° BC, désignation..." oninput="renderBCLinker()" style="font-size:12px">
     </div>
@@ -8319,6 +8326,418 @@ function applyACTToFretLines(actData,fileName){
   if(typeof recalcEmersonDevisPreview==='function')recalcEmersonDevisPreview();
 }
 
+// =============================================================================
+// IMPORT EMERSON ORDER ACKNOWLEDGEMENT (PDF) → BC Emerson
+// =============================================================================
+// Workflow :
+//   1. parseEmersonAck(text) extrait Customer PO N°, Sales Order N°, lignes, totaux, end-user
+//   2. Auto-détection : si un BC avec num === customerPO existe dans DB.bcs → mise à jour
+//      (ajoute Sales Order Emerson dans une nouvelle prop, statut → Confirmé, conserve le
+//      tauxAUD d'origine pour ne pas casser les calculs de marge)
+//   3. Sinon → création d'un nouveau BC avec lignes, taux par défaut, statut Confirmé
+//   4. Liaison automatique avec la facture en cours dans la modal BC linker
+//   5. Aperçu modal avant validation finale par l'utilisateur
+function importEmersonAckForBCLink(file){
+  if(!file)return;
+  if(file.type!=='application/pdf' && !/\.pdf$/i.test(file.name)){
+    alert('Le fichier sélectionné n\'est pas un PDF.');
+    var input=document.getElementById('bclink-emerson-ack-file');
+    if(input)input.value='';
+    return;
+  }
+  if(!bcLinkerInvId){
+    alert('❌ Aucune facture sélectionnée. Ouvrez la modal BC linker depuis une facture.');
+    return;
+  }
+  // Loader
+  var loader=document.createElement('div');
+  loader.id='emerson-ack-loader';
+  loader.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:99999;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;flex-direction:column;gap:10px';
+  loader.innerHTML='<div style="font-size:32px">📄✓</div><div>Lecture de l\'Acknowledgement Emerson…</div>';
+  document.body.appendChild(loader);
+
+  loadPdfJs()
+    .then(function(){return file.arrayBuffer();})
+    .then(function(buf){
+      // Réutilise extractEmersonPdf qui produit le rawText, on parse ensuite avec notre propre parser
+      return pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise.then(function(pdf){
+        var tasks=[];
+        for(var i=1;i<=pdf.numPages;i++){
+          tasks.push(pdf.getPage(i).then(function(page){
+            return page.getTextContent().then(function(tc){
+              var lineMap={};
+              tc.items.forEach(function(it){
+                if(!it.str||!it.transform)return;
+                var y=Math.round(it.transform[5]);
+                var x=it.transform[4];
+                if(!lineMap[y])lineMap[y]=[];
+                lineMap[y].push({x:x,str:it.str});
+              });
+              var ys=Object.keys(lineMap).map(Number).sort(function(a,b){return b-a;});
+              return ys.map(function(y){
+                return lineMap[y].sort(function(a,b){return a.x-b.x;}).map(function(o){return o.str;}).join(' ').replace(/\s+/g,' ').trim();
+              }).filter(function(s){return s.length;}).join('\n');
+            });
+          }));
+        }
+        return Promise.all(tasks).then(function(pageTexts){return pageTexts.join('\n\n---PAGE BREAK---\n\n');});
+      });
+    })
+    .then(function(rawText){
+      var loader=document.getElementById('emerson-ack-loader');
+      if(loader)loader.remove();
+      var parsed=parseEmersonAck(rawText);
+      if(!parsed.customerPO){
+        alert('❌ Impossible d\'extraire le N° de PO Calinstrum (Customer PO No) du PDF.\n\nVérifiez qu\'il s\'agit bien d\'un PDF d\'Order Acknowledgement Emerson.');
+        return;
+      }
+      showEmersonAckPreview(parsed,file.name);
+    })
+    .catch(function(err){
+      console.error('Erreur import Acknowledgement Emerson:',err);
+      var loader=document.getElementById('emerson-ack-loader');
+      if(loader)loader.remove();
+      alert('❌ Erreur lors de la lecture du PDF :\n\n'+err.message);
+    });
+  // Reset input pour permettre re-upload du même fichier
+  var input=document.getElementById('bclink-emerson-ack-file');
+  if(input)input.value='';
+}
+
+// Parse le texte brut d'un Order Acknowledgement Emerson.
+// Retourne {customerPO, salesOrder, customerOrderDate, salesPerson, ackInquiries, endUser,
+//          shipTo, lines:[{ref, desc, qty, unitPrice}], totalAmount, currency}
+function parseEmersonAck(text){
+  var result={
+    customerPO:'',
+    salesOrder:'',
+    customerOrderDate:'',
+    salesPerson:'',
+    ackInquiries:'',
+    endUser:'',
+    shipTo:'',
+    lines:[],
+    totalAmount:0,
+    currency:'AUD'
+  };
+  // === Header ===
+  // Customer PO No (peut être sur plusieurs lignes : "Customer PO No:" puis valeur ligne suivante)
+  var m=text.match(/Customer\s+PO\s+No:\s*([^\n\r]+)/i);
+  if(m)result.customerPO=m[1].trim();
+  // Format alternatif où la valeur est sur la ligne suivante
+  if(!result.customerPO){
+    m=text.match(/Customer\s+PO\s+No:\s*\n\s*(\S+)/i);
+    if(m)result.customerPO=m[1].trim();
+  }
+  // Tentative supplémentaire : chercher dans FAX_INFO en haut du PDF
+  if(!result.customerPO){
+    m=text.match(/FAX_INFO:\d+:[A-Z]:([^\:\n]+)/);
+    if(m)result.customerPO=m[1].trim();
+  }
+  // Sales Order No
+  m=text.match(/Sales\s+Order\s+No:\s*([^\n\r]+)/i);
+  if(m)result.salesOrder=m[1].trim();
+  if(!result.salesOrder){
+    m=text.match(/Sales\s+Order\s+No:\s*\n\s*(\S+)/i);
+    if(m)result.salesOrder=m[1].trim();
+  }
+  // Customer Order Date
+  m=text.match(/Customer\s+Order\s+Date:\s*([^\n\r]+)/i);
+  if(m)result.customerOrderDate=convertEmersonDate(m[1].trim());
+  if(!result.customerOrderDate){
+    m=text.match(/Customer\s+Order\s+Date:\s*\n\s*([^\n\r]+)/i);
+    if(m)result.customerOrderDate=convertEmersonDate(m[1].trim());
+  }
+  // Sales Person
+  m=text.match(/Sales\s+Person:\s*([^\n\r]+)/i);
+  if(m)result.salesPerson=m[1].trim();
+  // Acknowledgement Inquiries
+  m=text.match(/Acknowledgement\s+Inquiries:\s*([^\n\r]+)/i);
+  if(m)result.ackInquiries=m[1].trim();
+  // End User : ligne après "End User:" jusqu'à "ABN:" ou "Ultimate Dest:"
+  m=text.match(/End\s+User:[^\n]*\n([\s\S]+?)(?=ABN:|Ultimate Dest:|Ship\s+To:|$)/i);
+  if(m)result.endUser=m[1].trim().replace(/\n+/g,' ').replace(/\s+/g,' ').substring(0,150);
+  // Currency : Total (XXX) ou Subtotal (AUD)
+  m=text.match(/Subtotal\s*\((\w+)\)/i);
+  if(m)result.currency=m[1].toUpperCase();
+  // Total Amount
+  m=text.match(/Total\s*\((\w+)\):\s*([\d,]+\.?\d*)/i);
+  if(m){
+    result.currency=m[1].toUpperCase();
+    result.totalAmount=parseFloat(m[2].replace(/,/g,''))||0;
+  }
+  if(!result.totalAmount){
+    m=text.match(/Subtotal\s*\(\w+\):\s*([\d,]+\.?\d*)/i);
+    if(m)result.totalAmount=parseFloat(m[1].replace(/,/g,''))||0;
+  }
+  // === Lignes : pattern "Cust Line No / Order Line / Description / Qty / Unit Price / Total Amount" ===
+  // Format dans le PDF : chaque ligne commence par un numéro Cust Line, puis des info, et se termine par
+  // qty / unit price / total amount sur la même ligne ou regroupée.
+  // Exemple : "1 1.1.1 214CTKSST1DUE0360SLE1UAE060XA Rosemount 214C Temperature Sensor ... 2 1,420.00 2,840.00"
+  // On cherche : (refnum)(qty) (unitprice) (totalprice) à la fin de chaque bloc.
+  // Approche : split par "Cust Line" sections puis parse chaque section.
+  // Pattern plus robuste : chercher des refs Emerson (alphanumériques avec tirets) suivies plus tard
+  // par 3 nombres (qty, unit, total).
+  // Approche 1 : capture sur les lignes contenant ref puis qty + 2 prix
+  var lineRe=/^(\d+)\s+([\d\.]+)\s+([A-Z0-9][-A-Z0-9]+)\s+/i;
+  var lines=text.split('\n');
+  var currentLine=null;
+  for(var i=0;i<lines.length;i++){
+    var ln=lines[i].trim();
+    // Détection d'une nouvelle ligne d'item : "1 1.1.1 RefABC..." (description optionnelle car parfois sur ligne suivante)
+    var hdr=ln.match(/^(\d+)\s+([\d\.]+)\s+([A-Z0-9][-A-Z0-9]{3,})\s*(.*)$/);
+    if(hdr){
+      // Push l'ancien si existe
+      if(currentLine&&currentLine.ref)result.lines.push(currentLine);
+      currentLine={
+        custLineNo:hdr[1],
+        orderLine:hdr[2],
+        ref:hdr[3],
+        desc:hdr[4]||'',
+        qty:0,
+        unitPrice:0,
+        totalPrice:0,
+        rawText:ln
+      };
+      continue;
+    }
+    if(currentLine){
+      // Chercher "qty unit_price total_price" en fin de ligne (ex: "2 1,420.00 2,840.00")
+      var priceMatch=ln.match(/(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
+      if(priceMatch&&!currentLine.qty){
+        currentLine.qty=parseInt(priceMatch[1],10)||1;
+        currentLine.unitPrice=parseFloat(priceMatch[2].replace(/,/g,''))||0;
+        currentLine.totalPrice=parseFloat(priceMatch[3].replace(/,/g,''))||0;
+        continue;
+      }
+      // Chercher juste un pattern Qty + UnitPrice + Total seul (parfois sur leur propre ligne)
+      var altPriceMatch=ln.match(/^(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
+      if(altPriceMatch&&!currentLine.qty){
+        currentLine.qty=parseInt(altPriceMatch[1],10)||1;
+        currentLine.unitPrice=parseFloat(altPriceMatch[2].replace(/,/g,''))||0;
+        currentLine.totalPrice=parseFloat(altPriceMatch[3].replace(/,/g,''))||0;
+        continue;
+      }
+      // Sinon enrichir la description (sauf si c'est du blabla legal/footer)
+      if(ln.length>3&&ln.length<200&&!/^Page\s+\d|Form:|Copyright|Thank\s+you|FAX_INFO|Tel:|Fax:|^This order|^Online Status|^All Invoices|^Customer PO:|^Emerson SO|^Customer\/|^Order Note/i.test(ln)){
+        if(!currentLine.desc)currentLine.desc=ln;
+        else if(currentLine.desc.length<100&&ln.length<60)currentLine.desc+=' '+ln;
+      }
+    }
+  }
+  if(currentLine&&currentLine.ref)result.lines.push(currentLine);
+  // Filter : éliminer les "lignes" qui sont en réalité du blabla terms&conditions
+  result.lines=result.lines.filter(function(l){
+    return l.ref&&l.qty>0&&l.unitPrice>0;
+  });
+  return result;
+}
+
+// Convertit "29-JAN-2026" en "2026-01-29"
+function convertEmersonDate(s){
+  if(!s)return '';
+  var m=s.match(/(\d{1,2})[\s-]+([A-Z]+)[\s-]+(\d{4})/i);
+  if(!m)return '';
+  var months={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+  var mon=months[m[2].toUpperCase().substring(0,3)];
+  if(!mon)return '';
+  return m[3]+'-'+mon+'-'+m[1].padStart(2,'0');
+}
+
+// Affiche un modal de prévisualisation avant validation de l'import Acknowledgement
+function showEmersonAckPreview(parsed,fileName){
+  // Auto-détection : chercher un BC avec num === customerPO dans DB.bcs
+  var existingBC=null;
+  var customerPONorm=parsed.customerPO.replace(/\s+/g,'').toUpperCase();
+  if(Array.isArray(DB.bcs)){
+    existingBC=DB.bcs.find(function(b){
+      return (b.num||'').replace(/\s+/g,'').toUpperCase()===customerPONorm;
+    });
+  }
+  var mode=existingBC?'update':'create';
+  // Récupérer la facture en cours pour info
+  var invoice=invoices.find(function(x){return x.id===bcLinkerInvId;});
+  // Construire le HTML du modal
+  var existing=document.getElementById('mEmersonAck');
+  if(existing)existing.remove();
+  var ttlAUD=parsed.lines.reduce(function(s,l){return s+l.totalPrice;},0);
+  // Taux à utiliser : si BC existant, conserver son tauxAUD ; sinon défaut
+  var taux=existingBC?getTauxAUD(existingBC):DEFAULT_TAUX_AUD;
+  var ttlXPF=Math.round(ttlAUD*taux);
+  var modalHtml=
+    '<div class="modal-overlay" id="mEmersonAck" style="z-index:99999">'+
+    '<div class="modal modal-lg" style="max-width:850px">'+
+      '<div class="modal-header">'+
+        '<h3>📄 Aperçu Acknowledgement Emerson — '+(mode==='update'?'<span style="color:#fbbf24">⚠ Mise à jour BC existant</span>':'<span style="color:var(--teal)">✓ Création nouveau BC</span>')+'</h3>'+
+        '<button class="modal-close" onclick="cm(\'mEmersonAck\')">✕</button>'+
+      '</div>'+
+      '<div class="modal-body">'+
+        '<div style="background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.3);border-radius:8px;padding:12px;margin-bottom:14px">'+
+          '<div style="font-size:11px;color:#38bdf8;font-weight:700;margin-bottom:6px">📋 Informations extraites du PDF</div>'+
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px">'+
+            '<div><strong style="color:var(--muted);font-size:10px">Customer PO :</strong><br><span style="color:var(--teal);font-weight:700">'+esc(parsed.customerPO||'(non détecté)')+'</span></div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Sales Order Emerson :</strong><br>'+esc(parsed.salesOrder||'-')+'</div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Date commande :</strong><br>'+esc(parsed.customerOrderDate||'-')+'</div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Sales Person :</strong><br>'+esc(parsed.salesPerson||'-')+'</div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Inquiries :</strong><br>'+esc(parsed.ackInquiries||'-')+'</div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">End User :</strong><br><span style="font-size:10.5px">'+esc(parsed.endUser||'-')+'</span></div>'+
+          '</div>'+
+        '</div>'+
+        (existingBC?
+          '<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.4);border-radius:8px;padding:11px;margin-bottom:14px;font-size:11.5px">'+
+            '<strong style="color:#fbbf24">⚠ BC déjà existant détecté : '+esc(existingBC.num)+'</strong><br>'+
+            'Statut actuel : '+esc(existingBC.status||'?')+' • Total : '+fN(existingBC.total||0)+' '+esc(existingBC.devise||'AUD')+' • Taux : '+taux.toFixed(2)+' XPF/AUD<br>'+
+            '<span style="color:var(--muted);font-size:10.5px">L\'import va ajouter le N° Sales Order Emerson, passer le statut à <strong>Confirmé</strong>, conserver le taux d\'origine pour ne pas affecter les calculs de marge, et lier ce BC à la facture en cours.</span>'+
+          '</div>':
+          '<div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.3);border-radius:8px;padding:11px;margin-bottom:14px;font-size:11.5px">'+
+            '<strong style="color:var(--teal)">✓ Aucun BC existant pour ce PO — création d\'un nouveau BC</strong><br>'+
+            '<span style="color:var(--muted);font-size:10.5px">Un nouveau BC sera créé avec ces lignes, statut <strong>Confirmé</strong>, taux par défaut <strong>'+DEFAULT_TAUX_AUD.toFixed(2)+' XPF/AUD</strong> (modifiable ensuite via la page BC), et lié à la facture en cours.</span>'+
+          '</div>'+
+          '<div style="margin-bottom:10px;font-size:11px"><strong style="color:var(--muted)">Taux AUD→XPF par défaut :</strong> <input type="number" id="ack-taux-input" value="'+DEFAULT_TAUX_AUD.toFixed(2)+'" step="0.01" style="width:80px;background:var(--bg2);color:var(--text);border:1px solid var(--border);padding:3px 6px;border-radius:4px"> XPF/AUD <span style="color:var(--muted);font-size:10px">(modifiable)</span></div>'
+        )+
+        '<h4 style="margin:10px 0 6px 0;color:var(--muted);font-size:11px">📦 '+parsed.lines.length+' ligne(s) extraite(s)</h4>'+
+        '<div style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">'+
+          '<table style="width:100%;font-size:10.5px;border-collapse:collapse">'+
+            '<thead><tr style="background:var(--bg2);position:sticky;top:0">'+
+              '<th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border)">Réf Emerson</th>'+
+              '<th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border)">Désignation</th>'+
+              '<th style="padding:6px 8px;text-align:center;border-bottom:1px solid var(--border)">Qté</th>'+
+              '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border)">PU AUD</th>'+
+              '<th style="padding:6px 8px;text-align:right;border-bottom:1px solid var(--border)">Total AUD</th>'+
+            '</tr></thead>'+
+            '<tbody>'+
+              parsed.lines.map(function(l){
+                return '<tr><td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04);font-family:monospace;font-size:9.5px">'+esc(l.ref)+'</td>'+
+                  '<td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04);max-width:280px;overflow:hidden;text-overflow:ellipsis">'+esc(l.desc||'-')+'</td>'+
+                  '<td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04);text-align:center">'+l.qty+'</td>'+
+                  '<td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04);text-align:right">'+fN(l.unitPrice)+'</td>'+
+                  '<td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04);text-align:right;font-weight:700">'+fN(l.totalPrice)+'</td></tr>';
+              }).join('')+
+            '</tbody>'+
+            '<tfoot><tr style="background:var(--bg2);font-weight:700">'+
+              '<td colspan="4" style="padding:8px;text-align:right">Total :</td>'+
+              '<td style="padding:8px;text-align:right;color:var(--teal)">'+fN(ttlAUD)+' AUD</td>'+
+            '</tr></tfoot>'+
+          '</table>'+
+        '</div>'+
+        '<div style="margin-top:10px;padding:9px;background:rgba(45,212,191,0.05);border-left:3px solid var(--teal);border-radius:4px;font-size:11px">'+
+          '<strong style="color:var(--teal)">💱 Conversion XPF</strong><br>'+
+          fN(ttlAUD)+' AUD × '+taux.toFixed(2)+' = <strong>'+fN(ttlXPF)+' XPF</strong>'+
+          (invoice?'<br><span style="color:var(--muted)">Facture liée : <strong>'+esc(invoice.num)+'</strong> ('+fN(invoice.montant)+' XPF) • Marge brute estimée : <strong style="color:'+((invoice.montant-ttlXPF)>0?'var(--green)':'#ef4444')+'">'+fN(invoice.montant-ttlXPF)+' XPF</strong></span>':'')+
+        '</div>'+
+      '</div>'+
+      '<div class="modal-footer">'+
+        '<button class="btn btn-ghost" onclick="cm(\'mEmersonAck\')">Annuler</button>'+
+        '<button class="btn btn-teal" onclick="confirmEmersonAckImport()">✓ '+(mode==='update'?'Mettre à jour le BC':'Créer le BC')+' et lier à la facture</button>'+
+      '</div>'+
+    '</div></div>';
+  document.body.insertAdjacentHTML('beforeend',modalHtml);
+  // Stocker les données pour confirmation
+  window._pendingAckImport={parsed:parsed,existingBC:existingBC,mode:mode,fileName:fileName};
+  om('mEmersonAck');
+}
+
+// Confirme l'import : crée ou met à jour le BC, le lie à la facture
+function confirmEmersonAckImport(){
+  var pending=window._pendingAckImport;
+  if(!pending){alert('Erreur interne : aucun import en attente');return;}
+  var parsed=pending.parsed;
+  var existingBC=pending.existingBC;
+  var mode=pending.mode;
+  if(!Array.isArray(DB.bcs))DB.bcs=[];
+  var newOrUpdatedBC;
+  if(mode==='update'&&existingBC){
+    // === MODE MISE À JOUR ===
+    // Conserver tauxAUD, lignes, etc. existants. Ajouter une nouvelle prop pour le Sales Order Emerson
+    // si pas déjà présente, et passer statut → Confirmé.
+    var alreadyHasSO=existingBC.props&&existingBC.props.some(function(p){
+      return (p.cref||'').indexOf(parsed.salesOrder)>=0;
+    });
+    if(!alreadyHasSO&&parsed.salesOrder){
+      var newProp={
+        num:parsed.salesOrder,
+        ver:'1',
+        amount:parsed.totalAmount||0,
+        cref:parsed.salesOrder,
+        id:'prop_ack_'+Date.now(),
+        _fromAcknowledgement:true,
+        _ackImportedAt:new Date().toISOString()
+      };
+      existingBC.props=existingBC.props||[];
+      existingBC.props.push(newProp);
+    }
+    existingBC.status='Confirmé';
+    if(parsed.ackInquiries&&!existingBC.bcNotes){
+      existingBC.bcNotes='Acknowledged by '+parsed.ackInquiries+' on '+(parsed.customerOrderDate||'(date)');
+    }
+    newOrUpdatedBC=existingBC;
+  } else {
+    // === MODE CRÉATION ===
+    var customTaux=parseFloat((document.getElementById('ack-taux-input')||{}).value)||DEFAULT_TAUX_AUD;
+    var endUserClient=parsed.endUser||'';
+    // Détection client final
+    if(/PRONY\s+RESOURCES/i.test(endUserClient))endUserClient='PRNC';
+    else if(/SOCIETE\s+LE\s+NICKEL|ERAMET-SLN/i.test(endUserClient))endUserClient='SLN';
+    var newBC={
+      id:Date.now(),
+      num:parsed.customerPO,
+      date:parsed.customerOrderDate||new Date().toISOString().slice(0,10),
+      devise:parsed.currency||'AUD',
+      tauxAUD:customTaux,
+      vcont:parsed.salesPerson||parsed.ackInquiries||'',
+      vemail:'',
+      vphone:'',
+      vaddr:'471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA',
+      inco:'Inco2020 : DDP (BANKSMEADOW)',
+      fret:'Collect',
+      status:'Confirmé',
+      clientFinal:endUserClient,
+      cref2:'',
+      props:parsed.salesOrder?[{
+        num:parsed.salesOrder,
+        ver:'1',
+        amount:parsed.totalAmount||0,
+        cref:parsed.salesOrder,
+        id:'prop_ack_'+Date.now(),
+        _fromAcknowledgement:true
+      }]:[],
+      bcNotes:'Importé depuis Acknowledgement Emerson '+(parsed.salesOrder||'')+(parsed.ackInquiries?' • Inquiries: '+parsed.ackInquiries:''),
+      discount:'0',salesTax:'0',otherTax:'0',shipping:'0',
+      devisLieId:'',
+      lines:parsed.lines.map(function(l){
+        return {
+          ref:l.ref,
+          desc:l.desc||'',
+          qte:l.qty,
+          pu:l.unitPrice,
+          propId:parsed.salesOrder?'prop_ack_'+Date.now():''
+        };
+      }),
+      total:parsed.totalAmount||0,
+      totals:{sub:parsed.totalAmount||0,disc:0,sales:0,other:0,ship:0,total:parsed.totalAmount||0},
+      linkDevis:'',linkBCclient:'',linkPOcali:'',linkBL:'',linkFacture:'',linkEmerson:'',linkCR:'',
+      _fromAcknowledgement:true,
+      _ackImportedAt:new Date().toISOString()
+    };
+    DB.bcs.push(newBC);
+    newOrUpdatedBC=newBC;
+  }
+  // === LIAISON À LA FACTURE ===
+  if(bcLinkerInvId&&typeof linkBCToInvoice==='function'){
+    linkBCToInvoice(bcLinkerInvId,newOrUpdatedBC.id);
+  }
+  saveDB();
+  cm('mEmersonAck');
+  if(typeof renderBCLinker==='function')renderBCLinker();
+  if(typeof renderBC==='function'){try{renderBC();}catch(e){}}
+  alert('✅ '+(mode==='update'?'BC mis à jour et lié à la facture':'Nouveau BC créé et lié à la facture')+'\n\n'+
+    '• N° BC : '+newOrUpdatedBC.num+'\n'+
+    '• Sales Order Emerson : '+(parsed.salesOrder||'-')+'\n'+
+    '• Statut : Confirmé\n'+
+    '• '+parsed.lines.length+' ligne(s) — Total : '+fN(parsed.totalAmount||0)+' '+parsed.currency);
+  window._pendingAckImport=null;
+}
+
 // Affiche le modal de prévisualisation avec tous les paramètres modifiables
 function showEmersonDevisPreview(emersonData,rateInfo,fileName){
   // Retirer un éventuel modal précédent
@@ -9067,6 +9486,10 @@ function renderHierarchicalRows(opts){
   var getValueXpf=opts.getValueXpf||function(x){return x.ttc||x.total||x.montant||0;};
   var renderDataRow=opts.renderDataRow;
   var emptyMsg=opts.emptyMsg||'Aucun élément';
+  // Devise affichée dans les totaux agrégés (Année, Mois, Client). Par défaut "XPF" pour les
+  // documents en monnaie locale (Devis, Factures, BL). Pour les BC Emerson, on passe "AUD"
+  // car les montants sont en AUD natif (les calculs de marge font la conversion ailleurs).
+  var currencyLabel=opts.currencyLabel||'XPF';
   if(items.length===0)return '<tr><td colspan="'+colspan+'" class="empty">'+emptyMsg+'</td></tr>';
   var st=getHgrState(type);
   // Grouper par année > mois > client
@@ -9096,7 +9519,7 @@ function renderHierarchicalRows(opts){
     var nbItemsYear=yearData.items.length;
     // Ligne Année
     html+='<tr class="hgr-year-row" onclick="toggleHgr(\''+type+'\',\''+yearKey+'\')">';
-    html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(yearExpanded?'▼':'▶')+'</span>📅 '+year+' <span style="color:var(--muted);font-weight:400">('+nbItemsYear+' éléments · '+fN(yearTotal)+' XPF)</span></td>';
+    html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(yearExpanded?'▼':'▶')+'</span>📅 '+year+' <span style="color:var(--muted);font-weight:400">('+nbItemsYear+' éléments · '+fN(yearTotal)+' '+currencyLabel+')</span></td>';
     html+='</tr>';
     if(!yearExpanded)return;
     // Tri mois (descendant : mois récent en haut)
@@ -9124,7 +9547,7 @@ function renderHierarchicalRows(opts){
         var clientTotal=clientData.items.reduce(function(s,it){return s+getValueXpf(it);},0);
         // Ligne Client
         html+='<tr class="hgr-client-row" onclick="toggleHgr(\''+type+'\',\''+cKey+'\')">';
-        html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(clientExpanded?'▼':'▶')+'</span>👤 '+esc(clientName)+' <span style="color:var(--muted);font-weight:400">('+nbItemsClient+' · '+fN(clientTotal)+' XPF)</span></td>';
+        html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(clientExpanded?'▼':'▶')+'</span>👤 '+esc(clientName)+' <span style="color:var(--muted);font-weight:400">('+nbItemsClient+' · '+fN(clientTotal)+' '+currencyLabel+')</span></td>';
         html+='</tr>';
         if(!clientExpanded)return;
         // === TRI DES LIGNES DANS UNE SECTION CLIENT ===
@@ -13104,6 +13527,10 @@ function renderBC(){
     type:'bc',
     items:data,
     colspan:9,
+    // Les BC Emerson sont en AUD natif — pas de conversion à l'agrégation pour ne pas
+    // mélanger des taux différents (chaque BC a son propre tauxAUD figé pour la marge).
+    // Si un jour des BC en USD apparaissent, prévoir une logique multi-devises.
+    currencyLabel:'AUD',
     getValueXpf:function(x){return x.total||0;},
     renderDataRow:renderBCRow,
     emptyMsg:'Aucun bon de commande'
