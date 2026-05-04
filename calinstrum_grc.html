@@ -539,6 +539,9 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <button class="tab" onclick="st('suiviTab','alertes')">🚨 Alertes</button>
   </div>
   <div class="tab-pane active" id="suiviTab-dash">
+    <!-- Onglets par client (Tous + 1 par client détecté). Filtre TOUT le dashboard :
+         KPIs, graphiques, progression, urgentes. Détection auto des clients via extractClientGroup. -->
+    <div id="suiviDashClientTabs" class="client-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
     <div class="g4" id="suivi-kpis"></div>
     <div class="g4" id="suivi-kpis-emerson" style="margin-top:8px"></div>
     <div class="g4">
@@ -3183,7 +3186,58 @@ function renderSuivi(){
   // Permet aux fonctions renderTable/renderSuviKPIs/renderCharts/etc. d'afficher
   // les bonnes données sans devoir les modifier (elles continuent de lire `invoices`).
   invoices=getSuiviSource();
-  renderSuviKPIs();renderCharts();renderTable();renderAlertes();renderProgression();renderUrgent();updateMigrationButton();
+  // Onglets clients du Dashboard (Tous/SLN/PRNC/...). Détection auto via extractClientGroup.
+  // Les onglets sont alimentés par TOUTES les invoices (avant filtrage), pour que les compteurs
+  // reflètent le nombre total de factures par client.
+  if(typeof renderClientTabs==='function'){
+    var withClient=invoices.map(function(i){
+      if(!i.client){
+        var c=(typeof detectClientFromInvoice==='function')?detectClientFromInvoice(i):'SLN';
+        return Object.assign({},i,{client:c});
+      }
+      return i;
+    });
+    renderClientTabs('suivi-dash',withClient,'suiviDashClientTabs');
+  }
+  renderSuviDashByClient();
+  renderTable();renderAlertes();updateMigrationButton();
+}
+
+// Filtre invoices selon l'onglet client actif du Dashboard, puis re-render KPIs/charts/progression/urgents.
+// Restaure la variable globale 'invoices' à la fin pour ne pas casser les autres fonctions
+// (renderTable a son propre filtre client séparé via 'suivi').
+function renderSuviDashByClient(){
+  var savedInvoices=invoices;
+  var st=(typeof getHgrState==='function')?getHgrState('suivi-dash'):{activeClient:''};
+  var activeC=st.activeClient||'';
+  // Re-render des onglets clients pour mettre à jour la classe .active sur l'onglet sélectionné
+  if(typeof renderClientTabs==='function'){
+    var withClient=savedInvoices.map(function(i){
+      if(!i.client){
+        var c=(typeof detectClientFromInvoice==='function')?detectClientFromInvoice(i):'SLN';
+        return Object.assign({},i,{client:c});
+      }
+      return i;
+    });
+    renderClientTabs('suivi-dash',withClient,'suiviDashClientTabs');
+  }
+  if(activeC){
+    // Filtrer en injectant client si manquant (legacy)
+    invoices=savedInvoices.map(function(i){
+      if(!i.client){
+        var c=(typeof detectClientFromInvoice==='function')?detectClientFromInvoice(i):'SLN';
+        return Object.assign({},i,{client:c});
+      }
+      return i;
+    }).filter(function(i){
+      var grp=(typeof extractClientGroup==='function')?extractClientGroup(i,'suivi-dash'):(i.client||'').split(' - ')[0];
+      return grp===activeC;
+    });
+  }
+  // Render avec invoices filtré
+  renderSuviKPIs();renderCharts();renderProgression();renderUrgent();
+  // Restaurer pour les autres fonctions (renderTable, etc.)
+  invoices=savedInvoices;
 }
 function renderSuviKPIs(){
   // Brut = somme de toutes les factures (peu importe phase)
@@ -3216,10 +3270,13 @@ function renderSuviKPIs(){
 
   var el=document.getElementById('suivi-kpis');
   if(!el)return;
+  // Label client dynamique (selon onglet actif). "Tous" si pas de filtre, sinon nom du client.
+  var dashState=(typeof getHgrState==='function')?getHgrState('suivi-dash'):{activeClient:''};
+  var clientLbl=dashState.activeClient||'Tous';
   el.innerHTML=
-    // Ligne 1 : flux SLN (clients)
-    '<div class="metric m-green"><div class="mlbl">💰 Encaissé SLN</div><div class="mval green">'+fN(enc)+'</div><div class="msub">'+(totalEmis>0?Math.round(enc/totalEmis*100):0)+'% des factures émises</div></div>'+
-    '<div class="metric m-amber"><div class="mlbl">⏳ À recouvrer SLN</div><div class="mval amber">'+fN(aRecouvrer)+'</div><div class="msub">'+emises.filter(function(i){return getStatus(i)!=='paid';}).length+' factures émises en attente</div></div>'+
+    // Ligne 1 : flux clients (label dynamique)
+    '<div class="metric m-green"><div class="mlbl">💰 Encaissé '+esc(clientLbl)+'</div><div class="mval green">'+fN(enc)+'</div><div class="msub">'+(totalEmis>0?Math.round(enc/totalEmis*100):0)+'% des factures émises</div></div>'+
+    '<div class="metric m-amber"><div class="mlbl">⏳ À recouvrer '+esc(clientLbl)+'</div><div class="mval amber">'+fN(aRecouvrer)+'</div><div class="msub">'+emises.filter(function(i){return getStatus(i)!=='paid';}).length+' factures émises en attente</div></div>'+
     '<div class="metric m-purple"><div class="mlbl">📦 Backlog (pré-facturé)</div><div class="mval" style="color:#a78bfa">'+fN(prebilledMnt)+'</div><div class="msub">'+prebilled.length+' factures non émises</div></div>'+
     '<div class="metric m-teal"><div class="mlbl">🎯 Total portefeuille</div><div class="mval">'+fN(totalBrut)+'</div><div class="msub">'+invoices.length+' lignes XPF (brut)</div></div>';
 
@@ -8409,9 +8466,25 @@ function importEmersonAckForBCLink(file){
       var loader=document.getElementById('emerson-ack-loader');
       if(loader)loader.remove();
       var parsed=parseEmersonAck(rawText);
-      if(!parsed.customerPO){
-        alert('❌ Impossible d\'extraire le N° de PO Calinstrum (Customer PO No) du PDF.\n\nVérifiez qu\'il s\'agit bien d\'un PDF d\'Order Acknowledgement Emerson.');
+      // === Garde 1 : PO absent OU PO suspect (label mal capturé) ===
+      // Le format Calinstrum est strict : DDMMYYYY/NNN. Si le PO ne match pas ce pattern,
+      // on rejette l'import au lieu de créer un BC bidon (cas connu : "Cust Proj Name/No:...").
+      var poStrictRe=/^\d{8}\/\d{2,3}$/;
+      if(!parsed.customerPO||!poStrictRe.test(parsed.customerPO)){
+        var detail=parsed.customerPO?
+          '\n\nValeur capturée : "'+parsed.customerPO+'" (semble être un label, pas un vrai PO)':
+          '\n\n(Aucune valeur trouvée dans le PDF)';
+        alert('❌ Impossible d\'extraire un N° de PO Calinstrum valide.\n\nLe format attendu est DDMMYYYY/NNN (ex: 29012026/081).'+detail+'\n\nVérifiez qu\'il s\'agit bien d\'un Order Acknowledgement Emerson généré pour un PO Calinstrum.');
         return;
+      }
+      // === Garde 2 : aucune ligne extraite ===
+      // Un Acknowledgement valide a forcément au moins une ligne. Si on n'extrait rien c'est
+      // que le PDF a un layout non standard ou que le parser échoue. On préfère ne rien créer
+      // plutôt qu'un BC vide qui faussera la marge.
+      if(!parsed.lines||parsed.lines.length===0){
+        if(!confirm('⚠ Aucune ligne d\'article n\'a été extraite du PDF.\n\nLe PO '+parsed.customerPO+' a été détecté mais le parser n\'a pas trouvé d\'item avec qty + prix unitaire.\n\nContinuer quand même ? (le BC sera créé sans lignes — total: '+(parsed.totalAmount||0)+' '+parsed.currency+')')){
+          return;
+        }
       }
       showEmersonAckPreview(parsed,file.name);
     })
@@ -8442,30 +8515,69 @@ function parseEmersonAck(text){
     totalAmount:0,
     currency:'AUD'
   };
-  // === Header ===
-  // Customer PO No (peut être sur plusieurs lignes : "Customer PO No:" puis valeur ligne suivante)
-  var m=text.match(/Customer\s+PO\s+No:\s*([^\n\r]+)/i);
+  // Helper : rejette les "valeurs" qui sont en fait des labels d'autres colonnes
+  // (cas où Emerson met plusieurs labels alignés sur une même ligne en page 2/3)
+  function isLabelValue(v){
+    if(!v)return true;
+    return /^(Rep|Cust|Sales|Print|Customer|Payment|Order|No$|Name)/i.test(v.trim());
+  }
+  // === Customer PO — STRATÉGIE EN CASCADE robuste ===
+  // L'ancienne regex matchait parfois "Cust Proj Name/No: Rep Order No:" sur la page 2
+  // où Emerson aligne les labels horizontalement. On utilise maintenant 4 stratégies par ordre
+  // de fiabilité décroissante.
+  // Stratégie 1 (la plus fiable) : le format CALINSTRUM est strict : DDMMYYYY/NNN
+  //   (8 chiffres, slash, 2-3 chiffres). Aucun label ne match ce pattern, donc match = succès.
+  var m=text.match(/\b(\d{8}\/\d{2,3})\b/);
   if(m)result.customerPO=m[1].trim();
-  // Format alternatif où la valeur est sur la ligne suivante
+  // Stratégie 2 : FAX_INFO en haut de chaque page (très fiable, format technique)
+  if(!result.customerPO){
+    m=text.match(/FAX_INFO:\d+:[A-Z]:([^:\n]+):/);
+    if(m){
+      var v=m[1].trim();
+      if(!isLabelValue(v))result.customerPO=v;
+    }
+  }
+  // Stratégie 3 : "Customer PO:" (forme courte sur les notes)
+  if(!result.customerPO){
+    m=text.match(/Customer\s+PO:\s*(\S+)/i);
+    if(m){
+      var v=m[1].trim();
+      if(!isLabelValue(v))result.customerPO=v;
+    }
+  }
+  // Stratégie 4 (fallback risqué) : "Customer PO No:" suivi de la valeur sur la ligne suivante,
+  // avec validation anti-label
   if(!result.customerPO){
     m=text.match(/Customer\s+PO\s+No:\s*\n\s*(\S+)/i);
-    if(m)result.customerPO=m[1].trim();
+    if(m){
+      var v=m[1].trim();
+      if(!isLabelValue(v))result.customerPO=v;
+    }
   }
-  // Tentative supplémentaire : chercher dans FAX_INFO en haut du PDF
-  if(!result.customerPO){
-    m=text.match(/FAX_INFO:\d+:[A-Z]:([^\:\n]+)/);
-    if(m)result.customerPO=m[1].trim();
-  }
-  // Sales Order No
-  m=text.match(/Sales\s+Order\s+No:\s*([^\n\r]+)/i);
+  // === Sales Order No ===
+  // Format Emerson : 4-4-8 chiffres (ex: 5221-6179-20126592). Pattern strict utilisé en priorité.
+  m=text.match(/\b(\d{4}-\d{4}-\d{8})\b/);
   if(m)result.salesOrder=m[1].trim();
   if(!result.salesOrder){
     m=text.match(/Sales\s+Order\s+No:\s*\n\s*(\S+)/i);
-    if(m)result.salesOrder=m[1].trim();
+    if(m){
+      var v=m[1].trim();
+      if(!isLabelValue(v))result.salesOrder=v;
+    }
+  }
+  if(!result.salesOrder){
+    m=text.match(/Sales\s+Order\s+No:\s*([^\n\r]+)/i);
+    if(m){
+      var v=m[1].trim();
+      if(!isLabelValue(v))result.salesOrder=v;
+    }
   }
   // Customer Order Date
   m=text.match(/Customer\s+Order\s+Date:\s*([^\n\r]+)/i);
-  if(m)result.customerOrderDate=convertEmersonDate(m[1].trim());
+  if(m){
+    var dt=convertEmersonDate(m[1].trim());
+    if(dt)result.customerOrderDate=dt;
+  }
   if(!result.customerOrderDate){
     m=text.match(/Customer\s+Order\s+Date:\s*\n\s*([^\n\r]+)/i);
     if(m)result.customerOrderDate=convertEmersonDate(m[1].trim());
@@ -9278,6 +9390,7 @@ function setHgrClient(type,clientName){
   else if(type==='bc'&&typeof renderBC==='function')renderBC();
   else if(type==='bl'&&typeof renderBL==='function')renderBL();
   else if(type==='suivi'&&typeof renderTable==='function')renderTable();
+  else if(type==='suivi-dash'&&typeof renderSuviDashByClient==='function')renderSuviDashByClient();
 }
 
 // Extrait le nom de groupe client selon le type d'item.
