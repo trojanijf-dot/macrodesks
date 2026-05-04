@@ -201,10 +201,12 @@ tr:hover td{background:rgba(255,255,255,.02)}
    - thead : se répète automatiquement en haut de chaque page                             */
 .doc-tbl tr,.doc-tbl tbody tr{page-break-inside:avoid!important;break-inside:avoid!important}
 .doc-tbl thead{display:table-header-group}
-/* fa-group : un <tbody> par "unité indivisible" (bandeau+1ère ligne, ligne+subLines KIT, etc.)
-   page-break-inside:avoid sur <tbody> est respecté par html2pdf ET par window.print de Chrome,
-   contrairement à la même règle sur <tr> qui est ignorée dans certains contextes.            */
-.doc-tbl tbody.fa-group{page-break-inside:avoid!important;break-inside:avoid!important}
+/* fa-section : un <tbody> par section complète (bandeau + lignes). page-break-inside:avoid
+   sur <tbody> est respecté par html2pdf ET par window.print de Chrome. Conséquence : si la
+   section "WI-FI TEMPERATURE" + ses 4 lignes ne tient pas sur la page courante, elle bascule
+   ENTIÈREMENT en haut de la page suivante. */
+.doc-tbl tbody.fa-section{page-break-inside:avoid!important;break-inside:avoid!important}
+.doc-tbl tbody.fa-section-loose{page-break-inside:auto;break-inside:auto}
 /* tfoot running : sous-total HT répété en bas de chaque page imprimée.
    display:table-footer-group + position:fixed/sticky non utilisé : le navigateur place
    le tfoot automatiquement en bas du dernier tbody visible, et Chrome le répète sur
@@ -13295,77 +13297,79 @@ function bDV(d){
 function bFA(f){
   var isExo=isClientExo(f.client);
   var clientDetail=getClientDetail(f.client);
-  // === CONSTRUCTION DU CORPS DE LA TABLE — STRUCTURE TBODY COHÉRENTE ===
-  // Pour empêcher les coupures de lignes entre pages PDF (html2pdf et window.print
-  // ignorent les page-break-inside:avoid sur <tr> dans certaines versions de Chrome),
-  // on regroupe chaque "unité indivisible" dans son propre <tbody class="fa-group">.
+  // === CONSTRUCTION DU CORPS DE LA TABLE — STRUCTURE SECTION-COHÉSIVE ===
+  // Stratégie : chaque SECTION COMPLÈTE (bandeau + toutes ses lignes) = 1 <tbody class="fa-section">
+  // Avec page-break-inside:avoid sur ce <tbody>, Chrome traite la section comme une unité :
+  // soit elle tient sur la page courante, soit elle bascule entièrement sur la suivante.
+  // Conséquence : si la section "WI-FI TEMPERATURE" + ses 4 lignes ne tient pas sur la page 1
+  // après les 3 sections précédentes, elle bascule entièrement en page 2 (avec son bandeau,
+  // sans coupure orpheline).
   //
-  // Une unité indivisible = soit :
-  //   - Un bandeau de section SEUL groupé avec la 1ère ligne suivante (évite bandeau orphelin)
-  //   - Une ligne principale + ses subLines KIT (toutes ensemble : pas de KIT coupé)
-  //   - Une ligne normale toute seule (insécable si 1 seule ligne)
+  // Garde-fou : si une section dépasse 12 lignes (rare), on désactive la cohésion pour cette
+  // section précise (elle peut se couper) — sinon risque que la section déborde la page entière
+  // et reste coupée silencieusement.
   //
-  // CSS associé (.fa-group{page-break-inside:avoid}) appliqué sur <tbody> est respecté
-  // par html2pdf et par window.print de Chrome.
+  // Les KIT (lignes avec subLines) restent dans le tbody de leur section et leurs subLines
+  // sont placées juste après la ligne porteuse — pas de tbody séparé pour les KITs.
   var lines=f.lines||[];
-  var groups=[];   // Array<{rowsHtml: string}>
-  var i=0;
-  while(i<lines.length){
-    var l=lines[i];
-    if(!l){i++;continue;}
-    var groupHtml='';
-    // Si c'est un bandeau de section, on le pose et on attache la PROCHAINE ligne avec lui
-    // (évite un bandeau orphelin en bas de page)
+  var sections=[];   // Array<{rowsHtml: string, lineCount: number}>
+  var currentSection=null;
+  function ensureSection(){
+    if(!currentSection){
+      currentSection={rowsHtml:'',lineCount:0};
+      sections.push(currentSection);
+    }
+    return currentSection;
+  }
+  lines.forEach(function(l){
+    if(!l)return;
     if(l.type==='header'){
+      // Nouveau bandeau de section → démarrer un nouveau tbody
       var sectionColor=l.mode==='kit'?'#3b82f6':l.mode==='task'?'#a78bfa':'#1e3a5f';
-      groupHtml+='<tr><td colspan="6" style="background:#e8eef5;color:'+sectionColor+';font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-top:1px solid #c8d1de;border-bottom:1px solid #c8d1de">'+
+      currentSection={rowsHtml:'',lineCount:0};
+      sections.push(currentSection);
+      currentSection.rowsHtml+='<tr><td colspan="6" style="background:#e8eef5;color:'+sectionColor+';font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-top:1px solid #c8d1de;border-bottom:1px solid #c8d1de">'+
         escNL(l.desc||'')+
         (l.mode==='kit'?' <span style="font-size:9px;color:#3b82f6;font-weight:600;text-transform:none;letter-spacing:0">— KIT (1 prix global)</span>':'')+
         '</td></tr>';
-      i++;
-      // Si la prochaine ligne est encore un header, on commit ce groupe seul et on continue
-      if(i<lines.length&&lines[i]&&lines[i].type==='header'){
-        groups.push({rowsHtml:groupHtml});
-        continue;
-      }
-      // Sinon attacher la prochaine ligne dans CE même groupe (ne pas incrémenter i ici, tomber dans le bloc suivant)
+      return;
     }
-    // À ce point, lines[i] est une ligne normale ou KIT principale
-    if(i<lines.length&&lines[i]&&lines[i].type!=='header'){
-      var ll=lines[i];
-      var hasSubLines=Array.isArray(ll.subLines)&&ll.subLines.length>0;
-      var tgcDisplay=(ll.tgc||0)+'%';
-      var tot=Math.round((ll.qte||0)*(ll.pu||0)*(1+(isExo?0:Number(ll.tgc)||0)/100));
-      groupHtml+='<tr>'+
-        '<td>'+(ll.ref?'<span style="font-family:monospace;font-size:10px;color:#64748b">'+esc(ll.ref)+'</span><br>':'')+escNL(ll.designation||'')+'</td>'+
-        '<td style="text-align:center">'+tgcDisplay+'</td>'+
-        '<td style="text-align:center">'+(ll.unite||'U')+'</td>'+
-        '<td style="text-align:center">'+(ll.qte||0)+'</td>'+
-        '<td style="text-align:right">'+fN(ll.pu)+'</td>'+
-        '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td>'+
-      '</tr>';
-      // Sous-lignes KIT — ATTACHÉES dans le même groupe (un KIT ne se coupe jamais)
-      if(hasSubLines){
-        ll.subLines.forEach(function(sub){
-          groupHtml+='<tr style="background:rgba(59,130,246,.04)">'+
-            '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
-              '<span style="color:#3b82f6;margin-right:4px">└</span>'+
-              (sub.ref?'<span style="font-family:monospace;font-size:9.5px;color:#64748b">'+esc(sub.ref)+'</span> — ':'')+
-              escNL(sub.designation||'')+
-            '</td>'+
-            '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
-            '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
-            '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
-            '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
-          '</tr>';
-        });
-      }
-      i++;
+    var sec=ensureSection();
+    var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
+    var tgcDisplay=(l.tgc||0)+'%';
+    var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    sec.rowsHtml+='<tr>'+
+      '<td>'+(l.ref?'<span style="font-family:monospace;font-size:10px;color:#64748b">'+esc(l.ref)+'</span><br>':'')+escNL(l.designation||'')+'</td>'+
+      '<td style="text-align:center">'+tgcDisplay+'</td>'+
+      '<td style="text-align:center">'+(l.unite||'U')+'</td>'+
+      '<td style="text-align:center">'+(l.qte||0)+'</td>'+
+      '<td style="text-align:right">'+fN(l.pu)+'</td>'+
+      '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td>'+
+    '</tr>';
+    sec.lineCount++;
+    if(hasSubLines){
+      l.subLines.forEach(function(sub){
+        sec.rowsHtml+='<tr style="background:rgba(59,130,246,.04)">'+
+          '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
+            '<span style="color:#3b82f6;margin-right:4px">└</span>'+
+            (sub.ref?'<span style="font-family:monospace;font-size:9.5px;color:#64748b">'+esc(sub.ref)+'</span> — ':'')+
+            escNL(sub.designation||'')+
+          '</td>'+
+          '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
+          '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
+          '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
+          '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
+        '</tr>';
+        sec.lineCount++;
+      });
     }
-    groups.push({rowsHtml:groupHtml});
-  }
-  // Construire le HTML : un <tbody class="fa-group"> par groupe
-  var tbodiesHtml=groups.map(function(g){return '<tbody class="fa-group">'+g.rowsHtml+'</tbody>';}).join('');
+  });
+  // Construire le HTML : un <tbody class="fa-section"> par section. Si trop long (>12 lignes),
+  // pas de classe cohésion → cette section peut se couper (garde-fou anti-débordement page).
+  var tbodiesHtml=sections.map(function(s){
+    var cls=s.lineCount<=12?'fa-section':'fa-section-loose';
+    return '<tbody class="'+cls+'">'+s.rowsHtml+'</tbody>';
+  }).join('');
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   // === ADRESSE CLIENT — règle spéciale SLN ===
   // Pour le client SLN (Société Le Nickel - ERAMET), on utilise toujours l'adresse
@@ -14419,10 +14423,16 @@ function printPreviewBC(){
       // la page suivante (Chrome respecte page-break-inside:avoid sur les conteneurs blocs).
       '.bc-prop-cohesive{page-break-inside:avoid!important;break-inside:avoid!important;}'+
       // === Factures multipages ===
-      // tbody.fa-group : chaque "unité indivisible" (bandeau+1ère ligne, ligne+subLines KIT,
-      // ou ligne seule) ne se coupe jamais entre 2 pages. page-break-inside:avoid sur <tbody>
-      // est respecté par Chrome window.print contrairement à la même règle sur <tr>.
-      '.doc-tbl tbody.fa-group{page-break-inside:avoid!important;break-inside:avoid!important;}'+
+      // tbody.fa-section : chaque section complète (bandeau + toutes ses lignes) ne se coupe
+      // jamais entre 2 pages. Si la section ne tient pas sur la page courante, elle bascule
+      // ENTIÈREMENT en haut de la page suivante. Conséquence : sous-total automatique en bas
+      // de page courante (le tfoot doc-tbl-running prend la place laissée libre).
+      // page-break-inside:avoid sur <tbody> est respecté par Chrome window.print contrairement
+      // à la même règle sur <tr>.
+      '.doc-tbl tbody.fa-section{page-break-inside:avoid!important;break-inside:avoid!important;}'+
+      // fa-section-loose : pour les sections trop longues (>12 lignes) qui doivent pouvoir
+      // se couper sinon elles débordent une page entière. Pas de cohésion forcée.
+      '.doc-tbl tbody.fa-section-loose{page-break-inside:auto!important;break-inside:auto!important;}'+
       // tfoot running : sous-total HT répété en bas de chaque page imprimée (sauf la dernière
       // qui aura le bloc total complet). Style discret en gris pour ne pas concurrencer le total.
       '.doc-tbl tfoot.doc-tbl-running{display:table-footer-group!important;}'+
