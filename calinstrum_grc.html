@@ -205,6 +205,16 @@ tr:hover td{background:rgba(255,255,255,.02)}
    page-break-inside:avoid sur <tbody> est respecté par html2pdf ET par window.print de Chrome,
    contrairement à la même règle sur <tr> qui est ignorée dans certains contextes.            */
 .doc-tbl tbody.fa-group{page-break-inside:avoid!important;break-inside:avoid!important}
+/* tfoot running : sous-total HT répété en bas de chaque page imprimée.
+   display:table-footer-group + position:fixed/sticky non utilisé : le navigateur place
+   le tfoot automatiquement en bas du dernier tbody visible, et Chrome le répète sur
+   chaque page si le tableau est multipages. Style discret (gris italic) pour ne pas
+   confondre avec le total final qui apparaît dans le bloc "doc-final-block" après. */
+.doc-tbl tfoot.doc-tbl-running{display:table-footer-group}
+.doc-tbl tfoot.doc-tbl-running td{padding:5px 8px;background:#f1f5f9;color:#475569;font-weight:600;font-size:10.5px;font-style:italic;border-top:1px solid #cbd5e1;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+/* En écran (aperçu HTML hors print), masquer le tfoot running pour ne pas qu'il
+   apparaisse au milieu du flux à côté du tbody — il n'est utile qu'à l'impression */
+@media screen{.doc-tbl tfoot.doc-tbl-running{display:none}}
 /* Bloc final (totaux + signatures + bandeau footer) toujours groupé en bas de la dernière page */
 .doc-final-block{page-break-inside:avoid;break-inside:avoid}
 .doc-totals{margin-left:auto;width:280px;border-collapse:collapse;font-size:11px}
@@ -13425,6 +13435,11 @@ function bFA(f){
     '<p style="font-size:11px;margin-bottom:8px"><strong>Facture N° :</strong> '+esc(f.num||'')+(f.dvlie?' — Devis N° '+esc(f.dvlie):'')+'</p>'+
     '<table class="doc-tbl">'+
       '<thead><tr><th>Désignation</th><th>TGC%</th><th>Unité</th><th>Quantité</th><th style="text-align:right">Prix unitaire</th><th style="text-align:right">TOTAL HT</th></tr></thead>'+
+      // Le tfoot avec display:table-footer-group est répété en bas de chaque page imprimée.
+      // Il affiche le sous-total HT cumulé (qui ne change pas par page mais ça reste utile :
+      // sur la dernière page, c'est le total final ; sur les pages intermédiaires, c'est un
+      // rappel du grand total). Marqué "doc-tbl-running" pour styling discret en gris.
+      '<tfoot class="doc-tbl-running"><tr><td colspan="5" style="text-align:right">Sous-total HT (XPF)</td><td style="text-align:right;font-weight:700">'+fN(f.ht||0)+'</td></tr></tfoot>'+
       tbodiesHtml+
     '</table>'+
     // Bloc final groupé avec page-break-inside:avoid pour qu'il reste cohérent en bas de la dernière page
@@ -14266,6 +14281,11 @@ function printPreviewBC(){
   var titleEl=document.getElementById('prvTitle');
   var docTitleStr=titleEl?titleEl.textContent:'';
   var isDevisPrint=/^Devis\s/i.test(docTitleStr);
+  // Détecter aussi les factures pour bénéficier du même système de pagination
+  // (sous-totaux par page, répétition du thead, footer fixe en bas de chaque page).
+  // Sans ce flag, les factures multipages avaient un bandeau footer qui chevauchait
+  // les dernières lignes ainsi qu'aucun sous-total intermédiaire.
+  var isFacturePrint=/^Facture\s/i.test(docTitleStr);
 
   // === Titre de la fenêtre print (= nom de fichier proposé par Chrome "Enregistrer en PDF") ===
   // Pour les devis : "DEVIS CALINSTRUM SLN-DVxxx Etalonnage / Pose de 6 transmetteurs..."
@@ -14349,13 +14369,15 @@ function printPreviewBC(){
   var printCss=
     '<style>'+
       // Marge basse @page :
-      //  - BC (isDevisPrint=false) : 22mm → réserve la zone pour le bandeau bleu fixed
-      //    (le viewport print Chrome inclut la zone marge, donc le bandeau .doc-fixed-footer
-      //    se positionne dans cette zone marge sans chevaucher le contenu de la page)
-      //  - DEVIS (isDevisPrint=true) : 10mm (était 14mm) — gain de 4mm en bas pour
-      //    rapprocher le bandeau bleu + phrase rouge italique du bord inférieur. Reste
-      //    suffisant pour que le numéro de page (@bottom-right) ne touche pas le bord.
-      (isDevisPrint?'@page{size:A4 portrait;margin:10mm 10mm 10mm 10mm;}':'@page{size:A4 portrait;margin:10mm 10mm 22mm 10mm;}')+
+      //  - DEVIS (isDevisPrint=true) : 10mm — pagination JS gère le footer par page
+      //  - FACTURE (isFacturePrint=true) : 32mm — réserve la zone pour bandeau bleu fixed +
+      //    le sous-total tfoot répété (lui-même prend ~8mm). Pourquoi 32mm : pour qu'il y ait
+      //    assez de place pour le bandeau footer (8mm) + le tfoot avec sous-total (8mm) +
+      //    une marge de respiration (16mm). Sinon le tfoot répété chevauche le bandeau.
+      //  - BC + autres : 22mm — réserve la zone pour le bandeau bleu fixed seul
+      (isDevisPrint?'@page{size:A4 portrait;margin:10mm 10mm 10mm 10mm;}':
+       isFacturePrint?'@page{size:A4 portrait;margin:10mm 10mm 32mm 10mm;}':
+       '@page{size:A4 portrait;margin:10mm 10mm 22mm 10mm;}')+
       '@page{@bottom-right{content:"Page " counter(page) " / " counter(pages);font-family:Inter,Calibri,Arial,sans-serif;font-size:9pt;color:#1e3a5f;}}'+
       'html,body{margin:0!important;padding:0!important;background:#fff!important;}'+
       'body::before,body::after{display:none!important;content:none!important;background:none!important;}'+
@@ -14396,6 +14418,17 @@ function printPreviewBC(){
       // Si la prop ne tient pas sur la fin de la page courante, elle bascule entièrement sur
       // la page suivante (Chrome respecte page-break-inside:avoid sur les conteneurs blocs).
       '.bc-prop-cohesive{page-break-inside:avoid!important;break-inside:avoid!important;}'+
+      // === Factures multipages ===
+      // tbody.fa-group : chaque "unité indivisible" (bandeau+1ère ligne, ligne+subLines KIT,
+      // ou ligne seule) ne se coupe jamais entre 2 pages. page-break-inside:avoid sur <tbody>
+      // est respecté par Chrome window.print contrairement à la même règle sur <tr>.
+      '.doc-tbl tbody.fa-group{page-break-inside:avoid!important;break-inside:avoid!important;}'+
+      // tfoot running : sous-total HT répété en bas de chaque page imprimée (sauf la dernière
+      // qui aura le bloc total complet). Style discret en gris pour ne pas concurrencer le total.
+      '.doc-tbl tfoot.doc-tbl-running{display:table-footer-group!important;}'+
+      '.doc-tbl tfoot.doc-tbl-running td{padding:5px 8px!important;background:#f1f5f9!important;color:#475569!important;font-weight:600!important;font-size:10.5px!important;font-style:italic!important;border-top:1px solid #cbd5e1!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
+      // doc-final-block : totaux + signatures + bandeau footer regroupés en bas de la dernière page
+      '.doc-final-block{page-break-inside:avoid!important;break-inside:avoid!important;}'+
       '.bc-section-cohesive{page-break-inside:avoid!important;break-inside:avoid!important;}'+
       '.bc-section-row{page-break-after:avoid!important;break-after:avoid!important;}'+
       '.bc-item-row{page-break-inside:avoid!important;break-inside:avoid!important;}'+
