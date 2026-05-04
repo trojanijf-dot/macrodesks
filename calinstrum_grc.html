@@ -12878,12 +12878,6 @@ function bindCoutReelLive(){
       el.dataset.coutReelBound='1';
     }
   });
-  // Le total BC change aussi quand on édite les lignes → on hooke également cBCtot via un MutationObserver léger sur bcTT
-  var totEl=document.getElementById('bcTT');
-  if(totEl&&!totEl.dataset.coutReelBound){
-    new MutationObserver(updateCoutReelPreview).observe(totEl,{childList:true,characterData:true,subtree:true});
-    totEl.dataset.coutReelBound='1';
-  }
   // Update du libellé pourcentage forfait
   var hint=document.getElementById('bc-frais-pct-hint');
   if(hint)hint.textContent=DEFAULT_FRAIS_PCT;
@@ -12893,8 +12887,17 @@ function bindCoutReelLive(){
 function updateCoutReelPreview(){
   var prev=document.getElementById('bc-cout-reel-preview');
   if(!prev)return;
-  var tot=cBCtot();
-  var totVal=typeof tot==='object'?tot.total:tot;
+  // Calcul direct sans appeler cBCtot() pour éviter toute boucle DOM.
+  var sub=0;
+  var flags=(typeof computeBCKitFlags==='function')?computeBCKitFlags(bcL):[];
+  (bcL||[]).forEach(function(l,i){ sub += (typeof bcLineExtended==='function')?bcLineExtended(l, flags[i]):0; });
+  var disc=parseFloat(gvg('bc-discount'))||0;
+  var sales=parseFloat(gvg('bc-sales-tax'))||0;
+  var other=parseFloat(gvg('bc-other-tax'))||0;
+  var ship=parseFloat(gvg('bc-shipping'))||0;
+  var discAmt=Math.round(sub*disc/100);
+  var salesAmt=Math.round((sub-discAmt)*sales/100);
+  var totVal=sub-discAmt+salesAmt+other+ship;
   var devise=gvg('bc-devise')||'AUD';
   var tauxStr=gvg('bc-tauxAUD');
   var taux=tauxStr===''?DEFAULT_TAUX_AUD:Number(tauxStr);
@@ -13238,6 +13241,11 @@ function cBCtot(){
   sv('bcShipAmt',ship>0?fN(ship)+' '+dv:'—');
   sv('bcTT',fN(total)+' '+dv);
   sv('bcDeviseLbl','Total Amount ('+dv+')');
+  // Si la modale BC est ouverte avec la section Coût réel, rafraîchir son preview
+  // (sans boucle : updateCoutReelPreview ne modifie que #bc-cout-reel-preview, pas #bcTT)
+  if(typeof updateCoutReelPreview==='function'){
+    try{updateCoutReelPreview();}catch(e){}
+  }
   return{sub:sub,disc:discAmt,sales:salesAmt,other:other,ship:ship,total:total};
 }
 function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;ensurePropIds();
