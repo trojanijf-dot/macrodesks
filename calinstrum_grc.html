@@ -1460,6 +1460,27 @@ tr:hover td{background:rgba(255,255,255,.02)}
         <input class="form-input" id="bc-link-cr" placeholder="Lien Drive ou référence du document">
       </div>
     </div>
+    <!-- ===== COÛT RÉEL : taux AUD + frais (réels ou forfait) ===== -->
+    <div id="bc-cout-reel-section" style="margin-top:14px;padding:14px;background:rgba(167,139,250,0.06);border:1px solid rgba(167,139,250,0.25);border-radius:8px">
+      <div style="font-weight:700;color:#a78bfa;margin-bottom:10px;font-size:12px">💰 Coût réel <span style="font-weight:400;color:var(--muted);font-size:10px">(impacte directement la marge calculée)</span></div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>💱 Taux AUD → XPF <span style="color:var(--muted);font-weight:400;font-size:10px">(par défaut 74,5)</span></label>
+          <input class="form-input" type="number" id="bc-tauxAUD" step="0.01" min="0" placeholder="74.5">
+          <div style="font-size:9.5px;color:var(--muted);margin-top:3px">À renseigner avec le taux réel après paiement Emerson pour ajuster la marge.</div>
+        </div>
+        <div class="form-group">
+          <label>📦 Frais réels XPF <span style="color:var(--muted);font-weight:400;font-size:10px">(vide = forfait <span id="bc-frais-pct-hint">20</span>% sur le coût Emerson)</span></label>
+          <input class="form-input" type="number" id="bc-fraisXPF" min="0" step="1" placeholder="ex: 1 850 000">
+          <div style="font-size:9.5px;color:var(--muted);margin-top:3px">Cumul fret international + douane + transit local + assurance + frais ACT.</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>📝 Détail / note frais <span style="color:var(--muted);font-weight:400;font-size:10px">(optionnel — ex: ventilation par poste, n° devis ACT…)</span></label>
+        <textarea class="form-textarea" id="bc-fraisNote" rows="2" placeholder="ex: Fret ACT facture 2024-XXX : 1 200 000 + douane 350 000 + manutention 50 000 + assurance 250 000"></textarea>
+      </div>
+      <div id="bc-cout-reel-preview" style="font-size:11px;padding:8px 10px;background:rgba(0,0,0,.15);border-radius:6px;color:var(--muted)"></div>
+    </div>
   </div>
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mBC')">Annuler</button>
@@ -2701,10 +2722,30 @@ function getCoutEmersonRestant(inv){
 function getMargeBrute(inv){
   return (inv.montant||0) - getCoutEmerson(inv);
 }
-// Marge nette = facture SLN - coût Emerson - frais (fret + assurance + frais locaux, 20% par défaut)
+// Frais réels d'un BC (XPF) : si bc.fraisXPF est saisi (≥ 0), on l'utilise.
+// Sinon on retombe sur le forfait par défaut (cout Emerson × DEFAULT_FRAIS_PCT%).
+function getBCFraisXPF(bc){
+  if(!bc)return 0;
+  if(bc.fraisXPF!==undefined && bc.fraisXPF!==null && bc.fraisXPF!==''){
+    var v=Number(bc.fraisXPF);
+    if(!isNaN(v) && v>=0)return v;
+  }
+  return getBCCoutXPF(bc)*(DEFAULT_FRAIS_PCT/100);
+}
+// Indique si un BC utilise des frais saisis manuellement (vs forfait 20%)
+function bcHasFraisReels(bc){
+  if(!bc)return false;
+  return bc.fraisXPF!==undefined && bc.fraisXPF!==null && bc.fraisXPF!=='' && !isNaN(Number(bc.fraisXPF)) && Number(bc.fraisXPF)>=0;
+}
+// Frais cumulés sur tous les BC liés à une facture (utilisé par getMargeNette).
+// Cohérent avec getCoutEmerson : somme par BC, sans double-comptage côté facture.
+function getFraisLies(inv){
+  return getLinkedBCs(inv).reduce(function(s,bc){return s+getBCFraisXPF(bc);},0);
+}
+// Marge nette = facture SLN - coût Emerson - frais (réels si saisis, sinon forfait 20%)
 function getMargeNette(inv){
   var cout=getCoutEmerson(inv);
-  var frais=cout*(DEFAULT_FRAIS_PCT/100);
+  var frais=getFraisLies(inv);
   return (inv.montant||0) - cout - frais;
 }
 function getMargeNettePct(inv){
@@ -3343,11 +3384,11 @@ function renderSuviKPIs(){
   var coutEmersonTotal=bcsLies.reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
   var coutEmersonPaye=bcsLies.filter(function(bc){return bc.paidEmerson;}).reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
   var coutEmersonRestant=coutEmersonTotal-coutEmersonPaye;
-  // Marge globale = recette factures liées à au moins 1 BC - coût Emerson dédupliqué
-  // Recette : on prend la facture entière (pas seulement la part déjà encaissée)
+  var fraisTotal=bcsLies.reduce(function(s,bc){return s+getBCFraisXPF(bc);},0);
+  // Marge globale = recette factures liées à au moins 1 BC - coût Emerson dédupliqué - frais
   var recetteLiee=invoices.filter(function(i){return getLinkedBCs(i).length>0;}).reduce(function(s,i){return s+(i.montant||0);},0);
   var margeBrutTotal=recetteLiee-coutEmersonTotal;
-  var margeNetteTotal=margeBrutTotal-coutEmersonTotal*(DEFAULT_FRAIS_PCT/100);
+  var margeNetteTotal=margeBrutTotal-fraisTotal;
   // Trésorerie nette = ce qu'on a vraiment encaissé moins ce qu'on a vraiment payé
   var tresoNette=enc-coutEmersonPaye;
   var nbLies=invoices.filter(function(i){return getLinkedBCs(i).length>0;}).length;
@@ -3563,7 +3604,7 @@ function renderDossiers(){
   filtered.forEach(function(d){
     var rec=d.factures.reduce(function(s,f){return s+(f.montant||0);},0);
     var cout=getBCCoutXPF(d.bc);
-    var frais=cout*(DEFAULT_FRAIS_PCT/100);
+    var frais=getBCFraisXPF(d.bc);
     var enc=d.factures.reduce(function(s,f){
       // Suit la même logique que renderSuviKPIs : paid = 100%, partial = pct, sinon 0
       var st=getStatus(f);
@@ -3583,10 +3624,14 @@ function renderDossiers(){
     if(filtered.length===0){
       kpisEl.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:14px;background:rgba(167,139,250,0.05);border:1px dashed rgba(167,139,250,0.3);border-radius:8px;color:var(--muted);font-size:11px">💡 <b>Aucun dossier</b> — un dossier apparaît dès qu\'un BC Emerson est lié à au moins 1 facture (bouton 🔗 dans Suivi → Liste).</div>';
     } else {
+      // Indicateur visuel : combien de dossiers ont des frais réels saisis vs forfait
+      var nbReels=filtered.filter(function(d){return bcHasFraisReels(d.bc);}).length;
+      var fraisLabel=nbReels===filtered.length?'📦 Frais réels':(nbReels===0?'📦 Frais '+DEFAULT_FRAIS_PCT+'%':'📦 Frais (mixte)');
+      var fraisSub=nbReels===filtered.length?('XPF · '+filtered.length+' dossiers, frais saisis'):(nbReels===0?'XPF · forfait '+DEFAULT_FRAIS_PCT+'% (fret + locaux)':'XPF · '+nbReels+' réels / '+(filtered.length-nbReels)+' forfait');
       kpisEl.innerHTML=
         '<div class="metric m-teal"><div class="mlbl">💰 Recette client</div><div class="mval">'+fN(totalRecette)+'</div><div class="msub">XPF · '+filtered.reduce(function(s,d){return s+d.factures.length;},0)+' factures</div></div>'+
         '<div class="metric m-red"><div class="mlbl">🏭 Coût Emerson</div><div class="mval red">'+fN(totalCout)+'</div><div class="msub">XPF · '+filtered.length+' BC · '+fN(totalPaye)+' déjà payés</div></div>'+
-        '<div class="metric m-amber"><div class="mlbl">📦 Frais '+DEFAULT_FRAIS_PCT+'%</div><div class="mval amber">'+fN(totalFrais)+'</div><div class="msub">XPF · fret + locaux</div></div>'+
+        '<div class="metric m-amber"><div class="mlbl">'+fraisLabel+'</div><div class="mval amber">'+fN(totalFrais)+'</div><div class="msub">'+fraisSub+'</div></div>'+
         '<div class="metric m-green"><div class="mlbl">📊 Marge nette</div><div class="mval" style="color:'+(totalMarge>=0?'var(--green)':'var(--red)')+'">'+fN(totalMarge)+'</div><div class="msub">XPF · '+pctMarge.toFixed(1)+'% · Tréso. nette : '+fN(totalTreso)+'</div></div>';
     }
   }
@@ -3601,7 +3646,8 @@ function renderDossiers(){
     var bc=d.bc;
     var rec=d.factures.reduce(function(s,f){return s+(f.montant||0);},0);
     var cout=getBCCoutXPF(bc);
-    var frais=cout*(DEFAULT_FRAIS_PCT/100);
+    var frais=getBCFraisXPF(bc);
+    var fraisReels=bcHasFraisReels(bc);
     var marge=rec-cout-frais;
     var pct=rec>0?(marge/rec*100):0;
     var enc=d.factures.reduce(function(s,f){
@@ -3633,6 +3679,13 @@ function renderDossiers(){
         '<td style="padding:5px 6px;text-align:right">'+stBadge+'</td>'+
       '</tr>';
     }).join('');
+    // Sous-label frais (réel ou forfait)
+    var fraisLabel=fraisReels?'Frais réels':'Frais '+DEFAULT_FRAIS_PCT+'%';
+    var fraisSub=fraisReels?'XPF · saisis manuellement':'XPF · forfait estimé';
+    var fraisColor=fraisReels?'#10b981':'#fbbf24';
+    var fraisBadge=fraisReels
+      ?'<span style="background:rgba(16,185,129,.12);color:#10b981;font-size:8.5px;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px" title="Frais réels saisis manuellement">RÉEL</span>'
+      :'<span style="background:rgba(251,191,36,.12);color:#fbbf24;font-size:8.5px;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px" title="Forfait par défaut '+DEFAULT_FRAIS_PCT+'%, modifiable">FORFAIT</span>';
     return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:10px">'+
       // En-tête : N°BC + statut + marge
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:10px">'+
@@ -3641,6 +3694,7 @@ function renderDossiers(){
             '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">'+esc(bc.num||'(sans n°)')+'</span>'+
             statutBadge+
             '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px" onclick="nav(\'bc\');setTimeout(function(){openBC('+bc.id+');},80);" title="Ouvrir le BC en édition">✎ Ouvrir BC</button>'+
+            '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#a78bfa;border-color:rgba(167,139,250,.3)" onclick="nav(\'bc\');setTimeout(function(){openBC('+bc.id+');setTimeout(function(){var el=document.getElementById(\'bc-cout-reel-section\');if(el)el.scrollIntoView({behavior:\'smooth\',block:\'center\'});},120);},80);" title="Modifier le taux AUD et les frais réels (fret, douane, locaux)">💰 Taux & frais</button>'+
             (bc.paidEmerson
               ?'<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#fbbf24;border-color:rgba(251,191,36,.3)" onclick="setBCPaidEmerson('+bc.id+',false)" title="Marquer non payé">↩ Marquer non payé</button>'
               :'<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#10b981;border-color:rgba(16,185,129,.3)" onclick="setBCPaidEmerson('+bc.id+',true)" title="Marquer comme payé chez Emerson">✓ Marquer payé Emerson</button>')+
@@ -3657,7 +3711,9 @@ function renderDossiers(){
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;padding:10px 12px;background:var(--bg3);border-radius:6px;margin-bottom:10px">'+
         '<div><div style="font-size:9.5px;color:var(--muted)">Recette client</div><div style="font-size:12.5px;font-weight:700">'+fN(rec)+' XPF</div></div>'+
         '<div><div style="font-size:9.5px;color:var(--muted)">Coût Emerson</div><div style="font-size:12.5px;font-weight:700">'+fN(cout)+' XPF</div><div style="font-size:9px;color:var(--muted)">'+esc(deviseTxt.trim())+'</div></div>'+
-        '<div><div style="font-size:9.5px;color:var(--muted)">Frais '+DEFAULT_FRAIS_PCT+'%</div><div style="font-size:12.5px;font-weight:700">'+fN(frais)+' XPF</div></div>'+
+        '<div><div style="font-size:9.5px;color:var(--muted)">'+fraisLabel+fraisBadge+'</div><div style="font-size:12.5px;font-weight:700;color:'+fraisColor+'">'+fN(frais)+' XPF</div>'+
+          (bc.fraisNote?'<div style="font-size:9px;color:var(--muted)" title="'+esc(bc.fraisNote)+'">📝 '+esc(bc.fraisNote.substring(0,28))+(bc.fraisNote.length>28?'…':'')+'</div>':'')+
+        '</div>'+
         '<div><div style="font-size:9.5px;color:var(--muted)">Trésorerie nette</div><div style="font-size:12.5px;font-weight:700;color:'+(treso>=0?'var(--green)':'var(--red)')+'">'+(treso>=0?'+':'')+fN(treso)+' XPF</div><div style="font-size:9px;color:var(--muted)">encaissé − payé</div></div>'+
       '</div>'+
       // Tableau des factures
@@ -12793,13 +12849,68 @@ function openBC(id){
     if(legacyCref && bcProps.length>0 && !bcProps[0].cref){bcProps[0].cref=legacyCref;}
     ensurePropIds();
     renderEmersonProps();
-    gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');sv('mBCtitle','Modifier BC — '+b.num);}
+    gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');
+    // Nouveaux champs Coût réel
+    gv('bc-tauxAUD',b.tauxAUD!==undefined&&b.tauxAUD!==null?b.tauxAUD:'');
+    gv('bc-fraisXPF',b.fraisXPF!==undefined&&b.fraisXPF!==null?b.fraisXPF:'');
+    gv('bc-fraisNote',b.fraisNote||'');
+    bindCoutReelLive();updateCoutReelPreview();
+    sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
     gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');
     bcProps=[];renderEmersonProps();
-    gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');sv('mBCtitle','Nouveau BC — Emerson');
+    gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');
+    // Nouveaux champs Coût réel : vides = utiliser défauts
+    gv('bc-tauxAUD','');gv('bc-fraisXPF','');gv('bc-fraisNote','');
+    bindCoutReelLive();updateCoutReelPreview();
+    sv('mBCtitle','Nouveau BC — Emerson');
   }
   rBClines();om('mBC');
+}
+
+// Bind les inputs Coût réel pour rafraîchir le preview à la volée (1 seule fois)
+function bindCoutReelLive(){
+  ['bc-tauxAUD','bc-fraisXPF','bc-devise'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el&&!el.dataset.coutReelBound){
+      el.addEventListener('input',updateCoutReelPreview);
+      el.addEventListener('change',updateCoutReelPreview);
+      el.dataset.coutReelBound='1';
+    }
+  });
+  // Le total BC change aussi quand on édite les lignes → on hooke également cBCtot via un MutationObserver léger sur bcTT
+  var totEl=document.getElementById('bcTT');
+  if(totEl&&!totEl.dataset.coutReelBound){
+    new MutationObserver(updateCoutReelPreview).observe(totEl,{childList:true,characterData:true,subtree:true});
+    totEl.dataset.coutReelBound='1';
+  }
+  // Update du libellé pourcentage forfait
+  var hint=document.getElementById('bc-frais-pct-hint');
+  if(hint)hint.textContent=DEFAULT_FRAIS_PCT;
+}
+
+// Met à jour le preview "Coût réel" dans la modale BC : montre coût converti, frais effectifs, marge prévisionnelle si possible
+function updateCoutReelPreview(){
+  var prev=document.getElementById('bc-cout-reel-preview');
+  if(!prev)return;
+  var tot=cBCtot();
+  var totVal=typeof tot==='object'?tot.total:tot;
+  var devise=gvg('bc-devise')||'AUD';
+  var tauxStr=gvg('bc-tauxAUD');
+  var taux=tauxStr===''?DEFAULT_TAUX_AUD:Number(tauxStr);
+  if(isNaN(taux)||taux<=0)taux=DEFAULT_TAUX_AUD;
+  var coutXPF=devise==='XPF'?totVal:(totVal*taux);
+  var fraisStr=gvg('bc-fraisXPF');
+  var fraisNum=fraisStr===''?null:Number(fraisStr);
+  var fraisXPF=(fraisNum!==null&&!isNaN(fraisNum)&&fraisNum>=0)?fraisNum:(coutXPF*DEFAULT_FRAIS_PCT/100);
+  var fraisLabel=(fraisNum!==null&&!isNaN(fraisNum)&&fraisNum>=0)?'<span style="color:#10b981;font-weight:700">RÉEL</span>':'<span style="color:#fbbf24;font-weight:700">FORFAIT '+DEFAULT_FRAIS_PCT+'%</span>';
+  var coutTotal=coutXPF+fraisXPF;
+  var html='<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">'+
+    '<div>Coût Emerson : <strong style="color:#fff">'+fN(Math.round(coutXPF))+' XPF</strong>'+(devise==='AUD'?' <span style="color:var(--muted);font-size:9.5px">('+fN(totVal)+' AUD × '+taux.toFixed(2)+')</span>':'')+'</div>'+
+    '<div>Frais : <strong style="color:#fff">'+fN(Math.round(fraisXPF))+' XPF</strong> '+fraisLabel+'</div>'+
+    '<div>Coût total chargé : <strong style="color:#fff">'+fN(Math.round(coutTotal))+' XPF</strong></div>'+
+    '</div>';
+  prev.innerHTML=html;
 }
 
 // Migration rétrocompat : pour les items en mode Kit avec textarea multi-lignes,
@@ -13129,7 +13240,17 @@ function cBCtot(){
   sv('bcDeviseLbl','Total Amount ('+dv+')');
   return{sub:sub,disc:discAmt,sales:salesAmt,other:other,ship:ship,total:total};
 }
-function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;ensurePropIds();return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr')};}
+function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;ensurePropIds();
+  // Lire les nouveaux champs Coût réel (taux + frais)
+  var tauxStr=gvg('bc-tauxAUD');
+  var tauxNum=tauxStr===''?null:Number(tauxStr);
+  var fraisStr=gvg('bc-fraisXPF');
+  var fraisNum=fraisStr===''?null:Number(fraisStr);
+  return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
+  tauxAUD:(tauxNum!==null&&!isNaN(tauxNum)&&tauxNum>0)?tauxNum:undefined,
+  fraisXPF:(fraisNum!==null&&!isNaN(fraisNum)&&fraisNum>=0)?fraisNum:undefined,
+  fraisNote:gvg('bc-fraisNote')||''
+  };}
 function populateBCDevisSelect(){
   var sel=document.getElementById('bc-devis-lie');
   if(!sel)return;
