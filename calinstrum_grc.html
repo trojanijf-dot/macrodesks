@@ -8482,7 +8482,7 @@ function importEmersonAckForBCLink(file){
       // que le PDF a un layout non standard ou que le parser échoue. On préfère ne rien créer
       // plutôt qu'un BC vide qui faussera la marge.
       if(!parsed.lines||parsed.lines.length===0){
-        if(!confirm('⚠ Aucune ligne d\'article n\'a été extraite du PDF.\n\nLe PO '+parsed.customerPO+' a été détecté mais le parser n\'a pas trouvé d\'item avec qty + prix unitaire.\n\nContinuer quand même ? (le BC sera créé sans lignes — total: '+(parsed.totalAmount||0)+' '+parsed.currency+')')){
+        if(!confirm('⚠ Aucune ligne d\'article n\'a été extraite du PDF.\n\nLe PO '+parsed.customerPO+' a été détecté mais le parser n\'a pas trouvé d\'item avec qty + prix unitaire.\n\nContinuer quand même ? (le BC sera créé sans lignes — subtotal: '+(parsed.subtotalAmount||parsed.totalAmount||0)+' '+parsed.currency+')')){
           return;
         }
       }
@@ -8510,157 +8510,148 @@ function parseEmersonAck(text){
     salesPerson:'',
     ackInquiries:'',
     endUser:'',
+    endUserCode:'',  // 'PRNC' / 'SLN' / '' — détecté par mot-clé
     shipTo:'',
     lines:[],
-    totalAmount:0,
+    subtotalAmount:0,  // Hors GST — utilisé comme coût Emerson (cohérent avec import DDP/CEVA)
+    totalAmount:0,     // Avec GST — info indicative
     currency:'AUD'
   };
-  // Helper : rejette les "valeurs" qui sont en fait des labels d'autres colonnes
-  // (cas où Emerson met plusieurs labels alignés sur une même ligne en page 2/3)
-  function isLabelValue(v){
-    if(!v)return true;
-    return /^(Rep|Cust|Sales|Print|Customer|Payment|Order|No$|Name)/i.test(v.trim());
-  }
-  // === Customer PO — STRATÉGIE EN CASCADE robuste ===
-  // L'ancienne regex matchait parfois "Cust Proj Name/No: Rep Order No:" sur la page 2
-  // où Emerson aligne les labels horizontalement. On utilise maintenant 4 stratégies par ordre
-  // de fiabilité décroissante.
-  // Stratégie 1 (la plus fiable) : le format CALINSTRUM est strict : DDMMYYYY/NNN
-  //   (8 chiffres, slash, 2-3 chiffres). Aucun label ne match ce pattern, donc match = succès.
+  // === Customer PO — pattern strict CALINSTRUM "DDMMYYYY/NNN" en priorité ===
+  // Ce format est unique et ne peut pas matcher un libellé de tableau (cas du bug précédent
+  // où "Cust Proj Name/No: Rep Order No:" était capturé sur la page 2).
   var m=text.match(/\b(\d{8}\/\d{2,3})\b/);
   if(m)result.customerPO=m[1].trim();
-  // Stratégie 2 : FAX_INFO en haut de chaque page (très fiable, format technique)
+  // Fallback FAX_INFO header (très fiable, format technique en haut de chaque page)
   if(!result.customerPO){
     m=text.match(/FAX_INFO:\d+:[A-Z]:([^:\n]+):/);
     if(m){
       var v=m[1].trim();
-      if(!isLabelValue(v))result.customerPO=v;
+      if(/^\d{8}\/\d{2,3}$/.test(v))result.customerPO=v;
     }
   }
-  // Stratégie 3 : "Customer PO:" (forme courte sur les notes)
-  if(!result.customerPO){
-    m=text.match(/Customer\s+PO:\s*(\S+)/i);
-    if(m){
-      var v=m[1].trim();
-      if(!isLabelValue(v))result.customerPO=v;
-    }
-  }
-  // Stratégie 4 (fallback risqué) : "Customer PO No:" suivi de la valeur sur la ligne suivante,
-  // avec validation anti-label
-  if(!result.customerPO){
-    m=text.match(/Customer\s+PO\s+No:\s*\n\s*(\S+)/i);
-    if(m){
-      var v=m[1].trim();
-      if(!isLabelValue(v))result.customerPO=v;
-    }
-  }
-  // === Sales Order No ===
-  // Format Emerson : 4-4-8 chiffres (ex: 5221-6179-20126592). Pattern strict utilisé en priorité.
+  // === Sales Order — pattern strict Emerson 4-4-8 ===
   m=text.match(/\b(\d{4}-\d{4}-\d{8})\b/);
   if(m)result.salesOrder=m[1].trim();
-  if(!result.salesOrder){
-    m=text.match(/Sales\s+Order\s+No:\s*\n\s*(\S+)/i);
-    if(m){
-      var v=m[1].trim();
-      if(!isLabelValue(v))result.salesOrder=v;
-    }
+  // === Customer Order Date ===
+  // pdf.js extrait parfois la date sur une ligne séparée du label, parfois sur la même.
+  // Stratégie : trouver TOUS les patterns "DD-MMM-YYYY" du document, et prendre :
+  //   - le 2ème (le 1er = Print Date qui est listé avant Customer Order Date dans le PDF)
+  //   - sinon le 1er en fallback
+  var monthMap={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+  var allDates=[];
+  var dateRe=/\b(\d{1,2})[\s-]+([A-Z]{3})[\s-]+(\d{4})\b/g;
+  var dm;
+  while((dm=dateRe.exec(text))!==null){allDates.push(dm);}
+  if(allDates.length>0){
+    var pickIdx=allDates.length>=2?1:0;
+    var d=allDates[pickIdx];
+    var mon=monthMap[d[2].toUpperCase()];
+    if(mon)result.customerOrderDate=d[3]+'-'+mon+'-'+d[1].padStart(2,'0');
   }
-  if(!result.salesOrder){
-    m=text.match(/Sales\s+Order\s+No:\s*([^\n\r]+)/i);
-    if(m){
-      var v=m[1].trim();
-      if(!isLabelValue(v))result.salesOrder=v;
-    }
-  }
-  // Customer Order Date
-  m=text.match(/Customer\s+Order\s+Date:\s*([^\n\r]+)/i);
-  if(m){
-    var dt=convertEmersonDate(m[1].trim());
-    if(dt)result.customerOrderDate=dt;
-  }
-  if(!result.customerOrderDate){
-    m=text.match(/Customer\s+Order\s+Date:\s*\n\s*([^\n\r]+)/i);
-    if(m)result.customerOrderDate=convertEmersonDate(m[1].trim());
-  }
-  // Sales Person
+  // === Sales Person ===
   m=text.match(/Sales\s+Person:\s*([^\n\r]+)/i);
   if(m)result.salesPerson=m[1].trim();
-  // Acknowledgement Inquiries
+  // === Acknowledgement Inquiries ===
+  // Couper la valeur sur les labels collés (Customer/Buyer, Tel:, etc.) car pdf.js
+  // peut linéariser plusieurs colonnes sur la même ligne Y.
   m=text.match(/Acknowledgement\s+Inquiries:\s*([^\n\r]+)/i);
-  if(m)result.ackInquiries=m[1].trim();
-  // End User : ligne après "End User:" jusqu'à "ABN:" ou "Ultimate Dest:"
-  m=text.match(/End\s+User:[^\n]*\n([\s\S]+?)(?=ABN:|Ultimate Dest:|Ship\s+To:|$)/i);
-  if(m)result.endUser=m[1].trim().replace(/\n+/g,' ').replace(/\s+/g,' ').substring(0,150);
-  // Currency : Total (XXX) ou Subtotal (AUD)
-  m=text.match(/Subtotal\s*\((\w+)\)/i);
-  if(m)result.currency=m[1].toUpperCase();
-  // Total Amount
-  m=text.match(/Total\s*\((\w+)\):\s*([\d,]+\.?\d*)/i);
+  if(m){
+    var v=m[1].trim();
+    v=v.split(/\s*(?:Customer\/Buyer|Tel:|Fax:|E-mail|Sales\s+Person)/i)[0].trim();
+    result.ackInquiries=v;
+  }
+  // === End User — détection par mot-clé robuste ===
+  // Le PDF a 3 colonnes côte-à-côte (Bill To / Sold To / End User) avec leurs adresses
+  // empilées dessous. pdf.js linéarise ce qui rend impossible de simplement "lire entre
+  // End User et la prochaine section". Solution : chercher des marqueurs identifiants.
+  if(/PRONY\s+RESOURCES/i.test(text)){
+    result.endUserCode='PRNC';
+    var pm=text.match(/(PRONY\s+RESOURCES[^\n]*)/i);
+    if(pm)result.endUser=pm[1].trim();
+  } else if(/ERAMET[\s-]+SLN|Soci[ée]t[ée]\s+Le\s+Nickel/i.test(text)){
+    result.endUserCode='SLN';
+    var sm=text.match(/((?:ERAMET[\s-]+SLN|Soci[ée]t[ée][^\n]*Nickel)[^\n]*)/i);
+    if(sm)result.endUser=sm[1].trim();
+  }
+  // === Subtotal (coût hors GST = vrai coût Emerson pour Calinstrum) ===
+  m=text.match(/Subtotal\s*\((\w+)\):\s*([\d,]+\.?\d*)/i);
   if(m){
     result.currency=m[1].toUpperCase();
-    result.totalAmount=parseFloat(m[2].replace(/,/g,''))||0;
+    result.subtotalAmount=parseFloat(m[2].replace(/,/g,''))||0;
   }
-  if(!result.totalAmount){
-    m=text.match(/Subtotal\s*\(\w+\):\s*([\d,]+\.?\d*)/i);
-    if(m)result.totalAmount=parseFloat(m[1].replace(/,/g,''))||0;
+  // === Total avec GST (info indicative, pas utilisé pour la marge) ===
+  // Lookbehind négatif (?<![Ss]ub) pour éviter de matcher "Subtotal".
+  m=text.match(/(^|[^a-zA-Z])Total\s*\((\w+)\):\s*([\d,]+\.?\d*)/i);
+  if(m){
+    if(!result.currency)result.currency=m[2].toUpperCase();
+    result.totalAmount=parseFloat(m[3].replace(/,/g,''))||0;
   }
-  // === Lignes : pattern "Cust Line No / Order Line / Description / Qty / Unit Price / Total Amount" ===
-  // Format dans le PDF : chaque ligne commence par un numéro Cust Line, puis des info, et se termine par
-  // qty / unit price / total amount sur la même ligne ou regroupée.
-  // Exemple : "1 1.1.1 214CTKSST1DUE0360SLE1UAE060XA Rosemount 214C Temperature Sensor ... 2 1,420.00 2,840.00"
-  // On cherche : (refnum)(qty) (unitprice) (totalprice) à la fin de chaque bloc.
-  // Approche : split par "Cust Line" sections puis parse chaque section.
-  // Pattern plus robuste : chercher des refs Emerson (alphanumériques avec tirets) suivies plus tard
-  // par 3 nombres (qty, unit, total).
-  // Approche 1 : capture sur les lignes contenant ref puis qty + 2 prix
-  var lineRe=/^(\d+)\s+([\d\.]+)\s+([A-Z0-9][-A-Z0-9]+)\s+/i;
-  var lines=text.split('\n');
-  var currentLine=null;
-  for(var i=0;i<lines.length;i++){
-    var ln=lines[i].trim();
-    // Détection d'une nouvelle ligne d'item : "1 1.1.1 RefABC..." (description optionnelle car parfois sur ligne suivante)
-    var hdr=ln.match(/^(\d+)\s+([\d\.]+)\s+([A-Z0-9][-A-Z0-9]{3,})\s*(.*)$/);
-    if(hdr){
-      // Push l'ancien si existe
-      if(currentLine&&currentLine.ref)result.lines.push(currentLine);
-      currentLine={
-        custLineNo:hdr[1],
-        orderLine:hdr[2],
-        ref:hdr[3],
-        desc:hdr[4]||'',
+  // Si pas de subtotal mais total → fallback (PDF sans GST)
+  if(!result.subtotalAmount&&result.totalAmount){
+    result.subtotalAmount=result.totalAmount;
+  }
+  // === Lignes du tableau — parsing en 2 étapes pour gérer les 2 formats ===
+  // Format A (PDF compact) : "1 1.1.1 REF QTY PU.dd TOT.dd" sur une seule ligne (cas 02012026/079)
+  // Format B (PDF étendu) : header sur ligne 1, prix sur ligne ultérieure (cas 29012026/081)
+  var hdrRe=/^(\d+)\s+([\d\.]+)\s+([A-Z0-9][-A-Z0-9]{3,})\s*(.*)$/i;
+  var priceTailRe=/^(.*?)\s*(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/;
+  var pricelineRe=/^(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/;
+  // Skip lines = bruit non pertinent (Tag, Configuration, NAME, Emerson address...)
+  var skipRe=/^(Page\s+\d|Form:|Copyright|Thank|FAX_INFO|Tel:|Fax:|This order|Online Status|All Invoices|Customer PO:|Emerson SO|Order Note|Expected Ship|Shipping Terms|Freight Terms|UOM:|US ECCN|HTS\/HS|Ship Method|Assemble To|Tag(\s+Configuration)?$|PERM|Configuration|NAME\s*:|WIRE\s*:|Transit Time|GST%|Emerson\s+Process|MOUNTAIN\s+HIGHWAY|BAYSWATER|VICTORIA|AUSTRALIA|Subtotal|Total\s*\(|---PAGE|Customer\/Buyers|Customer\s+Contact|ABN:|Bill\s+To:|Sold\s+To:|End\s+User:|Ship\s+To:|Ultimate\s+Dest)/i;
+  var rawLines=text.split('\n');
+  var cur=null;
+  for(var i=0;i<rawLines.length;i++){
+    var ln=rawLines[i].trim();
+    if(!ln)continue;
+    var h=ln.match(hdrRe);
+    if(h){
+      if(cur&&cur.ref)result.lines.push(cur);
+      cur={
+        custLineNo:h[1],
+        orderLine:h[2],
+        ref:h[3],
+        desc:'',
         qty:0,
         unitPrice:0,
-        totalPrice:0,
-        rawText:ln
+        totalPrice:0
       };
+      var rest=(h[4]||'').trim();
+      if(rest){
+        // Vérifier si la fin contient le pattern prix (Format A)
+        var pm=rest.match(priceTailRe);
+        if(pm){
+          cur.desc=pm[1].trim();
+          cur.qty=parseInt(pm[2],10)||0;
+          cur.unitPrice=parseFloat(pm[3].replace(/,/g,''))||0;
+          cur.totalPrice=parseFloat(pm[4].replace(/,/g,''))||0;
+        } else {
+          cur.desc=rest;
+        }
+      }
       continue;
     }
-    if(currentLine){
-      // Chercher "qty unit_price total_price" en fin de ligne (ex: "2 1,420.00 2,840.00")
-      var priceMatch=ln.match(/(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
-      if(priceMatch&&!currentLine.qty){
-        currentLine.qty=parseInt(priceMatch[1],10)||1;
-        currentLine.unitPrice=parseFloat(priceMatch[2].replace(/,/g,''))||0;
-        currentLine.totalPrice=parseFloat(priceMatch[3].replace(/,/g,''))||0;
-        continue;
+    if(cur){
+      // Format B : prix sur ligne séparée (uniquement si pas encore extrait)
+      if(!cur.qty){
+        var plm=ln.match(pricelineRe);
+        if(plm){
+          cur.qty=parseInt(plm[1],10)||0;
+          cur.unitPrice=parseFloat(plm[2].replace(/,/g,''))||0;
+          cur.totalPrice=parseFloat(plm[3].replace(/,/g,''))||0;
+          continue;
+        }
       }
-      // Chercher juste un pattern Qty + UnitPrice + Total seul (parfois sur leur propre ligne)
-      var altPriceMatch=ln.match(/^(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/);
-      if(altPriceMatch&&!currentLine.qty){
-        currentLine.qty=parseInt(altPriceMatch[1],10)||1;
-        currentLine.unitPrice=parseFloat(altPriceMatch[2].replace(/,/g,''))||0;
-        currentLine.totalPrice=parseFloat(altPriceMatch[3].replace(/,/g,''))||0;
-        continue;
-      }
-      // Sinon enrichir la description (sauf si c'est du blabla legal/footer)
-      if(ln.length>3&&ln.length<200&&!/^Page\s+\d|Form:|Copyright|Thank\s+you|FAX_INFO|Tel:|Fax:|^This order|^Online Status|^All Invoices|^Customer PO:|^Emerson SO|^Customer\/|^Order Note/i.test(ln)){
-        if(!currentLine.desc)currentLine.desc=ln;
-        else if(currentLine.desc.length<100&&ln.length<60)currentLine.desc+=' '+ln;
+      // Enrichir la description SEULEMENT tant qu'on n'a pas encore les prix
+      // (sinon on chope du parasite après l'item).
+      if(cur.qty===0&&ln.length>3&&ln.length<200&&!skipRe.test(ln)){
+        if(!cur.desc)cur.desc=ln;
+        else if(cur.desc.length<100&&ln.length<60)cur.desc+=' '+ln;
       }
     }
   }
-  if(currentLine&&currentLine.ref)result.lines.push(currentLine);
-  // Filter : éliminer les "lignes" qui sont en réalité du blabla terms&conditions
+  if(cur&&cur.ref)result.lines.push(cur);
+  // Filter : qty>0 ET unitPrice>0 (élimine les Assemble To à 0)
   result.lines=result.lines.filter(function(l){
     return l.ref&&l.qty>0&&l.unitPrice>0;
   });
@@ -8714,7 +8705,9 @@ function showEmersonAckPreview(parsed,fileName){
             '<div><strong style="color:var(--muted);font-size:10px">Date commande :</strong><br>'+esc(parsed.customerOrderDate||'-')+'</div>'+
             '<div><strong style="color:var(--muted);font-size:10px">Sales Person :</strong><br>'+esc(parsed.salesPerson||'-')+'</div>'+
             '<div><strong style="color:var(--muted);font-size:10px">Inquiries :</strong><br>'+esc(parsed.ackInquiries||'-')+'</div>'+
-            '<div><strong style="color:var(--muted);font-size:10px">End User :</strong><br><span style="font-size:10.5px">'+esc(parsed.endUser||'-')+'</span></div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">End User :</strong><br>'+
+              (parsed.endUserCode?'<span style="display:inline-block;background:rgba(45,212,191,0.15);color:var(--teal);padding:1px 7px;border-radius:3px;font-size:10px;font-weight:700;margin-right:6px">'+esc(parsed.endUserCode)+'</span>':'')+
+              '<span style="font-size:10.5px">'+esc(parsed.endUser||'-')+'</span></div>'+
           '</div>'+
         '</div>'+
         (existingBC?
@@ -8791,7 +8784,7 @@ function confirmEmersonAckImport(){
       var newProp={
         num:parsed.salesOrder,
         ver:'1',
-        amount:parsed.totalAmount||0,
+        amount:parsed.subtotalAmount||parsed.totalAmount||0,
         cref:parsed.salesOrder,
         id:'prop_ack_'+Date.now(),
         _fromAcknowledgement:true,
@@ -8830,12 +8823,12 @@ function confirmEmersonAckImport(){
       props:parsed.salesOrder?[{
         num:parsed.salesOrder,
         ver:'1',
-        amount:parsed.totalAmount||0,
+        amount:parsed.subtotalAmount||parsed.totalAmount||0,
         cref:parsed.salesOrder,
         id:'prop_ack_'+Date.now(),
         _fromAcknowledgement:true
       }]:[],
-      bcNotes:'Importé depuis Acknowledgement Emerson '+(parsed.salesOrder||'')+(parsed.ackInquiries?' • Inquiries: '+parsed.ackInquiries:''),
+      bcNotes:'Importé depuis Acknowledgement Emerson '+(parsed.salesOrder||'')+(parsed.ackInquiries?' • Inquiries: '+parsed.ackInquiries:'')+(parsed.totalAmount&&parsed.totalAmount!==parsed.subtotalAmount?' • Total avec GST: '+fN(parsed.totalAmount)+' '+parsed.currency:''),
       discount:'0',salesTax:'0',otherTax:'0',shipping:'0',
       devisLieId:'',
       lines:parsed.lines.map(function(l){
@@ -8847,8 +8840,9 @@ function confirmEmersonAckImport(){
           propId:parsed.salesOrder?'prop_ack_'+Date.now():''
         };
       }),
-      total:parsed.totalAmount||0,
-      totals:{sub:parsed.totalAmount||0,disc:0,sales:0,other:0,ship:0,total:parsed.totalAmount||0},
+      // Total = Subtotal hors GST (= coût Emerson réel pour Calinstrum, GST récupéré ou export DDP/CEVA)
+      total:parsed.subtotalAmount||parsed.totalAmount||0,
+      totals:{sub:parsed.subtotalAmount||parsed.totalAmount||0,disc:0,sales:0,other:0,ship:0,total:parsed.subtotalAmount||parsed.totalAmount||0},
       linkDevis:'',linkBCclient:'',linkPOcali:'',linkBL:'',linkFacture:'',linkEmerson:'',linkCR:'',
       _fromAcknowledgement:true,
       _ackImportedAt:new Date().toISOString()
@@ -8868,7 +8862,8 @@ function confirmEmersonAckImport(){
     '• N° BC : '+newOrUpdatedBC.num+'\n'+
     '• Sales Order Emerson : '+(parsed.salesOrder||'-')+'\n'+
     '• Statut : Confirmé\n'+
-    '• '+parsed.lines.length+' ligne(s) — Total : '+fN(parsed.totalAmount||0)+' '+parsed.currency);
+    '• '+parsed.lines.length+' ligne(s) — Subtotal : '+fN(parsed.subtotalAmount||0)+' '+parsed.currency+
+    (parsed.totalAmount&&parsed.totalAmount!==parsed.subtotalAmount?' (Total avec GST: '+fN(parsed.totalAmount)+' '+parsed.currency+')':''));
   window._pendingAckImport=null;
 }
 
