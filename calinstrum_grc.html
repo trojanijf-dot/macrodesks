@@ -550,6 +550,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div class="card mt8"><div class="ctitle">🚨 Factures urgentes</div><div id="urgent-list"></div></div>
   </div>
   <div class="tab-pane" id="suiviTab-liste">
+    <!-- Onglets par client (Tous + 1 par client). Compteurs reflètent le nombre de factures
+         filtrées par les filtres status/type/recherche actifs. Le drag-and-drop permet de
+         réorganiser l'ordre des onglets (mémorisé dans localStorage sous _clientTabsOrder_suivi). -->
+    <div id="suiviClientTabs" class="client-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
       <button class="filter-btn active" onclick="setFilter('all',this)">Toutes <span class="filter-count" id="cnt-all"></span></button>
       <button class="filter-btn" onclick="setFilter('paid',this)">✓ Payées <span class="filter-count" id="cnt-paid"></span></button>
@@ -3390,18 +3394,41 @@ function renderTable(){
   // Mettre à jour les compteurs des badges de filtres avec les valeurs actuelles
   updateFilterCounts();
   var search=(gvg('search-input')||'').toLowerCase();
-  var data=invoices.filter(function(i){
-    var st=getStatus(i);
-    // Filtre statut spécial "prebilled" (Backlog) : phase opérationnelle pas encore livrée/reçue
-    if(activeFilter==='prebilled'){if(!isPrebilled(i))return false;}
-    else if(activeFilter!=='all'&&st!==activeFilter)return false;
-    if(activeTypeFilter!=='all'){
-      var typ=i.type||'Fourniture'; // défaut pour entrées legacy sans type
-      if(typ!==activeTypeFilter) return false;
+  // === ÉTAPE 1 : Construire la source avec champ "client" garanti ===
+  // Les anciennes invoices peuvent ne pas avoir de champ client → on le détecte via PO/intitulé.
+  // C'est la source utilisée pour les compteurs d'onglets clients (avant filtre client mais
+  // APRÈS filtres status/type/recherche, pour que les compteurs reflètent ce qu'on voit).
+  var sourceWithClient=invoices.map(function(i){
+    if(!i.client){
+      var c=(typeof detectClientFromInvoice==='function')?detectClientFromInvoice(i):'SLN';
+      return Object.assign({},i,{client:c});
     }
-    if(search&&JSON.stringify(i).toLowerCase().indexOf(search)<0)return false;
-    return true;
+    return i;
   });
+  // === ÉTAPE 2 : Appliquer filtres status / type / recherche (PAS le filtre client) ===
+  // Cette source filtrée alimente à la fois les compteurs d'onglets clients ET le tableau.
+  function applyStatusTypeSearch(arr){
+    return arr.filter(function(i){
+      var st=getStatus(i);
+      if(activeFilter==='prebilled'){if(!isPrebilled(i))return false;}
+      else if(activeFilter!=='all'&&st!==activeFilter)return false;
+      if(activeTypeFilter!=='all'){
+        var typ=i.type||'Fourniture';
+        if(typ!==activeTypeFilter) return false;
+      }
+      if(search&&JSON.stringify(i).toLowerCase().indexOf(search)<0)return false;
+      return true;
+    });
+  }
+  var afterStatusType=applyStatusTypeSearch(sourceWithClient);
+  // === ÉTAPE 3 : Onglets clients alimentés par afterStatusType ===
+  // Le compteur "Tous" affiche le total après filtres status/type/recherche
+  // Les compteurs par client affichent le sous-ensemble par client
+  if(typeof renderClientTabs==='function'){
+    renderClientTabs('suivi',afterStatusType,'suiviClientTabs');
+  }
+  // === ÉTAPE 4 : Appliquer le filtre client actif ===
+  var data=(typeof filterByActiveClient==='function')?filterByActiveClient(afterStatusType,'suivi'):afterStatusType;
   data.sort(function(a,b){
     var va,vb;
     if(currentSortKey==='montant'){va=a.montant;vb=b.montant;}
@@ -8809,6 +8836,7 @@ function setHgrClient(type,clientName){
   else if(type==='fa'&&typeof renderFA==='function')renderFA();
   else if(type==='bc'&&typeof renderBC==='function')renderBC();
   else if(type==='bl'&&typeof renderBL==='function')renderBL();
+  else if(type==='suivi'&&typeof renderTable==='function')renderTable();
 }
 
 // Extrait le nom de groupe client selon le type d'item.
