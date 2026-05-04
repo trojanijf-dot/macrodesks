@@ -2638,7 +2638,7 @@ function setSUIVIPhase(id,newPhase){
 // Le taux AUD→XPF est stocké sur chaque BC (bc.tauxAUD), avec un défaut de 74,5
 
 var DEFAULT_TAUX_AUD=74.5; // 1 AUD ≈ 74,5 XPF (taux de change CALINSTRUM par défaut)
-var DEFAULT_FRAIS_PCT=15;  // 15% de frais douane/transport par défaut sur le coût Emerson
+var DEFAULT_FRAIS_PCT=20;  // 20% de frais (fret + assurance + frais locaux) par défaut sur le coût Emerson
 
 function getTauxAUD(bc){
   return Number(bc&&bc.tauxAUD)||DEFAULT_TAUX_AUD;
@@ -2669,11 +2669,11 @@ function getCoutEmersonPaye(inv){
 function getCoutEmersonRestant(inv){
   return getLinkedBCs(inv).filter(function(b){return !b.paidEmerson;}).reduce(function(s,b){return s+getBCCoutXPF(b);},0);
 }
-// Marge brute = facture SLN - coût Emerson (sans frais douane/transport)
+// Marge brute = facture SLN - coût Emerson (sans frais fret/assurance/locaux)
 function getMargeBrute(inv){
   return (inv.montant||0) - getCoutEmerson(inv);
 }
-// Marge nette = facture SLN - coût Emerson - frais douane/transport (15% par défaut)
+// Marge nette = facture SLN - coût Emerson - frais (fret + assurance + frais locaux, 20% par défaut)
 function getMargeNette(inv){
   var cout=getCoutEmerson(inv);
   var frais=cout*(DEFAULT_FRAIS_PCT/100);
