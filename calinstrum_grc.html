@@ -1301,9 +1301,11 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <!-- Bouton import Acknowledgement Emerson : parse un PDF Order Acknowledgement et auto-détecte
          si le BC existe déjà (par N° PO Calinstrum) pour mettre à jour, sinon en crée un nouveau.
          Le BC créé/mis à jour est automatiquement lié à la facture en cours. -->
-    <div style="margin-bottom:10px">
-      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('bclink-emerson-ack-file').click()" style="border-color:rgba(56,189,248,.5);color:#38bdf8;font-weight:700" title="Importer un PDF d'Order Acknowledgement Emerson. Auto-détection : si le N° PO Calinstrum existe déjà comme BC, met à jour ; sinon crée un nouveau BC. Le BC est automatiquement lié à cette facture.">📄 Importer Acknowledgement Emerson (PDF)</button>
+    <div style="margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('bclink-emerson-ack-file').click()" style="border-color:rgba(56,189,248,.5);color:#38bdf8;font-weight:700" title="Importer un PDF d'Order Acknowledgement Emerson (commande confirmée). Auto-détection : si le N° PO existe déjà, met à jour le BC ; sinon en crée un nouveau. Le BC est automatiquement lié à la facture en cours.">📄 Acknowledgement (PDF)</button>
       <input type="file" id="bclink-emerson-ack-file" accept="application/pdf" style="display:none" onchange="importEmersonAckForBCLink(this.files[0])">
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('bclink-emerson-inv-file').click()" style="border-color:rgba(167,139,250,.5);color:#a78bfa;font-weight:700" title="Importer un PDF de Tax Invoice Emerson (facture finale). Met à jour le BC existant avec les VRAIES valeurs facturées (Subtotal, Invoice No, Invoice Date, Due Date, Ship Date, Tracking) et passe le statut à 'Facturé Emerson'. Affiche le diff vs le BC actuel pour validation.">📋 Tax Invoice (PDF)</button>
+      <input type="file" id="bclink-emerson-inv-file" accept="application/pdf" style="display:none" onchange="importEmersonInvoiceForBCLink(this.files[0])">
     </div>
     <div style="margin-bottom:8px">
       <input class="form-input" id="bclink-search" placeholder="🔍 Rechercher par N° BC, désignation..." oninput="renderBCLinker()" style="font-size:12px">
@@ -8919,6 +8921,516 @@ function confirmEmersonAckImport(){
     '• '+parsed.lines.length+' ligne(s) — Subtotal : '+fN(parsed.subtotalAmount||0)+' '+parsed.currency+
     (parsed.totalAmount&&parsed.totalAmount!==parsed.subtotalAmount?' (Total avec GST: '+fN(parsed.totalAmount)+' '+parsed.currency+')':''));
   window._pendingAckImport=null;
+}
+
+// =============================================================================
+// IMPORT EMERSON TAX INVOICE (PDF) — facture finale Emerson
+// =============================================================================
+// Workflow : un BC Emerson existe déjà (créé via PO ou via Acknowledgement).
+// Quand Emerson facture, le PDF Tax Invoice contient les VRAIES valeurs
+// (subtotal sans GST si export DDP, dates de facturation/échéance, ship date,
+// tracking, et parfois un n° de facture refacturée). On met à jour le BC avec
+// ces données réelles et on passe le statut à "Facturé Emerson".
+function importEmersonInvoiceForBCLink(file){
+  if(!file)return;
+  if(file.type!=='application/pdf' && !/\.pdf$/i.test(file.name)){
+    alert('Le fichier sélectionné n\'est pas un PDF.');
+    var input=document.getElementById('bclink-emerson-inv-file');
+    if(input)input.value='';
+    return;
+  }
+  if(!bcLinkerInvId){
+    alert('❌ Aucune facture sélectionnée. Ouvrez la modal BC linker depuis une facture.');
+    return;
+  }
+  var loader=document.createElement('div');
+  loader.id='emerson-inv-loader';
+  loader.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:99999;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;flex-direction:column;gap:10px';
+  loader.innerHTML='<div style="font-size:32px">📋✓</div><div>Lecture de la Tax Invoice Emerson…</div>';
+  document.body.appendChild(loader);
+
+  loadPdfJs()
+    .then(function(){return file.arrayBuffer();})
+    .then(function(buf){
+      return pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise.then(function(pdf){
+        var tasks=[];
+        for(var i=1;i<=pdf.numPages;i++){
+          tasks.push(pdf.getPage(i).then(function(page){
+            return page.getTextContent().then(function(tc){
+              var lineMap={};
+              tc.items.forEach(function(it){
+                if(!it.str||!it.transform)return;
+                var y=Math.round(it.transform[5]);
+                var x=it.transform[4];
+                if(!lineMap[y])lineMap[y]=[];
+                lineMap[y].push({x:x,str:it.str});
+              });
+              var ys=Object.keys(lineMap).map(Number).sort(function(a,b){return b-a;});
+              return ys.map(function(y){
+                return lineMap[y].sort(function(a,b){return a.x-b.x;}).map(function(o){return o.str;}).join(' ').replace(/\s+/g,' ').trim();
+              }).filter(function(s){return s.length;}).join('\n');
+            });
+          }));
+        }
+        return Promise.all(tasks).then(function(pageTexts){return pageTexts.join('\n\n---PAGE BREAK---\n\n');});
+      });
+    })
+    .then(function(rawText){
+      var loader=document.getElementById('emerson-inv-loader');
+      if(loader)loader.remove();
+      var parsed=parseEmersonInvoice(rawText);
+      // Garde 1 : PO format strict
+      var poStrictRe=/^\d{8}\/\d{2,3}$/;
+      if(!parsed.customerPO||!poStrictRe.test(parsed.customerPO)){
+        var detail=parsed.customerPO?
+          '\n\nValeur capturée : "'+parsed.customerPO+'" (semble être un label, pas un vrai PO)':
+          '\n\n(Aucune valeur trouvée dans le PDF)';
+        alert('❌ Impossible d\'extraire un N° de PO Calinstrum valide.\n\nLe format attendu est DDMMYYYY/NNN (ex: 02012026/079).'+detail+'\n\nVérifiez qu\'il s\'agit bien d\'une Tax Invoice Emerson référencant un PO Calinstrum.');
+        return;
+      }
+      // Garde 2 : Invoice No obligatoire pour une Tax Invoice
+      if(!parsed.invoiceNum){
+        if(!confirm('⚠ Aucun N° de facture Emerson (Invoice No) n\'a été détecté dans le PDF.\n\nÊtes-vous sûr qu\'il s\'agit bien d\'une Tax Invoice (et non d\'un Order Acknowledgement) ?\n\nContinuer quand même ?')){
+          return;
+        }
+      }
+      // Garde 3 : aucune ligne extraite
+      if(!parsed.lines||parsed.lines.length===0){
+        if(!confirm('⚠ Aucune ligne d\'article n\'a été extraite du PDF.\n\nLa Tax Invoice '+(parsed.invoiceNum||'(sans n°)')+' a été détectée mais pas de lignes valides.\n\nContinuer quand même ? (le BC sera mis à jour sans modifier les lignes existantes)')){
+          return;
+        }
+      }
+      showEmersonInvoicePreview(parsed,file.name);
+    })
+    .catch(function(err){
+      console.error('Erreur import Tax Invoice Emerson:',err);
+      var loader=document.getElementById('emerson-inv-loader');
+      if(loader)loader.remove();
+      alert('❌ Erreur lors de la lecture du PDF :\n\n'+err.message);
+    });
+  var input=document.getElementById('bclink-emerson-inv-file');
+  if(input)input.value='';
+}
+
+// Parse le texte brut d'une Tax Invoice Emerson.
+// Retourne tous les champs spécifiques aux factures (Invoice No, Invoice Date, Due Date,
+// Ship Date, Tracking, Commercial Invoice, Original Invoice si refacturation, Reason, etc.).
+function parseEmersonInvoice(text){
+  var result={
+    docType:'invoice',
+    customerPO:'',
+    salesOrder:'',
+    invoiceNum:'',
+    invoiceDate:'',
+    dueDate:'',
+    shipDate:'',
+    tracking:'',
+    commercialInvoice:'',
+    reasonForReinvoice:'',
+    originalInvoice:'',
+    invoiceInquiries:'',
+    endUser:'',
+    endUserCode:'',
+    lines:[],
+    subtotalAmount:0,
+    gstAmount:0,
+    totalAmount:0,
+    currency:'AUD'
+  };
+  var monthMap={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+  // === FAX_INFO header ===
+  // Format Tax Invoice : "FAX_INFO:10112382:O|N|4735|NEW:N|N:02012026/079:Y:"
+  // Le 1er segment = Invoice No, on cherche le PO format DDMMYYYY/NNN parmi les segments.
+  var fax=text.match(/FAX_INFO:([^\n]+)/);
+  if(fax){
+    var segments=fax[1].split(':');
+    if(segments[0]&&/^\d{6,10}$/.test(segments[0])){
+      result.invoiceNum=segments[0];
+    }
+    for(var si=0;si<segments.length;si++){
+      if(/^\d{8}\/\d{2,3}$/.test(segments[si])){
+        result.customerPO=segments[si];
+        break;
+      }
+    }
+  }
+  // Fallback Customer PO
+  if(!result.customerPO){
+    var m=text.match(/\b(\d{8}\/\d{2,3})\b/);
+    if(m)result.customerPO=m[1].trim();
+  }
+  // Sales Order
+  m=text.match(/\b(\d{4}-\d{4}-\d{8})\b/);
+  if(m)result.salesOrder=m[1].trim();
+  // Invoice No (fallback si pas trouvé via FAX_INFO)
+  if(!result.invoiceNum){
+    m=text.match(/Invoice\s+No:\s*\n?\s*(\d{6,10})/i);
+    if(m)result.invoiceNum=m[1].trim();
+  }
+  // === Dates : stratégie "1ère et 2ème date après le label Invoice Date:" ===
+  // Layout typique pdf.js du Tax Invoice :
+  //   "Mail Invoice To Invoice Date: No: Date:" (ligne labels, "Due " mangé par overlap)
+  //   "21-APR-2026 10112382 21-MAY-2026"        (ligne valeurs : invoice / invoiceNo / due)
+  // Donc après "Invoice Date:" on a 2 dates : la 1ère = Invoice Date, la 2ème = Due Date.
+  var labelInvoiceDate=text.match(/Invoice\s+Date:/i);
+  if(labelInvoiceDate){
+    var afterLabel=text.substring(labelInvoiceDate.index+labelInvoiceDate[0].length, labelInvoiceDate.index+labelInvoiceDate[0].length+300);
+    var datesFound=[];
+    var dateRe=/\b(\d{1,2})-([A-Z]{3})-(\d{2,4})\b/g;
+    var dm;
+    while((dm=dateRe.exec(afterLabel))!==null){
+      var day=dm[1], mon=monthMap[dm[2].toUpperCase()], year=dm[3];
+      if(year.length===2)year='20'+year;
+      if(mon)datesFound.push(year+'-'+mon+'-'+day.padStart(2,'0'));
+    }
+    if(datesFound.length>=1)result.invoiceDate=datesFound[0];
+    if(datesFound.length>=2)result.dueDate=datesFound[1];
+  }
+  // Ship Date : sur sa propre ligne, format DD-MMM-YY (2 chiffres)
+  var labelShipDate=text.match(/Ship\s+Date:/i);
+  if(labelShipDate){
+    var afterShip=text.substring(labelShipDate.index+labelShipDate[0].length, labelShipDate.index+labelShipDate[0].length+200);
+    var sm=afterShip.match(/\b(\d{1,2})-([A-Z]{3})-(\d{2,4})\b/);
+    if(sm){
+      var sday=sm[1], smon=monthMap[sm[2].toUpperCase()], syear=sm[3];
+      if(syear.length===2)syear='20'+syear;
+      if(smon)result.shipDate=syear+'-'+smon+'-'+sday.padStart(2,'0');
+    }
+  }
+  // Tracking
+  m=text.match(/Tracking\s+No:?\s*([A-Z0-9]+)/i);
+  if(m)result.tracking=m[1].trim();
+  // Commercial Invoice
+  m=text.match(/Commercial\s+Invoice\s+No:?\s*(\d+)/i);
+  if(m)result.commercialInvoice=m[1].trim();
+  // Reason / Original Invoice (cas des refacturations)
+  m=text.match(/REASON\s+FOR\s+REINVOICE:?\s*([^\n\r]+)/i);
+  if(m)result.reasonForReinvoice=m[1].trim();
+  m=text.match(/ORIGINAL\s+INVOICE:?\s*(\d+)/i);
+  if(m)result.originalInvoice=m[1].trim();
+  // Invoice Inquiries
+  m=text.match(/Invoice\s+Inquiries:\s*([^\n\r]+)/i);
+  if(m){
+    var v=m[1].trim();
+    v=v.split(/\s*(?:Customer\/Buyer|Tel:|Fax:|Email|E-mail|Sales\s+Person)/i)[0].trim();
+    result.invoiceInquiries=v;
+  }
+  // End User
+  if(/PRONY\s+RESOURCES/i.test(text)){
+    result.endUserCode='PRNC';
+    var pm=text.match(/(PRONY\s+RESOURCES[^\n]*)/i);
+    if(pm)result.endUser=pm[1].trim();
+  } else if(/ERAMET[\s-]+SLN|Soci[ée]t[ée]\s+Le\s+Nickel/i.test(text)){
+    result.endUserCode='SLN';
+    var sm2=text.match(/((?:ERAMET[\s-]+SLN|Soci[ée]t[ée][^\n]*Nickel)[^\n]*)/i);
+    if(sm2)result.endUser=sm2[1].trim();
+  }
+  // Subtotal / GST / Total
+  m=text.match(/Subtotal\s*\((\w+)\):\s*([\d,]+\.?\d*)/i);
+  if(m){
+    result.currency=m[1].toUpperCase();
+    result.subtotalAmount=parseFloat(m[2].replace(/,/g,''))||0;
+  }
+  m=text.match(/GST\s*\(\w+\):\s*([\d,]+\.?\d*)/i);
+  if(m)result.gstAmount=parseFloat(m[1].replace(/,/g,''))||0;
+  m=text.match(/(^|[^a-zA-Z])Total\s*\((\w+)\):\s*([\d,]+\.?\d*)/i);
+  if(m){
+    if(!result.currency)result.currency=m[2].toUpperCase();
+    result.totalAmount=parseFloat(m[3].replace(/,/g,''))||0;
+  }
+  if(!result.subtotalAmount&&result.totalAmount){
+    result.subtotalAmount=result.totalAmount;
+  }
+  // === Lignes ===
+  // Format Tax Invoice : "1 1.1.1 2 2051TG2A2B21AS5KDM5P1Q4QT 1 3,188.00 3,188.00"
+  // (cust ord invoiceLine ref qty pu tot) — diffère de l'Ack qui n'a pas le numéro Invoice Line
+  // Regex tolérant : la 3ème colonne (invoice line) est optionnelle pour réutiliser sur l'Ack
+  var hdrRe=/^(\d+)\s+([\d\.]+)\s+(?:(\d+)\s+)?([A-Z0-9][-A-Z0-9]{3,})\s*(.*)$/i;
+  var priceTailRe=/^(.*?)\s*(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/;
+  var pricelineRe=/^(\d+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$/;
+  var skipRe=/^(Page\s+\d|Form:|Copyright|Thank|FAX_INFO|Tel:|Fax:|This order|Online Status|All Invoices|Customer PO:|Emerson SO|Order Note|Expected Ship|Shipping Terms|Freight Terms|UOM:|US ECCN|HTS\/HS|Ship Method|Assemble To|Tag|PERM|Configuration|NAME\s*:|WIRE\s*:|Transit Time|GST%|Emerson\s+Process|MOUNTAIN\s+HIGHWAY|BAYSWATER|VICTORIA|AUSTRALIA|Subtotal|Total\s*\(|---PAGE|Customer\/Buyers|Customer\s+Contact|ABN:|Bill\s+To:|Sold\s+To:|End\s+User:|Ship\s+To:|Ultimate|Unit:|COO:|Line\s+Note|CUSTOMER\s+PO:|ORIGINAL\s+INVOICE|REASON|Inco2020|Serial)/i;
+  var rawLines=text.split('\n');
+  var cur=null;
+  for(var ri=0;ri<rawLines.length;ri++){
+    var ln=rawLines[ri].trim();
+    if(!ln)continue;
+    var h=ln.match(hdrRe);
+    if(h){
+      if(cur&&cur.ref)result.lines.push(cur);
+      cur={
+        custLineNo:h[1],
+        orderLine:h[2],
+        invoiceLine:h[3]||'',
+        ref:h[4],
+        desc:'',
+        qty:0,
+        unitPrice:0,
+        totalPrice:0
+      };
+      var rest=(h[5]||'').trim();
+      if(rest){
+        var pm=rest.match(priceTailRe);
+        if(pm){
+          cur.desc=pm[1].trim();
+          cur.qty=parseInt(pm[2],10)||0;
+          cur.unitPrice=parseFloat(pm[3].replace(/,/g,''))||0;
+          cur.totalPrice=parseFloat(pm[4].replace(/,/g,''))||0;
+        } else {
+          cur.desc=rest;
+        }
+      }
+      continue;
+    }
+    if(cur){
+      if(!cur.qty){
+        var plm=ln.match(pricelineRe);
+        if(plm){
+          cur.qty=parseInt(plm[1],10)||0;
+          cur.unitPrice=parseFloat(plm[2].replace(/,/g,''))||0;
+          cur.totalPrice=parseFloat(plm[3].replace(/,/g,''))||0;
+          continue;
+        }
+      }
+      if(cur.qty===0&&ln.length>3&&ln.length<200&&!skipRe.test(ln)){
+        if(!cur.desc)cur.desc=ln;
+        else if(cur.desc.length<100&&ln.length<60)cur.desc+=' '+ln;
+      }
+    }
+  }
+  if(cur&&cur.ref)result.lines.push(cur);
+  result.lines=result.lines.filter(function(l){return l.ref&&l.qty>0&&l.unitPrice>0;});
+  return result;
+}
+
+// Modal preview Tax Invoice avec DIFF visuel vs BC actuel + bouton "Mettre à jour BC"
+function showEmersonInvoicePreview(parsed,fileName){
+  var existing=document.getElementById('mEmersonInv');
+  if(existing)existing.remove();
+  // Trouver le BC à mettre à jour : par PO match
+  var existingBC=null;
+  if(parsed.customerPO){
+    existingBC=(DB.bcs||[]).find(function(b){return (b.num||'').trim()===parsed.customerPO.trim();});
+  }
+  var mode=existingBC?'update':'create';
+  // Si pas de BC existant : on demande confirmation pour CRÉER (rare cas où la Tax Invoice arrive sans Ack préalable)
+  if(!existingBC){
+    if(!confirm('⚠ Aucun BC trouvé pour le PO '+parsed.customerPO+'.\n\nNormalement, l\'Acknowledgement est importé en premier (qui crée le BC), puis la Tax Invoice met à jour ce BC.\n\nSouhaitez-vous quand même créer un nouveau BC depuis cette Tax Invoice ?')){
+      return;
+    }
+  }
+  // Calcul du diff (uniquement en mode update)
+  var diff={};
+  if(existingBC){
+    diff.subtotal={old:Number(existingBC.total)||0,new:parsed.subtotalAmount};
+    diff.lines={old:(existingBC.lines||[]).length,new:parsed.lines.length};
+    var pctEcart=diff.subtotal.old>0?Math.abs(diff.subtotal.new-diff.subtotal.old)/diff.subtotal.old*100:0;
+    diff.pctEcart=pctEcart;
+    diff.hasEcart=Math.abs(diff.subtotal.new-diff.subtotal.old)>=0.01;
+  }
+  var taux=existingBC?getTauxAUD(existingBC):DEFAULT_TAUX_AUD;
+  var newCoutXPF=Math.round(parsed.subtotalAmount*taux);
+  // Récupérer la facture pour calculer la marge
+  var inv=null;
+  if(bcLinkerInvId&&typeof invoices!=='undefined'){
+    inv=invoices.find(function(x){return x.id===bcLinkerInvId;});
+  }
+  var margeBruteEstimee=inv?(inv.montant||0)-newCoutXPF:0;
+  var modalHtml=
+    '<div class="modal-overlay" id="mEmersonInv" style="z-index:99999">'+
+    '<div class="modal modal-lg" style="max-width:900px">'+
+      '<div class="modal-header">'+
+        '<h3>📋 Tax Invoice Emerson — '+(mode==='update'?'<span style="color:#a78bfa">⚠ Mise à jour BC '+esc(existingBC.num)+'</span>':'<span style="color:var(--teal)">✓ Création nouveau BC</span>')+'</h3>'+
+        '<button class="modal-close" onclick="cm(\'mEmersonInv\')">✕</button>'+
+      '</div>'+
+      '<div class="modal-body">'+
+        '<div style="background:rgba(167,139,250,0.05);border:1px solid rgba(167,139,250,0.3);border-radius:8px;padding:12px;margin-bottom:14px">'+
+          '<div style="font-size:11px;color:#a78bfa;font-weight:700;margin-bottom:6px">📋 Informations extraites de la Tax Invoice</div>'+
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;font-size:12px">'+
+            '<div><strong style="color:var(--muted);font-size:10px">Customer PO :</strong><br><span style="color:var(--teal);font-weight:700">'+esc(parsed.customerPO||'-')+'</span></div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Invoice No :</strong><br><span style="color:#a78bfa;font-weight:700">'+esc(parsed.invoiceNum||'-')+'</span></div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Sales Order :</strong><br>'+esc(parsed.salesOrder||'-')+'</div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Invoice Date :</strong><br>'+esc(parsed.invoiceDate||'-')+'</div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Due Date :</strong><br><span style="color:#fbbf24;font-weight:700">'+esc(parsed.dueDate||'-')+'</span></div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Ship Date :</strong><br>'+esc(parsed.shipDate||'-')+'</div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Tracking :</strong><br><span style="font-family:monospace;font-size:10.5px">'+esc(parsed.tracking||'-')+'</span></div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">Inquiries :</strong><br>'+esc(parsed.invoiceInquiries||'-')+'</div>'+
+            '<div><strong style="color:var(--muted);font-size:10px">End User :</strong><br>'+
+              (parsed.endUserCode?'<span style="display:inline-block;background:rgba(45,212,191,0.15);color:var(--teal);padding:1px 7px;border-radius:3px;font-size:10px;font-weight:700;margin-right:6px">'+esc(parsed.endUserCode)+'</span>':'')+
+              '<span style="font-size:10.5px">'+esc(parsed.endUser||'-')+'</span></div>'+
+          '</div>'+
+          (parsed.reasonForReinvoice?'<div style="margin-top:10px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:8px;font-size:11px"><strong style="color:#fbbf24">⚠ Refacturation :</strong> '+esc(parsed.reasonForReinvoice)+(parsed.originalInvoice?' • Facture originale annulée : <strong>'+esc(parsed.originalInvoice)+'</strong>':'')+'</div>':'')+
+        '</div>'+
+        // === DIFF VISUEL (si update) ===
+        (mode==='update'?
+          '<div style="background:rgba(45,212,191,0.05);border:1px solid rgba(45,212,191,0.3);border-radius:8px;padding:12px;margin-bottom:14px">'+
+            '<div style="font-size:11px;color:var(--teal);font-weight:700;margin-bottom:8px">🔄 Comparaison BC actuel vs Tax Invoice</div>'+
+            '<table style="width:100%;font-size:12px;border-collapse:collapse">'+
+              '<tr style="border-bottom:1px solid rgba(255,255,255,0.08)"><th style="text-align:left;padding:5px;color:var(--muted);font-weight:600;font-size:10px">Champ</th><th style="text-align:right;padding:5px;color:var(--muted);font-weight:600;font-size:10px">BC actuel</th><th style="text-align:right;padding:5px;color:var(--muted);font-weight:600;font-size:10px">Tax Invoice</th><th style="text-align:right;padding:5px;color:var(--muted);font-weight:600;font-size:10px">Écart</th></tr>'+
+              '<tr style="border-bottom:1px solid rgba(255,255,255,0.05)"><td style="padding:5px"><strong>Subtotal AUD</strong></td><td style="text-align:right;padding:5px">'+fN(diff.subtotal.old)+'</td><td style="text-align:right;padding:5px;color:'+(diff.hasEcart?'#a78bfa':'inherit')+';font-weight:700">'+fN(diff.subtotal.new)+'</td><td style="text-align:right;padding:5px;color:'+(diff.hasEcart?(diff.subtotal.new>diff.subtotal.old?'#fbbf24':'#10b981'):'var(--muted)')+';font-weight:700">'+(diff.hasEcart?(diff.subtotal.new>diff.subtotal.old?'+':'')+fN(diff.subtotal.new-diff.subtotal.old)+' ('+(diff.subtotal.new>diff.subtotal.old?'+':'-')+diff.pctEcart.toFixed(1)+'%)':'identique')+'</td></tr>'+
+              '<tr style="border-bottom:1px solid rgba(255,255,255,0.05)"><td style="padding:5px"><strong>Nb lignes</strong></td><td style="text-align:right;padding:5px">'+diff.lines.old+'</td><td style="text-align:right;padding:5px">'+diff.lines.new+'</td><td style="text-align:right;padding:5px;color:'+(diff.lines.new!==diff.lines.old?'#fbbf24':'var(--muted)')+'">'+(diff.lines.new!==diff.lines.old?(diff.lines.new>diff.lines.old?'+':'')+(diff.lines.new-diff.lines.old):'identique')+'</td></tr>'+
+              '<tr><td style="padding:5px"><strong>Coût XPF estimé</strong></td><td style="text-align:right;padding:5px">'+fN(getBCCoutXPF(existingBC))+'</td><td style="text-align:right;padding:5px;color:#a78bfa;font-weight:700">'+fN(newCoutXPF)+'</td><td style="text-align:right;padding:5px;color:var(--muted);font-size:10px">@ taux '+taux+'</td></tr>'+
+            '</table>'+
+            (diff.pctEcart>5?'<div style="margin-top:8px;padding:6px 10px;background:rgba(251,191,36,0.1);border-left:3px solid #fbbf24;font-size:11px;color:#fbbf24"><strong>⚠ Écart de prix significatif ('+diff.pctEcart.toFixed(1)+'%)</strong> — Vérifiez que la Tax Invoice correspond bien au PO attendu.</div>':'')+
+          '</div>':'')+
+        // === LIGNES ===
+        '<div style="margin-bottom:10px">'+
+          '<div style="font-size:11px;color:var(--muted);font-weight:700;margin-bottom:6px">📦 '+parsed.lines.length+' ligne(s) facturée(s)</div>'+
+          '<div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:6px;overflow:hidden">'+
+            '<table style="width:100%;font-size:11px;border-collapse:collapse">'+
+              '<thead style="background:rgba(255,255,255,0.05)"><tr><th style="text-align:left;padding:6px 10px;font-weight:600;color:var(--muted)">RÉF EMERSON</th><th style="text-align:left;padding:6px 10px;font-weight:600;color:var(--muted)">DÉSIGNATION</th><th style="text-align:right;padding:6px 10px;font-weight:600;color:var(--muted)">QTÉ</th><th style="text-align:right;padding:6px 10px;font-weight:600;color:var(--muted)">PU AUD</th><th style="text-align:right;padding:6px 10px;font-weight:600;color:var(--muted)">TOTAL AUD</th></tr></thead>'+
+              '<tbody>'+
+                parsed.lines.map(function(l){
+                  return '<tr style="border-top:1px solid rgba(255,255,255,0.04)"><td style="padding:6px 10px;font-family:monospace">'+esc(l.ref)+'</td><td style="padding:6px 10px;color:var(--muted)">'+esc(l.desc||'-')+'</td><td style="text-align:right;padding:6px 10px">'+l.qty+'</td><td style="text-align:right;padding:6px 10px">'+fN(l.unitPrice)+'</td><td style="text-align:right;padding:6px 10px;font-weight:700">'+fN(l.totalPrice)+'</td></tr>';
+                }).join('')+
+              '</tbody>'+
+              '<tfoot><tr style="border-top:2px solid rgba(167,139,250,0.4);background:rgba(167,139,250,0.05)"><td colspan="4" style="text-align:right;padding:7px 10px;font-weight:700">Subtotal :</td><td style="text-align:right;padding:7px 10px;font-weight:700;color:#a78bfa">'+fN(parsed.subtotalAmount)+' '+parsed.currency+'</td></tr>'+
+              (parsed.gstAmount>0?'<tr><td colspan="4" style="text-align:right;padding:5px 10px;color:var(--muted);font-size:10px">GST :</td><td style="text-align:right;padding:5px 10px;color:var(--muted);font-size:10px">'+fN(parsed.gstAmount)+' '+parsed.currency+'</td></tr><tr><td colspan="4" style="text-align:right;padding:5px 10px;color:var(--muted);font-size:10px">Total avec GST :</td><td style="text-align:right;padding:5px 10px;color:var(--muted);font-size:10px">'+fN(parsed.totalAmount)+' '+parsed.currency+'</td></tr>':'')+
+              '</tfoot>'+
+            '</table>'+
+          '</div>'+
+        '</div>'+
+        // === IMPACT MARGE ===
+        (inv?'<div style="background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:10px;margin-bottom:10px;font-size:12px">'+
+          '<div style="font-size:11px;color:#10b981;font-weight:700;margin-bottom:4px">💰 Impact sur la marge ('+esc(inv.num)+')</div>'+
+          '<div>Facture client : <strong>'+fN(inv.montant||0)+' XPF</strong> • Coût Emerson : <strong style="color:var(--red)">'+fN(newCoutXPF)+' XPF</strong> • Marge brute estimée : <strong style="color:'+(margeBruteEstimee>=0?'#10b981':'var(--red)')+'">'+(margeBruteEstimee>=0?'+':'')+fN(margeBruteEstimee)+' XPF</strong></div>'+
+        '</div>':'')+
+      '</div>'+
+      '<div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end">'+
+        '<button class="btn btn-ghost" onclick="cm(\'mEmersonInv\');window._pendingInvImport=null">Annuler</button>'+
+        '<button class="btn btn-teal" onclick="confirmEmersonInvoiceImport()">✓ '+(mode==='update'?'Mettre à jour le BC':'Créer le BC')+' (Statut: Facturé Emerson)</button>'+
+      '</div>'+
+    '</div></div>';
+  document.body.insertAdjacentHTML('beforeend',modalHtml);
+  om('mEmersonInv');
+  window._pendingInvImport={parsed:parsed,fileName:fileName,mode:mode,existingBCId:existingBC?existingBC.id:null};
+}
+
+// Confirme l'import : applique les changements au BC (existant ou nouveau) + lien à la facture
+function confirmEmersonInvoiceImport(){
+  var pending=window._pendingInvImport;
+  if(!pending){
+    alert('❌ État interne perdu. Veuillez recommencer l\'import.');
+    return;
+  }
+  var parsed=pending.parsed;
+  var mode=pending.mode;
+  var existingBC=pending.existingBCId?(DB.bcs||[]).find(function(b){return b.id===pending.existingBCId;}):null;
+  var newOrUpdatedBC=null;
+  if(mode==='update'&&existingBC){
+    // Mise à jour du BC existant avec les vraies valeurs Tax Invoice
+    existingBC.total=parsed.subtotalAmount;
+    if(!existingBC.totals)existingBC.totals={};
+    existingBC.totals.sub=parsed.subtotalAmount;
+    existingBC.totals.total=parsed.subtotalAmount;
+    // Champs spécifiques Tax Invoice (nouveaux)
+    existingBC.emersonInvoiceNum=parsed.invoiceNum||'';
+    existingBC.emersonInvoiceDate=parsed.invoiceDate||'';
+    existingBC.emersonDueDate=parsed.dueDate||'';
+    existingBC.emersonShipDate=parsed.shipDate||'';
+    existingBC.emersonTracking=parsed.tracking||'';
+    existingBC.emersonCommercialInvoice=parsed.commercialInvoice||'';
+    existingBC.emersonInvoiceImportedAt=new Date().toISOString();
+    if(parsed.reasonForReinvoice){
+      existingBC.emersonReasonForReinvoice=parsed.reasonForReinvoice;
+      existingBC.emersonOriginalInvoice=parsed.originalInvoice||'';
+    }
+    // Statut → Facturé Emerson
+    existingBC.status='Facturé Emerson';
+    // Lignes : on remplace par les VRAIES lignes facturées (filter qty>0 + pu>0 déjà fait par le parser)
+    if(parsed.lines&&parsed.lines.length>0){
+      existingBC.lines=parsed.lines.map(function(l){
+        return {
+          ref:l.ref,
+          desc:l.desc||'',
+          qte:l.qty,
+          pu:l.unitPrice,
+          propId:existingBC.props&&existingBC.props.length?existingBC.props[0].id:''
+        };
+      });
+    }
+    // Notes enrichies
+    var noteParts=[];
+    if(existingBC.bcNotes)noteParts.push(existingBC.bcNotes);
+    noteParts.push('Tax Invoice '+(parsed.invoiceNum||'-')+' importée le '+new Date().toLocaleDateString('fr-FR')+(parsed.dueDate?' • Échéance: '+parsed.dueDate:'')+(parsed.tracking?' • Tracking: '+parsed.tracking:''));
+    if(parsed.reasonForReinvoice){
+      noteParts.push('⚠ Refacturation: '+parsed.reasonForReinvoice+(parsed.originalInvoice?' (original: '+parsed.originalInvoice+')':''));
+    }
+    existingBC.bcNotes=noteParts.join(' • ');
+    newOrUpdatedBC=existingBC;
+  } else {
+    // Création d'un nouveau BC depuis la Tax Invoice (cas rare : pas d'Ack importé avant)
+    var endUserClient=parsed.endUserCode==='PRNC'?'PRNC':(parsed.endUserCode==='SLN'?'SLN':'');
+    var customTaux=DEFAULT_TAUX_AUD;
+    var newBC={
+      id:Date.now()+Math.floor(Math.random()*1000),
+      num:parsed.customerPO,
+      date:parsed.invoiceDate||new Date().toISOString().slice(0,10),
+      devise:parsed.currency||'AUD',
+      tauxAUD:customTaux,
+      vcont:parsed.invoiceInquiries||'',
+      vemail:'',
+      vphone:'',
+      vaddr:'471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA',
+      inco:'Inco2020 : DDP (BANKSMEADOW)',
+      fret:'Prepaid & Allowed',
+      status:'Facturé Emerson',
+      clientFinal:endUserClient,
+      cref2:'',
+      props:parsed.salesOrder?[{
+        num:parsed.salesOrder,
+        ver:'1',
+        amount:parsed.subtotalAmount,
+        cref:parsed.salesOrder,
+        id:'prop_inv_'+Date.now(),
+        _fromInvoice:true
+      }]:[],
+      bcNotes:'Importé depuis Tax Invoice Emerson '+(parsed.invoiceNum||'')+(parsed.dueDate?' • Échéance: '+parsed.dueDate:'')+(parsed.tracking?' • Tracking: '+parsed.tracking:''),
+      discount:'0',salesTax:'0',otherTax:'0',shipping:'0',
+      devisLieId:'',
+      lines:parsed.lines.map(function(l){
+        return {
+          ref:l.ref,
+          desc:l.desc||'',
+          qte:l.qty,
+          pu:l.unitPrice,
+          propId:parsed.salesOrder?'prop_inv_'+Date.now():''
+        };
+      }),
+      total:parsed.subtotalAmount,
+      totals:{sub:parsed.subtotalAmount,disc:0,sales:0,other:0,ship:0,total:parsed.subtotalAmount},
+      linkDevis:'',linkBCclient:'',linkPOcali:'',linkBL:'',linkFacture:'',linkEmerson:'',linkCR:'',
+      // Champs Tax Invoice spécifiques
+      emersonInvoiceNum:parsed.invoiceNum||'',
+      emersonInvoiceDate:parsed.invoiceDate||'',
+      emersonDueDate:parsed.dueDate||'',
+      emersonShipDate:parsed.shipDate||'',
+      emersonTracking:parsed.tracking||'',
+      emersonCommercialInvoice:parsed.commercialInvoice||'',
+      emersonInvoiceImportedAt:new Date().toISOString(),
+      _fromTaxInvoice:true
+    };
+    if(parsed.reasonForReinvoice){
+      newBC.emersonReasonForReinvoice=parsed.reasonForReinvoice;
+      newBC.emersonOriginalInvoice=parsed.originalInvoice||'';
+    }
+    DB.bcs.push(newBC);
+    newOrUpdatedBC=newBC;
+  }
+  // Liaison à la facture
+  if(bcLinkerInvId&&typeof linkBCToInvoice==='function'){
+    linkBCToInvoice(bcLinkerInvId,newOrUpdatedBC.id);
+  }
+  saveDB();
+  cm('mEmersonInv');
+  if(typeof renderBCLinker==='function')renderBCLinker();
+  if(typeof renderBC==='function'){try{renderBC();}catch(e){}}
+  alert('✅ '+(mode==='update'?'BC mis à jour avec Tax Invoice':'Nouveau BC créé depuis Tax Invoice')+'\n\n'+
+    '• N° BC : '+newOrUpdatedBC.num+'\n'+
+    '• Invoice No Emerson : '+(parsed.invoiceNum||'-')+'\n'+
+    '• Statut : Facturé Emerson\n'+
+    '• Échéance paiement : '+(parsed.dueDate||'-')+'\n'+
+    '• '+parsed.lines.length+' ligne(s) — Subtotal : '+fN(parsed.subtotalAmount)+' '+parsed.currency);
+  window._pendingInvImport=null;
 }
 
 // Affiche le modal de prévisualisation avec tous les paramètres modifiables
