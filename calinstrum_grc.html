@@ -383,6 +383,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <button class="btn btn-ghost btn-sm" id="manualSaveBtn" onclick="manualSave()" title="Forcer une sauvegarde maintenant (Ctrl+S)">💾 Sauver</button>
     <button class="btn btn-ghost btn-sm" onclick="exportDBBackup()" title="Télécharger une sauvegarde complète (JSON)">⬇ Export</button>
     <span id="time-v" style="font-size:10px;color:var(--muted)"></span>
+    <button class="btn btn-ghost btn-sm" onclick="lockApp()" title="Verrouiller l'application (Ctrl+L)" style="border-color:rgba(244,63,94,0.4);color:#f43f5e">🔒 Verrouiller</button>
     <button class="btn btn-ghost btn-sm" onclick="window.print()">🖨 Imprimer</button>
   </div>
 </div>
@@ -3042,7 +3043,13 @@ function migrateInvoicesToFactures(){
   msg+='  • Montant total : '+fN(totalMontant)+' XPF\n';
   if(nbDoublons>0)msg+='  • ⚠️ Doublons détectés : '+nbDoublons+' (seront ignorés)\n';
   msg+='\n👉 Confirmer la migration ?';
-  if(!confirm(msg))return;
+  // Confirmation 2 étapes via confirmCritical (au lieu d'un confirm simple)
+  confirmCritical('MIGRATION SUIVI → FACTURES',msg,function(){_doMigrateInvoicesToFactures();});
+}
+
+// Fonction interne : exécution effective de la migration (après double confirmation)
+function _doMigrateInvoicesToFactures(){
+  if(!DB.invoices||DB.invoices.length===0)return;
   // === ÉTAPE 1 : BACKUP ===
   var snapshotData={
     _timestamp:Date.now(),
@@ -3144,10 +3151,15 @@ function undoMigrateInvoices(){
   try{bk=JSON.parse(raw);}catch(e){alert('Backup corrompu.');return;}
   if(!bk||!bk.db){alert('Backup invalide.');return;}
   var ageDays=Math.round((Date.now()-bk._timestamp)/(24*3600*1000));
-  if(!confirm('↩️ DÉFAIRE LA MIGRATION ?\n\n'+
-              'Cela va restaurer l\'état exact d\'avant la migration ('+ageDays+' jour(s)).\n\n'+
-              '⚠️ ATTENTION : toute modification effectuée APRÈS la migration sera PERDUE.\n\n'+
-              'Continuer ?')){return;}
+  // Confirmation critique 2 étapes (action très risquée car écrase l'état actuel)
+  confirmCritical('DÉFAIRE LA MIGRATION',
+    'Cela va restaurer l\'état exact d\'avant la migration ('+ageDays+' jour(s)).\n\n'+
+    '⚠️ ATTENTION : toute modification effectuée APRÈS la migration sera DÉFINITIVEMENT PERDUE.',
+    function(){_doUndoMigrate(bk);}
+  );
+}
+
+function _doUndoMigrate(bk){
   // Restaurer
   DB=JSON.parse(JSON.stringify(bk.db));
   if(typeof invoices!=='undefined')invoices=DB.invoices||[];
@@ -3516,7 +3528,17 @@ function saveSUIVI(){
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
 }
 function delInv(id){
-  if(!confirm('Supprimer cette facture ?'))return;
+  var inv=invoices.find(function(x){return x.id===id;});
+  var lbl=inv?(inv.num||('#'+id)):('#'+id);
+  confirmCritical(
+    'SUPPRESSION FACTURE SUIVI',
+    'Vous allez supprimer la facture :\n\n'+lbl+(inv?(' • '+fN(inv.montant||0)+' XPF'):'')+
+    '\n\nSi cette facture est liée à une facture GRC complète, elle sera aussi supprimée.\n\nL\'opération est annulable via "↶ Annuler".',
+    function(){_doDelInv(id);}
+  );
+}
+
+function _doDelInv(id){
   var idx=invoices.findIndex(function(x){return x.id===id;});
   if(idx<0)return;
   var removed=JSON.parse(JSON.stringify(invoices[idx]));
@@ -13840,7 +13862,20 @@ function updFC(id,arr){
   el.innerHTML='<option value="">Tous les clients</option>'+clients.map(function(c){return'<option'+(c===cur?' selected':'')+'>'+esc(c)+'</option>';}).join('');
 }
 function delDoc(col,id){
-  if(!confirm('Supprimer ce document?'))return;
+  // Récupérer le label du document pour un message clair
+  var doc=DB[col]?DB[col].find(function(x){return x.id===id;}):null;
+  var docLabel=doc?(doc.num||doc.intitule||doc.objet||('#'+id)):'';
+  var typeLabel={devis:'Devis',factures:'Facture',bcs:'Bon de commande',bls:'Bon de livraison',invoices:'Facture Suivi'}[col]||'document';
+  // Confirmation critique 2 étapes (au lieu d'un simple confirm)
+  confirmCritical(
+    'SUPPRESSION '+typeLabel.toUpperCase(),
+    'Vous allez supprimer ce '+typeLabel.toLowerCase()+' :\n\n'+docLabel+'\n\nL\'opération est annulable via "↶ Annuler" mais peut casser des liaisons (BC/Facture, Suivi).',
+    function(){_doDelDoc(col,id);}
+  );
+}
+
+// Fonction interne réelle de suppression (séparée pour permettre appels après confirmCritical)
+function _doDelDoc(col,id){
   // Snapshot pour l'undo
   var idx=DB[col].findIndex(function(x){return x.id===id;});
   if(idx<0)return;
@@ -16543,6 +16578,306 @@ document.addEventListener('DOMContentLoaded',function(){
   // Draft recovery (if a BC edit was lost after crash/close)
   setTimeout(checkDraftRecovery,500);
 });
+
+// ===========================================================
+// VERROUILLAGE ÉCRAN + PIN 4 chiffres
+// ===========================================================
+// Stockage : localStorage._grcPin (4 chiffres en clair, anti-curieux uniquement).
+// Lock manuel via bouton 🔒 ou Ctrl+L. Pas de lock auto (préférence utilisateur).
+// 1ère utilisation : flux setPin (saisie + confirmation).
+// 3 essais ratés → délai 30s avant nouvelle tentative.
+var _lockState={
+  pinBuffer:'',     // PIN en cours de saisie
+  setMode:false,    // true si on est dans le flux de définition initiale
+  setStage:1,       // 1=saisie nouveau PIN, 2=confirmation
+  setFirstPin:'',   // mémoire du PIN saisi à l'étape 1
+  attempts:0,       // compteur essais ratés
+  lockedUntil:0     // timestamp millis si verrouillage temporaire actif
+};
+
+function _getPinStored(){
+  try{return localStorage.getItem('_grcPin')||'';}catch(e){return '';}
+}
+function _setPinStored(pin){
+  try{localStorage.setItem('_grcPin',pin);}catch(e){}
+}
+function _clearPinStored(){
+  try{localStorage.removeItem('_grcPin');}catch(e){}
+}
+
+function lockApp(){
+  // Affiche l'overlay de verrouillage. Si pas de PIN défini, déclenche le flux setPin.
+  var pin=_getPinStored();
+  _lockState.pinBuffer='';
+  _lockState.attempts=0;
+  _lockState.lockedUntil=0;
+  if(!pin){
+    // Premier verrouillage : passe en mode "définir le PIN"
+    _lockState.setMode=true;
+    _lockState.setStage=1;
+    _lockState.setFirstPin='';
+    _updateLockUI('Définissez un PIN à 4 chiffres','set');
+  } else {
+    _lockState.setMode=false;
+    _updateLockUI('🔒 Application verrouillée','lock');
+  }
+  document.getElementById('lockScreen').classList.add('active');
+  _renderPinDots();
+  _updateLockTime();
+  if(window._lockTimeInterval)clearInterval(window._lockTimeInterval);
+  window._lockTimeInterval=setInterval(_updateLockTime,1000);
+}
+
+function _updateLockTime(){
+  var el=document.getElementById('lockTime');
+  if(!el)return;
+  var d=new Date();
+  var hh=String(d.getHours()).padStart(2,'0');
+  var mm=String(d.getMinutes()).padStart(2,'0');
+  var dateStr=d.toLocaleDateString('fr-FR',{day:'2-digit',month:'long',year:'numeric'});
+  el.textContent=hh+':'+mm+' NCT • '+dateStr;
+}
+
+function _updateLockUI(message,mode){
+  var s=document.getElementById('lockStatus');
+  if(s){
+    s.textContent=message;
+    s.className='lock-status'+(mode==='set'?' set-mode':'');
+  }
+}
+
+function _renderPinDots(errorState){
+  var dots=document.querySelectorAll('#lockPinDots .lock-pin-dot');
+  for(var i=0;i<dots.length;i++){
+    dots[i].classList.remove('filled','error');
+    if(errorState)dots[i].classList.add('error');
+    else if(i<_lockState.pinBuffer.length)dots[i].classList.add('filled');
+  }
+}
+
+function _onPinKey(digit){
+  // Ignore si verrouillage temporaire actif
+  if(_lockState.lockedUntil>Date.now())return;
+  if(_lockState.pinBuffer.length>=4)return;
+  _lockState.pinBuffer+=digit;
+  _renderPinDots();
+  if(_lockState.pinBuffer.length===4){
+    setTimeout(_validatePinBuffer,150);
+  }
+}
+
+function _onPinBack(){
+  if(_lockState.lockedUntil>Date.now())return;
+  _lockState.pinBuffer=_lockState.pinBuffer.slice(0,-1);
+  _renderPinDots();
+}
+
+function _onPinClear(){
+  if(_lockState.lockedUntil>Date.now())return;
+  _lockState.pinBuffer='';
+  _renderPinDots();
+}
+
+function _validatePinBuffer(){
+  if(_lockState.setMode){
+    // === Mode définition du PIN ===
+    if(_lockState.setStage===1){
+      _lockState.setFirstPin=_lockState.pinBuffer;
+      _lockState.pinBuffer='';
+      _lockState.setStage=2;
+      _renderPinDots();
+      _updateLockUI('Confirmez le PIN','set');
+      return;
+    }
+    // setStage===2 : confirmation
+    if(_lockState.pinBuffer===_lockState.setFirstPin){
+      _setPinStored(_lockState.setFirstPin);
+      _updateLockUI('✓ PIN défini — application déverrouillée','set');
+      setTimeout(_unlockApp,600);
+    } else {
+      _renderPinDots(true);
+      _updateLockUI('❌ Les deux PIN ne correspondent pas — recommencez','set');
+      _lockState.pinBuffer='';
+      _lockState.setStage=1;
+      _lockState.setFirstPin='';
+      setTimeout(function(){
+        _renderPinDots();
+        _updateLockUI('Définissez un PIN à 4 chiffres','set');
+      },1200);
+    }
+    return;
+  }
+  // === Mode normal : vérification ===
+  var stored=_getPinStored();
+  if(_lockState.pinBuffer===stored){
+    _updateLockUI('✓ Déverrouillé','set');
+    _unlockApp();
+  } else {
+    _lockState.attempts++;
+    _renderPinDots(true);
+    var attEl=document.getElementById('lockAttempts');
+    if(attEl){
+      if(_lockState.attempts>=3){
+        // 3 essais → délai 30s
+        _lockState.lockedUntil=Date.now()+30000;
+        _startLockoutCountdown();
+      } else {
+        attEl.textContent='❌ Code incorrect — '+(3-_lockState.attempts)+' essai(s) restant(s)';
+      }
+    }
+    _lockState.pinBuffer='';
+    setTimeout(function(){
+      if(_lockState.lockedUntil<=Date.now())_renderPinDots();
+    },500);
+  }
+}
+
+function _startLockoutCountdown(){
+  var attEl=document.getElementById('lockAttempts');
+  function tick(){
+    var remain=Math.ceil((_lockState.lockedUntil-Date.now())/1000);
+    if(remain<=0){
+      attEl.textContent='';
+      _lockState.attempts=0;
+      _lockState.lockedUntil=0;
+      _renderPinDots();
+      return;
+    }
+    attEl.textContent='⏳ Trop d\'essais — réessayez dans '+remain+'s';
+    setTimeout(tick,1000);
+  }
+  tick();
+}
+
+function _unlockApp(){
+  document.getElementById('lockScreen').classList.remove('active');
+  if(window._lockTimeInterval){clearInterval(window._lockTimeInterval);window._lockTimeInterval=null;}
+  _lockState.pinBuffer='';
+  _lockState.setMode=false;
+  _lockState.setFirstPin='';
+  _lockState.setStage=1;
+  _lockState.attempts=0;
+  _renderPinDots();
+}
+
+function resetPinFlow(){
+  // Réinitialise le PIN. Demande l'ancien d'abord (si défini) pour empêcher quelqu'un
+  // de juste cliquer sur "Réinitialiser" et passer.
+  var stored=_getPinStored();
+  if(stored){
+    var oldPin=prompt('🔐 Saisissez votre PIN actuel pour le réinitialiser :');
+    if(oldPin===null)return;
+    if(oldPin!==stored){alert('❌ PIN incorrect.');return;}
+  }
+  if(!confirm('⚠ Réinitialiser le PIN ?\n\nVous devrez en définir un nouveau au prochain verrouillage.'))return;
+  _clearPinStored();
+  alert('✓ PIN supprimé. Au prochain verrouillage, vous serez invité à en définir un nouveau.');
+  if(document.getElementById('lockScreen').classList.contains('active')){
+    // Si on est déjà sur l'écran de verrouillage, basculer en mode "définition"
+    _lockState.setMode=true;
+    _lockState.setStage=1;
+    _lockState.setFirstPin='';
+    _lockState.pinBuffer='';
+    _renderPinDots();
+    _updateLockUI('Définissez un PIN à 4 chiffres','set');
+  }
+}
+
+// === Listeners pour le keypad et le clavier physique ===
+document.addEventListener('DOMContentLoaded',function(){
+  var keypad=document.getElementById('lockKeypad');
+  if(keypad){
+    keypad.addEventListener('click',function(e){
+      var btn=e.target.closest('.lock-key');
+      if(!btn)return;
+      var digit=btn.getAttribute('data-digit');
+      var action=btn.getAttribute('data-action');
+      if(digit!==null&&digit!==undefined)_onPinKey(digit);
+      else if(action==='back')_onPinBack();
+      else if(action==='clear')_onPinClear();
+    });
+  }
+});
+
+// Clavier physique (uniquement si l'écran de verrouillage est actif)
+document.addEventListener('keydown',function(e){
+  // Ctrl+L → verrouiller
+  if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&(e.key==='l'||e.key==='L')){
+    e.preventDefault();
+    lockApp();
+    return;
+  }
+  // Si écran lock actif, gérer la saisie clavier
+  var ls=document.getElementById('lockScreen');
+  if(ls&&ls.classList.contains('active')){
+    if(e.key>='0'&&e.key<='9'){e.preventDefault();_onPinKey(e.key);}
+    else if(e.key==='Backspace'){e.preventDefault();_onPinBack();}
+    else if(e.key==='Escape'){e.preventDefault();_onPinClear();}
+  }
+});
+
+// ===========================================================
+// CONFIRMATION 2 ÉTAPES pour actions critiques
+// ===========================================================
+// Usage : confirmCritical('Supprimer 23 factures ?', 'Cette action est IRRÉVERSIBLE.', function(){...})
+// 1ère étape : OK/Annuler simple. Si OK → 2ème étape avec compte à rebours 3s pendant
+// lequel le bouton est désactivé. Le callback n'est exécuté qu'après la 2ème confirmation.
+var _critState={callback:null,stage:1,countdown:0,interval:null};
+
+function confirmCritical(title,message,callback){
+  _critState.callback=callback;
+  _critState.stage=1;
+  _critState.countdown=0;
+  if(_critState.interval){clearInterval(_critState.interval);_critState.interval=null;}
+  document.getElementById('critTitle').textContent=title||'ACTION CRITIQUE';
+  document.getElementById('critMsg').textContent=message||'Cette action est irréversible. Confirmer ?';
+  document.getElementById('critStep').textContent='Étape 1 / 2';
+  document.getElementById('critIcon').textContent='⚠️';
+  var btn=document.getElementById('critOkBtn');
+  btn.textContent='Continuer';
+  btn.disabled=false;
+  document.getElementById('critConfirm').classList.add('active');
+}
+
+function critCancel(){
+  if(_critState.interval){clearInterval(_critState.interval);_critState.interval=null;}
+  document.getElementById('critConfirm').classList.remove('active');
+  _critState.callback=null;
+  _critState.stage=1;
+}
+
+function critProceed(){
+  if(_critState.stage===1){
+    // Passe en étape 2 avec compte à rebours 3s
+    _critState.stage=2;
+    _critState.countdown=3;
+    document.getElementById('critStep').textContent='Étape 2 / 2 — Confirmation finale';
+    document.getElementById('critIcon').textContent='🚨';
+    var btn=document.getElementById('critOkBtn');
+    btn.disabled=true;
+    btn.textContent='Patientez '+_critState.countdown+'s…';
+    if(_critState.interval)clearInterval(_critState.interval);
+    _critState.interval=setInterval(function(){
+      _critState.countdown--;
+      if(_critState.countdown<=0){
+        clearInterval(_critState.interval);
+        _critState.interval=null;
+        btn.disabled=false;
+        btn.textContent='✓ CONFIRMER DÉFINITIVEMENT';
+      } else {
+        btn.textContent='Patientez '+_critState.countdown+'s…';
+      }
+    },1000);
+    return;
+  }
+  // Stage 2 : exécution effective
+  if(_critState.interval){clearInterval(_critState.interval);_critState.interval=null;}
+  var cb=_critState.callback;
+  document.getElementById('critConfirm').classList.remove('active');
+  _critState.callback=null;
+  _critState.stage=1;
+  if(typeof cb==='function')cb();
+}
 </script>
 
 <!-- PARAMÈTRES -->
@@ -16664,5 +16999,86 @@ document.addEventListener('DOMContentLoaded',function(){
   </div>
 </div>
 </div>
+
+<!-- ============================================================== -->
+<!-- ÉCRAN DE VERROUILLAGE — overlay plein écran avec PIN 4 chiffres -->
+<!-- ============================================================== -->
+<style>
+#lockScreen{position:fixed;inset:0;z-index:99999;background:radial-gradient(circle at center,#0f172a 0%,#020617 100%);display:none;flex-direction:column;align-items:center;justify-content:center;font-family:var(--mono);color:#fff;-webkit-print-color-adjust:exact}
+#lockScreen.active{display:flex}
+#lockScreen .lock-logo{width:120px;height:120px;border-radius:14px;background:#fff;display:flex;align-items:center;justify-content:center;margin-bottom:16px;box-shadow:0 8px 40px rgba(45,212,191,0.25);font-size:72px}
+#lockScreen .lock-brand{font-family:var(--display);font-size:28px;font-weight:900;letter-spacing:0.18em;color:#fff;margin-bottom:2px}
+#lockScreen .lock-sub{font-size:11px;color:var(--muted);letter-spacing:0.25em;margin-bottom:22px}
+#lockScreen .lock-status{font-size:13px;color:#f43f5e;margin-bottom:14px;display:flex;align-items:center;gap:8px;font-weight:700}
+#lockScreen .lock-status.set-mode{color:var(--teal)}
+#lockScreen .lock-pin-dots{display:flex;gap:14px;margin-bottom:22px;height:18px;align-items:center}
+#lockScreen .lock-pin-dot{width:14px;height:14px;border-radius:50%;background:rgba(255,255,255,0.12);border:1.5px solid rgba(255,255,255,0.2);transition:all .15s}
+#lockScreen .lock-pin-dot.filled{background:var(--teal);border-color:var(--teal);box-shadow:0 0 12px rgba(45,212,191,0.5)}
+#lockScreen .lock-pin-dot.error{background:#f43f5e;border-color:#f43f5e;animation:lockShake 0.3s}
+@keyframes lockShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+#lockScreen .lock-keypad{display:grid;grid-template-columns:repeat(3,72px);grid-gap:10px;margin-bottom:18px}
+#lockScreen .lock-key{width:72px;height:72px;border-radius:50%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;font-size:24px;font-weight:300;cursor:pointer;font-family:var(--mono);transition:all .12s;display:flex;align-items:center;justify-content:center}
+#lockScreen .lock-key:hover{background:rgba(45,212,191,0.15);border-color:var(--teal);transform:scale(1.05)}
+#lockScreen .lock-key:active{transform:scale(0.95)}
+#lockScreen .lock-key.special{font-size:18px;color:var(--muted)}
+#lockScreen .lock-time{font-size:11px;color:var(--muted);letter-spacing:0.15em;margin-top:8px}
+#lockScreen .lock-attempts{font-size:11px;color:#f43f5e;margin-top:6px;height:14px}
+#lockScreen .lock-reset{position:absolute;bottom:14px;right:14px;font-size:10px;color:var(--muted);background:none;border:1px dashed rgba(255,255,255,0.2);padding:4px 10px;border-radius:4px;cursor:pointer;font-family:var(--mono)}
+#lockScreen .lock-reset:hover{color:#f43f5e;border-color:#f43f5e}
+</style>
+<div id="lockScreen">
+  <div class="lock-logo" id="lockLogo">🔒</div>
+  <div class="lock-brand">CALINSTRUM</div>
+  <div class="lock-sub">GRC COMMERCIAL</div>
+  <div class="lock-status" id="lockStatus">🔒 Application verrouillée</div>
+  <div class="lock-pin-dots" id="lockPinDots">
+    <div class="lock-pin-dot"></div><div class="lock-pin-dot"></div><div class="lock-pin-dot"></div><div class="lock-pin-dot"></div>
+  </div>
+  <div class="lock-keypad" id="lockKeypad">
+    <button class="lock-key" data-digit="1">1</button>
+    <button class="lock-key" data-digit="2">2</button>
+    <button class="lock-key" data-digit="3">3</button>
+    <button class="lock-key" data-digit="4">4</button>
+    <button class="lock-key" data-digit="5">5</button>
+    <button class="lock-key" data-digit="6">6</button>
+    <button class="lock-key" data-digit="7">7</button>
+    <button class="lock-key" data-digit="8">8</button>
+    <button class="lock-key" data-digit="9">9</button>
+    <button class="lock-key special" data-action="back">⌫</button>
+    <button class="lock-key" data-digit="0">0</button>
+    <button class="lock-key special" data-action="clear">✕</button>
+  </div>
+  <div class="lock-time" id="lockTime">--:-- NCT</div>
+  <div class="lock-attempts" id="lockAttempts"></div>
+  <button class="lock-reset" onclick="resetPinFlow()">⚙ Réinitialiser le PIN</button>
+</div>
+
+<!-- ============================================================== -->
+<!-- MODAL CONFIRMATION 2 ÉTAPES pour actions critiques               -->
+<!-- ============================================================== -->
+<style>
+#critConfirm{position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.75);display:none;align-items:center;justify-content:center}
+#critConfirm.active{display:flex}
+#critConfirm .crit-box{background:var(--bg1);border:2px solid #f43f5e;border-radius:10px;padding:22px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(244,63,94,0.4)}
+#critConfirm .crit-icon{font-size:42px;text-align:center;margin-bottom:8px}
+#critConfirm .crit-title{font-family:var(--display);font-size:16px;font-weight:800;color:#f43f5e;text-align:center;letter-spacing:0.05em;margin-bottom:10px}
+#critConfirm .crit-msg{color:var(--text);font-size:12.5px;line-height:1.6;text-align:center;margin-bottom:16px;white-space:pre-line}
+#critConfirm .crit-step{font-size:10px;color:var(--muted);text-align:center;margin-bottom:8px;letter-spacing:0.15em;text-transform:uppercase}
+#critConfirm .crit-actions{display:flex;gap:10px;justify-content:flex-end}
+#critConfirm .crit-confirm:disabled{opacity:0.4;cursor:not-allowed}
+</style>
+<div id="critConfirm">
+  <div class="crit-box">
+    <div class="crit-icon" id="critIcon">⚠️</div>
+    <div class="crit-title" id="critTitle">ACTION CRITIQUE</div>
+    <div class="crit-step" id="critStep">Étape 1 / 2</div>
+    <div class="crit-msg" id="critMsg"></div>
+    <div class="crit-actions">
+      <button class="btn btn-ghost" onclick="critCancel()">Annuler</button>
+      <button class="btn btn-red crit-confirm" id="critOkBtn" onclick="critProceed()">Continuer</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
