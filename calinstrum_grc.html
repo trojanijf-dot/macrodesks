@@ -13439,11 +13439,6 @@ function bFA(f){
     '<p style="font-size:11px;margin-bottom:8px"><strong>Facture N° :</strong> '+esc(f.num||'')+(f.dvlie?' — Devis N° '+esc(f.dvlie):'')+'</p>'+
     '<table class="doc-tbl">'+
       '<thead><tr><th>Désignation</th><th>TGC%</th><th>Unité</th><th>Quantité</th><th style="text-align:right">Prix unitaire</th><th style="text-align:right">TOTAL HT</th></tr></thead>'+
-      // Le tfoot avec display:table-footer-group est répété en bas de chaque page imprimée.
-      // Il affiche le sous-total HT cumulé (qui ne change pas par page mais ça reste utile :
-      // sur la dernière page, c'est le total final ; sur les pages intermédiaires, c'est un
-      // rappel du grand total). Marqué "doc-tbl-running" pour styling discret en gris.
-      '<tfoot class="doc-tbl-running"><tr><td colspan="5" style="text-align:right">Sous-total HT (XPF)</td><td style="text-align:right;font-weight:700">'+fN(f.ht||0)+'</td></tr></tfoot>'+
       tbodiesHtml+
     '</table>'+
     // Bloc final groupé avec page-break-inside:avoid pour qu'il reste cohérent en bas de la dernière page
@@ -14839,13 +14834,113 @@ function printPreviewBC(){
     '<\/script>'
   ):'';
 
+  // === Script de pagination FACTURE (séparé du devis) ===
+  // Logique simple et ciblée :
+  //   1. Au load, mesure la hauteur des <tbody class="fa-section"> et <tbody class="fa-section-loose">
+  //   2. Distribue les sections sur les pages selon la capacité disponible (mesurée)
+  //   3. À la fin de chaque page intermédiaire, insère un <tbody> "Sous-total HT (page N)" avec
+  //      la VRAIE somme cumulée des lignes de cette page
+  //   4. Force un saut de page (page-break-after:always) après ce tbody de sous-total
+  //
+  // Pas de manipulation des header/info-bar (la facture utilise le système doc-fixed-footer
+  // déjà en place pour le bandeau footer répété, et le thead se répète automatiquement).
+  var facturePaginationScript=isFacturePrint?(
+    '<script>'+
+    '(function(){'+
+    'function whenReady(fn){if(document.readyState==="complete")fn();else window.addEventListener("load",fn);}'+
+    'function plog(){try{var args=Array.prototype.slice.call(arguments);console.log.apply(console,["[FAC-PGW]"].concat(args));if(window.opener&&window.opener.console){window.opener.console.log.apply(window.opener.console,["[FAC-PGW]"].concat(args));}}catch(e){}}'+
+    'whenReady(function(){'+
+      'try{'+
+        'var tbl=document.querySelector(".doc-tbl");'+
+        'if(!tbl){plog("Pas de .doc-tbl trouvé");return;}'+
+        // Récupérer toutes les sections (tbody.fa-section ou fa-section-loose) dans l'ordre
+        'var sections=Array.prototype.slice.call(tbl.querySelectorAll("tbody.fa-section, tbody.fa-section-loose"));'+
+        'plog("Sections trouvées:",sections.length);'+
+        'if(sections.length<=1){plog("Une seule section, pas de pagination nécessaire");return;}'+
+        // Retirer le tfoot doc-tbl-running existant — on va le remplacer par des sous-totaux PAR PAGE
+        'var existingTfoot=tbl.querySelector("tfoot.doc-tbl-running");'+
+        'if(existingTfoot)existingTfoot.parentNode.removeChild(existingTfoot);'+
+        // Calculer la hauteur disponible pour le tableau sur la page 1 et sur les pages suivantes
+        // A4 portrait ≈ 297mm. Marges @page:10mm top + 32mm bottom = 255mm utiles.
+        // Sur la 1ère page, on a aussi le header CALINSTRUM (~30mm) + les infos parties (~50mm) + objet (~10mm).
+        // Sur les pages suivantes, le thead se répète (~8mm) mais pas les autres entêtes.
+        // Mesure réelle : on calcule combien de pixels = 1mm au browser, puis on fait la conversion.
+        'var mmToPx=function(){var d=document.createElement("div");d.style.cssText="height:100mm;position:absolute;top:-9999px";document.body.appendChild(d);var h=d.offsetHeight/100;document.body.removeChild(d);return h;};'+
+        'var pxPerMm=mmToPx()||3.78;'+ // fallback ~3.78px/mm
+        'plog("pxPerMm:",pxPerMm);'+
+        // Capacité utile par page (en pixels) : (297mm - 10mm top - 32mm bottom) = 255mm
+        // Mais on doit retirer la zone "fixed footer" qui apparaît sur chaque page → -8mm
+        // → pages utiles ~247mm
+        'var pageCapacityPx=247*pxPerMm;'+
+        // Pour la page 1, on retire la zone occupée par le bloc parties + objet + facture N°
+        // = approximativement 90mm
+        'var page1ExtraReserved=90*pxPerMm;'+
+        'var page1Capacity=pageCapacityPx-page1ExtraReserved;'+
+        // Capacité de pages suivantes : on retire ~10mm pour le thead répété
+        'var pageNCapacity=pageCapacityPx-10*pxPerMm;'+
+        'plog("Capacités px - p1:",page1Capacity,"pN:",pageNCapacity);'+
+        // Mesurer chaque section (hauteur DOM réelle) + extraire le montant total
+        'var sectionData=sections.map(function(sec){'+
+          'var h=sec.offsetHeight;'+
+          // Calcul de la somme des lignes de cette section : dernière cellule (Total HT) de chaque <tr>
+          // EXCLURE les <tr> qui sont des bandeaux de section (colspan=6) ou des subLines KIT (colspan=2 sur dernier td)
+          'var rows=Array.prototype.slice.call(sec.querySelectorAll("tr"));'+
+          'var sectionTotal=0;'+
+          'rows.forEach(function(tr){'+
+            'var tds=tr.querySelectorAll("td");'+
+            'if(tds.length<6)return;'+ // bandeau ou subLine descriptive : skip
+            'var last=tds[tds.length-1];'+
+            'if(last.getAttribute("colspan"))return;'+ // td colspan : skip
+            'var txt=last.textContent.replace(/[\\u00a0\\s]/g,"").replace(/,/g,".");'+
+            'var v=parseFloat(txt);if(!isNaN(v))sectionTotal+=v;'+
+          '});'+
+          'return {el:sec,height:h,total:sectionTotal};'+
+        '});'+
+        'plog("SectionData:",sectionData.map(function(s){return {h:s.height,t:s.total};}));'+
+        // Distribuer les sections sur les pages
+        'var pages=[];var currentPage={sections:[],totalH:0,totalAmt:0};var isFirstPage=true;'+
+        'sectionData.forEach(function(sd){'+
+          'var cap=isFirstPage?page1Capacity:pageNCapacity;'+
+          'if(currentPage.totalH+sd.height<=cap||currentPage.sections.length===0){'+
+            'currentPage.sections.push(sd);'+
+            'currentPage.totalH+=sd.height;'+
+            'currentPage.totalAmt+=sd.total;'+
+          '} else {'+
+            // Cette section ne tient pas → nouvelle page
+            'pages.push(currentPage);'+
+            'currentPage={sections:[sd],totalH:sd.height,totalAmt:sd.total};'+
+            'isFirstPage=false;'+
+          '}'+
+        '});'+
+        'if(currentPage.sections.length>0)pages.push(currentPage);'+
+        'plog("Nombre de pages:",pages.length,"totaux:",pages.map(function(p){return p.totalAmt;}));'+
+        // Insérer un sous-total APRÈS la dernière section de chaque page (sauf la dernière page)
+        'var fmtNum=function(n){return Math.round(n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g," ");};'+
+        'for(var pi=0;pi<pages.length-1;pi++){'+
+          'var page=pages[pi];'+
+          'var lastSection=page.sections[page.sections.length-1].el;'+
+          // Créer un nouveau <tbody> de sous-total + saut de page forcé
+          'var subtotalTbody=document.createElement("tbody");'+
+          'subtotalTbody.className="fa-subtotal-row";'+
+          'subtotalTbody.style.cssText="page-break-after:always;break-after:page;";'+
+          'subtotalTbody.innerHTML="<tr><td colspan=\\"5\\" style=\\"padding:6px 8px;text-align:right;background:#f1f5f9;color:#1e3a5f;font-weight:700;font-size:11px;font-style:italic;border-top:2px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact\\">Sous-total HT page "+(pi+1)+" (XPF)</td><td style=\\"padding:6px 8px;text-align:right;background:#f1f5f9;color:#1e3a5f;font-weight:800;font-size:11.5px;border-top:2px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact\\">"+fmtNum(page.totalAmt)+"</td></tr>";'+
+          // Insérer juste après la dernière section de la page
+          'lastSection.parentNode.insertBefore(subtotalTbody,lastSection.nextSibling);'+
+        '}'+
+        'plog("Pagination facture terminée");'+
+      '}catch(e){plog("Erreur:",e.message,e.stack);}'+
+    '});'+
+    '})();'+
+    '<\/script>'
+  ):'';
+
   // Échapper les caractères HTML spéciaux du titre (<, >, &, ", ') pour éviter
   // de casser le markup <title> ou d'introduire une faille XSS via l'objet du devis.
   var escTitle=printWindowTitle.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   var iframeDoc=
     '<!doctype html><html><head><meta charset="utf-8"><title>'+escTitle+'</title>'+
     stylesHtml+printCss+
-    '</head><body>'+docHtml+paginationScript+'</body></html>';
+    '</head><body>'+docHtml+paginationScript+facturePaginationScript+'</body></html>';
 
   // === Pipeline window.open (au lieu d'iframe cachée) ===
   // Pourquoi : Chrome rend différemment le contenu d\'une iframe en visibility:hidden
