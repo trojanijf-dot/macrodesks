@@ -161,6 +161,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .alert-row.today{border-left:3px solid var(--amber)}
 .alert-row.soon{border-left:3px solid var(--blue)}
 .filter-btn{padding:4px 11px;border-radius:4px;border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--muted);font-family:var(--mono);font-size:9.5px;cursor:pointer;transition:all .15s}
+/* Petit badge rond dans les boutons de filtre, affichant le nombre d'éléments correspondants */
+.filter-count{display:inline-block;min-width:18px;padding:1px 6px;margin-left:4px;background:rgba(255,255,255,.08);color:inherit;border-radius:9px;font-size:9px;font-weight:700;text-align:center;vertical-align:middle;line-height:1.3}
+.filter-btn.active .filter-count{background:rgba(0,0,0,.25);color:#fff}
+.filter-btn-type.active .filter-count{background:rgba(0,0,0,.25);color:#fff}
 .filter-btn.active{background:var(--teal);border-color:var(--teal);color:#000;font-weight:700}
 .filter-btn-type{padding:3px 9px;border-radius:4px;border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--muted);font-family:var(--mono);font-size:9px;cursor:pointer;transition:all .15s}
 .filter-btn-type.active{background:rgba(45,212,191,.18);border-color:var(--teal);color:var(--teal);font-weight:700}
@@ -3343,7 +3347,44 @@ function renderUrgent(){
 function sortBy(key){if(currentSortKey===key)currentSortDir*=-1;else{currentSortKey=key;currentSortDir=1;}renderTable();}
 function setFilter(f,btn){activeFilter=f;document.querySelectorAll('.filter-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');renderTable();}
 function setTypeFilter(t,btn){activeTypeFilter=t;document.querySelectorAll('.filter-btn-type').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');renderTable();}
+// Met à jour les compteurs affichés dans les badges des filtres Suivi Factures.
+// Les compteurs reflètent l'état réel de getSuiviSource() (DB.factures+DB.invoices après dédoublon)
+// et ignorent la recherche en cours (le compteur est une vue d'ensemble, pas du résultat filtré).
+// Appelée à chaque renderTable() pour rester synchrone avec les données.
+function updateFilterCounts(){
+  var src=Array.isArray(invoices)?invoices:[];
+  // Compteurs par statut
+  var counts={all:src.length,paid:0,partial:0,pending:0,late:0,prebilled:0};
+  // Compteurs par type
+  var typeCounts={all:src.length,fourniture:0,prestation:0,mixte:0};
+  src.forEach(function(i){
+    var st=getStatus(i);
+    if(st==='paid')counts.paid++;
+    else if(st==='partial')counts.partial++;
+    else if(st==='late')counts.late++;
+    else if(st==='pending')counts.pending++;
+    if(typeof isPrebilled==='function'&&isPrebilled(i))counts.prebilled++;
+    var typ=i.type||'Fourniture';
+    if(typ==='Fourniture')typeCounts.fourniture++;
+    else if(typ==='Prestation de service')typeCounts.prestation++;
+    else if(typ==='Fourniture + Prestation')typeCounts.mixte++;
+  });
+  // Helper pour mettre à jour un compteur (n'écrit rien si l'élément n'existe pas)
+  function setCnt(id,n){var el=document.getElementById(id);if(el)el.textContent=n;}
+  setCnt('cnt-all',counts.all);
+  setCnt('cnt-paid',counts.paid);
+  setCnt('cnt-partial',counts.partial);
+  setCnt('cnt-pending',counts.pending);
+  setCnt('cnt-late',counts.late);
+  setCnt('cnt-prebilled',counts.prebilled);
+  setCnt('cnt-type-all',typeCounts.all);
+  setCnt('cnt-type-fourniture',typeCounts.fourniture);
+  setCnt('cnt-type-prestation',typeCounts.prestation);
+  setCnt('cnt-type-mixte',typeCounts.mixte);
+}
 function renderTable(){
+  // Mettre à jour les compteurs des badges de filtres avec les valeurs actuelles
+  updateFilterCounts();
   var search=(gvg('search-input')||'').toLowerCase();
   var data=invoices.filter(function(i){
     var st=getStatus(i);
@@ -14418,12 +14459,12 @@ function printPreviewBC(){
       // au bord physique de la feuille. On utilise bottom:8mm pour positionner le bandeau
       // 8mm au-dessus du bord (juste au-dessus du n° de page qui est en @bottom-right).
       // Le contenu paginé s'arrête à la marge basse (22mm), donc aucun chevauchement.
-      '.doc-fixed-footer{position:fixed!important;bottom:8mm!important;left:0!important;right:0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
-      '.doc-fixed-footer .doc-footer-bar{margin:0!important;background:#1e3a5f!important;color:#fff!important;text-align:center!important;padding:5px 10mm!important;font-size:9px!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
-      // Phrase rouge "Opération réalisée en franchise de taxe..." dans le wrapper fixed,
-      // juste au-dessus du bandeau bleu. Marge top:0 et padding réduit pour qu\'elle reste
-      // proche du bandeau sans gaspiller l\'espace réservé.
-      '.doc-fixed-footer .doc-legal{margin:0 0 3px 0!important;padding:0 10mm!important;font-size:9.5px!important;color:#cc2200!important;font-style:italic!important;text-align:center!important;}'+
+      '.doc-fixed-footer{position:fixed!important;bottom:8mm!important;left:0!important;right:0!important;display:flex!important;flex-direction:column!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
+      // Phrase rouge en PREMIER (au-dessus du bandeau bleu) — order:1 garantit l'ordre
+      // visuel indépendamment de l'ordre HTML, en cas où Chrome aurait inversé.
+      '.doc-fixed-footer .doc-legal{order:1!important;margin:0 0 3px 0!important;padding:0 10mm!important;font-size:9.5px!important;color:#cc2200!important;font-style:italic!important;text-align:center!important;}'+
+      // Bandeau bleu en DERNIER (tout en bas, juste au-dessus du n° de page Chrome)
+      '.doc-fixed-footer .doc-footer-bar{order:2!important;margin:0!important;background:#1e3a5f!important;color:#fff!important;text-align:center!important;padding:5px 10mm!important;font-size:9px!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
       '.print-wrapper>thead>tr>td,.print-wrapper>tbody>tr>td{padding:0!important;margin:0!important;border:0!important;vertical-align:top!important;}'+
       '.print-wrapper>thead>tr>td{padding-bottom:6mm!important;}'+
       '.bc-prop-block{page-break-inside:auto;break-inside:auto;}'+
