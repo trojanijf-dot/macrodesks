@@ -2130,6 +2130,11 @@ function getSuiviSource(){
       client:f.client||'SLN',
       dvlie:f.dvlie||'',
       dateEncaissement:f.dateEncaissement||'',
+      // CRITIQUE : on doit préserver linkedBCs depuis DB.factures pour que les calculs de
+      // marge (getCoutEmerson/getMargeBrute via getLinkedBCs) trouvent les BC liés.
+      // Sans ça, après renderSuivi() (qui rebuilt invoices via getSuiviSource()), la modal
+      // BC linker affiche "Aucun BC lié" même si DB.factures contient bien le lien.
+      linkedBCs:Array.isArray(f.linkedBCs)?f.linkedBCs.slice():[],
       _fromGRC:true,         // flag : provient de DB.factures
       _factureId:f.id        // pour ouvrir la facture GRC depuis Suivi/Factures
     });
@@ -2705,46 +2710,40 @@ function setBCPaidEmerson(bcId,paid){
 }
 // Lier un BC Emerson à une facture du Suivi
 function linkBCToInvoice(invId,bcId){
-  console.log('[linkBC] CALLED with invId='+invId+' bcId='+bcId);
   // Recherche dans la VRAIE source de vérité (DB.factures puis DB.invoices)
-  // au lieu de la variable globale `invoices` qui peut contenir des objets virtuels.
+  // au lieu de la variable globale `invoices` qui peut contenir des objets virtuels périmés.
   var target=null;
-  var targetSource='';
   if(Array.isArray(DB.factures)){
     target=DB.factures.find(function(x){return x.id===invId;});
-    if(target)targetSource='factures';
   }
   if(!target&&Array.isArray(DB.invoices)){
     target=DB.invoices.find(function(x){return x.id===invId;});
-    if(target)targetSource='invoices';
   }
   if(!target){
+    // Fallback : id virtuel généré depuis DB.factures via getSuiviSource
     var virt=(typeof invoices!=='undefined')?invoices.find(function(x){return x.id===invId;}):null;
-    console.log('[linkBC] virt found:', virt);
     if(virt){
       var grcId=virt._factureId||virt.grcFactureId;
       if(grcId)target=DB.factures.find(function(x){return x.id===grcId;});
-      if(target)targetSource='factures';
     }
   }
-  console.log('[linkBC] target=', target, 'source=', targetSource);
   if(!target){
-    console.error('[linkBC] FAIL: aucune facture trouvée pour id='+invId);
     alert('❌ Facture introuvable (id '+invId+'). Le lien n\'a pas été créé.');
     return;
   }
   if(!target.linkedBCs)target.linkedBCs=[];
   if(target.linkedBCs.indexOf(bcId)<0){
     target.linkedBCs.push(bcId);
-    console.log('[linkBC] BC '+bcId+' ajouté à '+target.num+'. linkedBCs=', target.linkedBCs);
-  } else {
-    console.log('[linkBC] BC déjà présent dans linkedBCs');
+  }
+  // Synchronise aussi la variable invoices (vue agrégée) pour que le rendu suivant voit les modifs
+  if(typeof invoices!=='undefined'){
+    var inv2=invoices.find(function(x){return x.id===invId;});
+    if(inv2)inv2.linkedBCs=target.linkedBCs.slice();
   }
   saveDB();
   if(typeof renderBCLinker==='function')renderBCLinker();
   if(typeof renderSuivi==='function')renderSuivi();
   if(typeof rDash==='function')rDash();
-  console.log('[linkBC] DONE');
 }
 function unlinkBCFromInvoice(invId,bcId){
   // Même logique : on cherche dans la source de vérité
@@ -2779,8 +2778,17 @@ function openBCLinker(invId){
 }
 function renderBCLinker(){
   if(!bcLinkerInvId)return;
+  // IMPORTANT : on lit linkedBCs depuis la SOURCE DE VÉRITÉ (DB.factures puis DB.invoices)
+  // au lieu de la variable globale `invoices` qui peut être périmée juste après linkBCToInvoice.
+  var truth=null;
+  if(Array.isArray(DB.factures))truth=DB.factures.find(function(x){return x.id===bcLinkerInvId;});
+  if(!truth&&Array.isArray(DB.invoices))truth=DB.invoices.find(function(x){return x.id===bcLinkerInvId;});
+  // Pour les autres infos (num, intitule, montant) on utilise toujours invoices
+  // (vue agrégée Suivi, qui a les champs unifiés). Mais linkedBCs vient de truth.
   var inv=invoices.find(function(x){return x.id===bcLinkerInvId;});
   if(!inv)return;
+  // Synchroniser linkedBCs depuis la source de vérité (cas où invoices est en cache périmé)
+  if(truth&&truth.linkedBCs)inv.linkedBCs=truth.linkedBCs;
   var search=(gvg('bclink-search')||'').toLowerCase();
   var linkedIds=(inv.linkedBCs||[]);
   var allBCs=DB.bcs||[];
@@ -2863,7 +2871,7 @@ function renderBCLinker(){
             '<div style="font-size:11px;font-weight:700">'+fN(b.total||0)+' '+(b.devise||'AUD')+'</div>'+
             '<div style="font-size:9.5px;color:var(--muted)">≈ '+fN(coutXPF)+' XPF</div>'+
           '</div>'+
-          '<button class="btn btn-teal btn-sm" onclick="event.stopPropagation();console.log(\'[+Lier CLICKED] invId=\','+bcLinkerInvId+',\' bcId=\','+b.id+');linkBCToInvoice('+bcLinkerInvId+','+b.id+');renderBCLinker();">+ Lier</button>'+
+          '<button class="btn btn-teal btn-sm" onclick="event.stopPropagation();linkBCToInvoice('+bcLinkerInvId+','+b.id+');renderBCLinker();">+ Lier</button>'+
         '</div>';
       }).join('')+'</div>';
     }
