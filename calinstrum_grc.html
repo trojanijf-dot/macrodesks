@@ -545,12 +545,12 @@ tr:hover td{background:rgba(255,255,255,.02)}
   </div>
   <div class="tab-pane" id="suiviTab-liste">
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
-      <button class="filter-btn active" onclick="setFilter('all',this)">Toutes</button>
-      <button class="filter-btn" onclick="setFilter('paid',this)">✓ Payées</button>
-      <button class="filter-btn" onclick="setFilter('partial',this)">⟳ Partielles</button>
-      <button class="filter-btn" onclick="setFilter('pending',this)">○ En cours</button>
-      <button class="filter-btn" onclick="setFilter('late',this)">⚠ En retard</button>
-      <button class="filter-btn" onclick="setFilter('prebilled',this)" style="border-color:#a78bfa;color:#a78bfa">📦 Backlog</button>
+      <button class="filter-btn active" onclick="setFilter('all',this)">Toutes <span class="filter-count" id="cnt-all"></span></button>
+      <button class="filter-btn" onclick="setFilter('paid',this)">✓ Payées <span class="filter-count" id="cnt-paid"></span></button>
+      <button class="filter-btn" onclick="setFilter('partial',this)">⟳ Partielles <span class="filter-count" id="cnt-partial"></span></button>
+      <button class="filter-btn" onclick="setFilter('pending',this)">○ En cours <span class="filter-count" id="cnt-pending"></span></button>
+      <button class="filter-btn" onclick="setFilter('late',this)">⚠ En retard <span class="filter-count" id="cnt-late"></span></button>
+      <button class="filter-btn" onclick="setFilter('prebilled',this)" style="border-color:#a78bfa;color:#a78bfa">📦 Backlog <span class="filter-count" id="cnt-prebilled"></span></button>
       <input class="search-input" id="search-input" placeholder="Rechercher..." oninput="renderTable()" style="margin-left:auto;max-width:200px">
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadExcelSync()" title="Synchronise depuis votre fichier Excel SLN 2026 (upload). Importe factures + devis simultanément, anti-doublon strict." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📥 Synchroniser depuis Excel</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadBCSLNPdf()" title="Importe un PDF de BC SLN GMAO. Matche automatiquement les articles avec votre grille tarifaire (devis cadre) et crée la facture pré-remplie." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Import BC SLN (PDF)</button>
@@ -567,10 +567,10 @@ tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
       <span style="font-size:9.5px;color:var(--muted);font-family:var(--mono);margin-right:2px">TYPE :</span>
-      <button class="filter-btn-type active" onclick="setTypeFilter('all',this)">Tous</button>
-      <button class="filter-btn-type" onclick="setTypeFilter('Fourniture',this)">🔧 Fourniture</button>
-      <button class="filter-btn-type" onclick="setTypeFilter('Prestation de service',this)">🛠 Prestation</button>
-      <button class="filter-btn-type" onclick="setTypeFilter('Fourniture + Prestation',this)">🔗 Mixte</button>
+      <button class="filter-btn-type active" onclick="setTypeFilter('all',this)">Tous <span class="filter-count" id="cnt-type-all"></span></button>
+      <button class="filter-btn-type" onclick="setTypeFilter('Fourniture',this)">🔧 Fourniture <span class="filter-count" id="cnt-type-fourniture"></span></button>
+      <button class="filter-btn-type" onclick="setTypeFilter('Prestation de service',this)">🛠 Prestation <span class="filter-count" id="cnt-type-prestation"></span></button>
+      <button class="filter-btn-type" onclick="setTypeFilter('Fourniture + Prestation',this)">🔗 Mixte <span class="filter-count" id="cnt-type-mixte"></span></button>
     </div>
     <div class="tbl-wrap">
       <table><thead><tr>
@@ -14341,8 +14341,18 @@ function printPreviewBC(){
   var fixedFooterHtml='';
   if(!isDevisPrint){
     var fbEl=docNode.querySelector('.doc-footer-bar');
+    var legalEl=docNode.querySelector('.doc-legal');
     if(fbEl){
-      fixedFooterHtml='<div class="doc-fixed-footer">'+fbEl.outerHTML+'</div>';
+      // Pour les factures : on inclut AUSSI .doc-legal (la phrase rouge "Opération réalisée
+      // en franchise de taxe...") dans le wrapper fixed pour qu'elle apparaisse en bas de
+      // CHAQUE page imprimée, juste au-dessus du bandeau bleu CALINSTRUM.
+      // Pour les BC : seul le bandeau bleu est répété (pas de doc-legal en BC).
+      var legalHtml='';
+      if(isFacturePrint&&legalEl){
+        legalHtml=legalEl.outerHTML;
+        legalEl.parentNode.removeChild(legalEl);
+      }
+      fixedFooterHtml='<div class="doc-fixed-footer">'+legalHtml+fbEl.outerHTML+'</div>';
       fbEl.parentNode.removeChild(fbEl);
     }
   }
@@ -14375,7 +14385,7 @@ function printPreviewBC(){
       //    une marge de respiration (16mm). Sinon le tfoot répété chevauche le bandeau.
       //  - BC + autres : 22mm — réserve la zone pour le bandeau bleu fixed seul
       (isDevisPrint?'@page{size:A4 portrait;margin:10mm 10mm 10mm 10mm;}':
-       isFacturePrint?'@page{size:A4 portrait;margin:10mm 10mm 32mm 10mm;}':
+       isFacturePrint?'@page{size:A4 portrait;margin:10mm 10mm 38mm 10mm;}':
        '@page{size:A4 portrait;margin:10mm 10mm 22mm 10mm;}')+
       '@page{@bottom-right{content:"Page " counter(page) " / " counter(pages);font-family:Inter,Calibri,Arial,sans-serif;font-size:9pt;color:#1e3a5f;}}'+
       'html,body{margin:0!important;padding:0!important;background:#fff!important;}'+
@@ -14410,6 +14420,10 @@ function printPreviewBC(){
       // Le contenu paginé s'arrête à la marge basse (22mm), donc aucun chevauchement.
       '.doc-fixed-footer{position:fixed!important;bottom:8mm!important;left:0!important;right:0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
       '.doc-fixed-footer .doc-footer-bar{margin:0!important;background:#1e3a5f!important;color:#fff!important;text-align:center!important;padding:5px 10mm!important;font-size:9px!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
+      // Phrase rouge "Opération réalisée en franchise de taxe..." dans le wrapper fixed,
+      // juste au-dessus du bandeau bleu. Marge top:0 et padding réduit pour qu\'elle reste
+      // proche du bandeau sans gaspiller l\'espace réservé.
+      '.doc-fixed-footer .doc-legal{margin:0 0 3px 0!important;padding:0 10mm!important;font-size:9.5px!important;color:#cc2200!important;font-style:italic!important;text-align:center!important;}'+
       '.print-wrapper>thead>tr>td,.print-wrapper>tbody>tr>td{padding:0!important;margin:0!important;border:0!important;vertical-align:top!important;}'+
       '.print-wrapper>thead>tr>td{padding-bottom:6mm!important;}'+
       '.bc-prop-block{page-break-inside:auto;break-inside:auto;}'+
@@ -14920,14 +14934,20 @@ function printPreviewBC(){
         'if(currentPage.sections.length>0)pages.push(currentPage);'+
         'plog("Nombre de pages:",pages.length,"lignes:",pages.map(function(p){return p.lines;}),"totaux:",pages.map(function(p){return p.total;}));'+
         // === INSERTION DES SOUS-TOTAUX ===
+        // Un sous-total est inséré après la dernière section de CHAQUE page de contenu —
+        // y compris la dernière. Sur la dernière page de contenu, le sous-total = total final
+        // et le page-break-after:always force le doc-final-block (totaux + signatures) à
+        // démarrer sur la page suivante. Sans ça, le bloc final pouvait se coller au sous-total
+        // de la dernière page de contenu et créer un visuel confus.
         'var fmtNum=function(n){return Math.round(n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g," ");};'+
-        'for(var pi=0;pi<pages.length-1;pi++){'+
+        'for(var pi=0;pi<pages.length;pi++){'+
           'var page=pages[pi];'+
           'var lastSection=page.sections[page.sections.length-1].el;'+
           'var subtotalTbody=document.createElement("tbody");'+
           'subtotalTbody.className="fa-subtotal-row";'+
-          'subtotalTbody.style.cssText="page-break-after:always;break-after:page;";'+
-          // Cellule de sous-total : colspan=6 + white-space:nowrap pour éviter que le nombre se casse en 2 lignes
+          // Page-break-after:always sur toutes sauf la dernière page (pour ne pas créer une page blanche après)
+          'var breakAfter=(pi<pages.length-1)?"page-break-after:always;break-after:page;":"";'+
+          'subtotalTbody.style.cssText=breakAfter;'+
           'subtotalTbody.innerHTML="<tr><td colspan=\\"5\\" style=\\"padding:6px 8px;text-align:right;background:#f1f5f9;color:#1e3a5f;font-weight:700;font-size:11px;font-style:italic;border-top:2px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact;white-space:nowrap\\">Sous-total HT page "+(pi+1)+" (XPF)</td><td style=\\"padding:6px 8px;text-align:right;background:#f1f5f9;color:#1e3a5f;font-weight:800;font-size:11.5px;border-top:2px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact;white-space:nowrap\\">"+fmtNum(page.total)+"</td></tr>";'+
           'lastSection.parentNode.insertBefore(subtotalTbody,lastSection.nextSibling);'+
         '}'+
