@@ -8656,105 +8656,155 @@ function parseLegacyDevisTextV1(text){
   if(mObjet)out.objet=mObjet[1].trim().replace(/\s+/g,' ');
 
   // Lignes du tableau
+  // === ALGORITHME 2-PASS ===
+  // PASS 1 : classer chaque ligne du tableau en :
+  //   - 'header'    : MAIN D'ŒUVRE / FOURNITURE / FRET / etc.
+  //   - 'meta'      : Désignation/TGC/Montant/Banque/Page/Remarque/etc. (ignorée)
+  //   - 'item'      : ligne avec unité + chiffres (item du devis)
+  //                   sous-types : 'item-with-desc' (désignation in-line) ou 'item-bare' (sans désignation)
+  //   - 'descriptive' : ligne de texte descriptif (orphan, soit préfixe soit continuation)
+  //
+  // PASS 2 : pour chaque BLOC d'items consécutifs sans désignation in-line, joindre
+  //   TOUS les orphans descriptifs entre le précédent header/item-with-desc et la
+  //   FIN du bloc. Cette désignation commune est appliquée à tous les items du bloc.
+  //
+  // Cela permet de gérer correctement les rowspan PDF où plusieurs lignes "H sup",
+  // "H tech" partagent une seule grande description.
   var unitRegex=/(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|jour|jours|U|lot|Lot|forfait|Forfait|km|m\b)/i;
-  var currentSection='service';
-  for(var k=0;k<rawLines.length;k++){
-    var line2=rawLines[k];
-    if(!line2)continue;
-    if(/MAIN\s*D['\u2019]?\s*[ŒOE]+UVRE/i.test(line2)){currentSection='service';continue;}
-    if(/^FOURNITURE\b/i.test(line2)){currentSection='fourniture';continue;}
-    // Section FRET : reconnaît plusieurs intitulés observés sur les templates Excel CALINSTRUM :
-    //   - FRET (seul)
-    //   - TRANSPORT
-    //   - FRET / FRAIS LOCAUX
-    //   - FRET / FRAIS DIVERS
-    //   - FRAIS LOCAUX (seul)
-    //   - FRAIS DIVERS (seul)
-    //   - Total FRET + Assurance (intitulé non-standard observé)
-    // IMPORTANT : on vérifie que la ligne n'est PAS un item (= pas d'unité ni de chiffre dans
-    // les colonnes qui suivent). Sinon une ligne du type "FRET/FRAIS LOCAUX | lot | 1 | 35000"
-    // serait identifiée comme header au lieu d'être traitée comme item de fret.
-    var firstCol=line2.replace(/\s*\|.*$/,'').trim();
-    var hasItemColumns=/\|[^|]*\b(?:lot|Lot|U|forfait|Forfait|H\s*sup|H\s*tech|H\s*qual|jour|jours|km)\b/i.test(line2);
-    if(/^(?:FRET\b|TRANSPORT\b|FRAIS\s+LOCAUX|FRAIS\s+DIVERS|FRET\s*\/\s*FRAIS|Total\s+FRET)/i.test(firstCol) && !hasItemColumns){
-      currentSection='fret';
+
+  // === PASS 1 : classification ===
+  function classifyV1(line){
+    var trimmed=line.trim();
+    if(!trimmed)return {type:'empty'};
+    if(/MAIN\s*D['\u2019]?\s*[ŒOE]+UVRE/i.test(line))return {type:'header',section:'service'};
+    if(/^FOURNITURE\b/i.test(line))return {type:'header',section:'fourniture'};
+    var firstColCheck=line.replace(/\s*\|.*$/,'').trim();
+    var hasItemColumnsCheck=/\|[^|]*\b(?:lot|Lot|U|forfait|Forfait|H\s*sup|H\s*tech|H\s*qual|jour|jours|km)\b/i.test(line);
+    if(/^(?:FRET\b|TRANSPORT\b|FRAIS\s+LOCAUX|FRAIS\s+DIVERS|FRET\s*\/\s*FRAIS|Total\s+FRET)/i.test(firstColCheck) && !hasItemColumnsCheck){
+      return {type:'header',section:'fret'};
+    }
+    if(/^(Désignation|TGC|Montant|Remarque|Banque|Code|IBAN|BIC|Le\s+Client|Signature|RIDET|Adresse|T[ée]l|e-?mail|Op[ée]ration|D[ée]lai|Validit|Paiement|Modalit|R[èe]glement|Nom\s+du)/i.test(line))return {type:'meta'};
+    if(/^Page\s+\d+/i.test(line))return {type:'meta'};
+    // Tenter de parser comme item
+    var partsCl=line.split(/\s*\|\s*/).map(function(s){return s.trim();}).filter(Boolean);
+    var unitClPos=-1, unitCl='';
+    if(partsCl.length>=4){
+      for(var pii=0;pii<partsCl.length;pii++){
+        if(unitRegex.test(partsCl[pii]) && partsCl[pii].length<=10){
+          unitClPos=pii;unitCl=partsCl[pii];break;
+        }
+      }
+    }
+    if(unitClPos>=0){
+      var afterCl=partsCl.slice(unitClPos+1);
+      var numsCl=[];
+      afterCl.forEach(function(p){
+        var nn=parseFloat(p.replace(/\s/g,'').replace(',','.'));
+        if(!isNaN(nn))numsCl.push(nn);
+      });
+      if(numsCl.length>=2){
+        var designationCl=partsCl.slice(0,unitClPos).join(' ').trim();
+        // Détection TGC%
+        var tgcPctCl=0;
+        for(var pjj=0;pjj<partsCl.length;pjj++){
+          var pctMcl=partsCl[pjj].match(/^(\d+(?:[,.]\d+)?)\s*%$/);
+          if(pctMcl){
+            var vCl=parseFloat(pctMcl[1].replace(',','.'));
+            if([0,3,6,11,22].indexOf(vCl)>=0){tgcPctCl=vCl;break;}
+          }
+        }
+        designationCl=designationCl.replace(/\s+(?:0|3|6|11|22)\s*%\s*$/,'').trim();
+        return {type:'item',designation:designationCl,unit:unitCl,nums:numsCl,tgc:tgcPctCl,raw:line};
+      }
+    }
+    // Tentative regex inline complète (cas où pdf.js a tout collé sans pipes)
+    var mInline=line.match(/^(.+?)\s+(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)\s+(\d+(?:[\s,.]\d+)*)\s+(\d+(?:[\s,.]\d+)*)\s+(\d+(?:[\s,.]\d+)*)\s*$/i);
+    if(mInline){
+      var nIn=[parseFloat(mInline[3].replace(/\s/g,'').replace(',','.')),
+              parseFloat(mInline[4].replace(/\s/g,'').replace(',','.')),
+              parseFloat(mInline[5].replace(/\s/g,'').replace(',','.'))];
+      var pctIn=line.match(/\b(0|3|6|11|22)\s*%/);
+      var tgcIn=pctIn?parseFloat(pctIn[1]):0;
+      var dIn=mInline[1].trim();
+      if(pctIn)dIn=dIn.replace(/\b(?:0|3|6|11|22)\s*%\s*/,'').trim();
+      return {type:'item',designation:dIn,unit:mInline[2],nums:nIn,tgc:tgcIn,raw:line};
+    }
+    // Sinon : descriptif (orphan)
+    var clean=partsCl.join(' ').replace(/\s+/g,' ').trim();
+    if(clean.length>2 && !/^\d[\d\s.,]*$/.test(clean)){
+      return {type:'descriptive',text:clean};
+    }
+    return {type:'empty'};
+  }
+
+  var classifiedV1=rawLines.map(classifyV1);
+
+  // === PASS 2 : assignation des descriptifs aux items ===
+  // Un BLOC = série d'items (item-with-desc OU item-bare) entourés par des descriptives.
+  // Pour chaque item-bare, on collecte TOUS les descriptifs qui le précèdent jusqu'au
+  // dernier item-with-desc OU header (= début de bloc descriptif partagé).
+  // Pour les item-bare consécutifs, ils partagent le même bloc descriptif accumulé,
+  // y compris les descriptifs entrelacés entre eux (cas pdf.js qui interleave les lignes
+  // wrapped d'un grand bloc avec les lignes d'item).
+  var currentSectionV1='service';
+  for(var ki=0;ki<classifiedV1.length;ki++){
+    var ci=classifiedV1[ki];
+    if(ci.type==='header'){
+      currentSectionV1=ci.section;
       continue;
     }
-    if(/^(Désignation|TGC|Montant|Remarque|Banque|Code|IBAN|BIC|Le\s+Client|Signature|RIDET|Adresse|T[ée]l|e-?mail|Op[ée]ration|D[ée]lai|Validit|Paiement|Modalit|R[èe]glement|Nom\s+du)/i.test(line2))continue;
-    if(/^Page\s+\d+/i.test(line2))continue;
+    if(ci.type!=='item')continue;
 
-    var parts=line2.split(/\s*\|\s*/).map(function(s){return s.trim();}).filter(Boolean);
-    var nums=[],unit='',designation='',foundUnit=false,tgcPct=0;
-    if(parts.length>=4){
-      for(var pi=0;pi<parts.length;pi++){
-        if(unitRegex.test(parts[pi]) && parts[pi].length<=10){
-          unit=parts[pi].trim();
-          designation=parts.slice(0,pi).join(' ').trim();
-          var afterUnit=parts.slice(pi+1);
-          afterUnit.forEach(function(p){
-            var num=parseFloat(p.replace(/\s/g,'').replace(',','.'));
-            if(!isNaN(num))nums.push(num);
-          });
-          // Détection TGC% par ligne :
-          // Sur les templates Excel non-exo, le taux TGC peut apparaître soit AVANT l'unité
-          // (ex: "Désignation | 22% | U | 1 | 1000 | 1220"), soit APRÈS (rare).
-          // Cherche un pourcentage dans toutes les parts, prioritairement dans les premières.
-          // Valeurs TGC valides en NC : 0, 3, 6, 11, 22.
-          for(var pj=0;pj<parts.length;pj++){
-            var pctMatch=parts[pj].match(/^(\d+(?:[,.]\d+)?)\s*%$/);
-            if(pctMatch){
-              var pctVal=parseFloat(pctMatch[1].replace(',','.'));
-              // Garder seulement les taux TGC standards de Nouvelle-Calédonie
-              if([0,3,6,11,22].indexOf(pctVal)>=0){
-                tgcPct=pctVal;
-                break;
-              }
-            }
-          }
-          // Nettoyer la désignation : retirer un éventuel "X%" qui aurait été aspiré dedans
-          // (cas où la colonne TGC est juste avant l'unité dans le tableau)
-          designation=designation.replace(/\s+(?:0|3|6|11|22)\s*%\s*$/,'').trim();
-          foundUnit=true;
-          break;
+    var qte=ci.nums[0], pu=ci.nums[1];
+    if(!(qte>0))continue;
+    var finalDesignation=ci.designation;
+
+    // Si l'item n'a pas de désignation in-line, reconstruire depuis les descriptifs alentour
+    if(!finalDesignation){
+      // Trouver le DÉBUT du bloc : remonter jusqu'au précédent item-with-desc OU header
+      // (en collectant les descriptifs)
+      var blockStart=ki;
+      for(var bi=ki-1;bi>=0;bi--){
+        var cb=classifiedV1[bi];
+        if(cb.type==='header')break;
+        if(cb.type==='item' && cb.designation)break;
+        // On continue à reculer (descriptifs et item-bare passés)
+        blockStart=bi;
+      }
+      // Trouver la FIN du bloc : avancer jusqu'au prochain item-with-desc OU header
+      // (pour collecter les descriptifs entrelacés entre les item-bare)
+      var blockEnd=ki;
+      for(var bj=ki+1;bj<classifiedV1.length;bj++){
+        var cf=classifiedV1[bj];
+        if(cf.type==='header')break;
+        if(cf.type==='item' && cf.designation)break;
+        blockEnd=bj;
+      }
+      // Assembler tous les descriptifs du bloc
+      var pieces=[];
+      for(var bk=blockStart;bk<=blockEnd;bk++){
+        if(classifiedV1[bk].type==='descriptive'){
+          pieces.push(classifiedV1[bk].text);
         }
       }
+      finalDesignation=pieces.join(' ').replace(/\s+/g,' ').trim();
     }
-    if(!foundUnit){
-      var m=line2.match(/^(.+?)\s+(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)\s+(\d+(?:[\s,.]\d+)*)\s+(\d+(?:[\s,.]\d+)*)\s+(\d+(?:[\s,.]\d+)*)\s*$/i);
-      if(m){
-        designation=m[1].trim();
-        unit=m[2].trim();
-        nums=[parseFloat(m[3].replace(/\s/g,'').replace(',','.')),
-              parseFloat(m[4].replace(/\s/g,'').replace(',','.')),
-              parseFloat(m[5].replace(/\s/g,'').replace(',','.'))];
-        // Détecter un TGC% éventuel dans la désignation (ex : "Désignation 22% ...")
-        var pctInLine=line2.match(/\b(0|3|6|11|22)\s*%/);
-        if(pctInLine){
-          tgcPct=parseFloat(pctInLine[1]);
-          // Retirer le pourcentage de la désignation pour propreté
-          designation=designation.replace(/\b(?:0|3|6|11|22)\s*%\s*/,'').trim();
-        }
-        foundUnit=true;
-      }
-    }
-    if(foundUnit && nums.length>=2){
-      var qte=nums[0], pu=nums[1];
-      if(designation && qte>0){
-        var unitNorm=unit.replace(/\./g,'').replace(/\s+/g,' ').trim();
-        if(/^H\s*sup/i.test(unitNorm))unitNorm='H sup';
-        else if(/^H\s*tech/i.test(unitNorm))unitNorm='H tech';
-        else if(/^H\s*qual/i.test(unitNorm))unitNorm='H qual';
-        else if(/^lot$/i.test(unitNorm))unitNorm='Lot';
-        else if(/^forfait$/i.test(unitNorm))unitNorm='Forfait';
-        out.lignes.push({
-          designation:designation,
-          unite:unitNorm,
-          qte:qte,
-          pu:pu,
-          tgc:tgcPct,
-          section:currentSection
-        });
-      }
+
+    if(finalDesignation){
+      var unitNorm=ci.unit.replace(/\./g,'').replace(/\s+/g,' ').trim();
+      if(/^H\s*sup/i.test(unitNorm))unitNorm='H sup';
+      else if(/^H\s*tech/i.test(unitNorm))unitNorm='H tech';
+      else if(/^H\s*qual/i.test(unitNorm))unitNorm='H qual';
+      else if(/^lot$/i.test(unitNorm))unitNorm='Lot';
+      else if(/^forfait$/i.test(unitNorm))unitNorm='Forfait';
+      out.lignes.push({
+        designation:finalDesignation,
+        unite:unitNorm,
+        qte:qte,
+        pu:pu,
+        tgc:ci.tgc,
+        section:currentSectionV1
+      });
     }
   }
 
