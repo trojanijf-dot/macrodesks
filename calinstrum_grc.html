@@ -8640,13 +8640,9 @@ function confirmLegacyImport(){
   var hasServ=lines.service.length>0;
   var typeAuto=(hasFourn && hasServ)?'Fourniture + Prestation':(hasFourn?'Fourniture':(hasServ?'Prestation de service':'Fourniture + Prestation'));
 
-  // Notes : combiner remarque utilisateur + frais locaux extraits si présents
-  var notesArr=[];
-  if(remarque)notesArr.push(remarque);
-  if(fraisLocaux>0){
-    notesArr.push('💰 '+fraisLocauxLabel+' : '+fN(fraisLocaux)+' XPF (extrait du PDF)');
-  }
-  if(service)notesArr.push('Service / département client : '+service);
+  // Notes : uniquement ce que l'utilisateur a saisi dans le champ "Remarque" de la modale.
+  // Les frais locaux et le service ne polluent PAS les notes — ils sont stockés dans
+  // newDevis.fraisLocauxImport et newDevis.service / newDevis.adresse respectivement.
 
   var newDevis={
     id:Date.now()+1,
@@ -8664,7 +8660,7 @@ function confirmLegacyImport(){
     validite:validite||'1 mois',
     delai:delai||'',
     paiement:paiement||'Paiement sous 30 jours à reception de la facture',
-    notes:notesArr.join('\n'),
+    notes:remarque||'',
     tgcM:tgcM||'506-2',
     service:service||'',
     fraisLocauxImport:fraisLocaux,
