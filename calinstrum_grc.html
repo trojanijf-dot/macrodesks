@@ -86,6 +86,25 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .form-input,.form-select,.form-textarea{width:100%;background:var(--bg3);border:1px solid rgba(255,255,255,.12);border-radius:5px;color:var(--text);padding:6px 9px;font-family:var(--mono);font-size:11px;outline:none;transition:border .15s}
 .form-input:focus,.form-select:focus,.form-textarea:focus{border-color:var(--teal)}
 .form-textarea{resize:vertical;min-height:55px}
+/* === Textarea expander : indicateur visuel "double-clic pour agrandir" === */
+/* Au survol d'un textarea, un petit badge apparaît en haut-droite. Affiché uniquement
+   sur les textareas non-désactivés et de taille raisonnable. */
+textarea:not(:disabled):not([readonly]){position:relative;transition:box-shadow .15s}
+textarea:not(:disabled):not([readonly]):hover{box-shadow:0 0 0 1px rgba(45,212,191,.4)}
+textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,191,.6)}
+/* Modale d'expansion textarea — au-dessus des autres modales */
+.txt-expander-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1200;align-items:center;justify-content:center;padding:5vh 4vw}
+.txt-expander-overlay.open{display:flex}
+.txt-expander{background:var(--bg2);border:1px solid rgba(45,212,191,.3);border-radius:10px;width:70vw;max-width:1100px;height:70vh;display:flex;flex-direction:column;box-shadow:0 30px 100px rgba(0,0,0,.6);overflow:hidden}
+.txt-expander-head{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:rgba(45,212,191,.05)}
+.txt-expander-head h3{font-family:var(--display);font-size:13px;font-weight:800;color:var(--teal);margin:0}
+.txt-expander-head .hint{font-size:10.5px;color:var(--muted);font-weight:400;margin-left:auto;margin-right:14px;letter-spacing:.02em}
+.txt-expander-body{flex:1;padding:14px 16px;display:flex;flex-direction:column;min-height:0}
+.txt-expander-body textarea{flex:1;width:100%;background:#0f172a;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:14px 16px;font-family:var(--font);font-size:13.5px;line-height:1.55;resize:none;outline:none;min-height:0}
+.txt-expander-body textarea:focus{border-color:rgba(45,212,191,.5)}
+.txt-expander-foot{padding:11px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px;background:rgba(0,0,0,.15)}
+.txt-expander-meta{font-size:10.5px;color:var(--muted)}
+.txt-expander-foot .actions{display:flex;gap:8px}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .form-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 .req{color:var(--red)}
@@ -15453,6 +15472,193 @@ function dvFillDefaultConditions(){
   el.value=DV_DEFAULT_CONDITIONS;
 }
 
+// ============================================================================
+// SYSTÈME D'ÉDITION AGRANDIE POUR TEXTAREAS (double-clic)
+// ----------------------------------------------------------------------------
+// Active sur TOUS les <textarea> de l'app. Au double-clic, ouvre une modale ~70%
+// écran avec le contenu en grand pour édition confortable. À la validation,
+// la valeur est ré-injectée dans le textarea source ET un event 'input' est
+// dispatché pour que les listeners métier (auto-save dvL, totaux, etc.) soient
+// notifiés exactement comme si l'utilisateur avait tapé dans le textarea original.
+//
+// Listener UNIQUE en bubbling sur document : pas besoin d'attendre la création des
+// textareas (createElement, innerHTML dynamique...), tous les textareas existants
+// et futurs sont automatiquement couverts.
+//
+// Raccourcis clavier dans la modale :
+//   - Ctrl+Entrée (ou Cmd+Entrée) : valider et fermer
+//   - Échap                       : annuler et fermer (texte source non modifié)
+// ============================================================================
+var _txtExpanderSource=null;          // référence au textarea source en cours d'édition
+var _txtExpanderOriginalValue='';     // valeur d'origine (pour le bouton Annuler)
+
+function _isExpandableTextarea(el){
+  if(!el || el.tagName!=='TEXTAREA')return false;
+  if(el.disabled || el.readOnly)return false;
+  // Exclure le textarea de la modale d'expansion elle-même (sinon double-clic dedans → boucle)
+  if(el.id==='txtExpanderArea')return false;
+  return true;
+}
+
+function openTextareaExpander(sourceEl){
+  if(!_isExpandableTextarea(sourceEl))return;
+  _txtExpanderSource=sourceEl;
+  _txtExpanderOriginalValue=sourceEl.value;
+  // Calculer un titre informatif (label associé OU placeholder OU "Édition")
+  var label='';
+  // 1. Chercher un <label for="..."> dans le DOM
+  if(sourceEl.id){
+    var lab=document.querySelector('label[for="'+CSS.escape(sourceEl.id)+'"]');
+    if(lab)label=lab.textContent.trim();
+  }
+  // 2. Chercher un <label> ancêtre direct
+  if(!label){
+    var p=sourceEl.parentElement;
+    while(p && p!==document.body){
+      if(p.tagName==='LABEL'){label=(p.textContent||'').replace(sourceEl.value,'').trim();break;}
+      var lblEl=p.querySelector ? p.querySelector('label') : null;
+      if(lblEl && p.contains(lblEl) && p.contains(sourceEl)){
+        // Si la zone parente contient un label avant le textarea
+        if(lblEl.compareDocumentPosition(sourceEl) & Node.DOCUMENT_POSITION_FOLLOWING){
+          label=lblEl.textContent.trim();break;
+        }
+      }
+      p=p.parentElement;
+      if(!p || (p.classList && (p.classList.contains('modal') || p.classList.contains('form-group'))))break;
+    }
+  }
+  // 3. Fallback : placeholder
+  if(!label && sourceEl.placeholder)label=sourceEl.placeholder;
+  // 4. Dernier recours
+  if(!label)label='Édition';
+  // Tronquer si trop long
+  if(label.length>80)label=label.substring(0,77)+'…';
+  var titleEl=document.getElementById('txtExpanderTitle');
+  if(titleEl)titleEl.textContent='📝 '+label;
+  // Charger le contenu et ouvrir la modale
+  var area=document.getElementById('txtExpanderArea');
+  if(!area)return;
+  area.value=sourceEl.value;
+  _updateTxtExpanderMeta();
+  var overlay=document.getElementById('txtExpander');
+  if(!overlay)return;
+  overlay.classList.add('open');
+  // Focus + curseur en fin de texte (UX classique pour expanders)
+  setTimeout(function(){
+    area.focus();
+    try{area.setSelectionRange(area.value.length,area.value.length);}catch(e){}
+  },30);
+}
+
+function _updateTxtExpanderMeta(){
+  var area=document.getElementById('txtExpanderArea');
+  var meta=document.getElementById('txtExpanderMeta');
+  if(!area||!meta)return;
+  var len=area.value.length;
+  var lines=area.value.split('\n').length;
+  meta.textContent=len+' caractère'+(len>1?'s':'')+' · '+lines+' ligne'+(lines>1?'s':'');
+}
+
+function txtExpanderApply(){
+  if(!_txtExpanderSource)return;
+  var area=document.getElementById('txtExpanderArea');
+  if(!area)return;
+  var newValue=area.value;
+  var src=_txtExpanderSource;
+  // Réinjecter la valeur dans le textarea source
+  src.value=newValue;
+  // Dispatcher des events 'input' et 'change' pour notifier les listeners existants
+  // (auto-save dvL[][], updateCoutReelPreview, validation, etc.)
+  try{src.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){}
+  try{src.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}
+  // Fermer la modale
+  txtExpanderClose();
+  // Refocus sur le textarea source pour continuer à naviguer naturellement
+  try{src.focus();}catch(e){}
+}
+
+function txtExpanderCancel(){
+  // Si l'utilisateur a modifié le texte dans la modale, demander confirmation
+  var area=document.getElementById('txtExpanderArea');
+  if(area && area.value!==_txtExpanderOriginalValue){
+    if(!confirm('Annuler les modifications ?\n\nLe texte agrandi a été modifié, mais ces changements seront perdus.'))return;
+  }
+  txtExpanderClose();
+}
+
+function txtExpanderClose(){
+  var overlay=document.getElementById('txtExpander');
+  if(overlay)overlay.classList.remove('open');
+  _txtExpanderSource=null;
+  _txtExpanderOriginalValue='';
+}
+
+// === Listeners globaux (en bubbling sur document) ===
+// Double-clic sur n'importe quel textarea de la page
+document.addEventListener('dblclick',function(e){
+  var t=e.target;
+  if(!_isExpandableTextarea(t))return;
+  // Empêcher la sélection de mot par défaut du double-clic (UX bizarre quand on ouvre la modale juste après)
+  e.preventDefault();
+  openTextareaExpander(t);
+});
+
+// Touchscreen : long-press (~500ms) au lieu de double-tap
+// (le double-tap est géré par le navigateur pour zoom natif sur tablette)
+var _txtPressTimer=null;
+var _txtPressTarget=null;
+document.addEventListener('touchstart',function(e){
+  var t=e.target;
+  if(!_isExpandableTextarea(t))return;
+  _txtPressTarget=t;
+  _txtPressTimer=setTimeout(function(){
+    if(_txtPressTarget===t)openTextareaExpander(t);
+    _txtPressTimer=null;
+  },550);
+},{passive:true});
+document.addEventListener('touchend',function(){
+  if(_txtPressTimer){clearTimeout(_txtPressTimer);_txtPressTimer=null;}
+  _txtPressTarget=null;
+});
+document.addEventListener('touchmove',function(){
+  if(_txtPressTimer){clearTimeout(_txtPressTimer);_txtPressTimer=null;}
+  _txtPressTarget=null;
+});
+
+// Raccourcis clavier dans la modale (Ctrl+Entrée valider, Échap annuler)
+// Listener attaché au textarea de la modale uniquement (créé une seule fois au DOMContentLoaded)
+function _initTxtExpanderShortcuts(){
+  var area=document.getElementById('txtExpanderArea');
+  if(!area)return;
+  area.addEventListener('input',_updateTxtExpanderMeta);
+  area.addEventListener('keydown',function(e){
+    // Ctrl+Entrée OU Cmd+Entrée → valider
+    if((e.ctrlKey||e.metaKey) && e.key==='Enter'){
+      e.preventDefault();
+      txtExpanderApply();
+      return;
+    }
+    // Échap → annuler
+    if(e.key==='Escape'){
+      e.preventDefault();
+      txtExpanderCancel();
+      return;
+    }
+  });
+  // Fermer si on clique en dehors de la boîte (mais pas sur le textarea ni sur les boutons)
+  var overlay=document.getElementById('txtExpander');
+  if(overlay){
+    overlay.addEventListener('click',function(e){
+      if(e.target===overlay)txtExpanderCancel();
+    });
+  }
+}
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded',_initTxtExpanderShortcuts);
+} else {
+  _initTxtExpanderShortcuts();
+}
+
 // ===== CHARGEMENT ONE-SHOT DU DOSSIER PRNC =====
 // Crée le BC Emerson 12112025/063-001 (114 998 AUD, taux 74.5) et le lie automatiquement
 // aux factures existantes PRNC-F037, PRNC-F040, PRNC-F041.
@@ -18762,6 +18968,27 @@ function critProceed(){
     <div class="crit-actions">
       <button class="btn btn-ghost" onclick="critCancel()">Annuler</button>
       <button class="btn btn-red crit-confirm" id="critOkBtn" onclick="critProceed()">Continuer</button>
+    </div>
+  </div>
+</div>
+
+<!-- === Modale d'édition agrandie pour textareas (double-clic) === -->
+<div class="txt-expander-overlay" id="txtExpander" role="dialog" aria-modal="true" aria-labelledby="txtExpanderTitle">
+  <div class="txt-expander">
+    <div class="txt-expander-head">
+      <h3 id="txtExpanderTitle">📝 Édition agrandie</h3>
+      <span class="hint">Ctrl+Entrée pour valider · Échap pour annuler</span>
+      <button class="modal-close" onclick="txtExpanderCancel()" aria-label="Annuler" title="Annuler (Échap)">✕</button>
+    </div>
+    <div class="txt-expander-body">
+      <textarea id="txtExpanderArea" spellcheck="true" placeholder="(vide)"></textarea>
+    </div>
+    <div class="txt-expander-foot">
+      <span class="txt-expander-meta" id="txtExpanderMeta">0 caractère</span>
+      <div class="actions">
+        <button class="btn btn-ghost" onclick="txtExpanderCancel()">Annuler</button>
+        <button class="btn btn-teal" onclick="txtExpanderApply()">✓ Valider</button>
+      </div>
     </div>
   </div>
 </div>
