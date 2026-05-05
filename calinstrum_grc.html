@@ -8161,7 +8161,13 @@ function parseLegacyDevisTextV2(text){
   for(var i=0;i<rawLines.length;i++){
     var lnNorm=rawLines[i].replace(/\s*\|\s*/g,' ').replace(/\s+/g,' ').trim();
     if(/^Item\s+Désignation/i.test(lnNorm) || /^Item\b.*TOTAL\s+TTC/i.test(lnNorm)){startIdx=i;}
+    // Plusieurs variantes de fin de tableau selon les templates :
+    //   - DV126 : "Total TTC - Fourniture et service (en XPF)"
+    //   - DV128 : "Total TTC (en XPF)" (sans "Fourniture et service")
+    //   - Variante : "Total Fret, Assurance et Frais Locaux..."
     if(/^Total\s+TTC\b.*Fourniture\s+et\s+service/i.test(lnNorm)){endIdx=i;break;}
+    if(/^Total\s+TTC\s*\(en\s+XPF\)/i.test(lnNorm)){endIdx=i;break;}
+    if(/^Total\s+Fret[\s,]+Assurance/i.test(lnNorm)){if(endIdx===rawLines.length)endIdx=i;}
     if(/^Montant\s+en\s+lettres/i.test(lnNorm)){if(endIdx===rawLines.length)endIdx=i;}
   }
   if(startIdx<0)startIdx=0;
@@ -8203,34 +8209,169 @@ function parseLegacyDevisTextV2(text){
   }
 
   // Classifier
+  // Helper : détecter les lignes "junk" qui sont des artefacts de mise en page PDF
+  // (header de tableau qui déborde, totaux qui se promènent, lignes orphelines de chiffres, etc.)
+  // Ces lignes ne sont ni des items, ni des orphans descriptifs : elles doivent être ignorées.
+  function isJunkLine(s){
+    var clean=s.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+    if(!clean)return true;
+    // Mots du header de tableau qui peuvent déborder sur la ligne suivante
+    if(/^(unitaire|Prix\s+unitaire|TOTAL\s+TTC|TGC%|Désignation|Item|Uté|Qté)$/i.test(clean))return true;
+    // Lignes de totaux qui auraient échappé au filtre endIdx
+    if(/^Total\s+TTC\b/i.test(clean))return true;
+    if(/^Total\s+Fret\b/i.test(clean))return true;
+    if(/^Sous[\s-]*total\b/i.test(clean))return true;
+    // Ligne uniquement constituée de chiffres et d'espaces (probablement un total isolé,
+    // p.ex. "1 820 748" sur sa propre ligne après le tableau)
+    if(/^[\d\s.,]+$/.test(clean) && clean.replace(/[\s.,]/g,'').length>=4)return true;
+    // Ligne de pied de page (Page N de N, RCS, etc.)
+    if(/^Page\s+\d+\s+(?:de|\/)/i.test(clean))return true;
+    return false;
+  }
   var classified=[];
   for(var ti=0;ti<tableLines.length;ti++){
     var lns=tableLines[ti].trim();
     if(!lns)continue;
+    if(isJunkLine(lns))continue;  // ignorer les artefacts (headers qui débordent, totaux, etc.)
     if(isMainHeader(lns))classified.push({type:'header',line:lns});
     else if(isSubheader(lns))classified.push({type:'subheader',line:lns});
     else if(isItemLine(lns))classified.push({type:'item',line:lns});
     else classified.push({type:'orphan',line:lns});
   }
 
-  // Agglutiner orphans en préfixes/suffixes (subheaders sont préfixes-only, jamais suffixes)
-  var itemsFinal=[];
-  var consumedSuffix={};
-  for(var ci2=0;ci2<classified.length;ci2++){
-    if(classified[ci2].type!=='item')continue;
-    var suffixes=[],prefixes=[];
-    var cj=ci2+1;
-    while(cj<classified.length && classified[cj].type==='orphan'){
-      suffixes.push(classified[cj].line);consumedSuffix[cj]=1;cj++;
-    }
-    var ck=ci2-1;
-    while(ck>=0 && (classified[ck].type==='orphan'||classified[ck].type==='subheader')){
-      if(!consumedSuffix[ck])prefixes.push(classified[ck].line);
-      ck--;
-    }
-    prefixes.reverse();
-    itemsFinal.push({itemLine:classified[ci2].line,prefixes:prefixes,suffixes:suffixes,pos:ci2});
+  // Agglutiner orphans en préfixes/suffixes
+  // ALGORITHME DÉTERMINISTE (pour éviter les attributions doubles ou perdues) :
+  //
+  // Pour chaque "zone" entre item N et item N+1, on attribue chaque orphan UNE SEULE FOIS :
+  //   - S'il y a 0 orphan : rien
+  //   - S'il y a 1 orphan : décision basée sur l'analyse des deux items
+  //       - Si la désignation in-line de l'item N termine par "(" ou par "( CODE-" non-fermé →
+  //         l'orphan est suffix de N (il complète la parenthèse cassée). DV126 cas.
+  //       - Si l'orphan ressemble à une référence produit compact (1 mot alphanumérique ≥10 chars) →
+  //         suffix de N (DV128 cas).
+  //       - Sinon → préfixe de N+1 (descriptif du prochain item).
+  //   - S'il y a 2+ orphans : le PREMIER (juste après item N) suit la même règle que le cas 1
+  //     ci-dessus. Tous les intermédiaires + le dernier sont préfixes de N+1.
+  //
+  // Subheaders : toujours préfixes du prochain item (jamais suffix d'un item précédent).
+  //
+  // Cas particuliers :
+  //   - Avant le 1er item : tous les orphans/subheaders → préfixes de l'item 1
+  //   - Après le dernier item : tous les orphans → suffixes du dernier item, MAIS on s'arrête
+  //     dès qu'un orphan ressemble au début d'un nouvel item (REF:DESCRIPTION) — cas DV128 item 5 FRET.
+  function looksLikeProductRefIso(s){
+    var clean=s.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+    if(/\s/.test(clean))return false;
+    if(clean.length<10)return false;
+    if(!/^[A-Z0-9][A-Z0-9.\-_/]*$/i.test(clean))return false;
+    if(!/[0-9]/.test(clean))return false;
+    if(!/[A-Z]/i.test(clean))return false;
+    return true;
   }
+  function looksLikeNewItemStart(s){
+    var clean=s.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+    return /^[A-Z0-9][A-Z0-9.\-_/]{4,}:[A-Za-z]/.test(clean);
+  }
+  function itemHasUnclosedParen(itemLine){
+    // Extraire la "cellule désignation" approximative : la portion de la ligne qui n'est ni
+    // numéro (premier) ni TGC/U/qte/PU/total (vers la fin). Plus simple : compter les ( vs )
+    // dans la ligne entière (item lines n'ont pas de parenthèses ailleurs sauf désignation).
+    var opens=(itemLine.match(/\(/g)||[]).length;
+    var closes=(itemLine.match(/\)/g)||[]).length;
+    return opens>closes;
+  }
+
+  // 1ère passe : pour chaque zone entre items, décider l'allocation des orphans
+  // Stockage : zoneAllocation[i] = { suffixesOfPrev: [...], prefixesOfNext: [...] }
+  var itemPositions=[];
+  for(var ip=0;ip<classified.length;ip++){
+    if(classified[ip].type==='item')itemPositions.push(ip);
+  }
+  // Allocations : index par item-position
+  var allocSuffixes={}; // pos → [lines]
+  var allocPrefixes={}; // pos → [lines]
+  itemPositions.forEach(function(p){allocSuffixes[p]=[];allocPrefixes[p]=[];});
+
+  // Avant le 1er item : tout en préfixes du 1er item
+  if(itemPositions.length>0){
+    var firstItemPos=itemPositions[0];
+    for(var pk=0;pk<firstItemPos;pk++){
+      var c=classified[pk];
+      if(c.type==='orphan' || c.type==='subheader')allocPrefixes[firstItemPos].push(c.line);
+    }
+  }
+
+  // Entre item N et item N+1 : règle déterministe
+  for(var ipi=0;ipi<itemPositions.length-1;ipi++){
+    var posN=itemPositions[ipi];
+    var posN1=itemPositions[ipi+1];
+    var zoneOrphansBetween=[];
+    var zoneSubheadersBetween=[];
+    for(var pk2=posN+1;pk2<posN1;pk2++){
+      var cz=classified[pk2];
+      if(cz.type==='orphan')zoneOrphansBetween.push(cz.line);
+      else if(cz.type==='subheader')zoneSubheadersBetween.push(cz.line);
+    }
+    // Subheaders → toujours préfixes de N+1
+    zoneSubheadersBetween.forEach(function(s){allocPrefixes[posN1].push(s);});
+
+    if(zoneOrphansBetween.length===0){
+      // Rien à faire
+    } else {
+      var firstOrphan=zoneOrphansBetween[0];
+      var itemNHasOpenParen=itemHasUnclosedParen(classified[posN].line);
+      var firstIsRef=looksLikeProductRefIso(firstOrphan);
+      // Cas additionnel : si le préfixe de l'item N (avant lui) se termine par une virgule
+      // ou un connecteur (ex: "COMPRESSION FITTING,"), c'est que la désignation est en cours
+      // et le 1er orphan APRÈS l'item N est sa suite → suffix N. (DV128 item 3 cas.)
+      var prevPrefixEndsContinuation=false;
+      var prefixesOfN=allocPrefixes[posN]||[];
+      if(prefixesOfN.length>0){
+        var lastPrefN=prefixesOfN[prefixesOfN.length-1];
+        var clean=lastPrefN.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+        // Continue : termine par virgule, "et", "ou", tiret, "&", parenthèse ouverte non fermée
+        if(/[,&]\s*$/.test(clean) || /\bet\s*$/.test(clean) || /\bou\s*$/.test(clean) || /-\s*$/.test(clean))prevPrefixEndsContinuation=true;
+        // ou parenthèse ouverte non fermée dans le préfixe
+        var po=(clean.match(/\(/g)||[]).length;
+        var pc=(clean.match(/\)/g)||[]).length;
+        if(po>pc)prevPrefixEndsContinuation=true;
+      }
+      // Décider si firstOrphan est suffix de N
+      var firstGoesToSuffix=itemNHasOpenParen || firstIsRef || prevPrefixEndsContinuation;
+      if(firstGoesToSuffix){
+        allocSuffixes[posN].push(firstOrphan);
+        // Les autres orphans (s'il y en a) sont préfixes de N+1
+        for(var oi=1;oi<zoneOrphansBetween.length;oi++){
+          allocPrefixes[posN1].push(zoneOrphansBetween[oi]);
+        }
+      } else {
+        // Tous les orphans → préfixes de N+1
+        zoneOrphansBetween.forEach(function(s){allocPrefixes[posN1].push(s);});
+      }
+    }
+  }
+
+  // Après le dernier item : suffixes du dernier item, jusqu'à un nouvel-item-start
+  if(itemPositions.length>0){
+    var lastItemPos=itemPositions[itemPositions.length-1];
+    for(var pk3=lastItemPos+1;pk3<classified.length;pk3++){
+      var cl=classified[pk3];
+      if(cl.type!=='orphan')continue;
+      if(looksLikeNewItemStart(cl.line))break;
+      allocSuffixes[lastItemPos].push(cl.line);
+    }
+  }
+
+  // Construire itemsFinal à partir des allocations
+  var itemsFinal=[];
+  itemPositions.forEach(function(pos){
+    itemsFinal.push({
+      itemLine:classified[pos].line,
+      prefixes:allocPrefixes[pos],
+      suffixes:allocSuffixes[pos],
+      pos:pos
+    });
+  });
 
   function sectionFor(idx){
     for(var sk=idx-1;sk>=0;sk--){
@@ -8268,13 +8409,14 @@ function parseLegacyDevisTextV2(text){
     var unit=cells[unitIdx];
 
     // === Détecter l'ordre des cellules ===
-    // Deux ordres possibles selon le layout PDF :
-    //   Ordre A (DV126 et similaires) : [N°, Désignation, TGC, Uté, Qté, PU, Total]
-    //   Ordre B (DV128 et similaires) : [N°, TGC, Désignation, Uté, Qté, PU, Total]
-    //
-    // Heuristique : si cells[1] matche un taux TGC valide (0, 3, 6, 11, 22) ET
-    // qu'au moins une cellule entre cells[2] et cells[unitIdx-1] existe, c'est l'ordre B.
-    // Sinon c'est l'ordre A par défaut.
+    // Trois layouts possibles selon le PDF :
+    //   Ordre A (DV126) : [N°, Désignation, TGC, Uté, Qté, PU, Total]
+    //                     → désignation est cells[1], TGC entre cells[2] et unitIdx-1
+    //   Ordre B (DV128) : [N°, TGC, Uté, Qté, PU, Total]   ← désignation ABSENTE de la ligne
+    //                     → la désignation est dans les orphans préfixes/suffixes
+    //                     → unitIdx vaut 2 (TGC en cells[1], Uté en cells[2])
+    //   Ordre C : variante avec TGC avant désignation : [N°, TGC, Désignation, Uté, ...]
+    //                     → unitIdx >= 3 ET cells[1] est un TGC valide
     function isTgcCell(c){
       var mp=c.match(/^(\d+(?:[,.]\d+)?)\s*%?$/);
       if(!mp)return false;
@@ -8284,21 +8426,22 @@ function parseLegacyDevisTextV2(text){
 
     var designation='';
     var tgcPct=0;
-    if(unitIdx>=3 && isTgcCell(cells[1])){
-      // Ordre B : TGC avant désignation
+    if(unitIdx===2 && isTgcCell(cells[1])){
+      // Ordre B : pas de désignation dans la ligne, TGC en cells[1]
       tgcPct=parseFloat(cells[1].replace(/[,%]/g,'.').replace(/\s/g,''));
-      // Désignation = cells[2..unitIdx-1] (peut couvrir plusieurs cellules si fragmentée)
+      // designation reste vide → sera reconstruite depuis prefixes/suffixes orphans
+    } else if(unitIdx>=3 && isTgcCell(cells[1])){
+      // Ordre C : TGC en cells[1], désignation entre cells[2] et unitIdx-1
+      tgcPct=parseFloat(cells[1].replace(/[,%]/g,'.').replace(/\s/g,''));
       designation=cells.slice(2,unitIdx).join(' ').trim();
     } else {
-      // Ordre A : Désignation avant TGC
+      // Ordre A : désignation = cells[1], TGC entre cells[2] et unitIdx-1
       designation=cells[1]||'';
-      // TGC entre cells[2] et cells[unitIdx-1]
       if(unitIdx>=3){
         for(var ti2=2;ti2<unitIdx;ti2++){
           if(isTgcCell(cells[ti2])){
             tgcPct=parseFloat(cells[ti2].replace(/[,%]/g,'.').replace(/\s/g,''));
-            // Si la cellule TGC a été trouvée APRÈS d'autres cellules entre désignation et unit,
-            // c'est qu'il y a peut-être des cellules de désignation en plus → les inclure
+            // Si la TGC a été trouvée APRÈS d'autres cellules, désignation peut couvrir plusieurs cells
             if(ti2>2){
               designation=cells.slice(1,ti2).join(' ').trim();
             }
@@ -8323,14 +8466,62 @@ function parseLegacyDevisTextV2(text){
     } else continue;
     if(qte===null||pu===null||isNaN(qte)||isNaN(pu))continue;
 
-    // Reconstruire la désignation complète : prefixes + designation + suffixes
-    var fullParts=[];
+    // === Distinguer "référence produit" vs "suite de désignation" parmi les SUFFIXES orphans ===
+    // Sur DV128, les codes produit Rosemount apparaissent sur leur propre ligne après la
+    // ligne d'item (orphan-suffix). Heuristique : un orphan contenant un seul "mot" alphanumérique
+    // compact (≥10 chars, lettres + chiffres + ponctuation : . - / _) sans espace = référence.
+    // Sinon = suite de désignation.
+    function looksLikeProductRef(s){
+      var clean=s.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+      // Doit être un seul "mot" (pas d'espace) ou un mot avec un seul ":" comme "00216-5000-9003:SPARES KIT"
+      // qui est en fait "réf:descriptif" → on prend juste la partie avant ":"
+      // Pour simplifier : un seul mot ≥10 chars en majuscules+chiffres+ponctuation simple
+      if(/\s/.test(clean))return false;
+      if(clean.length<10)return false;
+      if(!/^[A-Z0-9][A-Z0-9.\-_/]*$/i.test(clean))return false;
+      // Doit contenir au moins 1 chiffre ET 1 lettre (sinon c'est un nombre ou un mot)
+      if(!/[0-9]/.test(clean))return false;
+      if(!/[A-Z]/i.test(clean))return false;
+      return true;
+    }
+    var refFromSuffix='';
+    var remainingSuffixes=[];
+    itf.suffixes.forEach(function(suf){
+      if(!refFromSuffix && looksLikeProductRef(suf)){
+        refFromSuffix=suf.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+      } else {
+        remainingSuffixes.push(suf);
+      }
+    });
+
+    // === Détecter aussi les références dans les PRÉFIXES orphans ===
+    // Sur DV128 ligne 3 : préfixe = "00216-5000-9003:SPARES KIT, COMPRESSION FITTING," 
+    // → la référence "00216-5000-9003" est avant le ":" et le reste est descriptif.
+    // Heuristique : si un préfixe commence par un code [A-Z0-9] suivi de ":" et de texte,
+    // séparer en référence et suite-de-désignation.
+    var refFromPrefix='';
+    var remainingPrefixes=[];
     itf.prefixes.forEach(function(pre){
+      var clean=pre.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+      // Pattern : "REF:descriptif" en début de chaîne, REF = ≥6 chars alphanum+ponct
+      var mRefDesc=clean.match(/^([A-Z0-9][A-Z0-9.\-_/]{5,}):(.+)$/i);
+      if(!refFromPrefix && mRefDesc){
+        refFromPrefix=mRefDesc[1].trim();
+        var rest=mRefDesc[2].trim();
+        if(rest)remainingPrefixes.push(rest);
+      } else {
+        remainingPrefixes.push(clean);
+      }
+    });
+
+    // Reconstruire la désignation complète : prefixes (sans réf) + designation in-line + suffixes (sans réf)
+    var fullParts=[];
+    remainingPrefixes.forEach(function(pre){
       var c=pre.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
       if(c)fullParts.push(c);
     });
     if(designation)fullParts.push(designation);
-    itf.suffixes.forEach(function(suf){
+    remainingSuffixes.forEach(function(suf){
       var c=suf.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
       if(c)fullParts.push(c);
     });
@@ -8340,12 +8531,15 @@ function parseLegacyDevisTextV2(text){
     fullDesignation=fullDesignation.replace(/\b([A-Z]{2,4})-\s+([A-Z0-9])/g,'$1-$2');
     fullDesignation=fullDesignation.replace(/\s+/g,' ').trim();
 
-    // Extraire la référence produit (codes Emerson type SNG-XXX)
-    var ref='';
-    var mref=fullDesignation.match(/\(([A-Z]{2,4}-[A-Z0-9]{2,}[A-Z0-9-]*)\)/);
-    if(mref){
-      ref=mref[1];
-      fullDesignation=fullDesignation.replace(new RegExp('\\s*\\('+ref.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\)\\s*'),' ').replace(/\s+/g,' ').trim();
+    // === Référence finale : priorité préfixe > suffixe > parenthèses dans désignation ===
+    var ref=refFromPrefix || refFromSuffix || '';
+    if(!ref){
+      // Fallback : chercher une réf entre parenthèses dans la désignation (DV126 style)
+      var mref=fullDesignation.match(/\(([A-Z]{2,4}-[A-Z0-9]{2,}[A-Z0-9-]*)\)/);
+      if(mref){
+        ref=mref[1];
+        fullDesignation=fullDesignation.replace(new RegExp('\\s*\\('+ref.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\)\\s*'),' ').replace(/\s+/g,' ').trim();
+      }
     }
 
     // Normalisation unité
