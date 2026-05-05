@@ -517,6 +517,9 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <div class="flex-between mb12">
     <div></div>
     <div style="display:flex;gap:8px">
+      <!-- Import PDF : facture CALINSTRUM (F061/F071...) ou Emerson (Tax Invoice AUD) -->
+      <input type="file" id="fa-import-pdf-file" accept=".pdf" style="display:none" onchange="importFacturePDF(this.files[0])">
+      <button class="btn btn-ghost no-print" onclick="document.getElementById('fa-import-pdf-file').click()" title="Importer une facture depuis un PDF (CALINSTRUM SLN-F... ou Tax Invoice Emerson AUD)" style="border-color:rgba(45,212,191,.4);color:var(--teal)">📄 Importer PDF</button>
       <!-- Import format simple : Excel avec colonnes Intitulé/N°/Montant/PO/Date/État/Commentaire -->
       <input type="file" id="fa-import-simple-file" accept=".xlsx,.xls" style="display:none" onchange="importSimpleFAExcel(this.files[0])">
       <button class="btn btn-ghost no-print" onclick="document.getElementById('fa-import-simple-file').click()" title="Import factures depuis un fichier Excel simple. Colonnes attendues : Intitulé, N° facture, Montant, N° PO, Date envoi, État paiement, Commentaire" style="border-color:rgba(167,139,250,.4);color:#a78bfa">📅 Importer factures Excel (simple)</button>
@@ -9135,6 +9138,579 @@ function legacyImportDevisFromPDFForFacture(file){
   if(!file)return;
   window._importTargetIsFacture=true;
   legacyImportDevisFromPDF(file);
+}
+
+// ============================================================================
+// IMPORT FACTURE PDF → CRÉATION FACTURE
+// ----------------------------------------------------------------------------
+// Permet d'importer une facture depuis un PDF (CALINSTRUM ou Emerson fournisseur).
+// Workflow :
+//  1. Utilisateur clique "📄 Importer PDF" dans Factures → input file
+//  2. fileImportFacturePDF() charge PDF.js + extrait le texte
+//  3. parseFacturePDF() détecte le type (CALINSTRUM / Emerson) et extrait les champs
+//  4. showFactureImportPreview() affiche un modal de prévisualisation avec édition
+//  5. À la validation : crée la facture dans DB.factures (autonome si pas de BC trouvé)
+//
+// Auto-détection :
+//   - Si le texte contient "Tax Invoice" + "Emerson" → format Emerson (AUD)
+//   - Si le texte contient "Facture SLN-" + "CALINSTRUM SARL" → format CALINSTRUM (XPF)
+//   - Sinon → erreur "format non reconnu"
+// ============================================================================
+
+// === Parser facture CALINSTRUM (F061, F071...) ===
+function parseFactureCalinstrumPdf(text){
+  var out={
+    type:'calinstrum',
+    num:'',date:'',contact:'',client:'',email:'',
+    bcRef:'',objet:'',tgcMention:'506-2',
+    lignes:[],totalTTC:0,devise:'XPF',
+    montantLettres:'',delaiPaiement:''
+  };
+  var rawLines=text.split('\n').map(function(l){return l.trim();}).filter(Boolean);
+  var flat=text.replace(/\s*\|\s*/g,' ').replace(/\s+/g,' ').replace(/[ \t]+\n/g,'\n');
+
+  // N° facture : "Facture SLN- F071" → "SLN-F071"
+  var mNum=flat.match(/Facture\s+([A-Z]{2,5})\s*[-–]?\s*F(\d+(?:rev\d+)?)/i);
+  if(mNum)out.num=mNum[1].toUpperCase()+'-F'+mNum[2];
+
+  // Date : "Le : 26/12/2025"
+  var mDate=flat.match(/Le\s*:\s*(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/);
+  if(mDate){
+    var dd=mDate[1].padStart(2,'0'),mm=mDate[2].padStart(2,'0'),yy=mDate[3];
+    if(yy.length===2)yy='20'+yy;
+    out.date=yy+'-'+mm+'-'+dd;
+  }
+
+  // Contact : "A Mr: Yorik Nigaille"
+  var mContact=flat.match(/A\s*Mr\s*:?\s+([A-ZÀÂÄÉÈÊËÎÏÔÖÙÛÜŸÇ][^|]{2,40}?)(?=\s+(?:RIDET|Adresse|T[ée]l|e-?mail|Objet|Facture|$))/i);
+  if(mContact)out.contact=mContact[1].trim().replace(/\s+/g,' ');
+
+  // Client : "Adresse : SOCIETE LE NICKEL" ou autre
+  for(var i=0;i<rawLines.length;i++){
+    var lnNorm=rawLines[i].replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+    var m=lnNorm.match(/Adresse\s*:\s*(SOCIETE\s+LE\s+NICKEL|PRONY\s+RESOURCES[^|]*|[A-Z][A-Z\s]{4,40})/i);
+    if(m){
+      var clientText=m[1].trim();
+      // Détecter SLN ou PRNC
+      if(/SOCIETE\s+LE\s+NICKEL|ERAMET-SLN/i.test(clientText))out.client='SLN';
+      else if(/PRONY\s+RESOURCES/i.test(clientText))out.client='PRNC';
+      else out.client=clientText;
+      break;
+    }
+  }
+
+  // Email client (autre que CALINSTRUM)
+  var emails=flat.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g)||[];
+  for(var ei=0;ei<emails.length;ei++){
+    if(emails[ei].toLowerCase().indexOf('calinstrum')<0){
+      out.email=emails[ei];
+      break;
+    }
+  }
+
+  // BC réf : "BC<NUMERO>"
+  var mBC=flat.match(/BC\s*(\d{4,})/);
+  if(mBC)out.bcRef='BC'+mBC[1];
+
+  // Objet : zone après "Objet:"
+  var mObjet=flat.match(/Objet\s*:?\s+([^|]+?)(?=\s+Facture\s+N°|$)/i);
+  if(mObjet)out.objet=mObjet[1].trim().replace(/\s+/g,' ');
+
+  // Mention TGC : Lp.506-2 ou Lp.514-5
+  var mTgc=flat.match(/Lp\.?\s*(506-?2|514-?5)/i);
+  if(mTgc){
+    var tcr=mTgc[1].replace(/-/g,'');
+    if(tcr==='5062')out.tgcMention='506-2';
+    else if(tcr==='5145')out.tgcMention='514-5';
+  }
+
+  // === Lignes du tableau ===
+  var startIdx=-1,endIdx=rawLines.length;
+  for(var li=0;li<rawLines.length;li++){
+    var lnNm=rawLines[li].replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+    if(/^Désignation\b.*TGC%/i.test(lnNm))startIdx=li;
+    if(/^Montant\s+à\s+payer\s+TTC\b/i.test(lnNm)){endIdx=li;break;}
+  }
+  if(startIdx<0)startIdx=0;
+  var tableLines=rawLines.slice(startIdx+1,endIdx);
+
+  var unitRegex=/^(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)$/i;
+  var classified=[];
+  for(var ti=0;ti<tableLines.length;ti++){
+    var s=tableLines[ti].trim();
+    if(!s)continue;
+    var parts=s.split('|').map(function(x){return x.trim();}).filter(function(x){return x.length>0;});
+    var unitPos=-1;
+    for(var ci=0;ci<parts.length;ci++){
+      if(unitRegex.test(parts[ci])){unitPos=ci;break;}
+    }
+    var hasNumbers=parts.some(function(p){return /^\d{1,3}(?:[\s,.]?\d{3})*(?:[.,]\d+)?$/.test(p) && parseFloat(p.replace(/\s/g,'').replace(',','.'))>0;});
+    if(unitPos>=0 && hasNumbers && parts.length>=4){
+      classified.push({type:'item',parts:parts,unitPos:unitPos});
+    } else {
+      var clean=parts.join(' ').replace(/\s+/g,' ').trim();
+      if(clean.length>2)classified.push({type:'desc',text:clean});
+    }
+  }
+
+  var items=[];
+  for(var pi=0;pi<classified.length;pi++){
+    if(classified[pi].type==='item')items.push(pi);
+  }
+
+  for(var pii=0;pii<items.length;pii++){
+    var pos=items[pii];
+    var prevPos=pii>0?items[pii-1]:-1;
+    var nextPos=pii<items.length-1?items[pii+1]:classified.length;
+    var iparts=classified[pos].parts;
+    var iunitPos=classified[pos].unitPos;
+    var unit=iparts[iunitPos];
+    var tgcPct=0;
+    var inlineDesignation='';
+    var preParts=iparts.slice(0,iunitPos);
+    var tgcIdx=-1;
+    for(var pj=0;pj<preParts.length;pj++){
+      var nv=parseFloat(preParts[pj].replace(/[%\s]/g,''));
+      if(!isNaN(nv) && [0,3,6,11,22].indexOf(nv)>=0 && preParts[pj].length<=4){
+        tgcPct=nv;tgcIdx=pj;break;
+      }
+    }
+    if(tgcIdx>0){
+      inlineDesignation=preParts.slice(0,tgcIdx).join(' ').trim();
+    } else if(tgcIdx===0){
+      inlineDesignation='';
+    } else {
+      inlineDesignation=preParts.join(' ').trim();
+    }
+    var nums=[];
+    for(var pk=iunitPos+1;pk<iparts.length;pk++){
+      var nn=parseFloat(iparts[pk].replace(/\s/g,'').replace(',','.'));
+      if(!isNaN(nn))nums.push(nn);
+    }
+    if(nums.length<2)continue;
+    var qte=nums[0],pu=nums[1],totalLn=nums.length>=3?nums[2]:qte*pu;
+    // Récupérer les orphans descriptifs
+    var descParts=[];
+    if(inlineDesignation)descParts.push(inlineDesignation);
+    for(var dpi=prevPos+1;dpi<pos;dpi++){
+      if(classified[dpi].type==='desc')descParts.unshift(classified[dpi].text);
+    }
+    for(var dpj=pos+1;dpj<nextPos;dpj++){
+      if(classified[dpj].type==='desc')descParts.push(classified[dpj].text);
+    }
+    var unitNorm=unit;
+    if(/^lot$/i.test(unitNorm))unitNorm='Lot';
+    else if(/^forfait$/i.test(unitNorm))unitNorm='Forfait';
+    else if(/^H\s*sup/i.test(unitNorm))unitNorm='H sup';
+    else if(/^H\s*tech/i.test(unitNorm))unitNorm='H tech';
+    out.lignes.push({
+      designation:descParts.join(' ').replace(/\s+/g,' ').trim(),
+      ref:'',tgc:tgcPct,unite:unitNorm,
+      qte:qte,pu:pu,total:totalLn
+    });
+  }
+
+  // Total TTC
+  var mTotal=flat.match(/Montant\s+à\s+payer\s+TTC[^0-9]*([\d\s]+)/i);
+  if(mTotal)out.totalTTC=parseInt(mTotal[1].replace(/\s/g,''),10);
+
+  // Montant en lettres
+  var mLtr=flat.match(/Montant\s+en\s+lettres\s*:?\s*([A-Z\s]+FRANCS?)/i);
+  if(mLtr)out.montantLettres=mLtr[1].trim();
+
+  // Délai paiement
+  var mDel=flat.match(/Délai\s+de\s+paiement\s*:?\s*(.+?)(?=\s+(?:Règlement|Banque|$))/i);
+  if(mDel)out.delaiPaiement=mDel[1].trim();
+
+  return out;
+}
+
+// === Parser facture Emerson (Tax Invoice australienne, AUD) ===
+function parseFactureEmersonPdf(text){
+  var out={
+    type:'emerson',
+    num:'',date:'',dueDate:'',poRef:'',
+    soldTo:'CALINSTRUM',endUser:'',
+    lignes:[],totalTTC:0,devise:'AUD',
+    paymentTerms:''
+  };
+  var rawLines=text.split('\n').map(function(l){return l.trim();}).filter(Boolean);
+  var hasTaxInvoice=rawLines.some(function(l){return /Tax\s+Invoice/i.test(l);});
+  if(!hasTaxInvoice)return null;
+
+  function cells(line){
+    return line.split('|').map(function(c){return c.trim();}).filter(function(c){return c.length>0;});
+  }
+  var months={JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12'};
+
+  for(var i=0;i<rawLines.length;i++){
+    var ln=rawLines[i];
+    var c=cells(ln);
+
+    // N° facture
+    if(!out.num){
+      var mN=ln.match(/Invoice\s+No\b\s*:?\s*(\d{6,})/i);
+      if(mN){out.num=mN[1];}
+      if(!out.num){
+        var mNd=ln.match(/(\d{1,2})-(\w{3})-(\d{4})\s*\|\s*\|?\s*(\d{6,})\s*\|/);
+        if(mNd){
+          out.num=mNd[4];
+          if(!out.date){
+            var mn=months[mNd[2].toUpperCase()];
+            if(mn)out.date=mNd[3]+'-'+mn+'-'+mNd[1].padStart(2,'0');
+          }
+        }
+      }
+    }
+
+    // PO réf : valeur après "Customer Order Number"
+    if(!out.poRef && /Customer\s+Order\s+Number/i.test(ln)){
+      for(var k=i+1;k<Math.min(i+6,rawLines.length);k++){
+        var subC=cells(rawLines[k]);
+        for(var sj=0;sj<subC.length;sj++){
+          if(/^\d{6,}\/\d{2,}-\d{2,}$/.test(subC[sj])){
+            out.poRef=subC[sj];
+            break;
+          }
+        }
+        if(out.poRef)break;
+      }
+    }
+
+    // End User
+    if(!out.endUser && /End\s+User/i.test(ln)){
+      for(var ek=i+1;ek<Math.min(i+3,rawLines.length);ek++){
+        var euC=cells(rawLines[ek]);
+        for(var ej=0;ej<euC.length;ej++){
+          if(/^[A-Z]{4,}/.test(euC[ej]) && !/CALINSTRUM/.test(euC[ej]) && !/VAT|GST/i.test(euC[ej])){
+            out.endUser=euC[ej].trim();
+            break;
+          }
+        }
+        if(out.endUser)break;
+      }
+    }
+
+    // Total
+    var mTot=ln.match(/Total\s*\(AUD\)\s*:?\s*[\s|]*([\d,]+\.\d+)/i);
+    if(mTot && !/Subtotal/i.test(ln))out.totalTTC=parseFloat(mTot[1].replace(/,/g,''));
+    // Si pas de "Total (AUD)" trouvé, fallback sur Subtotal
+    if(out.totalTTC===0){
+      var mSub=ln.match(/Subtotal\s*\(AUD\)\s*:?\s*[\s|]*([\d,]+\.\d+)/i);
+      if(mSub)out.totalTTC=parseFloat(mSub[1].replace(/,/g,''));
+    }
+
+    // Payment Terms
+    if(!out.paymentTerms){
+      var pt=ln.match(/Payment\s+due\s+in\s+(\d+\s+days?)/i);
+      if(pt)out.paymentTerms='Payment due in '+pt[1];
+    }
+
+    // Item line : 7 cellules numériques
+    if(c.length===7){
+      var custLN=c[0],invLN=c[1],lineN=c[2],ref=c[3],qte=c[4],pu=c[5],tot=c[6];
+      if(/^\d+$/.test(custLN) && /^\d+\.\d+$/.test(invLN) && /^\d+$/.test(lineN)
+        && /^[A-Z0-9][A-Z0-9\-]+$/.test(ref) && /^\d+$/.test(qte)
+        && /^[\d,]+\.\d+$/.test(pu) && /^[\d,]+\.\d+$/.test(tot)){
+        var descParts=[];
+        for(var dj=i+1;dj<rawLines.length;dj++){
+          var dl=rawLines[dj].trim();
+          if(/^(UOM\b|HTS\/HS|Lic Decision|US ECCN|Shipping Terms|Unit:|TH$|Print Date|Page\s+\d|Subtotal|Total\s*\(|Customer)/i.test(dl))break;
+          var dlcells=cells(dl);
+          if(dlcells.length===7 && /^\d+$/.test(dlcells[0]) && /^\d+\.\d+$/.test(dlcells[1]))break;
+          var clean=dlcells.join(' ').replace(/\s+/g,' ').trim();
+          if(clean)descParts.push(clean);
+        }
+        out.lignes.push({
+          ref:ref,
+          designation:descParts.join(' ').replace(/\s+/g,' ').trim(),
+          qte:parseFloat(qte),
+          pu:parseFloat(pu.replace(/,/g,'')),
+          total:parseFloat(tot.replace(/,/g,'')),
+          tgc:0,unite:'Each',invLineNo:invLN
+        });
+      }
+    }
+  }
+
+  // Refaire un passage spécifique pour les dates (souvent sur 1 ligne avec 2 dates)
+  for(var ii=0;ii<rawLines.length;ii++){
+    var lc=rawLines[ii];
+    var dates=lc.match(/(\d{1,2})-(\w{3})-(\d{4})/g);
+    if(dates && dates.length===2){
+      var d1=dates[0].match(/(\d{1,2})-(\w{3})-(\d{4})/);
+      var d2=dates[1].match(/(\d{1,2})-(\w{3})-(\d{4})/);
+      out.date=d1[3]+'-'+(months[d1[2].toUpperCase()]||'01')+'-'+d1[1].padStart(2,'0');
+      out.dueDate=d2[3]+'-'+(months[d2[2].toUpperCase()]||'01')+'-'+d2[1].padStart(2,'0');
+      break;
+    }
+  }
+
+  return out;
+}
+
+// === Auto-routeur : détecte le type et appelle le bon parser ===
+function parseFacturePdfAuto(text){
+  // Emerson Tax Invoice
+  if(/Tax\s+Invoice/i.test(text) && /Emerson/i.test(text)){
+    return parseFactureEmersonPdf(text);
+  }
+  // CALINSTRUM
+  if(/Facture\s+SLN/i.test(text) || /CALINSTRUM\s+SARL/i.test(text)){
+    return parseFactureCalinstrumPdf(text);
+  }
+  // Inconnu
+  return null;
+}
+
+// === Pipeline d'import : charge PDF, extrait texte, parse, ouvre prévisualisation ===
+var _factureImportState=null;
+
+function importFacturePDF(file){
+  if(!file)return;
+  if(file.type!=='application/pdf' && !/\.pdf$/i.test(file.name)){
+    alert('Le fichier sélectionné n\'est pas un PDF.');
+    var inp=document.getElementById('fa-import-pdf-file');
+    if(inp)inp.value='';
+    return;
+  }
+  var loader=document.createElement('div');
+  loader.id='fa-import-loader';
+  loader.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;flex-direction:column;gap:10px';
+  loader.innerHTML='<div style="font-size:32px">📄</div><div>Lecture du PDF…</div><div style="font-size:11px;color:#94a3b8" id="fa-import-step">Chargement de PDF.js…</div>';
+  document.body.appendChild(loader);
+
+  loadPdfJs()
+    .then(function(){
+      var stepEl=document.getElementById('fa-import-step');
+      if(stepEl)stepEl.textContent='Extraction du texte…';
+      return file.arrayBuffer();
+    })
+    .then(function(buf){return window.pdfjsLib.getDocument({data:buf}).promise;})
+    .then(function(pdf){
+      var promises=[];
+      for(var i=1;i<=pdf.numPages;i++){
+        promises.push(pdf.getPage(i).then(function(page){
+          return page.getTextContent().then(function(tc){
+            var its=tc.items.slice();
+            its.sort(function(a,b){
+              var ya=a.transform[5],yb=b.transform[5];
+              if(Math.abs(ya-yb)>2)return yb-ya;
+              return a.transform[4]-b.transform[4];
+            });
+            var lines=[],curLine=null,curY=null;
+            its.forEach(function(it){
+              var y=it.transform[5];
+              if(curY===null||Math.abs(y-curY)>2){
+                if(curLine)lines.push(curLine);
+                curLine={y:y,parts:[]};
+                curY=y;
+              }
+              curLine.parts.push({x:it.transform[4],t:it.str});
+            });
+            if(curLine)lines.push(curLine);
+            return lines.map(function(L){return L.parts.map(function(p){return p.t;}).join(' | ');}).join('\n');
+          });
+        }));
+      }
+      return Promise.all(promises).then(function(arr){return arr.join('\n');});
+    })
+    .then(function(rawText){
+      document.body.removeChild(loader);
+      var parsed=parseFacturePdfAuto(rawText);
+      if(!parsed){
+        alert('Format de facture non reconnu.\n\nFormats supportés :\n• Facture CALINSTRUM (SLN-F...)\n• Tax Invoice Emerson (AUD)\n\nLe fichier ne semble correspondre à aucun de ces formats.');
+        var inp=document.getElementById('fa-import-pdf-file');
+        if(inp)inp.value='';
+        return;
+      }
+      _factureImportState={parsed:parsed,rawText:rawText};
+      showFactureImportPreview(parsed);
+    })
+    .catch(function(err){
+      if(document.body.contains(loader))document.body.removeChild(loader);
+      alert('Erreur lors de la lecture du PDF :\n'+(err.message||err));
+      var inp=document.getElementById('fa-import-pdf-file');
+      if(inp)inp.value='';
+    });
+}
+
+function showFactureImportPreview(parsed){
+  // Vérifier si le BC référencé existe dans la base
+  var bcMatch=null;
+  if(parsed.bcRef||parsed.poRef){
+    var lookup=parsed.bcRef||parsed.poRef;
+    bcMatch=DB.bcs.find(function(b){
+      return b.num===lookup ||
+        (b.num && b.num.replace(/^BC/i,'')===lookup.replace(/^BC/i,'')) ||
+        (b.numClient && b.numClient===lookup);
+    });
+  }
+
+  // Construire le HTML de la modale de prévisualisation
+  var typeLabel=parsed.type==='emerson'?'📦 Facture Emerson (Fournisseur)':'📋 Facture CALINSTRUM';
+  var deviseLabel=parsed.devise==='AUD'?'AUD (Australien)':'XPF';
+  var bcStatus=bcMatch
+    ? '<div style="background:rgba(45,212,191,.1);border:1px solid rgba(45,212,191,.3);padding:8px 12px;border-radius:4px;margin:10px 0"><strong style="color:var(--teal)">✓ BC trouvé dans le GRC :</strong> '+esc(bcMatch.num)+(bcMatch.client?' — '+esc(bcMatch.client):'')+'</div>'
+    : (parsed.bcRef||parsed.poRef
+      ? '<div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);padding:8px 12px;border-radius:4px;margin:10px 0"><strong style="color:#f59e0b">⚠ BC référencé non trouvé :</strong> '+esc(parsed.bcRef||parsed.poRef)+'<br><span style="font-size:11px;color:var(--muted)">La facture sera créée en mode AUTONOME (sans liaison)</span></div>'
+      : '<div style="background:rgba(0,0,0,.3);padding:8px 12px;border-radius:4px;margin:10px 0;font-size:11px;color:var(--muted)">Aucun BC référencé dans le PDF — facture autonome</div>');
+
+  var lignesHtml=parsed.lignes.map(function(l,idx){
+    return '<tr>'+
+      '<td style="text-align:center;padding:4px 6px">'+(idx+1)+'</td>'+
+      '<td style="padding:4px 6px"><input type="text" id="fa-imp-ref-'+idx+'" value="'+esc(l.ref||'')+'" style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--border);color:var(--text);padding:3px 6px;font-size:11px;border-radius:3px"></td>'+
+      '<td style="padding:4px 6px"><textarea id="fa-imp-des-'+idx+'" rows="2" style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--border);color:var(--text);padding:3px 6px;font-size:11px;border-radius:3px;resize:vertical">'+esc(l.designation||'')+'</textarea></td>'+
+      '<td style="padding:4px 6px"><input type="number" id="fa-imp-qte-'+idx+'" value="'+(l.qte||0)+'" step="0.01" style="width:60px;background:rgba(0,0,0,.3);border:1px solid var(--border);color:var(--text);padding:3px 6px;font-size:11px;border-radius:3px"></td>'+
+      '<td style="padding:4px 6px"><input type="number" id="fa-imp-pu-'+idx+'" value="'+(l.pu||0)+'" step="0.01" style="width:90px;background:rgba(0,0,0,.3);border:1px solid var(--border);color:var(--text);padding:3px 6px;font-size:11px;border-radius:3px;text-align:right"></td>'+
+      '<td style="padding:4px 6px;text-align:right;font-weight:700;color:var(--teal)">'+(l.total||0).toLocaleString('fr-FR')+' '+parsed.devise+'</td>'+
+    '</tr>';
+  }).join('');
+
+  var emersonExtra=parsed.type==='emerson'?
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'+
+      '<div><label style="font-size:10px;color:var(--muted)">Date due</label><input type="date" id="fa-imp-duedate" value="'+esc(parsed.dueDate||'')+'" class="form-input" style="width:100%"></div>'+
+      '<div><label style="font-size:10px;color:var(--muted)">End user</label><input type="text" id="fa-imp-enduser" value="'+esc(parsed.endUser||'')+'" class="form-input" style="width:100%"></div>'+
+    '</div>':'';
+
+  var calinstrumExtra=parsed.type==='calinstrum'?
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'+
+      '<div><label style="font-size:10px;color:var(--muted)">Contact</label><input type="text" id="fa-imp-contact" value="'+esc(parsed.contact||'')+'" class="form-input" style="width:100%"></div>'+
+      '<div><label style="font-size:10px;color:var(--muted)">Email client</label><input type="text" id="fa-imp-email" value="'+esc(parsed.email||'')+'" class="form-input" style="width:100%"></div>'+
+    '</div>':'';
+
+  var html=
+    '<div class="modal-overlay open" id="mFactImport" style="z-index:1100">'+
+      '<div class="modal" style="max-width:1100px;width:90vw;max-height:88vh;display:flex;flex-direction:column">'+
+        '<div class="modal-head" style="flex-shrink:0">'+
+          '<h2 class="modal-title">📥 Import facture PDF — '+typeLabel+'</h2>'+
+          '<button class="modal-close" onclick="cancelFactureImport()" aria-label="Fermer">✕</button>'+
+        '</div>'+
+        '<div class="modal-body" style="flex:1;overflow-y:auto">'+
+          bcStatus+
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'+
+            '<div><label style="font-size:10px;color:var(--muted)">N° facture</label><input type="text" id="fa-imp-num" value="'+esc(parsed.num||'')+'" class="form-input" style="width:100%"></div>'+
+            '<div><label style="font-size:10px;color:var(--muted)">Date</label><input type="date" id="fa-imp-date" value="'+esc(parsed.date||'')+'" class="form-input" style="width:100%"></div>'+
+          '</div>'+
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'+
+            '<div><label style="font-size:10px;color:var(--muted)">Client</label><input type="text" id="fa-imp-client" value="'+esc(parsed.client||parsed.soldTo||'')+'" class="form-input" style="width:100%"></div>'+
+            '<div><label style="font-size:10px;color:var(--muted)">'+(parsed.type==='emerson'?'PO réf (BC CALINSTRUM)':'BC réf')+'</label><input type="text" id="fa-imp-bc" value="'+esc(parsed.bcRef||parsed.poRef||'')+'" class="form-input" style="width:100%"></div>'+
+          '</div>'+
+          calinstrumExtra+emersonExtra+
+          '<div style="margin-bottom:10px"><label style="font-size:10px;color:var(--muted)">Objet</label><input type="text" id="fa-imp-objet" value="'+esc(parsed.objet||'')+'" class="form-input" style="width:100%"></div>'+
+          '<h4 style="margin:14px 0 6px;font-size:12px;color:var(--teal)">Lignes ('+parsed.lignes.length+')</h4>'+
+          '<table style="width:100%;border-collapse:collapse;font-size:11px">'+
+            '<thead><tr style="background:rgba(45,212,191,.1)"><th style="padding:6px;text-align:center">#</th><th style="padding:6px;text-align:left">Réf</th><th style="padding:6px;text-align:left">Désignation</th><th style="padding:6px;text-align:center">Qté</th><th style="padding:6px;text-align:right">PU</th><th style="padding:6px;text-align:right">Total</th></tr></thead>'+
+            '<tbody>'+lignesHtml+'</tbody>'+
+          '</table>'+
+          '<div style="margin-top:14px;padding:10px 14px;background:rgba(45,212,191,.1);border-radius:4px;text-align:right">'+
+            '<strong style="font-size:13px">Total : '+parsed.totalTTC.toLocaleString('fr-FR')+' '+parsed.devise+'</strong>'+
+          '</div>'+
+        '</div>'+
+        '<div class="modal-foot" style="flex-shrink:0;display:flex;justify-content:flex-end;gap:8px;padding:14px;border-top:1px solid var(--border)">'+
+          '<button class="btn btn-ghost" onclick="cancelFactureImport()">Annuler</button>'+
+          '<button class="btn btn-teal" onclick="confirmFactureImport()">✓ Créer la facture</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  // Insérer dans le DOM
+  var wrap=document.createElement('div');
+  wrap.innerHTML=html;
+  document.body.appendChild(wrap.firstChild);
+}
+
+function cancelFactureImport(){
+  var m=document.getElementById('mFactImport');
+  if(m)m.parentNode.removeChild(m);
+  _factureImportState=null;
+  var inp=document.getElementById('fa-import-pdf-file');
+  if(inp)inp.value='';
+}
+
+function confirmFactureImport(){
+  if(!_factureImportState){cancelFactureImport();return;}
+  var parsed=_factureImportState.parsed;
+  // Récupérer les valeurs éditées
+  var num=(document.getElementById('fa-imp-num')||{}).value||parsed.num;
+  var date=(document.getElementById('fa-imp-date')||{}).value||parsed.date;
+  var client=(document.getElementById('fa-imp-client')||{}).value||parsed.client;
+  var bcRef=(document.getElementById('fa-imp-bc')||{}).value||parsed.bcRef||parsed.poRef||'';
+  var objet=(document.getElementById('fa-imp-objet')||{}).value||parsed.objet;
+  var contact=(document.getElementById('fa-imp-contact')||{}).value||parsed.contact||'';
+  var email=(document.getElementById('fa-imp-email')||{}).value||parsed.email||'';
+  // Lignes
+  var lignes=[];
+  for(var i=0;i<parsed.lignes.length;i++){
+    var ref=(document.getElementById('fa-imp-ref-'+i)||{}).value||'';
+    var des=(document.getElementById('fa-imp-des-'+i)||{}).value||'';
+    var qte=parseFloat((document.getElementById('fa-imp-qte-'+i)||{}).value||0);
+    var pu=parseFloat((document.getElementById('fa-imp-pu-'+i)||{}).value||0);
+    if(qte>0 || pu>0){
+      lignes.push({
+        ref:ref,designation:des,
+        qte:qte,pu:pu,
+        total:qte*pu,
+        tgc:parsed.lignes[i].tgc||0,
+        unite:parsed.lignes[i].unite||'Lot'
+      });
+    }
+  }
+  // Vérifier doublon de N°
+  var existing=DB.factures.find(function(f){return f.num===num;});
+  if(existing){
+    if(!confirm('⚠ Une facture avec le N° '+num+' existe déjà.\n\nVoulez-vous quand même importer cette facture ? (Un nouveau N° devrait être saisi)')){
+      return;
+    }
+  }
+  // Vérifier liaison BC
+  var bcId=null;
+  if(bcRef){
+    var bc=DB.bcs.find(function(b){
+      return b.num===bcRef ||
+        (b.num && b.num.replace(/^BC/i,'')===bcRef.replace(/^BC/i,'')) ||
+        (b.numClient && b.numClient===bcRef);
+    });
+    if(bc)bcId=bc.id;
+  }
+  // Calculer total
+  var totalHT=0;
+  lignes.forEach(function(l){totalHT+=(l.qte||0)*(l.pu||0);});
+  // Construire l'objet facture
+  var newFa={
+    id:Date.now(),
+    num:num,
+    client:client||'SLN',
+    contact:contact,
+    email:email,
+    objet:objet,
+    date:date,
+    type:parsed.type==='emerson'?'Fourniture':'Prestation',
+    incoterms:'',
+    freight:'',
+    notes:parsed.type==='emerson'?'Facture fournisseur Emerson — devise '+parsed.devise:'',
+    lines:{
+      fourniture:parsed.type==='emerson'?lignes.map(function(l){return Object.assign({},l,{unite:l.unite||'U'});}):[],
+      service:parsed.type==='calinstrum'?lignes:[],
+      fret:[]
+    },
+    ttc:parsed.totalTTC||totalHT,
+    tgcM:parsed.tgcMention||'506-2',
+    bcRef:bcRef,
+    bcId:bcId,
+    statut:'envoyee',
+    devise:parsed.devise,
+    dueDate:parsed.dueDate||'',
+    endUser:parsed.endUser||'',
+    paymentTerms:parsed.paymentTerms||'',
+    importedFromPdf:true,
+    importDate:new Date().toISOString()
+  };
+  if(!DB.factures)DB.factures=[];
+  DB.factures.push(newFa);
+  saveDB();
+  cancelFactureImport();
+  if(typeof renderFA==='function')renderFA();
+  alert('✅ Facture importée avec succès !\n\nN° : '+num+'\nMontant : '+(parsed.totalTTC||totalHT).toLocaleString('fr-FR')+' '+parsed.devise+'\n'+(bcId?'Liée au BC '+bcRef:'Mode autonome (BC non trouvé ou non spécifié)'));
 }
 
 // ============================================================================
