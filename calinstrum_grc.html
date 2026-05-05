@@ -7952,6 +7952,303 @@ function legacyImportDevisFromPDF(file){
 }
 
 function parseLegacyDevisText(text){
+  // Auto-détection du layout : nouveau layout CALINSTRUM (DV126+) contient
+  // "Shipping Terms:" et "Voie maritime:". Sinon, fallback sur le parser Excel legacy.
+  if(/Shipping\s+Terms\s*:/i.test(text) && /Voie\s+maritime\s*:/i.test(text)){
+    var v2=parseLegacyDevisTextV2(text);
+    if(v2 && v2.lignes && v2.lignes.length>0) return v2;
+    // Si V2 échoue à extraire des lignes, on tente quand même V1 par sécurité
+  }
+  return parseLegacyDevisTextV1(text);
+}
+
+// === Parser V2 — Nouveau layout CALINSTRUM (DV126 et suivants) ===
+// Layout type :
+//   - en-tête avec "Shipping Terms:" "Voie maritime:" "Marchandise dangereuse"
+//   - tableau Item | Désignation | TGC% | Uté | Qté | PU | TOTAL TTC
+//   - sous-headers descriptifs en majuscules (ex: "AMS WIRELESS VIBRATION MONITOR ACCESSORIES")
+//   - main headers FOURNITURE / SERVICE D'INGENIERIE
+//   - bloc "Total Fret, Assurance et Frais Locaux ... 275 321" → fraisLocaux
+//   - bloc "Total TTC avec livraison ..." → totalTTC
+function parseLegacyDevisTextV2(text){
+  var out={num:'',rev:'',date:'',client:'',service:'',contact:'',email:'',objet:'',
+    shipping:'',freight:'',voieMaritime:'',dangereuse:'Non',
+    validite:'',paiement:'',delai:'',
+    lignes:[],totalTTC:0,fraisLocaux:0,fraisLocauxLabel:'',
+    tgcMention:'506-2',remarque:''};
+
+  var rawLines=text.split('\n').map(function(l){return l.replace(/\s+$/,'');}).filter(function(l){return l.length>0;});
+  var flat=text.replace(/\s*\|\s*/g,' ').replace(/\s+/g,' ').trim();
+
+  // ---- Numéro + révision
+  var mNum=flat.match(/DEVIS\s+N°\s+([A-Z]{2,5}-?DV\d+[A-Za-z0-9-]*)\s+(REV\d+)?/i);
+  if(mNum){out.num=mNum[1].trim();out.rev=(mNum[2]||'').trim();}
+
+  // ---- Date
+  var mDate=flat.match(/Le\s*[:\s]+(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})/);
+  if(mDate){
+    var dd=mDate[1].padStart(2,'0'),mm=mDate[2].padStart(2,'0'),yy=mDate[3];
+    if(yy.length===2)yy='20'+yy;
+    out.date=yy+'-'+mm+'-'+dd;
+  }
+
+  // ---- Service / client (ligne "Adresse : Service XXX YYY")
+  var mAdr=flat.match(/Adresse\s+:\s+(?:Service\s+)?([A-ZÀ-Ÿ][^|]{1,60}?)(?=\s+(?:CALINSTRUM|à\s+M|à\s+Mme|à\s+Mlle|RIDET|$))/);
+  if(mAdr){
+    var adr=mAdr[1].trim().replace(/\s+/g,' ');
+    var ms=adr.match(/^(?:Service\s+)?([A-Z]{2,15})\s+([A-Z]{2,10})\s*$/);
+    if(ms){out.service=ms[1];out.client=ms[2];}
+    else out.client=adr;
+  }
+
+  // ---- Contact (à M / Mme NOM Prénom)
+  var mCt=flat.match(/(?:à\s+M\.?|à\s+Mme|à\s+Mlle)\s+([A-ZÀ-Ÿ][A-ZÀ-Ÿ\s'-]{2,60}?)(?=\s+(?:RIDET|[\w.+-]+@|Adresse|CALINSTRUM|$))/);
+  if(mCt)out.contact=mCt[1].trim().replace(/\s+/g,' ');
+
+  // ---- Email (non-CALINSTRUM)
+  var emails=flat.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g)||[];
+  for(var ei=0;ei<emails.length;ei++){
+    if(emails[ei].toLowerCase().indexOf('calinstrum')<0){out.email=emails[ei];break;}
+  }
+
+  // ---- Objet
+  var mObj=flat.match(/Objet\s*:\s*([^|]+?)(?=\s+(?:Marchandise|Devis\s+N°|Freight|Voie|Shipping|$))/i);
+  if(mObj)out.objet=mObj[1].trim().replace(/\s+/g,' ');
+
+  // ---- Shipping / Freight / Voie maritime
+  var mSh=flat.match(/Shipping\s+Terms\s*:\s*([^|]+?)(?=\s+(?:Voie\s+maritime|Freight|e-?mail|Marchandise|Devis\s+N°|Objet|$))/i);
+  if(mSh)out.shipping=mSh[1].trim();
+  var mFr=flat.match(/Freight\s+Terms\s*:\s*([^|]+?)(?=\s+(?:Item|Désignation|Prix|TGC|Voie|Shipping|$))/i);
+  if(mFr)out.freight=mFr[1].trim();
+  var mVm=flat.match(/Voie\s+maritime\s*:\s*([^|]+?)(?=\s+(?:Marchandise|Freight|Shipping|Objet|Devis|$))/i);
+  if(mVm)out.voieMaritime=mVm[1].trim();
+
+  // ---- Marchandise dangereuse
+  if(/Marchandise\s+dangereuse\s*[:=]?\s*Oui/i.test(flat))out.dangereuse='Oui';
+  else out.dangereuse='Non';
+
+  // ---- Délimitation du tableau
+  var startIdx=-1,endIdx=rawLines.length;
+  for(var i=0;i<rawLines.length;i++){
+    var lnNorm=rawLines[i].replace(/\s*\|\s*/g,' ');
+    if(/^Item\s+Désignation/i.test(lnNorm) || /^Item\b.*TOTAL\s+TTC/i.test(lnNorm)){startIdx=i;}
+    if(/^Total\s+TTC\b.*Fourniture\s+et\s+service/i.test(lnNorm)){endIdx=i;break;}
+    if(/^Montant\s+en\s+lettres/i.test(lnNorm)){if(endIdx===rawLines.length)endIdx=i;}
+  }
+  if(startIdx<0)startIdx=0;
+  var tableLines=rawLines.slice(startIdx+1,endIdx);
+
+  var UNIT_REG=/\b(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)\b/i;
+  // Match au DÉBUT seulement (.match(...) avec "^" implicite serait bizarre, on utilise un test direct)
+  function unitAtStart(s){
+    return /^(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)$/i.test(s);
+  }
+
+  function isItemLine(ln){
+    var parts=ln.split('|').map(function(p){return p.trim();});
+    if(!parts.length)return false;
+    if(!/^\d+$/.test(parts[0]))return false;
+    var joined=parts.join(' ');
+    return UNIT_REG.test(joined);
+  }
+  function isMainHeader(ln){
+    var s=ln.replace(/\|/g,' ').trim();
+    if(/^FOURNITURE\b/i.test(s))return true;
+    if(/^SERVICE\b/i.test(s) || /INGENIERIE/i.test(s.toUpperCase()))return true;
+    if(/^MAIN\s*D['\u2019]?\s*[ŒOE]+UVRE/i.test(s))return true;
+    if(/^(?:FRET\b|TRANSPORT\b|FRAIS\s+LOCAUX|FRAIS\s+DIVERS|FRET\s*\/\s*FRAIS|Total\s+FRET)/i.test(s))return true;
+    return false;
+  }
+  function isSubheader(ln){
+    var s=ln.replace(/\|/g,' ').trim();
+    if(s.indexOf(':')>=0)return false;
+    if(!/^[A-Z][A-Z\s'/-]{15,}$/.test(s))return false;
+    if(/\d{2,}/.test(s))return false;
+    if(isMainHeader(ln))return false;
+    return true;
+  }
+
+  // Classifier
+  var classified=[];
+  for(var ti=0;ti<tableLines.length;ti++){
+    var lns=tableLines[ti].trim();
+    if(!lns)continue;
+    if(isMainHeader(lns))classified.push({type:'header',line:lns});
+    else if(isSubheader(lns))classified.push({type:'subheader',line:lns});
+    else if(isItemLine(lns))classified.push({type:'item',line:lns});
+    else classified.push({type:'orphan',line:lns});
+  }
+
+  // Agglutiner orphans en préfixes/suffixes (subheaders sont préfixes-only, jamais suffixes)
+  var itemsFinal=[];
+  var consumedSuffix={};
+  for(var ci=0;ci<classified.length;ci++){
+    if(classified[ci].type!=='item')continue;
+    var suffixes=[],prefixes=[];
+    var cj=ci+1;
+    while(cj<classified.length && classified[cj].type==='orphan'){
+      suffixes.push(classified[cj].line);consumedSuffix[cj]=1;cj++;
+    }
+    var ck=ci-1;
+    while(ck>=0 && (classified[ck].type==='orphan'||classified[ck].type==='subheader')){
+      if(!consumedSuffix[ck])prefixes.push(classified[ck].line);
+      ck--;
+    }
+    prefixes.reverse();
+    itemsFinal.push({itemLine:classified[ci].line,prefixes:prefixes,suffixes:suffixes,pos:ci});
+  }
+
+  function sectionFor(idx){
+    for(var sk=idx-1;sk>=0;sk--){
+      if(classified[sk].type!=='header')continue;
+      var up=classified[sk].line.toUpperCase();
+      if(up.indexOf('FOURNITURE')===0)return 'fourniture';
+      if(up.indexOf('SERVICE')===0||up.indexOf('INGENIERIE')>=0)return 'service';
+      if(up.indexOf('FRET')===0||up.indexOf('TRANSPORT')===0)return 'fret';
+      if(up.indexOf('MAIN')===0)return 'service';
+    }
+    return 'service';
+  }
+
+  // Parser chaque item
+  for(var ii=0;ii<itemsFinal.length;ii++){
+    var itf=itemsFinal[ii];
+    var ln2=itf.itemLine;
+    var section=sectionFor(itf.pos);
+    var parts=ln2.split('|').map(function(p){return p.trim();});
+
+    // Trouver l'unité
+    var unitIdx=-1;
+    for(var pi=1;pi<parts.length;pi++){
+      if(parts[pi].length<=10 && unitAtStart(parts[pi])){unitIdx=pi;break;}
+    }
+    if(unitIdx<0)continue;
+    var unit=parts[unitIdx];
+    var itemNum=parts[0];
+
+    // Désignation initiale (entre n° et unit), retirer un éventuel TGC% en queue
+    var desigParts=parts.slice(1,unitIdx);
+    var tgcPct=0;
+    if(desigParts.length){
+      var last=desigParts[desigParts.length-1];
+      var mp=last.match(/^(\d+(?:[,.]\d+)?)\s*%?$/);
+      if(mp){
+        var v=parseFloat(mp[1].replace(',','.'));
+        if([0,3,6,11,22].indexOf(v)>=0){tgcPct=v;desigParts.pop();}
+      }
+    }
+    var designation=desigParts.join(' ').trim();
+
+    // Reconstituer la désignation complète : prefixes + designation + suffixes
+    var fullParts=[];
+    itf.prefixes.forEach(function(pre){
+      var c=pre.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+      if(c)fullParts.push(c);
+    });
+    if(designation)fullParts.push(designation);
+    itf.suffixes.forEach(function(suf){
+      var c=suf.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+      if(c)fullParts.push(c);
+    });
+    var fullDesignation=fullParts.join(' ');
+    fullDesignation=fullDesignation.replace(/\(\s+/g,'(').replace(/\s+\)/g,')');
+    // Recoller codes Emerson cassés sur 2 lignes : "SNG- A9530V3" → "SNG-A9530V3"
+    fullDesignation=fullDesignation.replace(/\b([A-Z]{2,4})-\s+([A-Z0-9])/g,'$1-$2');
+    fullDesignation=fullDesignation.replace(/\s+/g,' ').trim();
+
+    // Extraire la référence produit (codes Emerson type SNG-XXX, ou autre code en parenthèses)
+    var ref='';
+    var mref=fullDesignation.match(/\(([A-Z]{2,4}-[A-Z0-9]{2,}[A-Z0-9-]*)\)/);
+    if(mref){
+      ref=mref[1];
+      fullDesignation=fullDesignation.replace(new RegExp('\\s*\\('+ref.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\)\\s*'),' ').replace(/\s+/g,' ').trim();
+    }
+
+    // Découper les chunks numériques en qté/PU/total avec contrainte qté×PU≈total
+    var numChunks=[];
+    for(var pj=unitIdx+1;pj<parts.length;pj++){
+      if(/^[\d.,]+$/.test(parts[pj]))numChunks.push(parts[pj]);
+    }
+    var qte=null,pu=null,totalLn=null;
+    var nNum=numChunks.length;
+    if(nNum>=3){
+      var best=null;
+      for(var iA=1;iA<nNum;iA++){
+        for(var iB=iA+1;iB<=nNum;iB++){
+          if(iB>nNum-1)continue; // grp3 doit avoir au moins 1 chunk
+          var g1=numChunks.slice(0,iA).join('');
+          var g2=numChunks.slice(iA,iB).join('');
+          var g3=numChunks.slice(iB,nNum).join('');
+          var v1=parseFloat(g1.replace(',','.'));
+          var v2=parseFloat(g2.replace(',','.'));
+          var v3=parseFloat(g3.replace(',','.'));
+          if(isNaN(v1)||isNaN(v2)||isNaN(v3))continue;
+          if(v1<=0||v2<=0||v3<=0)continue;
+          var diff=Math.abs(v1*v2-v3);
+          if(diff<=100){
+            if(!best||diff<best.diff)best={qte:v1,pu:v2,total:v3,diff:diff};
+          }
+        }
+      }
+      if(best){qte=best.qte;pu=best.pu;totalLn=best.total;}
+    } else if(nNum===2){
+      qte=parseFloat(numChunks[0].replace(',','.'));
+      pu=parseFloat(numChunks[1].replace(',','.'));
+      if(!isNaN(qte)&&!isNaN(pu))totalLn=qte*pu;
+    }
+    if(qte===null||pu===null)continue;
+
+    // Normalisation unité
+    var unitNorm=unit;
+    if(/^lot$/i.test(unitNorm))unitNorm='Lot';
+    else if(/^forfait$/i.test(unitNorm))unitNorm='Forfait';
+    else if(/^H\s*sup/i.test(unitNorm))unitNorm='H sup';
+    else if(/^H\s*tech/i.test(unitNorm))unitNorm='H tech';
+    else if(/^H\s*qual/i.test(unitNorm))unitNorm='H qual';
+
+    out.lignes.push({
+      designation:fullDesignation,
+      ref:ref,
+      unite:unitNorm,
+      qte:qte,
+      pu:pu,
+      total:totalLn,
+      tgc:tgcPct,
+      section:section
+    });
+  }
+
+  // ---- Bloc frais locaux
+  var mFL=flat.match(/Total\s+Fret[\s,]+Assurance\s+et\s+Frais\s+Locaux\s+rendu\s+\w+\s+\([^)]+\)\s+([\d\s]+)/i);
+  if(mFL){
+    out.fraisLocaux=parseInt(mFL[1].replace(/\s/g,''),10);
+    out.fraisLocauxLabel='Fret + Assurance + Frais Locaux (extrait du devis)';
+  }
+
+  // ---- Total TTC final (avec livraison) ou fallback fourniture
+  var mTT=flat.match(/Total\s+TTC\s+avec\s+livraison[^)]+\)\s+([\d\s]+)/i);
+  if(mTT)out.totalTTC=parseInt(mTT[1].replace(/\s/g,''),10);
+  else{
+    var mTT2=flat.match(/Total\s+TTC\s*-\s*Fourniture\s+et\s+service\s*\([^)]+\)\s+([\d\s]+)/i);
+    if(mTT2)out.totalTTC=parseInt(mTT2[1].replace(/\s/g,''),10);
+  }
+
+  // ---- Validité, paiement, délai
+  var mV=flat.match(/Durée\s+de\s+validité\s+du\s+devis\s*:\s*([^|]+?)(?=\s+(?:Modalité|Délai|Banque|Code|$))/i);
+  if(mV)out.validite=mV[1].trim();
+  var mP=flat.match(/Modalité\s+de\s+paiement\s*:\s*([^|]+?)(?=\s+(?:Délai|Règlement|Banque|$))/i);
+  if(mP)out.paiement=mP[1].trim();
+  var mD=flat.match(/Délai\s+de\s+livraison\s*:\s*([^|]+?)(?=\s+(?:Règlement|Banque|Code|Modalité|$))/i);
+  if(mD)out.delai=mD[1].trim();
+
+  // Mention TGC
+  if(/Lp\.?\s*506-?2/i.test(flat))out.tgcMention='506-2';
+  else if(/Lp\.?\s*514-?5/i.test(flat))out.tgcMention='514-5';
+
+  return out;
+}
+
+function parseLegacyDevisTextV1(text){
   var raw=text;
   var flat=text.replace(/ \| /g,' ').replace(/\s+/g,' ').replace(/[ \t]+\n/g,'\n');
 
@@ -8142,6 +8439,8 @@ function showLegacyImportPreview(parsed,rawText,fileName){
   if(existing)existing.remove();
 
   var clientExists=DB.clients.some(function(c){return c.nom===parsed.client;});
+  // Détection : ce parsing vient-il du parser V2 (présence de champs spécifiques) ?
+  var isV2=parsed.shipping!==undefined || parsed.voieMaritime!==undefined || parsed.fraisLocaux!==undefined;
   var modal=document.createElement('div');
   modal.id='mLegacyImport';
   modal.className='modal-overlay open';
@@ -8154,35 +8453,59 @@ function showLegacyImportPreview(parsed,rawText,fileName){
       '<div class="modal-body">'+
         '<div style="background:rgba(45,212,191,.06);border:1px solid rgba(45,212,191,.25);border-radius:6px;padding:10px;margin-bottom:12px;font-size:11px;color:var(--muted)">'+
           '✅ Les champs ci-dessous ont été extraits automatiquement du PDF. Vérifiez et corrigez si besoin avant de valider.'+
+          (isV2?' <span style="color:var(--teal);font-weight:700">[Layout DV126+]</span>':'')+
         '</div>'+
         '<div class="form-row">'+
-          '<div class="form-group"><label>N° Devis</label><input class="form-input" id="li-num" value="'+esc(parsed.num)+'"></div>'+
+          '<div class="form-group"><label>N° Devis</label><input class="form-input" id="li-num" value="'+esc(parsed.num)+(parsed.rev?' '+esc(parsed.rev):'')+'"></div>'+
           '<div class="form-group"><label>Date</label><input type="date" class="form-input" id="li-date" value="'+esc(parsed.date)+'"></div>'+
         '</div>'+
         '<div class="form-row">'+
           '<div class="form-group"><label>Client (société) '+(clientExists?'<span style="color:var(--teal);font-size:9.5px">✓ existant</span>':'<span style="color:var(--amber);font-size:9.5px">⚠️ sera créé automatiquement</span>')+'</label><input class="form-input" id="li-client" value="'+esc(parsed.client)+'"></div>'+
-          '<div class="form-group"><label>Contact (À M.)</label><input class="form-input" id="li-contact" value="'+esc(parsed.contact)+'"></div>'+
+          '<div class="form-group"><label>Service / département <span style="color:var(--muted);font-size:9.5px">(ex: FENI, MEFA…)</label><input class="form-input" id="li-service" value="'+esc(parsed.service||'')+'"></div>'+
         '</div>'+
         '<div class="form-row">'+
+          '<div class="form-group"><label>Contact (À M.)</label><input class="form-input" id="li-contact" value="'+esc(parsed.contact)+'"></div>'+
           '<div class="form-group"><label>Email contact</label><input class="form-input" id="li-email" value="'+esc(parsed.email)+'"></div>'+
+        '</div>'+
+        '<div class="form-group"><label>Objet</label><textarea class="form-textarea" id="li-objet" rows="2">'+esc(parsed.objet)+'</textarea></div>'+
+        (isV2 ? (
+        '<div class="form-row">'+
+          '<div class="form-group"><label>Shipping Terms</label><input class="form-input" id="li-shipping" value="'+esc(parsed.shipping||'')+'"></div>'+
+          '<div class="form-group"><label>Freight Terms</label><input class="form-input" id="li-freight" value="'+esc(parsed.freight||'')+'"></div>'+
+        '</div>'+
+        '<div class="form-row">'+
+          '<div class="form-group"><label>Voie maritime</label><input class="form-input" id="li-voie" value="'+esc(parsed.voieMaritime||'')+'"></div>'+
+          '<div class="form-group"><label>Marchandise dangereuse</label><select class="form-select" id="li-danger">'+
+            '<option value="Non"'+(parsed.dangereuse!=='Oui'?' selected':'')+'>Non</option>'+
+            '<option value="Oui"'+(parsed.dangereuse==='Oui'?' selected':'')+'>Oui</option>'+
+          '</select></div>'+
+        '</div>'
+        ) : '')+
+        '<div class="form-row">'+
+          '<div class="form-group"><label>Validité</label><input class="form-input" id="li-validite" value="'+esc(parsed.validite)+'"></div>'+
           '<div class="form-group"><label>Mention TGC</label><select class="form-select" id="li-tgcM">'+
             '<option value="506-2"'+(parsed.tgcMention==='506-2'?' selected':'')+'>Lp.506-2 (exonéré)</option>'+
             '<option value="514-5"'+(parsed.tgcMention==='514-5'?' selected':'')+'>Lp.514-5 (franchise de taxe)</option>'+
             '<option value="tgc"'+(parsed.tgcMention==='tgc'?' selected':'')+'>TGC applicable</option>'+
           '</select></div>'+
         '</div>'+
-        '<div class="form-group"><label>Objet</label><textarea class="form-textarea" id="li-objet" rows="2">'+esc(parsed.objet)+'</textarea></div>'+
         '<div class="form-row">'+
-          '<div class="form-group"><label>Validité</label><input class="form-input" id="li-validite" value="'+esc(parsed.validite)+'"></div>'+
-          '<div class="form-group"><label>Délai</label><input class="form-input" id="li-delai" value="'+esc(parsed.delai)+'"></div>'+
+          '<div class="form-group"><label>Délai de livraison</label><input class="form-input" id="li-delai" value="'+esc(parsed.delai)+'"></div>'+
+          '<div class="form-group"><label>Modalités de paiement</label><input class="form-input" id="li-paiement" value="'+esc(parsed.paiement)+'"></div>'+
         '</div>'+
-        '<div class="form-group"><label>Modalités de paiement</label><input class="form-input" id="li-paiement" value="'+esc(parsed.paiement)+'"></div>'+
-        '<div class="form-group"><label>Remarque</label><textarea class="form-textarea" id="li-remarque" rows="2">'+esc(parsed.remarque)+'</textarea></div>'+
+        '<div class="form-group"><label>Remarque / Note interne</label><textarea class="form-textarea" id="li-remarque" rows="2">'+esc(parsed.remarque||'')+'</textarea></div>'+
+        (isV2 && parsed.fraisLocaux>0 ? (
+          '<div style="background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.25);border-radius:6px;padding:10px;margin-bottom:8px;font-size:11px">'+
+            '<div style="color:#a78bfa;font-weight:700;margin-bottom:4px">💰 Frais locaux extraits du devis</div>'+
+            '<div style="color:var(--muted)">'+esc(parsed.fraisLocauxLabel||'Frais locaux')+' : <strong style="color:#a78bfa">'+fN(parsed.fraisLocaux)+' XPF</strong></div>'+
+            '<div style="color:var(--muted);font-size:10px;margin-top:4px">Ces frais seront enregistrés dans une note du devis. Lors de la création du BC Emerson lié, tu pourras les reporter dans le champ « Frais réels » pour le calcul de marge.</div>'+
+          '</div>'
+        ) : '')+
         '<hr class="sep" style="margin:12px 0">'+
         '<div style="font-weight:700;color:var(--teal);font-size:12px;margin-bottom:6px">📋 Lignes extraites ('+parsed.lignes.length+')</div>'+
         '<div style="max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:6px">'+
           '<table class="items-tbl" style="margin:0">'+
-            '<thead><tr><th>Section</th><th>Désignation</th><th>U</th><th>Qté</th><th>PU</th><th>TGC%</th></tr></thead>'+
+            '<thead><tr><th>Section</th><th style="width:120px">Référence</th><th>Désignation</th><th>U</th><th>Qté</th><th>PU</th><th>TGC%</th></tr></thead>'+
             '<tbody id="li-lines">'+
               parsed.lignes.map(function(l,idx){
                 return '<tr>'+
@@ -8191,6 +8514,7 @@ function showLegacyImportPreview(parsed,rawText,fileName){
                     '<option value="fourniture"'+(l.section==='fourniture'?' selected':'')+'>Fourniture</option>'+
                     '<option value="fret"'+(l.section==='fret'?' selected':'')+'>Fret/Frais</option>'+
                   '</select></td>'+
+                  '<td><input class="form-input" id="li-ref-'+idx+'" value="'+esc(l.ref||'')+'" style="font-size:10.5px;padding:2px 4px" placeholder="ex: SNG-A212"></td>'+
                   '<td><input class="form-input" id="li-des-'+idx+'" value="'+esc(l.designation)+'" style="font-size:10.5px;padding:2px 4px"></td>'+
                   '<td><input class="form-input" id="li-uni-'+idx+'" value="'+esc(l.unite)+'" style="font-size:10.5px;padding:2px 4px;width:70px"></td>'+
                   '<td><input type="number" class="form-input" id="li-qte-'+idx+'" value="'+(l.qte||0)+'" style="font-size:10.5px;padding:2px 4px;width:60px"></td>'+
@@ -8214,6 +8538,9 @@ function showLegacyImportPreview(parsed,rawText,fileName){
     '</div>';
   document.body.appendChild(modal);
   modal._nbLines=parsed.lignes.length;
+  modal._isV2=isV2;
+  modal._fraisLocaux=parsed.fraisLocaux||0;
+  modal._fraisLocauxLabel=parsed.fraisLocauxLabel||'';
 }
 
 function closeLegacyImport(){
@@ -8228,6 +8555,9 @@ function confirmLegacyImport(){
   var modal=document.getElementById('mLegacyImport');
   if(!modal)return;
   var nbLines=modal._nbLines||0;
+  var isV2=modal._isV2||false;
+  var fraisLocaux=modal._fraisLocaux||0;
+  var fraisLocauxLabel=modal._fraisLocauxLabel||'';
 
   var num=gvg('li-num').trim();
   var date=gvg('li-date').trim();
@@ -8240,6 +8570,12 @@ function confirmLegacyImport(){
   var paiement=gvg('li-paiement').trim();
   var remarque=gvg('li-remarque').trim();
   var tgcM=gvg('li-tgcM');
+  // Champs V2 (peuvent ne pas être présents en mode V1)
+  var service=isV2?(gvg('li-service')||'').trim():'';
+  var shipping=isV2?(gvg('li-shipping')||'').trim():'';
+  var freight=isV2?(gvg('li-freight')||'').trim():'';
+  var voie=isV2?(gvg('li-voie')||'').trim():'';
+  var danger=isV2?(gvg('li-danger')||'Non'):'Non';
 
   if(!num){alert('Le N° de devis est obligatoire.');return;}
   if(!clientNom){alert('Le nom du client est obligatoire.');return;}
@@ -8261,7 +8597,7 @@ function confirmLegacyImport(){
       email:email||'',
       tel:'',tel2:'',
       exo:exoTGC,
-      adresse:'',
+      adresse:service?'Service '+service:'',
       notes:'Créé automatiquement lors de l\'import du devis '+num,
       priority:false
     };
@@ -8272,13 +8608,17 @@ function confirmLegacyImport(){
   var lines={fourniture:[],service:[],fret:[]};
   for(var idx=0;idx<nbLines;idx++){
     var sec=gvg('li-sec-'+idx);
+    var ref=gvg('li-ref-'+idx);
+    ref=ref?ref.trim():'';
     var des=gvg('li-des-'+idx).trim();
     var uni=gvg('li-uni-'+idx).trim();
     var qte=parseFloat(gvg('li-qte-'+idx))||0;
     var pu=parseFloat(gvg('li-pu-'+idx))||0;
     var tgc=parseFloat(gvg('li-tgc-'+idx))||0;
     if(!des || qte<=0)continue;
-    lines[sec||'service'].push({designation:des,unite:uni||'U',qte:qte,pu:pu,tgc:tgc});
+    var lineObj={designation:des,unite:uni||'U',qte:qte,pu:pu,tgc:tgc};
+    if(ref)lineObj.ref=ref;
+    lines[sec||'service'].push(lineObj);
   }
 
   // Calculer les totaux
@@ -8293,27 +8633,44 @@ function confirmLegacyImport(){
   var fr=lines.fret.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0);},0);
   var ttc=ht+t11+t22+t6+fr;
 
+  // Auto-déduction du type devis selon les sections présentes
+  var hasFourn=lines.fourniture.length>0;
+  var hasServ=lines.service.length>0;
+  var typeAuto=(hasFourn && hasServ)?'Fourniture + Prestation':(hasFourn?'Fourniture':(hasServ?'Prestation de service':'Fourniture + Prestation'));
+
+  // Notes : combiner remarque utilisateur + frais locaux extraits si présents
+  var notesArr=[];
+  if(remarque)notesArr.push(remarque);
+  if(fraisLocaux>0){
+    notesArr.push('💰 '+fraisLocauxLabel+' : '+fN(fraisLocaux)+' XPF (extrait du PDF)');
+  }
+  if(service)notesArr.push('Service / département client : '+service);
+
   var newDevis={
     id:Date.now()+1,
     num:num,
     rev:'',
     date:date,
-    type:'Fourniture + Prestation',
+    type:typeAuto,
     client:clientNom,
     contact:contact||'',
     email:email||'',
-    adresse:'',
+    adresse:service?'Service '+service:'',
     objet:objet||'',
-    incoterms:'',transport:'',freight:'',danger:'',
+    incoterms:shipping||'',transport:voie||'',freight:freight||'',danger:danger||'Non',
     status:'Brouillon',
     validite:validite||'1 mois',
     delai:delai||'',
     paiement:paiement||'Paiement sous 30 jours à reception de la facture',
-    notes:remarque||'',
+    notes:notesArr.join('\n'),
     tgcM:tgcM||'506-2',
+    service:service||'',
+    fraisLocauxImport:fraisLocaux,
+    fraisLocauxLabel:fraisLocauxLabel,
     lines:lines,
     ht:ht,t11:t11,t22:t22,t6:t6,fr:fr,ttc:ttc,
-    _legacyPdfImport:true
+    _legacyPdfImport:true,
+    _legacyPdfImportV2:isV2
   };
 
   pushUndo('Import devis « '+num+' »',function(){
