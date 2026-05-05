@@ -879,6 +879,18 @@ tr:hover td{background:rgba(255,255,255,.02)}
           <option value="tgc">Soumis à la TGC</option>
         </select>
       </div>
+      <details style="background:rgba(96,165,250,.04);border:1px solid rgba(96,165,250,.2);border-radius:6px;padding:8px 10px;margin-bottom:10px">
+        <summary style="color:#60a5fa;font-weight:700;cursor:pointer;font-size:12px">📄 Conditions commerciales & Remarques (textes en page 2-3 du PDF généré)</summary>
+        <div style="margin-top:10px">
+          <label style="display:block;font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Conditions commerciales <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">(texte standard, modifiable)</span></label>
+          <textarea class="form-textarea" id="dv-conditionsCommerciales" rows="6" style="font-size:11px"></textarea>
+          <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;margin-top:4px;padding:3px 8px" onclick="dvFillDefaultConditions()" title="Remplir avec le texte standard CALINSTRUM">⚡ Texte standard</button>
+        </div>
+        <div style="margin-top:10px">
+          <label style="display:block;font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Remarques <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">(à remplir uniquement si Emerson intervient sur site)</span></label>
+          <textarea class="form-textarea" id="dv-remarques" rows="6" style="font-size:11px" placeholder="Ex : • La marchandise comprend... • Les services sur site sont inclus..."></textarea>
+        </div>
+      </details>
 
     </div>
     <!-- ONGLET TRAÇABILITÉ : métadonnées internes (NON imprimées sur le devis client) -->
@@ -6291,6 +6303,10 @@ function openDV(id){
       gv('dv-tgc-mention',d.tgcM||'506-2');gv('dv-link-emerson',d.linkEmerson||'');gv('dv-link-bc',d.linkBC||'');gv('dv-link-po',d.linkPO||'');gv('dv-link-other',d.linkOther||'');
       gv('dv-bc-client-sln',d.bcClientSLN||'');gv('dv-bc-client-sln-date',d.bcClientSLNDate||'');
       gv('dv-cadre-ref',d.cadreRef||'');gv('dv-cadre-start',d.cadreStart||'');
+      var elDvCond=document.getElementById('dv-conditionsCommerciales');
+      if(elDvCond)elDvCond.value=d.conditionsCommerciales||'';
+      var elDvRem=document.getElementById('dv-remarques');
+      if(elDvRem)elDvRem.value=d.remarques||'';
       dvL=JSON.parse(JSON.stringify(d.lines||{fourniture:[],service:[],fret:[]}));
       sv('mDVtitle','Modifier — '+d.num);
       // === DÉTECTION AUTO TGC ERRONÉ ===
@@ -6334,6 +6350,10 @@ function openDV(id){
     gv('dv-status','Brouillon');gv('dv-validite','1 mois');gv('dv-delai','');gv('dv-notes','');gv('dv-tgc-mention','506-2');gv('dv-link-emerson','');gv('dv-link-bc','');gv('dv-link-po','');gv('dv-link-other','');
     gv('dv-bc-client-sln','');gv('dv-bc-client-sln-date','');
     gv('dv-cadre-ref','');gv('dv-cadre-start','');
+    var elDvCondNew=document.getElementById('dv-conditionsCommerciales');
+    if(elDvCondNew)elDvCondNew.value='';
+    var elDvRemNew=document.getElementById('dv-remarques');
+    if(elDvRemNew)elDvRemNew.value='';
     var infoElNew=document.getElementById('dv-date-info');
     if(infoElNew)infoElNew.innerHTML='✨ Nouveau devis — date par défaut = aujourd\'hui (modifiable).';
     sv('mDVtitle','Nouveau Devis');
@@ -7146,6 +7166,8 @@ function getDV(){
     objet:gvg('dv-objet'),incoterms:gvg('dv-incoterms'),transport:gvg('dv-transport'),freight:gvg('dv-freight'),
     danger:gvg('dv-danger'),status:gvg('dv-status'),validite:gvg('dv-validite'),delai:gvg('dv-delai'),
     paiement:gvg('dv-paiement'),notes:gvg('dv-notes'),tgcM:gvg('dv-tgc-mention'),
+    conditionsCommerciales:(document.getElementById('dv-conditionsCommerciales')?document.getElementById('dv-conditionsCommerciales').value:''),
+    remarques:(document.getElementById('dv-remarques')?document.getElementById('dv-remarques').value:''),
     bcClientSLN:gvg('dv-bc-client-sln'),bcClientSLNDate:gvg('dv-bc-client-sln-date'),
     cadreRef:gvg('dv-cadre-ref'),cadreStart:gvg('dv-cadre-start'),
     linkFactureId:existing?existing.linkFactureId:undefined, // préserver si déjà créée
@@ -7962,6 +7984,76 @@ function parseLegacyDevisText(text){
   return parseLegacyDevisTextV1(text);
 }
 
+// === Helpers pour extraire les sections "CONDITIONS COMMERCIALES" et "REMARQUES" du PDF ===
+// Capture le bloc entre un marqueur "MOT-CLÉ :" et le footer (Opération réalisée / Page X de Y).
+// Filtre les en-têtes répétés à chaque page (logo, n°, date, contact).
+function extractPdfSection(fullText, startMarkerRegex){
+  var lines=fullText.split('\n');
+  var inSection=false;
+  var captured=[];
+  // Patterns à ignorer (en-têtes répétés sur chaque page, footer, n° page)
+  var skipPatterns=[
+    /^\s*\|?\s*DEVIS\s+N°/i,
+    /^\s*\|?\s*Le\s*:\s*\d/i,
+    /^\s*\|?\s*Adresse\s*:/i,
+    /^\s*\|?\s*à\s+M\s/i,
+    /^\s*\|?\s*[\w.+-]+@[\w-]+\.[\w.-]+\s*$/,
+    /^\s*\|?\s*Opération\s+réalisée/i,
+    /^\s*\|?\s*Page\s+\d+\s+de\s+\d+\s*$/i
+  ];
+  for(var li=0;li<lines.length;li++){
+    var ln=lines[li];
+    var cleaned=ln.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
+    if(!inSection){
+      if(startMarkerRegex.test(cleaned))inSection=true;
+      continue;
+    }
+    // Une fois dans la section, on s'arrête à l'autre marqueur
+    if(/^(REMARQUES|CONDITIONS\s+COMMERCIALES)\s*:/i.test(cleaned))break;
+    var skip=false;
+    for(var sp=0;sp<skipPatterns.length;sp++){
+      if(skipPatterns[sp].test(ln)){skip=true;break;}
+    }
+    if(skip)continue;
+    if(cleaned.length===0)continue;
+    captured.push(cleaned);
+  }
+  return captured.join('\n');
+}
+// Recombine les lignes coupées (PDF wraps) en paragraphes propres.
+// Une nouvelle puce/numéro déclenche un saut de paragraphe ; sinon, on colle.
+function reflowPdfParagraphs(text){
+  if(!text)return '';
+  var lines=text.split('\n');
+  var out=[];
+  var buffer='';
+  for(var li=0;li<lines.length;li++){
+    var line=lines[li];
+    if(!buffer){buffer=line;continue;}
+    var buf=buffer.trim();
+    var next=line.trim();
+    if(!next){if(buf)out.push(buf);buffer='';continue;}
+    // Nouvelle puce/numéro = flush et démarrer un nouveau paragraphe.
+    // ATTENTION : "o " (sous-puce CALINSTRUM) doit être strictement suivie d'un espace
+    // ET d'une majuscule pour ne pas faux-positiver sur "ou", "où", "or", etc.
+    if(/^[•◦]/.test(next) || /^\d+\.\d+\s+/.test(next) || /^o\s+[A-ZÀ-Ÿ]/.test(next)){
+      if(buf)out.push(buf);
+      buffer=next;
+      continue;
+    }
+    // Si la ligne précédente se termine par . ou : ET la suivante commence par majuscule = nouveau paragraphe
+    if(/[.:]\s*$/.test(buf) && /^[A-ZÀ-Ÿ]/.test(next)){
+      out.push(buf);
+      buffer=next;
+      continue;
+    }
+    // Sinon : continuation
+    buffer=buf+' '+next;
+  }
+  if(buffer)out.push(buffer.trim());
+  return out.join('\n');
+}
+
 // === Parser V2 — Nouveau layout CALINSTRUM (DV126 et suivants) ===
 // Layout type :
 //   - en-tête avec "Shipping Terms:" "Voie maritime:" "Marchandise dangereuse"
@@ -7983,7 +8075,8 @@ function parseLegacyDevisTextV2(text){
     shipping:'',freight:'',voieMaritime:'',dangereuse:'Non',
     validite:'',paiement:'',delai:'',
     lignes:[],totalTTC:0,fraisLocaux:0,fraisLocauxLabel:'',
-    tgcMention:'506-2',remarque:''};
+    tgcMention:'506-2',remarque:'',
+    conditionsCommerciales:'',remarques:''};
 
   var rawLines=text.split('\n').map(function(l){return l.replace(/\s+$/,'');}).filter(function(l){return l.length>0;});
   var flat=text.replace(/\s*\|\s*/g,' ').replace(/\s+/g,' ').trim();
@@ -8247,6 +8340,10 @@ function parseLegacyDevisTextV2(text){
   if(/Lp\.?\s*506-?2/i.test(flat))out.tgcMention='506-2';
   else if(/Lp\.?\s*514-?5/i.test(flat))out.tgcMention='514-5';
 
+  // ---- Pages 2 & 3 : conditions commerciales et remarques (sections boilerplate optionnelles)
+  out.conditionsCommerciales=reflowPdfParagraphs(extractPdfSection(text,/^CONDITIONS\s+COMMERCIALES\s*:/i));
+  out.remarques=reflowPdfParagraphs(extractPdfSection(text,/^REMARQUES\s*:/i));
+
   return out;
 }
 
@@ -8500,8 +8597,21 @@ function showLegacyImportPreview(parsed,rawText,fileName){
           '<div style="background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.25);border-radius:6px;padding:10px;margin-bottom:8px;font-size:11px">'+
             '<div style="color:#a78bfa;font-weight:700;margin-bottom:4px">💰 Frais locaux extraits du devis</div>'+
             '<div style="color:var(--muted)">'+esc(parsed.fraisLocauxLabel||'Frais locaux')+' : <strong style="color:#a78bfa">'+fN(parsed.fraisLocaux)+' XPF</strong></div>'+
-            '<div style="color:var(--muted);font-size:10px;margin-top:4px">Ces frais seront enregistrés dans une note du devis. Lors de la création du BC Emerson lié, tu pourras les reporter dans le champ « Frais réels » pour le calcul de marge.</div>'+
+            '<div style="color:var(--muted);font-size:10px;margin-top:4px">Ces frais sont enregistrés dans le devis. Lors de la création du BC Emerson lié, tu pourras les reporter dans le champ « Frais réels » du BC pour le calcul de marge.</div>'+
           '</div>'
+        ) : '')+
+        (isV2 && (parsed.conditionsCommerciales || parsed.remarques) ? (
+          '<details style="background:rgba(96,165,250,.06);border:1px solid rgba(96,165,250,.25);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px"'+(parsed.remarques?' open':'')+'>'+
+            '<summary style="color:#60a5fa;font-weight:700;cursor:pointer">📄 Conditions commerciales & Remarques (extraits du PDF)</summary>'+
+            '<div style="margin-top:8px">'+
+              '<label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700">Conditions commerciales <span style="color:#60a5fa">(éditables)</span></label>'+
+              '<textarea class="form-textarea" id="li-conditions" rows="6" style="font-size:10.5px;font-family:var(--font);margin-top:4px">'+esc(parsed.conditionsCommerciales||'')+'</textarea>'+
+            '</div>'+
+            '<div style="margin-top:8px">'+
+              '<label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700">Remarques '+(parsed.remarques?'<span style="color:var(--amber)">(spécifique au devis — vérifie/édite)</span>':'<span style="color:var(--muted)">(vide — typique pour devis sans intervention sur site)</span>')+'</label>'+
+              '<textarea class="form-textarea" id="li-remarques" rows="6" style="font-size:10.5px;font-family:var(--font);margin-top:4px" placeholder="(à remplir uniquement si Emerson intervient sur site)">'+esc(parsed.remarques||'')+'</textarea>'+
+            '</div>'+
+          '</details>'
         ) : '')+
         '<hr class="sep" style="margin:12px 0">'+
         '<div style="font-weight:700;color:var(--teal);font-size:12px;margin-bottom:6px">📋 Lignes extraites ('+parsed.lignes.length+')</div>'+
@@ -8578,6 +8688,11 @@ function confirmLegacyImport(){
   var freight=isV2?(gvg('li-freight')||'').trim():'';
   var voie=isV2?(gvg('li-voie')||'').trim():'';
   var danger=isV2?(gvg('li-danger')||'Non'):'Non';
+  // Conditions commerciales / Remarques (peuvent être absentes du PDF — sont absentes des champs UI dans ce cas)
+  var elCond=document.getElementById('li-conditions');
+  var elRem=document.getElementById('li-remarques');
+  var conditionsCommerciales=elCond?elCond.value.trim():'';
+  var remarques=elRem?elRem.value.trim():'';
 
   if(!num){alert('Le N° de devis est obligatoire.');return;}
   if(!clientNom){alert('Le nom du client est obligatoire.');return;}
@@ -8665,6 +8780,8 @@ function confirmLegacyImport(){
     service:service||'',
     fraisLocauxImport:fraisLocaux,
     fraisLocauxLabel:fraisLocauxLabel,
+    conditionsCommerciales:conditionsCommerciales||'',
+    remarques:remarques||'',
     lines:lines,
     ht:ht,t11:t11,t22:t22,t6:t6,fr:fr,ttc:ttc,
     _legacyPdfImport:true,
@@ -15314,6 +15431,19 @@ function _doDelDoc(col,id){
   rDash();
   if(col==='factures' && typeof renderSuivi==='function'){try{renderSuivi();}catch(e){console.warn('renderSuivi skipped:',e.message);}}
 }
+// Texte standard CALINSTRUM des conditions commerciales (4 articles)
+var DV_DEFAULT_CONDITIONS=
+'1.0 Délai de livraison : En raison de l\'incertitude entourant la pénurie mondiale actuelle de composants électroniques, le délai de livraison mentionné ci-dessus n\'est qu\'une estimation et peut changer à court terme.\n'+
+'2.0 Variation du taux de change : les prix indiqués sont en Francs CFP, sur la base des taux de change au moment de l\'établissement du devis. Le vendeur se réserve le droit de répercuter sur l\'acheteur les coûts supplémentaires dus à la variation du taux de change.\n'+
+'3.0 Modifications de l\'étendue de la fourniture : Les prix et la livraison sont sujets à des modifications en cas de variation de l\'équipement, des options ou des exigences du client en matière de livraison/fret/emballage.\n'+
+'4.0 GST : Les prix indiqués n\'incluent pas la GST ni toute autre taxe applicable ; les taxes et la GST seront détaillées séparément sur chaque facture.';
+function dvFillDefaultConditions(){
+  var el=document.getElementById('dv-conditionsCommerciales');
+  if(!el)return;
+  if(el.value.trim() && !confirm('Remplacer le texte actuel par le texte standard CALINSTRUM ?')) return;
+  el.value=DV_DEFAULT_CONDITIONS;
+}
+
 // ===== CHARGEMENT ONE-SHOT DU DOSSIER PRNC =====
 // Crée le BC Emerson 12112025/063-001 (114 998 AUD, taux 74.5) et le lie automatiquement
 // aux factures existantes PRNC-F037, PRNC-F040, PRNC-F041.
