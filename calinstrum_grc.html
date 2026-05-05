@@ -9688,11 +9688,15 @@ function confirmFactureImport(){
     incoterms:'',
     freight:'',
     notes:parsed.type==='emerson'?'Facture fournisseur Emerson — devise '+parsed.devise:'',
-    lines:{
-      fourniture:parsed.type==='emerson'?lignes.map(function(l){return Object.assign({},l,{unite:l.unite||'U'});}):[],
-      service:parsed.type==='calinstrum'?lignes:[],
-      fret:[]
-    },
+    // Format des lignes : TABLEAU PLAT (compatible avec openFA / rFAlines legacy)
+    // Chaque ligne porte un champ `section` ('fourniture'/'service'/'fret') pour préserver
+    // la sémantique. C'est le même format que celui produit par les anciennes factures GRC.
+    lines:lignes.map(function(l){
+      return Object.assign({},l,{
+        section:parsed.type==='emerson'?'fourniture':'service',
+        unite:l.unite||(parsed.type==='emerson'?'U':'Lot')
+      });
+    }),
     ttc:parsed.totalTTC||totalHT,
     tgcM:parsed.tgcMention||'506-2',
     bcRef:bcRef,
@@ -12646,6 +12650,22 @@ function openFA(id,fromDV){
         faVersements=[{date:f.date||td(),montant:+f.paye}];
       }
       faL=JSON.parse(JSON.stringify(f.lines||[]));
+      // Normalisation : f.lines peut être au format LEGACY (tableau plat de lignes)
+      // OU au format OBJET {fourniture:[],service:[],fret:[]} (créé par confirmFactureImport).
+      // openFA et rFAlines attendent un tableau plat, donc on convertit l'objet en tableau si besoin.
+      if(faL && !Array.isArray(faL) && typeof faL==='object'){
+        var flat=[];
+        ['fourniture','service','fret'].forEach(function(sec){
+          if(Array.isArray(faL[sec])){
+            faL[sec].forEach(function(l){
+              flat.push(Object.assign({},l,{section:sec}));
+            });
+          }
+        });
+        faL=flat;
+      }
+      // Sécurité finale : si faL n'est toujours pas un tableau, fallback à []
+      if(!Array.isArray(faL))faL=[];
       sv('mFAtitle','Modifier '+f.num);
       // Afficher l'historique du délai après chargement
       setTimeout(function(){if(typeof renderFADelaiHistory==='function')renderFADelaiHistory();},50);
