@@ -8256,8 +8256,7 @@ function parseLegacyDevisTextV2(text){
     if(cells.length<5)continue;
 
     var itemNum=cells[0];
-    var designation=cells[1]||'';
-    // Trouver l'index de l'unité (parmi les cellules après désignation)
+    // Trouver l'index de l'unité (parmi les cellules après l'item N°)
     var unitIdx=-1;
     for(var ci3=2;ci3<cells.length;ci3++){
       if(/^(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)$/i.test(cells[ci3])){
@@ -8268,15 +8267,43 @@ function parseLegacyDevisTextV2(text){
     if(unitIdx<0)continue;
     var unit=cells[unitIdx];
 
-    // TGC% est avant l'unité (entre désignation et unit)
+    // === Détecter l'ordre des cellules ===
+    // Deux ordres possibles selon le layout PDF :
+    //   Ordre A (DV126 et similaires) : [N°, Désignation, TGC, Uté, Qté, PU, Total]
+    //   Ordre B (DV128 et similaires) : [N°, TGC, Désignation, Uté, Qté, PU, Total]
+    //
+    // Heuristique : si cells[1] matche un taux TGC valide (0, 3, 6, 11, 22) ET
+    // qu'au moins une cellule entre cells[2] et cells[unitIdx-1] existe, c'est l'ordre B.
+    // Sinon c'est l'ordre A par défaut.
+    function isTgcCell(c){
+      var mp=c.match(/^(\d+(?:[,.]\d+)?)\s*%?$/);
+      if(!mp)return false;
+      var v=parseFloat(mp[1].replace(',','.'));
+      return [0,3,6,11,22].indexOf(v)>=0;
+    }
+
+    var designation='';
     var tgcPct=0;
-    if(unitIdx>=3){
-      // cells[2..unitIdx-1] : il devrait y avoir le TGC
-      for(var ti2=2;ti2<unitIdx;ti2++){
-        var mp2=cells[ti2].match(/^(\d+(?:[,.]\d+)?)\s*%?$/);
-        if(mp2){
-          var v=parseFloat(mp2[1].replace(',','.'));
-          if([0,3,6,11,22].indexOf(v)>=0){tgcPct=v;break;}
+    if(unitIdx>=3 && isTgcCell(cells[1])){
+      // Ordre B : TGC avant désignation
+      tgcPct=parseFloat(cells[1].replace(/[,%]/g,'.').replace(/\s/g,''));
+      // Désignation = cells[2..unitIdx-1] (peut couvrir plusieurs cellules si fragmentée)
+      designation=cells.slice(2,unitIdx).join(' ').trim();
+    } else {
+      // Ordre A : Désignation avant TGC
+      designation=cells[1]||'';
+      // TGC entre cells[2] et cells[unitIdx-1]
+      if(unitIdx>=3){
+        for(var ti2=2;ti2<unitIdx;ti2++){
+          if(isTgcCell(cells[ti2])){
+            tgcPct=parseFloat(cells[ti2].replace(/[,%]/g,'.').replace(/\s/g,''));
+            // Si la cellule TGC a été trouvée APRÈS d'autres cellules entre désignation et unit,
+            // c'est qu'il y a peut-être des cellules de désignation en plus → les inclure
+            if(ti2>2){
+              designation=cells.slice(1,ti2).join(' ').trim();
+            }
+            break;
+          }
         }
       }
     }
