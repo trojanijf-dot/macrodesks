@@ -2256,7 +2256,15 @@ function commitInvoiceChange(inv){
 
 // ===== UTILS =====
 function pad(n,l){return String(n).padStart(l||3,'0');}
-function td(){return new Date().toISOString().split('T')[0];}
+function td(){
+  // Date du jour en timezone locale (et non UTC, qui décale d'un jour pour Nouméa = UTC+11).
+  // Format YYYY-MM-DD compatible avec <input type="date">.
+  var d=new Date();
+  var y=d.getFullYear();
+  var m=String(d.getMonth()+1).padStart(2,'0');
+  var j=String(d.getDate()).padStart(2,'0');
+  return y+'-'+m+'-'+j;
+}
 function fD(d){if(!d)return'';var p=d.split('-');return p[2]+'/'+p[1]+'/'+p[0];}
 function fN(n){if(!n&&n!==0)return'—';return Math.round(Number(n)).toLocaleString('fr-FR');}
 function nxt(t){
@@ -3185,7 +3193,7 @@ function _doMigrateInvoicesToFactures(){
   }
   // Backup B : téléchargement JSON (sécurité supplémentaire)
   try{
-    var dateStr=new Date().toISOString().slice(0,10);
+    var dateStr=td();
     var blob=new Blob([JSON.stringify(snapshotData,null,2)],{type:'application/json'});
     var url=URL.createObjectURL(blob);
     var a=document.createElement('a');
@@ -9100,7 +9108,7 @@ function confirmEmersonAckImport(){
     var newBC={
       id:Date.now(),
       num:parsed.customerPO,
-      date:parsed.customerOrderDate||new Date().toISOString().slice(0,10),
+      date:parsed.customerOrderDate||td(),
       devise:parsed.currency||'AUD',
       tauxAUD:customTaux,
       vcont:parsed.salesPerson||parsed.ackInquiries||'',
@@ -9600,7 +9608,7 @@ function confirmEmersonInvoiceImport(){
     var newBC={
       id:Date.now()+Math.floor(Math.random()*1000),
       num:parsed.customerPO,
-      date:parsed.invoiceDate||new Date().toISOString().slice(0,10),
+      date:parsed.invoiceDate||td(),
       devise:parsed.currency||'AUD',
       tauxAUD:customTaux,
       vcont:parsed.invoiceInquiries||'',
@@ -11288,7 +11296,7 @@ function openFA(id,fromDV){
       if(f.versements && f.versements.length){
         faVersements=JSON.parse(JSON.stringify(f.versements));
       } else if(f.paye && f.paye>0){
-        faVersements=[{date:f.date||new Date().toISOString().slice(0,10),montant:+f.paye}];
+        faVersements=[{date:f.date||td(),montant:+f.paye}];
       }
       faL=JSON.parse(JSON.stringify(f.lines||[]));
       sv('mFAtitle','Modifier '+f.num);
@@ -11782,7 +11790,7 @@ function updateVersementsTotals(){
 }
 
 function addVersement(){
-  var today=new Date().toISOString().slice(0,10);
+  var today=td();
   faVersements.push({date:today,montant:0});
   rVersements();
 }
@@ -11792,7 +11800,7 @@ function autoSplitVersements(){
   var ttc=Math.round(+faL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);},0))||0;
   if(ttc===0){alert('Ajoute d\'abord des lignes à la facture pour calculer le TTC.');return;}
   if(faVersements.length && !confirm('Remplacer les '+faVersements.length+' versement(s) existant(s) par '+n+' versement(s) auto-répartis ?')) return;
-  var baseDate=new Date(gvg('fa-date')||new Date().toISOString().slice(0,10));
+  var baseDate=new Date(gvg('fa-date')||td());
   var part=Math.floor(ttc/n);
   var reste=ttc-part*n; // mis dans le dernier
   faVersements=[];
@@ -12269,7 +12277,7 @@ function openAcompteModal(){
   }
   gv('ac-num',suggestedNum);
   sv('ac-numSugg',suggestedNum);
-  gv('ac-date',new Date().toISOString().slice(0,10));
+  gv('ac-date',td());
   gv('ac-pct',Math.min(50,pctRestant));
   gv('ac-type','acompte');
   gv('ac-libelle','Acompte '+Math.min(50,pctRestant)+'%');
