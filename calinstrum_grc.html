@@ -15835,35 +15835,34 @@ function bDV(d){
     '</div>'+
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
     '<p class="doc-legal">'+mention+'</p>'+
-    // ===== PAGE 2 : CONDITIONS COMMERCIALES (si renseignées) =====
+    '</div>'+ // fermeture .doc-totals-wrap (déplacée ici depuis la fin pour que les
+              // .dv-extra-page suivantes soient FRÈRES du wrapper, pas descendants)
+    // ===== PAGES 2 ET 3 : CONDITIONS COMMERCIALES + REMARQUES (si renseignées) =====
+    // Ces pages sont placées DANS le flux DOM ici, mais sont marquées avec la classe
+    // "dv-extra-page" pour que le script PGW (pagination devis) les EXTRAIE avant
+    // sa pagination du contenu principal et les RÉINJECTE comme pages séparées en fin
+    // de document. Sans ce mécanisme, PGW les injecterait dans la dernière .pgw-page
+    // (qui a height:268mm), ce qui chevaucherait totaux/signature et casserait le
+    // page-break.
+    // Pas de doc-head ni doc-footer-bar ici : le système d'impression existant les
+    // ajoute automatiquement (.doc-head dans le <thead> répété, .doc-footer-bar/legal
+    // épinglés en pied de page sur toutes les pages).
     ((d.conditionsCommerciales||'').trim() ? (
-      '<div style="page-break-before:always;break-before:always;padding-top:6px"></div>'+
-      '<div class="doc-head">'+
-        '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
-        '<div style="width:50%;text-align:right"><div class="doc-title">DEVIS N° '+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</div><div class="doc-meta">Le : '+fD(d.date)+'</div></div>'+
-      '</div>'+
-      '<div style="margin-top:14px;padding:10px 14px;background:#1e3a5f;color:#fff;font-weight:800;font-size:13px;letter-spacing:.05em;border-radius:4px 4px 0 0;text-align:center">CONDITIONS COMMERCIALES :</div>'+
-      '<div style="border:1px solid #1e3a5f;border-top:none;padding:14px 16px;font-size:11px;line-height:1.55;border-radius:0 0 4px 4px">'+
-        esc(d.conditionsCommerciales).replace(/\n/g,'<br>').replace(/(\d+\.\d+\s+[^:<]+:)/g,'<strong style="text-decoration:underline">$1</strong>')+
-      '</div>'+
-      '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
-      '<p class="doc-legal">'+mention+'</p>'
+      '<div class="dv-extra-page" data-extra-page="conditions">'+
+        '<div style="margin-top:14px;padding:10px 14px;background:#1e3a5f;color:#fff;font-weight:800;font-size:13px;letter-spacing:.05em;border-radius:4px 4px 0 0;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact">CONDITIONS COMMERCIALES :</div>'+
+        '<div style="border:1px solid #1e3a5f;border-top:none;padding:14px 16px;font-size:11px;line-height:1.55;border-radius:0 0 4px 4px">'+
+          esc(d.conditionsCommerciales).replace(/\n/g,'<br>').replace(/(\d+\.\d+\s+[^:<]+:)/g,'<strong style="text-decoration:underline">$1</strong>')+
+        '</div>'+
+      '</div>'
     ) : '')+
-    // ===== PAGE 3 : REMARQUES (si renseignées) =====
     ((d.remarques||'').trim() ? (
-      '<div style="page-break-before:always;break-before:always;padding-top:6px"></div>'+
-      '<div class="doc-head">'+
-        '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
-        '<div style="width:50%;text-align:right"><div class="doc-title">DEVIS N° '+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</div><div class="doc-meta">Le : '+fD(d.date)+'</div></div>'+
-      '</div>'+
-      '<div style="margin-top:14px;padding:10px 14px;background:#1e3a5f;color:#fff;font-weight:800;font-size:13px;letter-spacing:.05em;border-radius:4px 4px 0 0;text-align:center">REMARQUES :</div>'+
-      '<div style="border:1px solid #1e3a5f;border-top:none;padding:14px 16px;font-size:11px;line-height:1.55;border-radius:0 0 4px 4px">'+
-        esc(d.remarques).replace(/\n/g,'<br>')+
-      '</div>'+
-      '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
-      '<p class="doc-legal">'+mention+'</p>'
+      '<div class="dv-extra-page" data-extra-page="remarques">'+
+        '<div style="margin-top:14px;padding:10px 14px;background:#1e3a5f;color:#fff;font-weight:800;font-size:13px;letter-spacing:.05em;border-radius:4px 4px 0 0;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact">REMARQUES :</div>'+
+        '<div style="border:1px solid #1e3a5f;border-top:none;padding:14px 16px;font-size:11px;line-height:1.55;border-radius:0 0 4px 4px">'+
+          esc(d.remarques).replace(/\n/g,'<br>')+
+        '</div>'+
+      '</div>'
     ) : '')+
-    '</div>'+
   '</div>';
 }
 
@@ -17199,9 +17198,23 @@ function printPreviewBC(){
           'nd.__pgw_remove=true;'+
         '}'+
       '});'+
+      // === Extraire les .dv-extra-page (Conditions, Remarques) pour les rendre en pages SÉPARÉES ===
+      // Ces blocs sont dans le DOM original (à la fin du flux du devis), mais ne doivent PAS
+      // se mêler aux totaux/signature de la dernière .pgw-page : ils doivent former leurs
+      // propres pages, après le contenu principal.
+      'var extraPages=[];'+
+      'nodesAfterTbl.forEach(function(nd){'+
+        'if(nd.nodeType!==1)return;'+
+        'if(nd.classList&&nd.classList.contains("dv-extra-page")){'+
+          // Retirer la classe avant de stocker (elle a servi son rôle de marqueur)
+          'nd.classList.remove("dv-extra-page");'+
+          'extraPages.push(nd.outerHTML);'+
+          'nd.__pgw_remove=true;'+
+        '}'+
+      '});'+
       // Filtrer les nœuds qui ont été marqués pour suppression
       'nodesAfterTbl=nodesAfterTbl.filter(function(nd){return !nd.__pgw_remove;});'+
-      'plog("[PGW] Footer extrait, longueur:",footerHtml.length,"chars | nodesAfterTbl restants:",nodesAfterTbl.length);'+
+      'plog("[PGW] Footer extrait, longueur:",footerHtml.length,"chars | nodesAfterTbl restants:",nodesAfterTbl.length,"| extraPages:",extraPages.length);'+
       // Lignes du <tbody> du tableau
       'var rows=Array.prototype.slice.call(tblWrap.querySelectorAll("tbody>tr"));'+
       'if(rows.length<1){window.__pgw_done=true;return;}'+
@@ -17413,6 +17426,33 @@ function printPreviewBC(){
       '});'+
       // Remplacer le contenu de .doc par les pages reconstruites
       'doc.innerHTML=newHtml;'+
+      // === Ajouter les pages extra (Conditions, Remarques) comme pages séparées ===
+      // Chaque page extra reproduit la structure d'une .pgw-page : header répété (logo+bandeau),
+      // contenu de la page, et footer flex en bas. Pas de tableau d'items dans ces pages.
+      'if(extraPages.length){'+
+        'plog("[PGW] Ajout de "+extraPages.length+" pages extra (conditions/remarques)");'+
+        'var extraPagesHtml="";'+
+        'extraPages.forEach(function(extraHtml){'+
+          'var pageHtml="<div class=\\"pgw-page\\">";'+
+          // Header répété : logo (.doc-head) + bandeau (.doc-info-bar)
+          'pageHtml+="<table class=\\"print-wrapper\\" role=\\"presentation\\">"+'+
+            '"<thead><tr><td>"+headRepeatHtml+"</td></tr></thead>"+'+
+            '"<tbody><tr><td>";'+
+          // Bandeau .doc-info-bar (extrait plus haut)
+          'pageHtml+=infoBarHtml;'+
+          // Contenu de la page extra
+          'pageHtml+=extraHtml;'+
+          'pageHtml+="</td></tr></tbody></table>";'+
+          // Pas de content-flex wrapper ici (pas nécessaire pour ces pages simples)
+          // Footer flex en bas (margin-top:auto le pousse en pied de page)
+          'if(footerHtml){'+
+            'pageHtml+="<div class=\\"pgw-footer-flex\\">"+footerHtml+"</div>";'+
+          '}'+
+          'pageHtml+="</div>";'+
+          'extraPagesHtml+=pageHtml;'+
+        '});'+
+        'doc.innerHTML+=extraPagesHtml;'+
+      '}'+
       'plog("[PGW] Pagination terminée");'+
       'window.__pgw_done=true;'+
       '}catch(e){plog("[PGW] Erreur:",e.message,e.stack);window.__pgw_done=true;}'+
