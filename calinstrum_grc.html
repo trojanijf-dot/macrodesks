@@ -7970,6 +7970,14 @@ function parseLegacyDevisText(text){
 //   - main headers FOURNITURE / SERVICE D'INGENIERIE
 //   - bloc "Total Fret, Assurance et Frais Locaux ... 275 321" → fraisLocaux
 //   - bloc "Total TTC avec livraison ..." → totalTTC
+//
+// IMPORTANT : pdf.js produit le texte sous forme "cell1 | cell2 | cell3"
+// où chaque cellule est un FRAGMENT TEXTUEL contigu (pas mot par mot).
+// Donc une ligne d'item ressemble à :
+//   "  | 1 |   |  | TRI AXIAL AND TEMPERATURE... | 0 |   | U |   | 16 |   | 121 731 |   | 1 947 704"
+// Après split('|') + trim + filter(empty), on obtient :
+//   ['1', 'TRI AXIAL...', '0', 'U', '16', '121 731', '1 947 704']
+//   = [N°, Désignation, TGC%, Uté, Qté, PU, Total]
 function parseLegacyDevisTextV2(text){
   var out={num:'',rev:'',date:'',client:'',service:'',contact:'',email:'',objet:'',
     shipping:'',freight:'',voieMaritime:'',dangereuse:'Non',
@@ -8030,7 +8038,7 @@ function parseLegacyDevisTextV2(text){
   // ---- Délimitation du tableau
   var startIdx=-1,endIdx=rawLines.length;
   for(var i=0;i<rawLines.length;i++){
-    var lnNorm=rawLines[i].replace(/\s*\|\s*/g,' ');
+    var lnNorm=rawLines[i].replace(/\s*\|\s*/g,' ').replace(/\s+/g,' ').trim();
     if(/^Item\s+Désignation/i.test(lnNorm) || /^Item\b.*TOTAL\s+TTC/i.test(lnNorm)){startIdx=i;}
     if(/^Total\s+TTC\b.*Fourniture\s+et\s+service/i.test(lnNorm)){endIdx=i;break;}
     if(/^Montant\s+en\s+lettres/i.test(lnNorm)){if(endIdx===rawLines.length)endIdx=i;}
@@ -8038,21 +8046,26 @@ function parseLegacyDevisTextV2(text){
   if(startIdx<0)startIdx=0;
   var tableLines=rawLines.slice(startIdx+1,endIdx);
 
-  var UNIT_REG=/\b(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)\b/i;
-  // Match au DÉBUT seulement (.match(...) avec "^" implicite serait bizarre, on utilise un test direct)
-  function unitAtStart(s){
-    return /^(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)$/i.test(s);
+  // Helper : split en cellules propres (filtre les pipes vides)
+  function splitCells(ln){
+    return ln.split('|').map(function(c){return c.trim();}).filter(function(c){return c.length>0;});
   }
 
   function isItemLine(ln){
-    var parts=ln.split('|').map(function(p){return p.trim();});
-    if(!parts.length)return false;
-    if(!/^\d+$/.test(parts[0]))return false;
-    var joined=parts.join(' ');
-    return UNIT_REG.test(joined);
+    var cells=splitCells(ln);
+    if(cells.length<5)return false;
+    // 1ère cellule = numéro d'item
+    if(!/^\d+$/.test(cells[0]))return false;
+    // Doit contenir au moins une cellule = unité (U, lot, Lot, forfait, jour…)
+    for(var ci=2;ci<cells.length;ci++){
+      if(/^(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)$/i.test(cells[ci])){
+        return true;
+      }
+    }
+    return false;
   }
   function isMainHeader(ln){
-    var s=ln.replace(/\|/g,' ').trim();
+    var s=ln.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
     if(/^FOURNITURE\b/i.test(s))return true;
     if(/^SERVICE\b/i.test(s) || /INGENIERIE/i.test(s.toUpperCase()))return true;
     if(/^MAIN\s*D['\u2019]?\s*[ŒOE]+UVRE/i.test(s))return true;
@@ -8060,7 +8073,7 @@ function parseLegacyDevisTextV2(text){
     return false;
   }
   function isSubheader(ln){
-    var s=ln.replace(/\|/g,' ').trim();
+    var s=ln.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
     if(s.indexOf(':')>=0)return false;
     if(!/^[A-Z][A-Z\s'/-]{15,}$/.test(s))return false;
     if(/\d{2,}/.test(s))return false;
@@ -8082,26 +8095,27 @@ function parseLegacyDevisTextV2(text){
   // Agglutiner orphans en préfixes/suffixes (subheaders sont préfixes-only, jamais suffixes)
   var itemsFinal=[];
   var consumedSuffix={};
-  for(var ci=0;ci<classified.length;ci++){
-    if(classified[ci].type!=='item')continue;
+  for(var ci2=0;ci2<classified.length;ci2++){
+    if(classified[ci2].type!=='item')continue;
     var suffixes=[],prefixes=[];
-    var cj=ci+1;
+    var cj=ci2+1;
     while(cj<classified.length && classified[cj].type==='orphan'){
       suffixes.push(classified[cj].line);consumedSuffix[cj]=1;cj++;
     }
-    var ck=ci-1;
+    var ck=ci2-1;
     while(ck>=0 && (classified[ck].type==='orphan'||classified[ck].type==='subheader')){
       if(!consumedSuffix[ck])prefixes.push(classified[ck].line);
       ck--;
     }
     prefixes.reverse();
-    itemsFinal.push({itemLine:classified[ci].line,prefixes:prefixes,suffixes:suffixes,pos:ci});
+    itemsFinal.push({itemLine:classified[ci2].line,prefixes:prefixes,suffixes:suffixes,pos:ci2});
   }
 
   function sectionFor(idx){
     for(var sk=idx-1;sk>=0;sk--){
       if(classified[sk].type!=='header')continue;
-      var up=classified[sk].line.toUpperCase();
+      // Nettoyer la ligne avant test (peut commencer par "| " dans le format pdf.js)
+      var up=classified[sk].line.replace(/\|/g,' ').replace(/\s+/g,' ').trim().toUpperCase();
       if(up.indexOf('FOURNITURE')===0)return 'fourniture';
       if(up.indexOf('SERVICE')===0||up.indexOf('INGENIERIE')>=0)return 'service';
       if(up.indexOf('FRET')===0||up.indexOf('TRANSPORT')===0)return 'fret';
@@ -8110,36 +8124,58 @@ function parseLegacyDevisTextV2(text){
     return 'service';
   }
 
-  // Parser chaque item
+  // Parser chaque item — adapté au format pdf.js : cellules propres
   for(var ii=0;ii<itemsFinal.length;ii++){
     var itf=itemsFinal[ii];
     var ln2=itf.itemLine;
     var section=sectionFor(itf.pos);
-    var parts=ln2.split('|').map(function(p){return p.trim();});
+    var cells=splitCells(ln2);
+    // Format attendu : [N°, Désignation, TGC%, Uté, Qté, PU, Total]
+    // Mais TGC% peut être absent si la ligne n'a pas de colonne TGC explicite : on est tolérant.
+    if(cells.length<5)continue;
 
-    // Trouver l'unité
+    var itemNum=cells[0];
+    var designation=cells[1]||'';
+    // Trouver l'index de l'unité (parmi les cellules après désignation)
     var unitIdx=-1;
-    for(var pi=1;pi<parts.length;pi++){
-      if(parts[pi].length<=10 && unitAtStart(parts[pi])){unitIdx=pi;break;}
-    }
-    if(unitIdx<0)continue;
-    var unit=parts[unitIdx];
-    var itemNum=parts[0];
-
-    // Désignation initiale (entre n° et unit), retirer un éventuel TGC% en queue
-    var desigParts=parts.slice(1,unitIdx);
-    var tgcPct=0;
-    if(desigParts.length){
-      var last=desigParts[desigParts.length-1];
-      var mp=last.match(/^(\d+(?:[,.]\d+)?)\s*%?$/);
-      if(mp){
-        var v=parseFloat(mp[1].replace(',','.'));
-        if([0,3,6,11,22].indexOf(v)>=0){tgcPct=v;desigParts.pop();}
+    for(var ci3=2;ci3<cells.length;ci3++){
+      if(/^(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)$/i.test(cells[ci3])){
+        unitIdx=ci3;
+        break;
       }
     }
-    var designation=desigParts.join(' ').trim();
+    if(unitIdx<0)continue;
+    var unit=cells[unitIdx];
 
-    // Reconstituer la désignation complète : prefixes + designation + suffixes
+    // TGC% est avant l'unité (entre désignation et unit)
+    var tgcPct=0;
+    if(unitIdx>=3){
+      // cells[2..unitIdx-1] : il devrait y avoir le TGC
+      for(var ti2=2;ti2<unitIdx;ti2++){
+        var mp2=cells[ti2].match(/^(\d+(?:[,.]\d+)?)\s*%?$/);
+        if(mp2){
+          var v=parseFloat(mp2[1].replace(',','.'));
+          if([0,3,6,11,22].indexOf(v)>=0){tgcPct=v;break;}
+        }
+      }
+    }
+
+    // Cellules numériques après l'unité = Qté, PU, Total
+    var numCells=[];
+    for(var ci4=unitIdx+1;ci4<cells.length;ci4++){
+      if(/^[\d\s.,]+$/.test(cells[ci4])){
+        numCells.push(parseFloat(cells[ci4].replace(/\s/g,'').replace(',','.')));
+      }
+    }
+    var qte=null,pu=null,totalLn=null;
+    if(numCells.length>=3){
+      qte=numCells[0];pu=numCells[1];totalLn=numCells[2];
+    } else if(numCells.length===2){
+      qte=numCells[0];pu=numCells[1];totalLn=qte*pu;
+    } else continue;
+    if(qte===null||pu===null||isNaN(qte)||isNaN(pu))continue;
+
+    // Reconstruire la désignation complète : prefixes + designation + suffixes
     var fullParts=[];
     itf.prefixes.forEach(function(pre){
       var c=pre.replace(/\|/g,' ').replace(/\s+/g,' ').trim();
@@ -8156,47 +8192,13 @@ function parseLegacyDevisTextV2(text){
     fullDesignation=fullDesignation.replace(/\b([A-Z]{2,4})-\s+([A-Z0-9])/g,'$1-$2');
     fullDesignation=fullDesignation.replace(/\s+/g,' ').trim();
 
-    // Extraire la référence produit (codes Emerson type SNG-XXX, ou autre code en parenthèses)
+    // Extraire la référence produit (codes Emerson type SNG-XXX)
     var ref='';
     var mref=fullDesignation.match(/\(([A-Z]{2,4}-[A-Z0-9]{2,}[A-Z0-9-]*)\)/);
     if(mref){
       ref=mref[1];
       fullDesignation=fullDesignation.replace(new RegExp('\\s*\\('+ref.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\)\\s*'),' ').replace(/\s+/g,' ').trim();
     }
-
-    // Découper les chunks numériques en qté/PU/total avec contrainte qté×PU≈total
-    var numChunks=[];
-    for(var pj=unitIdx+1;pj<parts.length;pj++){
-      if(/^[\d.,]+$/.test(parts[pj]))numChunks.push(parts[pj]);
-    }
-    var qte=null,pu=null,totalLn=null;
-    var nNum=numChunks.length;
-    if(nNum>=3){
-      var best=null;
-      for(var iA=1;iA<nNum;iA++){
-        for(var iB=iA+1;iB<=nNum;iB++){
-          if(iB>nNum-1)continue; // grp3 doit avoir au moins 1 chunk
-          var g1=numChunks.slice(0,iA).join('');
-          var g2=numChunks.slice(iA,iB).join('');
-          var g3=numChunks.slice(iB,nNum).join('');
-          var v1=parseFloat(g1.replace(',','.'));
-          var v2=parseFloat(g2.replace(',','.'));
-          var v3=parseFloat(g3.replace(',','.'));
-          if(isNaN(v1)||isNaN(v2)||isNaN(v3))continue;
-          if(v1<=0||v2<=0||v3<=0)continue;
-          var diff=Math.abs(v1*v2-v3);
-          if(diff<=100){
-            if(!best||diff<best.diff)best={qte:v1,pu:v2,total:v3,diff:diff};
-          }
-        }
-      }
-      if(best){qte=best.qte;pu=best.pu;totalLn=best.total;}
-    } else if(nNum===2){
-      qte=parseFloat(numChunks[0].replace(',','.'));
-      pu=parseFloat(numChunks[1].replace(',','.'));
-      if(!isNaN(qte)&&!isNaN(pu))totalLn=qte*pu;
-    }
-    if(qte===null||pu===null)continue;
 
     // Normalisation unité
     var unitNorm=unit;
