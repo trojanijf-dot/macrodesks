@@ -9267,11 +9267,69 @@ function parseLegacyDevisTextV1(text){
   return out;
 }
 
+// Toggle du champ "Nouveau client" dans le modal Import devis selon la valeur du select.
+// Appelé au onchange du select #li-client. Affiche ou cache le wrap #li-client-new-wrap.
+function onLiClientChange(){
+  var sel=document.getElementById('li-client');
+  var wrap=document.getElementById('li-client-new-wrap');
+  if(!sel||!wrap)return;
+  if(sel.value==='__NEW__'){
+    wrap.style.display='block';
+    var inp=document.getElementById('li-client-new');
+    if(inp){setTimeout(function(){inp.focus();inp.select();},10);}
+  } else {
+    wrap.style.display='none';
+  }
+}
+
 function showLegacyImportPreview(parsed,rawText,fileName){
   var existing=document.getElementById('mLegacyImport');
   if(existing)existing.remove();
 
+  // === MATCHING FUZZY DU CLIENT EXTRAIT VS DB.CLIENTS ===
+  // L'extraction PDF retourne souvent un nom long ("Société Le Nickel - ERAMET-SLN")
+  // qui ne match pas le nom court stocké en DB ("SLN"). On tente une détection floue
+  // à base de mots-clés caractéristiques. Si ça matche, on pré-sélectionne dans le select.
   var clientExists=DB.clients.some(function(c){return c.nom===parsed.client;});
+  var fuzzyMatchedClient=null;
+  if(!clientExists && parsed.client){
+    var pNorm=parsed.client.toLowerCase();
+    fuzzyMatchedClient=DB.clients.find(function(c){
+      var nm=(c.nom||'').toLowerCase();
+      if(!nm)return false;
+      // Match si le nom court DB est inclus dans le texte extrait (ex: "SLN" ⊂ "Société...ERAMET-SLN")
+      if(pNorm.indexOf(nm)>=0)return true;
+      return false;
+    });
+    // Heuristiques supplémentaires pour les 2 clients principaux Calinstrum
+    if(!fuzzyMatchedClient){
+      if(/sln|eramet|le\s*nickel/i.test(parsed.client)){
+        fuzzyMatchedClient=DB.clients.find(function(c){return /^sln$/i.test(c.nom||'');});
+      } else if(/prnc|prony\s*resour/i.test(parsed.client)){
+        fuzzyMatchedClient=DB.clients.find(function(c){return /^prnc$/i.test(c.nom||'');});
+      }
+    }
+  }
+  // Construction des options du dropdown : <option> par client DB + option "Créer nouveau"
+  var preselectedNom = clientExists ? parsed.client : (fuzzyMatchedClient ? fuzzyMatchedClient.nom : '__NEW__');
+  var clientOptionsHtml='';
+  DB.clients.forEach(function(c){
+    var sel = (c.nom===preselectedNom) ? ' selected' : '';
+    clientOptionsHtml += '<option value="'+esc(c.nom)+'"'+sel+'>'+esc(c.nom)+(c.exo==='oui'?' (exo)':'')+'</option>';
+  });
+  clientOptionsHtml += '<option value="__NEW__"'+(preselectedNom==='__NEW__'?' selected':'')+'>+ Créer un nouveau client</option>';
+  // Label dynamique selon le statut du match
+  var clientLabelHint;
+  if(clientExists){
+    clientLabelHint='<span style="color:var(--teal);font-size:9.5px">✓ Client existant trouvé en base</span>';
+  } else if(fuzzyMatchedClient){
+    clientLabelHint='<span style="color:var(--blue);font-size:9.5px">🔗 Match auto : '+esc(fuzzyMatchedClient.nom)+' (vérifie/change si besoin)</span>';
+  } else {
+    clientLabelHint='<span style="color:var(--amber);font-size:9.5px">⚠ Sélectionne un client existant ou crée-en un nouveau</span>';
+  }
+  // Le champ "nouveau client" (input texte) s'affiche seulement si __NEW__ est sélectionné
+  var newClientDisplay = (preselectedNom==='__NEW__') ? 'block' : 'none';
+
   // Détection : ce parsing vient-il du parser V2 (présence de champs spécifiques) ?
   var isV2=parsed.shipping!==undefined || parsed.voieMaritime!==undefined || parsed.fraisLocaux!==undefined;
   var modal=document.createElement('div');
@@ -9292,8 +9350,19 @@ function showLegacyImportPreview(parsed,rawText,fileName){
           '<div class="form-group"><label>N° Devis</label><input class="form-input" id="li-num" value="'+esc(parsed.num)+(parsed.rev?' '+esc(parsed.rev):'')+'"></div>'+
           '<div class="form-group"><label>Date</label><input type="date" class="form-input" id="li-date" value="'+esc(parsed.date)+'"></div>'+
         '</div>'+
+        // === CHAMP CLIENT : DROPDOWN + INPUT NOUVEAU CLIENT (conditionnel) ===
+        // Le dropdown liste tous DB.clients + option "Créer nouveau".
+        // Le toggle dans onChange affiche/cache le champ "Nouveau client" en dessous.
         '<div class="form-row">'+
-          '<div class="form-group"><label>Client (société) '+(clientExists?'<span style="color:var(--teal);font-size:9.5px">✓ existant</span>':'<span style="color:var(--amber);font-size:9.5px">⚠️ sera créé automatiquement</span>')+'</label><input class="form-input" id="li-client" value="'+esc(parsed.client)+'"></div>'+
+          '<div class="form-group">'+
+            '<label>Client (société) '+clientLabelHint+'</label>'+
+            '<select class="form-select" id="li-client" onchange="onLiClientChange()">'+clientOptionsHtml+'</select>'+
+            '<div id="li-client-new-wrap" style="display:'+newClientDisplay+';margin-top:8px">'+
+              '<label style="font-size:9.5px;color:var(--amber);text-transform:uppercase;letter-spacing:.05em;font-weight:700">⚠ Nom du nouveau client à créer</label>'+
+              '<input class="form-input" id="li-client-new" value="'+esc(parsed.client||'')+'" placeholder="Ex: SLN, PRNC, EMERSON…" style="margin-top:3px">'+
+              '<div style="font-size:9.5px;color:var(--muted);margin-top:3px;font-style:italic">💡 Préfère un nom court (ex: SLN) plutôt que la raison sociale complète. Tu pourras compléter les détails dans Clients.</div>'+
+            '</div>'+
+          '</div>'+
           '<div class="form-group"><label>Service / département <span style="color:var(--muted);font-size:9.5px">(ex: FENI, MEFA…)</label><input class="form-input" id="li-service" value="'+esc(parsed.service||'')+'"></div>'+
         '</div>'+
         '<div class="form-row">'+
@@ -9407,7 +9476,17 @@ function confirmLegacyImport(){
 
   var num=gvg('li-num').trim();
   var date=gvg('li-date').trim();
-  var clientNom=gvg('li-client').trim();
+  // === LECTURE DU CLIENT (dropdown) ===
+  // Si l'utilisateur a sélectionné "+ Créer un nouveau client" (__NEW__), on lit le champ
+  // texte li-client-new ; sinon on prend la valeur du select directement.
+  var clientSelectVal=gvg('li-client').trim();
+  var clientNom;
+  if(clientSelectVal==='__NEW__'){
+    clientNom=(gvg('li-client-new')||'').trim();
+    if(!clientNom){alert('⚠ Tu as choisi de créer un nouveau client mais le nom est vide.\n\nSaisis le nom du client (ex: SLN, PRNC) ou sélectionne un client existant dans la liste.');return;}
+  } else {
+    clientNom=clientSelectVal;
+  }
   var contact=gvg('li-contact').trim();
   var email=gvg('li-email').trim();
   var objet=gvg('li-objet').trim();
