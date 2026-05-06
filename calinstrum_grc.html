@@ -4133,11 +4133,20 @@ function updateFilterCounts(){
   var typeCounts={all:src.length,fourniture:0,prestation:0,mixte:0};
   src.forEach(function(i){
     var st=getStatus(i);
-    if(st==='paid')counts.paid++;
-    else if(st==='partial')counts.partial++;
-    else if(st==='late')counts.late++;
-    else if(st==='pending')counts.pending++;
-    if(typeof isPrebilled==='function'&&isPrebilled(i))counts.prebilled++;
+    var prebilled=(typeof isPrebilled==='function')?isPrebilled(i):false;
+    // === RÈGLES DE COMPTAGE (mutuellement exclusives sauf 'all') ===
+    // Une facture pré-facturée (phase non-billed) NE compte JAMAIS dans pending/paid/partial/late
+    // car elle n'est pas considérée comme officiellement émise au client. Elle compte uniquement
+    // dans 'prebilled' (Backlog). Cela garantit prebilled + paid + partial + pending + late = all
+    // (pour les factures non en retard) → pas de double-comptage entre Émise et Backlog.
+    if(prebilled){
+      counts.prebilled++;
+    } else {
+      if(st==='paid')counts.paid++;
+      else if(st==='partial')counts.partial++;
+      else if(st==='late')counts.late++;
+      else if(st==='pending')counts.pending++;
+    }
     var typ=i.type||'Fourniture';
     if(typ==='Fourniture')typeCounts.fourniture++;
     else if(typ==='Prestation de service')typeCounts.prestation++;
@@ -4176,8 +4185,18 @@ function renderTable(){
   function applyStatusTypeSearch(arr){
     return arr.filter(function(i){
       var st=getStatus(i);
-      if(activeFilter==='prebilled'){if(!isPrebilled(i))return false;}
-      else if(activeFilter!=='all'&&st!==activeFilter)return false;
+      var prebilled=(typeof isPrebilled==='function')?isPrebilled(i):false;
+      // Filtre "📦 Backlog" → uniquement les pré-facturées
+      if(activeFilter==='prebilled'){
+        if(!prebilled)return false;
+      }
+      // Filtres Émise / Payée / Partielle / Retard → EXCLUSION des pré-facturées (elles ont leur propre onglet)
+      // Ainsi "📤 Émise" affiche uniquement les factures émises au client en attente de paiement,
+      // pas les pré-facturées encore en transit/production.
+      else if(activeFilter!=='all'){
+        if(prebilled)return false;
+        if(st!==activeFilter)return false;
+      }
       if(activeTypeFilter!=='all'){
         var typ=i.type||'Fourniture';
         if(typ!==activeTypeFilter) return false;
