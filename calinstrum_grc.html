@@ -992,6 +992,10 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         </div>
       </div>
       <div class="form-row">
+        <div class="form-group"><label>📋 N° PO Client <span style="color:var(--muted);font-weight:400;font-size:10px">(synchronisé avec le N° PO du Suivi Factures)</span></label><input class="form-input" id="fa-po" placeholder="ex: 28042026/97 ou 00734811-01" title="Numéro de bon de commande du client final (SLN, PRNC...). Format Calinstrum interne : DDMMYYYY/NNN. Champ unifié avec le N° PO du Suivi Factures."></div>
+        <div class="form-group"></div>
+      </div>
+      <div class="form-row">
         <div class="form-group"><label>Statut</label>
           <select class="form-select" id="fa-status"><option>En attente</option><option>Partiel</option><option>Payée</option><option>En retard</option></select>
         </div>
@@ -2308,7 +2312,9 @@ function commitInvoiceChange(inv){
     if(inv.type)fa.type=inv.type;
     if(inv.dateButoir)fa.dateButoir=inv.dateButoir;
     if(inv.dateEnvoi&&!fa.date)fa.date=inv.dateEnvoi;
-    if(inv.po&&!fa._importPONum)fa._importPONum=inv.po;
+    // PO : sync bidirectionnelle. Si l'utilisateur a modifié le N° PO côté Suivi
+    // (ou inversement), on propage vers DB.factures._importPONum (source de vérité unifiée).
+    if(typeof inv.po!=='undefined') fa._importPONum=inv.po||'';
     if(inv.linkedBCs)fa.linkedBCs=inv.linkedBCs;
     // Versements cohérents avec le statut/pct
     var ttc=fa.ttc||0;
@@ -13042,6 +13048,15 @@ function openFA(id,fromDV){
       // Si le champ est vide en DB, on essaie une auto-détection silencieuse depuis le PO ou BC lié.
       var dateRecBC = f.dateReceptionBC || autoDetectDateReceptionBC(f);
       gv('fa-dateReceptionBC', dateRecBC || '');
+      // N° PO Client : champ unifié _importPONum / bcClientSLN (mêmes valeurs côté Suivi.po)
+      // Priorité : _importPONum (champ historique d'import), sinon bcClientSLN (créé par BC),
+      // sinon récupération depuis le devis lié comme dans getSuiviSource.
+      var fapo = f._importPONum || f.bcClientSLN || '';
+      if(!fapo && f.dvlie){
+        var d=DB.devis.find(function(x){return (x.num||'').toUpperCase()===(f.dvlie||'').toUpperCase();});
+        if(d&&d.bcClientSLN)fapo=d.bcClientSLN;
+      }
+      gv('fa-po', fapo);
       // Rétrocompat : si versements absents mais paye>0, créer 1 versement
       if(f.versements && f.versements.length){
         faVersements=JSON.parse(JSON.stringify(f.versements));
@@ -13075,6 +13090,8 @@ function openFA(id,fromDV){
     gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');gv('fa-email',fromDV.email||'');
     gv('fa-objet',fromDV.objet||'');gv('fa-dvlie',fromDV.num||'');gv('fa-type',fromDV.type||'Fourniture');gv('fa-status','En attente');
     gv('fa-notes','');gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');
+    // N° PO : récupérer depuis le devis source (champ bcClientSLN)
+    gv('fa-po', fromDV.bcClientSLN || '');
     if(isClientExo(fromDV.client))gv('fa-tgc-mention','506-2');else gv('fa-tgc-mention','tgc');
     var lf=fromDV.lines||{};
     faL=[].concat(lf.fourniture||[],lf.service||[],lf.fret||[]).map(function(l){return Object.assign({},l);});
@@ -13083,7 +13100,7 @@ function openFA(id,fromDV){
     gv('fa-num',nxt('fa'));gv('fa-date',td());gv('fa-contact','');
     gv('fa-adresse','');gv('fa-email','');gv('fa-objet','');gv('fa-dvlie','');
     gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
-    gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');
+    gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');gv('fa-po','');
     sv('mFAtitle','Nouvelle Facture');
   }
   rFAlines();
@@ -13614,8 +13631,11 @@ function getFA(){
       if(existing._migratedAt)preservedFlags._migratedAt=existing._migratedAt;
       // Flags d'import (traçabilité)
       if(existing._importedAt)preservedFlags._importedAt=existing._importedAt;
-      if(existing._importPONum)preservedFlags._importPONum=existing._importPONum;
+      // _importPONum N'est PLUS préservé ici car il est désormais éditable via le champ fa-po.
+      // La valeur du formulaire prime ; si fa-po est vide, on retombe sur l'ancienne valeur (cf plus bas).
       if(existing._importEtat)preservedFlags._importEtat=existing._importEtat;
+      // bcClientSLN : préservé tel quel (champ historique, défini par BC ou devis lié)
+      if(existing.bcClientSLN)preservedFlags.bcClientSLN=existing.bcClientSLN;
       // Cohérence : si la facture est passée à Payée pour la 1ère fois, on enregistre
       // discrètement la date du changement de statut pour que l'utilisateur puisse
       // si besoin retrouver "quand c'est passé en payée" dans l'historique
@@ -13638,6 +13658,10 @@ function getFA(){
     // Date de réception du BC Client : utilisée pour classer la facture dans le bon mois
     // quand elle est encore en pré-facturée (phase non-billed). Auto-remplissable depuis PO.
     dateReceptionBC:gvg('fa-dateReceptionBC')||'',
+    // N° PO Client (saisi via fa-po) : champ unifié avec le N° PO du Suivi Factures.
+    // Stocké dans _importPONum (champ historique d'import). Si vide dans le formulaire,
+    // on retombe sur l'ancienne valeur côté `existing` pour préserver l'historique.
+    _importPONum:gvg('fa-po') || (eFAid && DB.factures.find(function(x){return x.id===eFAid;})||{})._importPONum || '',
     lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc,suiviId:existingSuiviId};
   // Fusionner les flags préservés (écrasement IMPOSSIBLE car on assigne après le fa de base)
   Object.keys(preservedFlags).forEach(function(k){fa[k]=preservedFlags[k];});
