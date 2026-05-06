@@ -603,6 +603,9 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <button class="btn btn-amber btn-sm no-print" id="btn-migrate-invoices" onclick="migrateInvoicesToFactures()" title="Migre toutes les factures du Suivi (DB.invoices) vers la page Factures (DB.factures) avec backup automatique" style="display:none;border-color:rgba(251,191,36,.5);color:#fbbf24;font-weight:700">🔄 Migrer Suivi → Factures</button>
       <!-- Bouton "Défaire migration" (visible 7 jours après migration) -->
       <button class="btn btn-ghost btn-sm no-print" id="btn-undo-migrate" onclick="undoMigrateInvoices()" title="Restaure l'état d'avant migration (snapshot localStorage)" style="display:none;border-color:rgba(244,63,94,.4);color:#f43f5e">↩️ Défaire migration</button>
+      <!-- Bouton "Nettoyer dates incohérentes" : scanne les factures dont la phase est non-émise (transit, douane, chantier...)
+           mais qui ont quand même une dateEnvoi/dateButoir renseignée, et propose de les effacer en bloc. -->
+      <button class="btn btn-ghost btn-sm no-print" onclick="cleanIncoherentDates()" title="Détecte les factures avec une date d'envoi alors que la phase n'est pas 'Livré client' ou 'Réceptionné PV', et propose de nettoyer ces dates incohérentes." style="border-color:rgba(96,165,250,.5);color:#60a5fa">🧹 Nettoyer dates</button>
       <button class="btn btn-teal btn-sm no-print" onclick="addSUIVI()">+ Ajouter</button>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
@@ -1323,14 +1326,13 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <div class="form-group"><label>% payé</label><input type="number" class="form-input" id="si-pct" min="0" max="100" value="0"></div></div>
     <div class="form-group"><label>📦 Phase opérationnelle <span style="color:var(--muted);font-weight:400;font-size:10px">(où en est le BC ?)</span></label>
       <select class="form-select" id="si-phase">
-        <option value="">📨 Émise (factures classique)</option>
         <option value="emerson">🏭 Backlog Emerson AUS (matériel pas encore expédié)</option>
         <option value="transit">✈️ Transit Aus → Nouméa (en mer/avion)</option>
         <option value="douane">🛃 Dédouanement ACT (à Nouméa, en cours)</option>
-        <option value="livre">🚚 Livré client (matériel reçu par SLN)</option>
+        <option value="livre">🚚 Livré client (matériel reçu par SLN — facture émise)</option>
         <option value="chantier_attente">🛠 Chantier non démarré (prestation)</option>
         <option value="chantier_cours">🔧 Chantier en cours (prestation)</option>
-        <option value="recu">✅ Réceptionné PV (prestation terminée)</option>
+        <option value="recu">✅ Réceptionné PV (prestation terminée — facture émise)</option>
       </select>
     </div>
     <div class="form-group"><label>🏷️ Type d'activité <span style="color:var(--muted);font-weight:400;font-size:10px">(détermine la classification dans les donuts du dashboard)</span></label>
@@ -2128,6 +2130,16 @@ function exportDBBackup(){
 var DB=loadDB();
 var invoices=DB.invoices||[];
 
+// Migration legacy : factures phase='' → 'livre' ou 'recu' selon type.
+// La fonction migrateLegacyEmisePhase est définie plus bas (avec PHASES).
+// On fait un appel différé via setTimeout pour que toutes les fonctions soient déjà parsées.
+setTimeout(function(){
+  if(typeof migrateLegacyEmisePhase==='function'){
+    try{ migrateLegacyEmisePhase(); }
+    catch(e){ console.warn('[CALINSTRUM] Migration legacy phase="" échouée :', e); }
+  }
+},0);
+
 // =============================================================================
 // SOURCE UNIFIÉE POUR LA PAGE SUIVI FACTURES + FACTURES
 // =============================================================================
@@ -2665,9 +2677,14 @@ function getStatus(inv){
 // avant d'être réellement émise au client. La phase indique où en est physiquement
 // le BC : matériel chez Emerson, en transit, dédouanement, ou prestation en cours.
 // Quand la phase atteint "livre" (matériel livré) ou "recu" (PV de réception), la
-// facture est considérée comme officiellement émise (financière).
+// facture est considérée comme officiellement émise (financière) — la dateEnvoi
+// devient alors pertinente.
+//
+// IMPORTANT : la phase '' (anciennement "Émise") n'existe plus comme phase distincte.
+// Toute facture émise au client est désormais en 'livre' (Fourniture) ou 'recu' (Prestation).
+// Les anciennes factures phase='' sont migrées automatiquement au chargement
+// (cf. migrateLegacyEmisePhase ci-dessous).
 var PHASES={
-  '':                {label:'Émise',                   icon:'📨', color:'#94a3b8', billed:true,  type:'all'},
   'emerson':         {label:'Backlog Emerson AUS',     icon:'🏭', color:'#a78bfa', billed:false, type:'fourniture'},
   'transit':         {label:'Transit Aus → Nouméa',    icon:'✈️', color:'#60a5fa', billed:false, type:'fourniture'},
   'douane':          {label:'Dédouanement ACT',        icon:'🛃', color:'#fbbf24', billed:false, type:'fourniture'},
@@ -2676,6 +2693,12 @@ var PHASES={
   'chantier_cours':  {label:'Chantier en cours',       icon:'🔧', color:'#f59e0b', billed:false, type:'prestation'},
   'recu':            {label:'Réceptionné PV',          icon:'✅', color:'#10b981', billed:true,  type:'prestation'}
 };
+// Phase par défaut selon le type d'activité (utilisée pour migration et fallbacks).
+// Fourniture / mixte → 'livre' ; Prestation → 'recu'.
+function getDefaultPhase(inv){
+  var t=(inv&&inv.type)||'';
+  return (t==='Prestation de service') ? 'recu' : 'livre';
+}
 // Une facture est dite "pré-facturée" si sa phase n'est PAS billed.
 // Cela signifie : le n° existe (réservé à la cohérence) mais la facture
 // n'a pas encore été officiellement émise au client.
@@ -2685,7 +2708,9 @@ function isPrebilled(inv){
 }
 function getPhase(inv){
   var p=inv.phase||'';
-  return PHASES[p]||PHASES[''];
+  if(PHASES[p]) return PHASES[p];
+  // Fallback type-aware pour anciennes factures sans phase ou phase=''
+  return PHASES[getDefaultPhase(inv)];
 }
 function phaseBadge(inv){
   var ph=getPhase(inv);
@@ -2700,17 +2725,46 @@ function phaseSelect(inv){
   }).join('');
   return '<select class="phase-sel" onchange="setSUIVIPhase('+inv.id+',this.value)" style="font-size:10px;padding:2px 4px;background:rgba(255,255,255,0.04);border:1px solid '+getPhase(inv).color+'40;color:'+getPhase(inv).color+';border-radius:3px;cursor:pointer;max-width:160px" title="Modifier la phase opérationnelle">'+opts+'</select>';
 }
-// Met à jour la phase. Auto-promotion si la phase passe à "livre" ou "recu".
+// Met à jour la phase. Effets de bord :
+//   - Si on passe vers une phase NON billed (transit, douane, chantier...) depuis
+//     une phase billed (livre/recu) → on EFFACE dateEnvoi et dateButoir car la
+//     facture n'est plus considérée comme officiellement émise.
+//   - Si on passe vers une phase billed (livre/recu) depuis une phase non-billed
+//     ET que dateEnvoi est vide → on propose de la fixer à aujourd'hui (auto-promotion).
 function setSUIVIPhase(id,newPhase){
   var inv=invoices.find(function(x){return x.id===id;});
   if(!inv)return;
   var oldPhase=inv.phase||'';
+  // Bascule effective de la phase (peut être annulée plus bas si l'utilisateur refuse)
   inv.phase=newPhase;
-  // Auto-promotion : phase devient "livré" ou "réceptionné"
-  // → suggère de mettre à jour la date d'envoi facture (qui était vide en pré-facturé)
-  var promoted=PHASES[newPhase]&&PHASES[newPhase].billed===true;
-  var wasPrebilled=PHASES[oldPhase]&&PHASES[oldPhase].billed===false;
-  if(promoted&&wasPrebilled&&!inv.dateEnvoi){
+
+  var newBilled = PHASES[newPhase] && PHASES[newPhase].billed===true;
+  var oldBilled = PHASES[oldPhase] && PHASES[oldPhase].billed===true;
+
+  // CAS 1 — RÉTROGRADATION : phase billed → non-billed
+  // Les dates d'envoi/butoir n'ont plus de sens : on propose de les effacer.
+  if(!newBilled && oldBilled){
+    if(inv.dateEnvoi || inv.dateButoir){
+      var newLabel = (PHASES[newPhase] && PHASES[newPhase].label) || newPhase;
+      if(confirm('⚠ La facture '+inv.num+' repasse en phase "'+newLabel+'" (non émise).\n\n' +
+                 'Les dates suivantes vont être effacées par cohérence :\n' +
+                 '• Date envoi : '+(inv.dateEnvoi||'(vide)')+'\n' +
+                 '• Date butoir : '+(inv.dateButoir||'(vide)')+'\n\n' +
+                 'Continuer ?')){
+        inv.dateEnvoi='';
+        inv.dateButoir='';
+      } else {
+        // L'utilisateur a refusé : on annule la bascule de phase
+        inv.phase=oldPhase;
+        renderSuivi();
+        return;
+      }
+    }
+  }
+
+  // CAS 2 — AUTO-PROMOTION : phase non-billed → billed, dateEnvoi vide
+  // On propose de fixer dateEnvoi=aujourd'hui + butoir=+30j
+  if(newBilled && !oldBilled && !inv.dateEnvoi){
     if(confirm('🎉 La facture '+inv.num+' passe en phase "'+PHASES[newPhase].label+'".\n\nVoulez-vous la considérer comme officiellement émise aujourd\'hui ?\n\n• Date d\'envoi = '+td()+'\n• Date butoir = '+td()+' + 30 jours\n• Statut = En attente de paiement')){
       inv.dateEnvoi=td();
       var d=new Date();d.setDate(d.getDate()+30);
@@ -2718,9 +2772,94 @@ function setSUIVIPhase(id,newPhase){
       if(inv.statut!=='paid'&&inv.statut!=='partial')inv.statut='pending';
     }
   }
+
   commitInvoiceChange(inv);
   saveDB();renderSuivi();rDash();
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
+}
+
+// =============================================================================
+// MIGRATION LEGACY : phase '' (Émise) → 'livre' ou 'recu' selon type
+// =============================================================================
+// Appelée une fois au chargement. Bascule silencieusement les anciennes factures
+// dont phase='' ou phase manquante vers la phase finale appropriée.
+//   - Fourniture ou mixte → 'livre'
+//   - Prestation de service → 'recu'
+// Les factures avec dateEnvoi non vide bénéficient en plus d'un nettoyage de
+// cohérence : la phase reste billed, donc dateEnvoi est conservée.
+// Les factures avec phase non-billed et dateEnvoi non vide ne sont PAS touchées
+// par cette migration — c'est cleanIncoherentDates() (bouton manuel) qui s'en charge,
+// pour laisser l'utilisateur décider.
+function migrateLegacyEmisePhase(){
+  var migrated=0;
+  function migrate(item){
+    var p=item.phase;
+    if(p==null || p==='' || !PHASES[p]){
+      item.phase = getDefaultPhase(item);
+      migrated++;
+    }
+  }
+  (DB.invoices||[]).forEach(migrate);
+  (DB.factures||[]).forEach(migrate);
+  if(migrated>0){
+    console.log('[CALINSTRUM] Migration legacy : '+migrated+' facture(s) phase="" → livre/recu');
+    try{ saveDB(); }catch(e){ console.warn('saveDB après migration a échoué :', e); }
+  }
+  return migrated;
+}
+
+// =============================================================================
+// NETTOYAGE DATES INCOHÉRENTES
+// =============================================================================
+// Détecte les factures dont la phase est non-billed (transit, douane, chantier...)
+// mais qui ont une dateEnvoi/dateButoir renseignée — cas typique de l'historique
+// d'avant le patch où "Émise" était utilisée par défaut. Affiche la liste à
+// l'utilisateur et propose un nettoyage en bloc.
+function cleanIncoherentDates(){
+  var problems=[];
+  function scan(source,sourceName){
+    (DB[source]||[]).forEach(function(inv){
+      var ph=inv.phase||'';
+      var phaseObj=PHASES[ph];
+      // Cas problématique : phase définie ET non-billed ET dateEnvoi/butoir présent
+      if(phaseObj && phaseObj.billed===false && (inv.dateEnvoi || inv.dateButoir)){
+        problems.push({
+          source:sourceName,
+          inv:inv,
+          num:inv.num||'(sans n°)',
+          phase:phaseObj.label,
+          dateEnvoi:inv.dateEnvoi||'',
+          dateButoir:inv.dateButoir||''
+        });
+      }
+    });
+  }
+  scan('invoices','Suivi');
+  scan('factures','Factures');
+
+  if(problems.length===0){
+    alert('✅ Aucune incohérence détectée.\n\nToutes les factures avec une date d\'envoi sont en phase "Livré client" ou "Réceptionné PV".');
+    return;
+  }
+
+  var msg='🔍 '+problems.length+' facture(s) avec dates incohérentes (phase non émise mais dateEnvoi présente) :\n\n';
+  msg += problems.slice(0,15).map(function(p){
+    return '• '+p.num+' — '+p.phase+' — envoi: '+(p.dateEnvoi||'-')+' | butoir: '+(p.dateButoir||'-');
+  }).join('\n');
+  if(problems.length>15) msg += '\n... et '+(problems.length-15)+' autre(s).';
+  msg += '\n\nVoulez-vous effacer dateEnvoi et dateButoir pour toutes ces factures ?\n(La phase opérationnelle est conservée, seules les dates sont effacées.)';
+
+  if(!confirm(msg)) return;
+
+  problems.forEach(function(p){
+    p.inv.dateEnvoi='';
+    p.inv.dateButoir='';
+  });
+  saveDB();
+  if(typeof renderSuivi==='function')renderSuivi();
+  if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
+  if(typeof rDash==='function'){try{rDash();}catch(e){}}
+  alert('✅ '+problems.length+' facture(s) nettoyée(s).');
 }
 
 // ============================================================================
@@ -3898,15 +4037,19 @@ function openSUIVI(id){
   gv('si-num',inv.num);gv('si-mont',inv.montant);gv('si-title',inv.intitule);
   gv('si-envoi',inv.dateEnvoi||'');gv('si-butoir',inv.dateButoir||'');
   gv('si-statut',inv.statut||'pending');gv('si-pct',inv.pct||0);
-  gv('si-phase',inv.phase||'');
+  // Phase : si vide ou invalide (legacy '' supprimée), retomber sur la phase par défaut selon type
+  var phaseToShow = (inv.phase && PHASES[inv.phase]) ? inv.phase : getDefaultPhase(inv);
+  gv('si-phase',phaseToShow);
   gv('si-type',inv.type||'Fourniture');
   gv('si-po',inv.po||'');gv('si-comment',inv.comment||'');
   sv('mSUIVItitle','Modifier '+inv.num);om('mSUIVI');
 }
 function addSUIVI(){
   eSUIVIid=null;
-  ['si-num','si-title','si-envoi','si-butoir','si-po','si-comment','si-phase'].forEach(function(i){gv(i,'');});
+  ['si-num','si-title','si-envoi','si-butoir','si-po','si-comment'].forEach(function(i){gv(i,'');});
   gv('si-mont',0);gv('si-pct',0);gv('si-statut','pending');gv('si-type','Fourniture');
+  // Phase par défaut pour une nouvelle facture Fourniture : 'livre' (matériel reçu = facture émise)
+  gv('si-phase','livre');
   sv('mSUIVItitle','Nouvelle facture suivi');om('mSUIVI');
 }
 function saveSUIVI(){
@@ -3915,14 +4058,31 @@ function saveSUIVI(){
   // virtuels mélangés depuis getSuiviSource). On délègue à commitInvoiceChange() qui
   // route correctement vers DB.factures (si la facture y existe) ou DB.invoices.
   var existing=eSUIVIid?invoices.find(function(x){return x.id===eSUIVIid;}):null;
+  var phaseInput = gvg('si-phase');
+  // Sécurité : si la phase est vide ou inconnue (cas legacy), forcer la phase par défaut selon type
+  var typeInput = gvg('si-type')||'Fourniture';
+  if(!phaseInput || !PHASES[phaseInput]){
+    phaseInput = getDefaultPhase({type:typeInput});
+  }
   var inv={id:eSUIVIid||Date.now(),num:gvg('si-num'),intitule:gvg('si-title'),
     montant:+gvg('si-mont')||0,dateEnvoi:gvg('si-envoi'),dateButoir:gvg('si-butoir'),
-    statut:gvg('si-statut'),pct:+gvg('si-pct')||0,phase:gvg('si-phase'),
-    type:gvg('si-type')||'Fourniture',
+    statut:gvg('si-statut'),pct:+gvg('si-pct')||0,phase:phaseInput,
+    type:typeInput,
     po:gvg('si-po'),comment:gvg('si-comment')};
   // Préserver les champs annexes (_fromGRC, grcFactureId, linkedBCs, _factureId, dateEncaissement)
   if(existing){['_fromGRC','grcFactureId','linkedBCs','_factureId','dateEncaissement'].forEach(function(k){if(existing[k]!==undefined)inv[k]=existing[k];});}
   if(!inv.num){alert('N° facture manquant');return;}
+  // Cohérence dateEnvoi/butoir vs phase : si phase non-billed mais dates renseignées, on alerte
+  if(PHASES[inv.phase] && PHASES[inv.phase].billed===false && (inv.dateEnvoi||inv.dateButoir)){
+    if(confirm('⚠ La phase "'+PHASES[inv.phase].label+'" n\'est pas une phase d\'émission.\n\n' +
+               'Les dates d\'envoi et butoir vont être effacées par cohérence.\n\n' +
+               'Continuer ?')){
+      inv.dateEnvoi='';
+      inv.dateButoir='';
+    } else {
+      return;
+    }
+  }
   commitInvoiceChange(inv);
   saveDB();cm('mSUIVI');renderSuivi();rDash();
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
