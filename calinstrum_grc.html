@@ -961,7 +961,13 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <div class="tab-pane active" id="fat-info">
       <div class="form-row">
         <div class="form-group"><label>N° Facture <span class="req">*</span></label><input class="form-input" id="fa-num"></div>
-        <div class="form-group"><label>Date <span class="req">*</span></label><input type="date" class="form-input" id="fa-date"></div>
+        <div class="form-group"><label>Date <span class="req">*</span> <span style="color:var(--muted);font-weight:400;font-size:10px">(date de création/émission)</span></label><input type="date" class="form-input" id="fa-date"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>📅 Date réception BC Client <span style="color:var(--muted);font-weight:400;font-size:10px">(détermine le mois de classement quand la facture est encore pré-facturée)</span></label><input type="date" class="form-input" id="fa-dateReceptionBC" title="Date à laquelle CALINSTRUM a reçu le bon de commande du client. Pré-rempli automatiquement depuis le PO format DDMMYYYY/NNN ou depuis le BC Emerson lié."></div>
+        <div class="form-group"><label>&nbsp;</label>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="autoFillDateReceptionBC()" style="border-color:rgba(45,212,191,.4);color:var(--teal);width:100%" title="Tente d'extraire automatiquement la date de réception du BC depuis le PO Calinstrum (format DDMMYYYY/NNN), le BC Emerson lié, ou l'objet de la facture.">🔍 Auto-détecter depuis PO/BC</button>
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group"><label>Client <span class="req">*</span></label>
@@ -2131,12 +2137,17 @@ var DB=loadDB();
 var invoices=DB.invoices||[];
 
 // Migration legacy : factures phase='' → 'livre' ou 'recu' selon type.
-// La fonction migrateLegacyEmisePhase est définie plus bas (avec PHASES).
-// On fait un appel différé via setTimeout pour que toutes les fonctions soient déjà parsées.
+// + Migration dateReceptionBC : auto-remplit pour les pré-facturées.
+// Les fonctions sont définies plus bas (avec PHASES). Appel différé via setTimeout
+// pour que toutes les fonctions soient déjà parsées.
 setTimeout(function(){
   if(typeof migrateLegacyEmisePhase==='function'){
     try{ migrateLegacyEmisePhase(); }
     catch(e){ console.warn('[CALINSTRUM] Migration legacy phase="" échouée :', e); }
+  }
+  if(typeof migrateDateReceptionBC==='function'){
+    try{ migrateDateReceptionBC(); }
+    catch(e){ console.warn('[CALINSTRUM] Migration dateReceptionBC échouée :', e); }
   }
 },0);
 
@@ -2235,6 +2246,15 @@ function getSuiviSource(){
       client:f.client||'SLN',
       dvlie:f.dvlie||'',
       dateEncaissement:f.dateEncaissement||'',
+      // Date de réception du BC Client : remontée pour permettre le classement par mois
+      // sur la page Factures lorsque la facture est encore pré-facturée (phase non-billed).
+      dateReceptionBC: f.dateReceptionBC || '',
+      // Champs propagés pour autoDetectDateReceptionBC() à la volée si dateReceptionBC manque
+      objet: f.objet || '',
+      notes: f.notes || '',
+      _importPONum: f._importPONum || '',
+      bcGmaoLink: f.bcGmaoLink || '',
+      bcClientSLN: f.bcClientSLN || '',
       // CRITIQUE : on doit préserver linkedBCs depuis DB.factures pour que les calculs de
       // marge (getCoutEmerson/getMargeBrute via getLinkedBCs) trouvent les BC liés.
       // Sans ça, après renderSuivi() (qui rebuilt invoices via getSuiviSource()), la modal
@@ -2905,6 +2925,143 @@ function cleanIncoherentDates(){
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
   if(typeof rDash==='function'){try{rDash();}catch(e){}}
   alert('✅ '+problemsInv.length+' entrée(s) nettoyée(s).');
+}
+
+// =============================================================================
+// NAVIGATION RAPIDE : Suivi Factures → Facture GRC
+// =============================================================================
+// Appelée au double-clic sur le N° d'une facture dans le tableau Suivi.
+// Bascule vers la page Factures et ouvre directement la modal d'édition de la facture.
+function navigateToFA(faId){
+  if(!faId)return;
+  var f=(DB.factures||[]).find(function(x){return x.id===faId;});
+  if(!f){
+    alert('⚠ Facture GRC introuvable (id='+faId+').\n\nElle a peut-être été supprimée ou cette entrée Suivi n\'a pas de facture GRC associée.');
+    return;
+  }
+  // Bascule de page (renderFA() est appelé automatiquement par nav('factures'))
+  if(typeof nav==='function'){
+    nav('factures');
+  }
+  // openFA() ouvre la modal automatiquement via om('mFA') en fin de fonction.
+  // Petit délai pour laisser le temps à nav() de finir le rendu de la page Factures.
+  setTimeout(function(){
+    if(typeof openFA==='function') openFA(faId);
+  },50);
+}
+
+// =============================================================================
+// AUTO-DÉTECTION DATE DE RÉCEPTION BC CLIENT
+// =============================================================================
+// Tente d'extraire automatiquement la date à laquelle CALINSTRUM a reçu le BC
+// du client final (SLN, PRNC...). Ordre de priorité :
+//   1. PO Calinstrum format DDMMYYYY/NNN  (ex "28042026/97" → 2026-04-28)
+//      Ce format est stable car généré par CALINSTRUM en interne.
+//   2. Champ bcGmaoLink ou _importPONum si format identique
+//   3. Date du BC Emerson lié (linkedBCs[0].date) en dernier recours
+// Retourne une string au format ISO 'YYYY-MM-DD' ou '' si aucune date n'a été trouvée.
+function autoDetectDateReceptionBC(f){
+  if(!f)return '';
+  // Source 1 : essayer d'extraire depuis l'objet de la facture (souvent contient le PO)
+  var objet=(f.objet||'').toString();
+  var poMatch=objet.match(/(\d{2})(\d{2})(\d{4})\s*\/\s*\d+/);
+  if(poMatch){
+    var yyyy=poMatch[3], mm=poMatch[2], dd=poMatch[1];
+    if(yyyy.length===4 && parseInt(mm,10)>=1 && parseInt(mm,10)<=12 && parseInt(dd,10)>=1 && parseInt(dd,10)<=31){
+      return yyyy+'-'+mm+'-'+dd;
+    }
+  }
+  // Source 2 : _importPONum ou bcGmaoLink
+  var poFields=[f._importPONum, f.bcGmaoLink, f.bcClientSLN];
+  for(var i=0;i<poFields.length;i++){
+    var v=(poFields[i]||'').toString();
+    var m=v.match(/(\d{2})(\d{2})(\d{4})\s*\/\s*\d+/);
+    if(m){
+      var y=m[3], mo=m[2], d=m[1];
+      if(y.length===4 && parseInt(mo,10)>=1 && parseInt(mo,10)<=12 && parseInt(d,10)>=1 && parseInt(d,10)<=31){
+        return y+'-'+mo+'-'+d;
+      }
+    }
+  }
+  // Source 3 : commentaire / notes de la facture (souvent "BC envoyé le DD/MM/YYYY")
+  var notes=(f.notes||'').toString();
+  var commentMatch=notes.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+  if(commentMatch){
+    var y2=commentMatch[3], mo2=commentMatch[2].padStart(2,'0'), d2=commentMatch[1].padStart(2,'0');
+    if(parseInt(mo2,10)>=1 && parseInt(mo2,10)<=12){
+      return y2+'-'+mo2+'-'+d2;
+    }
+  }
+  // Source 4 : BC Emerson lié → date du BC
+  if(f.linkedBCs && f.linkedBCs.length && DB.bcs){
+    var bc=DB.bcs.find(function(x){return x.id===f.linkedBCs[0];});
+    if(bc && bc.date) return bc.date;
+  }
+  return '';
+}
+
+// Bouton "🔍 Auto-détecter depuis PO/BC" du formulaire facture
+function autoFillDateReceptionBC(){
+  // On reconstruit l'objet courant depuis les champs du formulaire
+  // (et on enrichit avec les flags persistés si on est en modification)
+  var current = {
+    objet: gvg('fa-objet'),
+    notes: gvg('fa-notes')
+  };
+  if(eFAid){
+    var existing=DB.factures.find(function(x){return x.id===eFAid;});
+    if(existing){
+      current._importPONum=existing._importPONum;
+      current.bcGmaoLink=existing.bcGmaoLink;
+      current.bcClientSLN=existing.bcClientSLN;
+      current.linkedBCs=existing.linkedBCs;
+    }
+  }
+  var detected=autoDetectDateReceptionBC(current);
+  if(detected){
+    gv('fa-dateReceptionBC', detected);
+    // Petit feedback visuel
+    var input=document.getElementById('fa-dateReceptionBC');
+    if(input){
+      input.style.transition='background .25s';
+      input.style.background='rgba(45,212,191,.18)';
+      setTimeout(function(){ input.style.background=''; },800);
+    }
+  } else {
+    alert('🔍 Aucune date détectée automatiquement.\n\n' +
+          'Sources scannées :\n' +
+          '• Objet (recherche PO format DDMMYYYY/NNN)\n' +
+          '• Champs PO (bcGmaoLink, _importPONum)\n' +
+          '• Notes (recherche date format DD/MM/YYYY)\n' +
+          '• BC Emerson lié (date du BC)\n\n' +
+          'Saisissez la date manuellement.');
+  }
+}
+
+// =============================================================================
+// MIGRATION : auto-remplissage dateReceptionBC pour factures existantes
+// =============================================================================
+// Au chargement, on tente de pré-remplir dateReceptionBC pour toutes les factures
+// pré-facturées (phase non-billed) qui n'en ont pas encore. Migration silencieuse.
+function migrateDateReceptionBC(){
+  var migrated=0;
+  (DB.factures||[]).forEach(function(f){
+    if(f.dateReceptionBC) return; // déjà rempli
+    var ph=f.phase||'';
+    var phaseObj=PHASES[ph];
+    // On ne pré-remplit que pour les pré-facturées (sinon dateEnvoi suffit)
+    if(!phaseObj || phaseObj.billed===true) return;
+    var detected=autoDetectDateReceptionBC(f);
+    if(detected){
+      f.dateReceptionBC=detected;
+      migrated++;
+    }
+  });
+  if(migrated>0){
+    console.log('[CALINSTRUM] dateReceptionBC auto-rempli pour '+migrated+' facture(s) pré-facturée(s)');
+    try{ saveDB(); }catch(e){ console.warn('saveDB après migrateDateReceptionBC échoué :', e); }
+  }
+  return migrated;
 }
 
 // ============================================================================
@@ -4057,8 +4214,15 @@ function renderTable(){
       ? '<td><span class="badge" style="background:rgba(167,139,250,.15);color:#a78bfa;border:1px solid rgba(167,139,250,.3);padding:2px 7px;border-radius:10px;font-size:9.5px;font-weight:700">📦 Pré-facturé</span></td>'
       : '<td>'+statusLabel(st)+'</td>';
     var delaiCell=prebilled?'<td><span style="color:#a78bfa;font-size:10px">N/A</span></td>':'<td>'+daysLeftLabel(i)+'</td>';
+    // === NAVIGATION RAPIDE : double-clic sur N° facture → ouvre la facture GRC ===
+    // Si la facture a un equivalent GRC (i._fromGRC + i._factureId ou grcFactureId),
+    // on permet d'y naviguer en double-cliquant sur le numéro. Curseur pointer pour signaler l'interaction.
+    var faGrcId = i._factureId || i.grcFactureId || null;
+    var numCellAttrs = faGrcId
+      ? ' ondblclick="navigateToFA('+faGrcId+')" style="cursor:pointer" title="Double-clic : ouvrir la facture GRC complète"'
+      : ' title="N° facture (pas de facture GRC liée)"';
     return'<tr style="'+rs+'">'+
-      '<td><span style="font-weight:700;color:var(--teal)">'+i.num+'</span>'+grcBadge+'</td>'+
+      '<td'+numCellAttrs+'><span style="font-weight:700;color:var(--teal)">'+i.num+'</span>'+grcBadge+'</td>'+
       '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(i.intitule)+'</td>'+
       typCell+
       '<td style="font-weight:700">'+fN(i.montant)+' XPF</td>'+
@@ -6106,6 +6270,17 @@ function syncBCToFacture(bc){
     return {action:'linked',faNum:bareInv.num,faId:bareInv.id,note:'Entrée Suivi pré-existante liée (import antérieur)'};
   }
   // === CRÉATION ===
+  // Auto-détecter la date de réception du BC Client à partir du PO (DDMMYYYY/NNN)
+  var autoDetectedRecBC = '';
+  try {
+    autoDetectedRecBC = autoDetectDateReceptionBC({
+      objet: objet,
+      _importPONum: bc.num,
+      bcGmaoLink: bc.num
+    });
+    // Fallback : date du BC Emerson lui-même
+    if(!autoDetectedRecBC && bc.date) autoDetectedRecBC = bc.date;
+  } catch(e){ /* silencieux */ }
   var newFa={
     id:Date.now()+Math.floor(Math.random()*1000),
     num:faNum,
@@ -6124,6 +6299,7 @@ function syncBCToFacture(bc){
     versements:[],
     notes:'Facture pré-facturée générée automatiquement depuis le BC '+(bc.num||'')+'. À émettre lors de la livraison client. Marge et fret à ajuster manuellement.',
     dateEncaissement:'',
+    dateReceptionBC: autoDetectedRecBC,
     lines:faLines,
     ht:ttc,tgc:0,ttc:ttc,
     phase:'emerson',
@@ -11772,8 +11948,22 @@ function extractClientGroup(item,type){
 }
 
 // Extrait l'année et le mois depuis la date d'un item
+// === LOGIQUE FACTURES PRÉ-FACTURÉES ===
+// Quand une facture GRC est en phase non-billed (transit, douane, chantier, emerson...),
+// elle n'a pas de date d'émission officielle au client. Pour un suivi cohérent,
+// on la classe alors par sa date de RÉCEPTION DU BC CLIENT (item.dateReceptionBC).
+// Pour les factures déjà émises (livre / recu), on garde le comportement classique
+// avec item.date (date d'émission).
 function extractYearMonth(item){
-  var d=item.date||item.bcDate||item.dueDate;
+  var d;
+  // Cas 1 : facture GRC pré-facturée → utiliser dateReceptionBC en priorité
+  if(item && item.phase && typeof PHASES!=='undefined' && PHASES[item.phase]
+     && PHASES[item.phase].billed===false && item.dateReceptionBC){
+    d=item.dateReceptionBC;
+  } else {
+    // Cas standard : date d'émission / date du document
+    d=item.date||item.bcDate||item.dueDate||item.dateReceptionBC;
+  }
   if(!d)return {year:'?',month:'?',monthLabel:'(sans date)'};
   // Formats acceptés : '2026-04-15', '15/04/2026', '2026-04', etc.
   var year='?',month='?';
@@ -12848,6 +13038,10 @@ function openFA(id,fromDV){
       gv('fa-notes',f.notes||'');
       // Date d'encaissement effective (à renseigner à réception avis de règlement)
       gv('fa-date-encaissement',f.dateEncaissement||'');
+      // Date de réception du BC Client (classement mensuel des pré-facturées).
+      // Si le champ est vide en DB, on essaie une auto-détection silencieuse depuis le PO ou BC lié.
+      var dateRecBC = f.dateReceptionBC || autoDetectDateReceptionBC(f);
+      gv('fa-dateReceptionBC', dateRecBC || '');
       // Rétrocompat : si versements absents mais paye>0, créer 1 versement
       if(f.versements && f.versements.length){
         faVersements=JSON.parse(JSON.stringify(f.versements));
@@ -12880,7 +13074,7 @@ function openFA(id,fromDV){
     buildClientOptions('fa-client',fromDV.client||'');
     gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');gv('fa-email',fromDV.email||'');
     gv('fa-objet',fromDV.objet||'');gv('fa-dvlie',fromDV.num||'');gv('fa-type',fromDV.type||'Fourniture');gv('fa-status','En attente');
-    gv('fa-notes','');gv('fa-date-encaissement','');
+    gv('fa-notes','');gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');
     if(isClientExo(fromDV.client))gv('fa-tgc-mention','506-2');else gv('fa-tgc-mention','tgc');
     var lf=fromDV.lines||{};
     faL=[].concat(lf.fourniture||[],lf.service||[],lf.fret||[]).map(function(l){return Object.assign({},l);});
@@ -12889,7 +13083,7 @@ function openFA(id,fromDV){
     gv('fa-num',nxt('fa'));gv('fa-date',td());gv('fa-contact','');
     gv('fa-adresse','');gv('fa-email','');gv('fa-objet','');gv('fa-dvlie','');
     gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
-    gv('fa-date-encaissement','');
+    gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');
     sv('mFAtitle','Nouvelle Facture');
   }
   rFAlines();
@@ -13441,6 +13635,9 @@ function getFA(){
     // Distincte de la date d'émission (date) et de l'échéance théorique calculée depuis le délai.
     // RÈGLE : jamais auto-remplie au changement de statut. Seul l'utilisateur la renseigne.
     dateEncaissement:gvg('fa-date-encaissement')||'',
+    // Date de réception du BC Client : utilisée pour classer la facture dans le bon mois
+    // quand elle est encore en pré-facturée (phase non-billed). Auto-remplissable depuis PO.
+    dateReceptionBC:gvg('fa-dateReceptionBC')||'',
     lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc,suiviId:existingSuiviId};
   // Fusionner les flags préservés (écrasement IMPOSSIBLE car on assigne après le fa de base)
   Object.keys(preservedFlags).forEach(function(k){fa[k]=preservedFlags[k];});
@@ -14267,8 +14464,23 @@ function renderFA(){
   // === RENDU HIÉRARCHIQUE ===
   // Année > Mois > Client > [Factures] (comme la page Devis)
   // renderHierarchicalRows attend des items avec un champ 'date' (ou 'dateEnvoi'/'dateEmission')
-  // → on ajoute date = dateEnvoi pour la compatibilité
-  var dataForHier=data.map(function(i){return Object.assign({},i,{date:i.dateEnvoi||''});});
+  // → on ajoute date = dateEnvoi pour la compatibilité.
+  // === SPÉCIFICITÉ PRÉ-FACTURÉES ===
+  // Pour les factures en phase non-billed (transit, douane, chantier, emerson...),
+  // dateEnvoi est vide. On utilise alors dateReceptionBC pour les classer dans
+  // le mois où le BC Client a été reçu — meilleur traçage du backlog.
+  // extractYearMonth() applique déjà cette logique en regardant phase + dateReceptionBC,
+  // mais comme on remappe ici en {date: ...}, on doit propager dateReceptionBC dans data
+  // pour que extractYearMonth puisse y accéder.
+  var dataForHier=data.map(function(i){
+    return Object.assign({},i,{
+      date: i.dateEnvoi || '',
+      // dateReceptionBC remonte depuis getSuiviSource (qui le copie de DB.factures.dateReceptionBC)
+      // Si manquant, on tente une auto-détection à la volée pour le rendu (sans persister).
+      dateReceptionBC: i.dateReceptionBC ||
+        (typeof autoDetectDateReceptionBC==='function' ? autoDetectDateReceptionBC(i) : '')
+    });
+  });
   tb.innerHTML=renderHierarchicalRows({
     type:'fa',
     items:dataForHier,
