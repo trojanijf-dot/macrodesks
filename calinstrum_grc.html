@@ -19,11 +19,45 @@ if(typeof pdfjsLib!=='undefined'){
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@700;800&display=swap');
 :root{
   --bg:#020409;--bg1:#060c18;--bg2:#080e1c;--bg3:#0c1424;--bg4:#111827;
-  --border:rgba(255,255,255,0.07);--text:#e2e8f0;--muted:#64748b;
+  --border:rgba(255,255,255,0.07);
+  /* === PALETTE DE TEXTE (3 niveaux pour meilleure lisibilité) === */
+  --text:#f1f5f9;        /* Texte principal — blanc cassé clair (était #e2e8f0) */
+  --text-strong:#ffffff; /* Réservé aux gros chiffres / titres importants */
+  --muted:#94a3b8;       /* Texte secondaire — gris-bleu lisible (était #64748b, trop sombre) */
+  --muted-soft:#64748b;  /* Pour annotations / placeholders / labels d'axes graphiques */
   --red:#f43f5e;--green:#10b981;--amber:#fbbf24;--blue:#38bdf8;
   --teal:#2dd4bf;--purple:#a78bfa;--orange:#f97316;
   --mono:'JetBrains Mono',monospace;--display:'Syne',sans-serif;
 }
+/* === EFFET SHIMMER === */
+/* Animation : un highlight blanc-teal traverse la surface en diagonale.
+   Appliqué via la classe .shimmer (à mettre sur les cartes ou éléments à mettre en valeur).
+   Pour limiter le coût CPU, l'animation utilise transform (composé sur GPU). */
+@keyframes shimmer{
+  0%{transform:translateX(-150%) skewX(-22deg);opacity:0}
+  10%{opacity:1}
+  90%{opacity:1}
+  100%{transform:translateX(280%) skewX(-22deg);opacity:0}
+}
+.shimmer{position:relative;overflow:hidden;isolation:isolate}
+.shimmer::after{
+  content:"";position:absolute;top:0;bottom:0;left:0;width:55%;
+  background:linear-gradient(90deg,transparent 0%,rgba(45,212,191,.10) 35%,rgba(255,255,255,.22) 50%,rgba(45,212,191,.10) 65%,transparent 100%);
+  animation:shimmer 3.2s ease-in-out infinite;
+  animation-delay:var(--shimmer-delay,0s);
+  pointer-events:none;z-index:1;
+}
+@media (prefers-reduced-motion:reduce){
+  .shimmer::after{animation:none;display:none}
+}
+/* Variantes de délai pour décaler l'animation entre cartes voisines (évite l'effet "vague synchrone") */
+.shimmer-d1{--shimmer-delay:.4s}
+.shimmer-d2{--shimmer-delay:.8s}
+.shimmer-d3{--shimmer-delay:1.2s}
+.shimmer-d4{--shimmer-delay:1.6s}
+.shimmer-d5{--shimmer-delay:2.0s}
+/* Les enfants de .shimmer doivent être au-dessus du pseudo-element pour rester nets */
+.shimmer > *{position:relative;z-index:2}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:12px;line-height:1.6;min-height:100vh;display:flex}
 body::before{content:"";position:fixed;inset:0;background-image:linear-gradient(rgba(45,212,191,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(45,212,191,0.025) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
@@ -47,9 +81,9 @@ body::before{content:"";position:fixed;inset:0;background-image:linear-gradient(
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
-.metric{background:var(--bg3);border-radius:6px;padding:10px 12px}
-.mlbl{font-size:8.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px}
-.mval{font-size:18px;font-weight:700;color:#fff;font-family:var(--mono)}
+.metric{background:var(--bg3);border-radius:6px;padding:10px 12px;box-shadow:0 1px 2px rgba(0,0,0,.2),0 0 0 1px rgba(255,255,255,.02)}
+.mlbl{font-size:8.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px;font-weight:600}
+.mval{font-size:18px;font-weight:700;color:var(--text-strong);font-family:var(--mono);text-shadow:0 0 12px rgba(255,255,255,.05)}
 .msub{font-size:9px;margin-top:2px;color:var(--muted)}
 .metric.m-teal{border-top:2px solid var(--teal)}
 .metric.m-green{border-top:2px solid var(--green)}
@@ -3798,11 +3832,11 @@ function renderSuviKPIs(){
   var dashState=(typeof getHgrState==='function')?getHgrState('suivi-dash'):{activeClient:''};
   var clientLbl=dashState.activeClient||'Tous';
   el.innerHTML=
-    // Ligne 1 : flux clients (label dynamique)
-    '<div class="metric m-green"><div class="mlbl">💰 Encaissé '+esc(clientLbl)+'</div><div class="mval green">'+fN(enc)+'</div><div class="msub">'+(totalEmis>0?Math.round(enc/totalEmis*100):0)+'% des factures émises</div></div>'+
-    '<div class="metric m-amber"><div class="mlbl">⏳ À recouvrer '+esc(clientLbl)+'</div><div class="mval amber">'+fN(aRecouvrer)+'</div><div class="msub">'+emises.filter(function(i){return getStatus(i)!=='paid';}).length+' factures émises en attente</div></div>'+
-    '<div class="metric m-purple"><div class="mlbl">📦 Backlog (pré-facturé)</div><div class="mval" style="color:#a78bfa">'+fN(prebilledMnt)+'</div><div class="msub">'+prebilled.length+' factures non émises</div></div>'+
-    '<div class="metric m-teal"><div class="mlbl">🎯 Total portefeuille</div><div class="mval">'+fN(totalBrut)+'</div><div class="msub">'+invoices.length+' lignes XPF (brut)</div></div>';
+    // Ligne 1 : flux clients (label dynamique). Effet shimmer décalé pour éviter la "vague synchronisée".
+    '<div class="metric m-green shimmer"><div class="mlbl">💰 Encaissé '+esc(clientLbl)+'</div><div class="mval green">'+fN(enc)+'</div><div class="msub">'+(totalEmis>0?Math.round(enc/totalEmis*100):0)+'% des factures émises</div></div>'+
+    '<div class="metric m-amber shimmer shimmer-d1"><div class="mlbl">⏳ À recouvrer '+esc(clientLbl)+'</div><div class="mval amber">'+fN(aRecouvrer)+'</div><div class="msub">'+emises.filter(function(i){return getStatus(i)!=='paid';}).length+' factures émises en attente</div></div>'+
+    '<div class="metric m-purple shimmer shimmer-d2"><div class="mlbl">📦 Backlog (pré-facturé)</div><div class="mval" style="color:#a78bfa">'+fN(prebilledMnt)+'</div><div class="msub">'+prebilled.length+' factures non émises</div></div>'+
+    '<div class="metric m-teal shimmer shimmer-d3"><div class="mlbl">🎯 Total portefeuille</div><div class="mval">'+fN(totalBrut)+'</div><div class="msub">'+invoices.length+' lignes XPF (brut)</div></div>';
 
   // Ligne 2 : flux EMERSON (fournisseur) — uniquement si au moins 1 BC lié
   var elEmerson=document.getElementById('suivi-kpis-emerson');
@@ -3811,10 +3845,10 @@ function renderSuviKPIs(){
       elEmerson.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:14px;background:rgba(167,139,250,0.05);border:1px dashed rgba(167,139,250,0.3);border-radius:8px;color:var(--muted);font-size:11px">💡 <b>Volet Emerson désactivé.</b> Liez vos factures à des BC Emerson (bouton 🔗 dans le tableau) pour voir apparaître coût Emerson, marge brute, marge nette et trésorerie nette.</div>';
     } else {
       elEmerson.innerHTML=
-        '<div class="metric m-red"><div class="mlbl">🏭 Coût Emerson total</div><div class="mval red">'+fN(coutEmersonTotal)+'</div><div class="msub">'+nbLies+' fact. liées · '+fN(coutEmersonPaye)+' déjà payés</div></div>'+
-        '<div class="metric m-amber"><div class="mlbl">⏳ Restant Emerson</div><div class="mval amber">'+fN(coutEmersonRestant)+'</div><div class="msub">'+(coutEmersonTotal>0?Math.round(coutEmersonRestant/coutEmersonTotal*100):0)+'% non payé chez Emerson</div></div>'+
-        '<div class="metric m-teal"><div class="mlbl">📊 Marge brute</div><div class="mval" style="color:'+(margeBrutTotal>=0?'var(--green)':'var(--red)')+'">'+fN(margeBrutTotal)+'</div><div class="msub">Net : '+fN(margeNetteTotal)+' ('+pctMargeNette.toFixed(1)+'%)</div></div>'+
-        '<div class="metric m-green"><div class="mlbl">💵 Trésorerie nette</div><div class="mval" style="color:'+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+fN(tresoNette)+'</div><div class="msub">Encaissé - Payé Emerson</div></div>';
+        '<div class="metric m-red shimmer shimmer-d4"><div class="mlbl">🏭 Coût Emerson total</div><div class="mval red">'+fN(coutEmersonTotal)+'</div><div class="msub">'+nbLies+' fact. liées · '+fN(coutEmersonPaye)+' déjà payés</div></div>'+
+        '<div class="metric m-amber shimmer shimmer-d5"><div class="mlbl">⏳ Restant Emerson</div><div class="mval amber">'+fN(coutEmersonRestant)+'</div><div class="msub">'+(coutEmersonTotal>0?Math.round(coutEmersonRestant/coutEmersonTotal*100):0)+'% non payé chez Emerson</div></div>'+
+        '<div class="metric m-teal shimmer"><div class="mlbl">📊 Marge brute</div><div class="mval" style="color:'+(margeBrutTotal>=0?'var(--green)':'var(--red)')+'">'+fN(margeBrutTotal)+'</div><div class="msub">Net : '+fN(margeNetteTotal)+' ('+pctMargeNette.toFixed(1)+'%)</div></div>'+
+        '<div class="metric m-green shimmer shimmer-d2"><div class="mlbl">💵 Trésorerie nette</div><div class="mval" style="color:'+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+fN(tresoNette)+'</div><div class="msub">Encaissé - Payé Emerson</div></div>';
     }
   }
 
@@ -7911,30 +7945,22 @@ function generateFactureFromDV(){
   // Construction de la facture
   var faNum=nxt('fa');
   var totals=cDVtot();
-  // Convertir les lignes du devis en lignes de facture (structure plate)
+  // === COPIE STRUCTURELLE DES LIGNES DEVIS → FACTURE ===
+  // On préserve EXACTEMENT la structure du devis : headers, KIT (1 prix global +
+  // sub-lignes "inclus"), TASK (mère qte=0/pu=0 + sub-lignes chiffrées). Le rendu
+  // PDF facture (renderFAPdfRows) sait afficher ces 3 cas grâce au flag _isTaskMain.
+  // Deep-clone via JSON pour éviter les références partagées avec le devis source.
   var faLines=[];
   ['fourniture','service','fret'].forEach(function(sec){
     (d.lines[sec]||[]).forEach(function(l){
-      // Sauter les lignes "header" (sous-titres / KIT / TÂCHE titles) qui ne sont pas
-      // des lignes facturables individuelles
-      if(l.isHeader)return;
-      // Pour les lignes TÂCHE avec sous-lignes, créer une ligne par sous-ligne
-      if(l.subLines&&l.subLines.length){
-        l.subLines.forEach(function(sl){
-          faLines.push({
-            ref:l.ref||'',
-            designation:(l.designation||'')+(sl.label?' — '+sl.label:''),
-            tgc:sl.tgc||0,unite:sl.unite||'U',
-            qte:sl.qte||1,pu:sl.pu||0
-          });
-        });
-      } else {
-        faLines.push({
-          ref:l.ref||'',designation:l.designation||'',
-          tgc:l.tgc||0,unite:l.unite||'U',
-          qte:l.qte||1,pu:l.pu||0
-        });
+      if(!l)return;
+      // Headers (sous-titres / KIT / TASK) → conservés tels quels pour structurer le PDF
+      if(l.type==='header'){
+        faLines.push(JSON.parse(JSON.stringify(l)));
+        return;
       }
+      // Ligne normale, KIT ou TASK : deep clone complet (préserve subLines, _isTaskMain)
+      faLines.push(JSON.parse(JSON.stringify(l)));
     });
   });
   var fa={
@@ -13113,7 +13139,12 @@ function openFA(id,fromDV){
     gv('fa-po', fromDV.bcClientSLN || '');
     if(isClientExo(fromDV.client))gv('fa-tgc-mention','506-2');else gv('fa-tgc-mention','tgc');
     var lf=fromDV.lines||{};
-    faL=[].concat(lf.fourniture||[],lf.service||[],lf.fret||[]).map(function(l){return Object.assign({},l);});
+    // === COPIE STRUCTURELLE COMPLÈTE ===
+    // On préserve TOUTE la structure du devis : headers, KIT (subLines avec pu=0,
+    // total = ligne mère), TASK (subLines chiffrées, ligne mère pu=0/qte=0).
+    // Deep clone via JSON pour éviter les références partagées avec le devis source.
+    faL=[].concat(lf.fourniture||[],lf.service||[],lf.fret||[])
+          .map(function(l){return JSON.parse(JSON.stringify(l));});
     sv('mFAtitle','Facture depuis '+fromDV.num);
   } else {
     gv('fa-num',nxt('fa'));gv('fa-date',td());gv('fa-contact','');
@@ -13383,43 +13414,86 @@ function rFAlines(){
         '<td><button class="fa-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer" title="Supprimer cette section">✕</button></td>'+
       '</tr>';
     }
-    // === LIGNE NORMALE / KIT PRINCIPALE ===
+    // === LIGNE NORMALE / KIT PRINCIPALE / TASK PRINCIPALE ===
     var tgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(l.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
     var uteOpts=['U','Lot','H sup','H tech','Forfait'].map(function(v){return'<option'+(l.unite===v?' selected':'')+'>'+v+'</option>';}).join('');
     var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
-    var kitBadge=hasSubLines?' <span style="display:inline-block;background:rgba(59,130,246,.15);color:#3b82f6;padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700">KIT</span>':'';
-    var rowBg=hasSubLines?'background:rgba(59,130,246,.04)':'';
+    // Détection TASK : flag _isTaskMain OU (subLines présentes ET ligne mère sans prix ET sub-lignes chiffrées).
+    // KIT : ligne mère porte le prix global, sub-lignes à pu=0 et descriptives.
+    var isTaskMain = !!l._isTaskMain ||
+      (hasSubLines && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
+       l.subLines.some(function(sub){return (Number(sub.pu)||0)>0;}));
+    var typeBadgeColor = isTaskMain ? '#a78bfa' : (hasSubLines ? '#3b82f6' : null);
+    var typeBadgeLabel = isTaskMain ? 'TÂCHE' : (hasSubLines ? 'KIT' : null);
+    var typeBadge = typeBadgeLabel ? ' <span style="display:inline-block;background:rgba('+(isTaskMain?'167,139,250':'59,130,246')+',.15);color:'+typeBadgeColor+';padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700">'+typeBadgeLabel+'</span>' : '';
+    var rowBg = hasSubLines ? ('background:rgba('+(isTaskMain?'167,139,250':'59,130,246')+',.04)') : '';
     // Champ ref optionnel affiché au-dessus de la désignation
     var refHtml=l.ref?'<input style="width:100%;font-family:monospace;font-size:10px;color:#94a3b8;background:transparent;border:1px solid rgba(255,255,255,.06);padding:2px 4px;margin-bottom:2px" value="'+esc(l.ref)+'" data-field="ref" data-idx="'+i+'" placeholder="Réf">':'';
+    // Pour TASK : ligne mère affiche TOTAL = somme des sub-lignes chiffrées (read-only sur qte/pu mère).
+    // Pour KIT et lignes normales : affichage classique avec inputs qte/pu.
+    var motherTotal;
+    if(isTaskMain){
+      motherTotal=l.subLines.reduce(function(s,sub){return s+(Number(sub.qte)||0)*(Number(sub.pu)||0)*(1+(Number(sub.tgc)||0)/100);},0);
+    } else {
+      motherTotal=(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);
+    }
     var html='<tr style="'+rowBg+'">'+
-      '<td>'+refHtml+'<textarea rows="1" style="width:100%;min-width:150px;resize:vertical;font-family:inherit;font-size:inherit;line-height:1.3;padding:4px 6px" data-field="designation" data-idx="'+i+'">'+esc(l.designation||'')+'</textarea>'+kitBadge+'</td>'+
-      '<td><select data-field="tgc" data-idx="'+i+'">'+tgcOpts+'</select></td>'+
-      '<td><select data-field="unite" data-idx="'+i+'">'+uteOpts+'</select></td>'+
-      '<td><input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'"></td>'+
-      '<td><input type="number" style="width:75px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'"></td>'+
-      '<td style="font-weight:700;color:var(--teal)">'+fN(Math.round((l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100)))+'</td>'+
+      '<td>'+refHtml+'<textarea rows="1" style="width:100%;min-width:150px;resize:vertical;font-family:inherit;font-size:inherit;line-height:1.3;padding:4px 6px" data-field="designation" data-idx="'+i+'">'+esc(l.designation||'')+'</textarea>'+typeBadge+'</td>'+
+      '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<select data-field="tgc" data-idx="'+i+'">'+tgcOpts+'</select>'))+'</td>'+
+      '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<select data-field="unite" data-idx="'+i+'">'+uteOpts+'</select>'))+'</td>'+
+      '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'">'))+'</td>'+
+      '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<input type="number" style="width:75px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'">'))+'</td>'+
+      '<td style="font-weight:700;color:var(--teal)">'+fN(Math.round(motherTotal))+'</td>'+
       '<td><button class="fa-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
       '</tr>';
-    // === SOUS-LIGNES KIT (descriptives + qte) ===
-    // Utilise data-sub-field/data-sub-idx comme les autres pour un listener uniforme.
+    // === SOUS-LIGNES ===
+    // Pour KIT : sub descriptives, pu non éditable (affiché "inclus dans KIT")
+    // Pour TASK : sub chiffrées, qte/pu/tgc/unite éditables, total calculé
     if(hasSubLines){
       l.subLines.forEach(function(sub,si){
-        html+='<tr style="background:rgba(59,130,246,.02);font-size:11px">'+
-          '<td style="padding-left:24px">'+
-            '<div style="color:#3b82f6;font-weight:700;display:inline-block;margin-right:4px">└</div>'+
-            '<input style="width:32%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10px;font-family:monospace;color:var(--text)" value="'+esc(sub.ref||'')+'" data-sub-field="ref" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Réf">'+
-            ' <input style="width:60%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10.5px;color:var(--text)" value="'+esc(sub.designation||'')+'" data-sub-field="designation" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Désignation">'+
-          '</td>'+
-          '<td></td>'+
-          '<td style="text-align:center;font-size:10px;color:var(--muted)">'+esc(sub.unite||'U')+'</td>'+
-          '<td><input type="number" style="width:50px;font-size:11px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
-          '<td style="text-align:right;font-size:10.5px;color:var(--muted);font-style:italic">— inclus dans KIT —</td>'+
-          '<td></td>'+
-          '<td><button class="fa-subdel-btn" data-idx="'+i+'" data-sub-idx="'+si+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px" title="Supprimer cette sous-ligne">✕</button></td>'+
-        '</tr>';
+        var subTgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(sub.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
+        var subUteOpts=['U','Lot','H sup','H tech','Forfait'].map(function(v){return'<option'+(sub.unite===v?' selected':'')+'>'+v+'</option>';}).join('');
+        var subBgColor = isTaskMain ? 'rgba(167,139,250,.02)' : 'rgba(59,130,246,.02)';
+        var arrowColor = isTaskMain ? '#a78bfa' : '#3b82f6';
+        if(isTaskMain){
+          // === SOUS-LIGNE TASK : qte/pu/tgc/unite éditables ===
+          var subTot=Math.round((sub.qte||0)*(sub.pu||0)*(1+(Number(sub.tgc)||0)/100));
+          html+='<tr style="background:'+subBgColor+';font-size:11px">'+
+            '<td style="padding-left:24px">'+
+              '<div style="color:'+arrowColor+';font-weight:700;display:inline-block;margin-right:4px">└</div>'+
+              '<input style="width:30%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10px;font-family:monospace;color:var(--text)" value="'+esc(sub.ref||'')+'" data-sub-field="ref" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Réf">'+
+              ' <input style="width:62%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10.5px;color:var(--text)" value="'+esc(sub.designation||'')+'" data-sub-field="designation" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Désignation">'+
+            '</td>'+
+            '<td><select data-sub-field="tgc" data-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10px">'+subTgcOpts+'</select></td>'+
+            '<td><select data-sub-field="unite" data-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10px">'+subUteOpts+'</select></td>'+
+            '<td><input type="number" style="width:50px;font-size:11px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
+            '<td><input type="number" style="width:75px;font-size:11px" value="'+(sub.pu||0)+'" data-sub-field="pu" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
+            '<td style="font-weight:600;color:var(--teal);font-size:11px">'+fN(subTot)+'</td>'+
+            '<td><button class="fa-subdel-btn" data-idx="'+i+'" data-sub-idx="'+si+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px" title="Supprimer cette sous-ligne">✕</button></td>'+
+          '</tr>';
+        } else {
+          // === SOUS-LIGNE KIT : descriptive (qte éditable seule) ===
+          html+='<tr style="background:'+subBgColor+';font-size:11px">'+
+            '<td style="padding-left:24px">'+
+              '<div style="color:'+arrowColor+';font-weight:700;display:inline-block;margin-right:4px">└</div>'+
+              '<input style="width:32%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10px;font-family:monospace;color:var(--text)" value="'+esc(sub.ref||'')+'" data-sub-field="ref" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Réf">'+
+              ' <input style="width:60%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10.5px;color:var(--text)" value="'+esc(sub.designation||'')+'" data-sub-field="designation" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Désignation">'+
+            '</td>'+
+            '<td></td>'+
+            '<td style="text-align:center;font-size:10px;color:var(--muted)">'+esc(sub.unite||'U')+'</td>'+
+            '<td><input type="number" style="width:50px;font-size:11px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
+            '<td style="text-align:right;font-size:10.5px;color:var(--muted);font-style:italic">— inclus dans KIT —</td>'+
+            '<td></td>'+
+            '<td><button class="fa-subdel-btn" data-idx="'+i+'" data-sub-idx="'+si+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px" title="Supprimer cette sous-ligne">✕</button></td>'+
+          '</tr>';
+        }
       });
-      // Bouton ajouter sous-ligne
-      html+='<tr><td colspan="7" style="padding:2px 0 6px 24px"><button class="fa-subadd-btn" data-idx="'+i+'" style="background:rgba(59,130,246,.1);border:1px dashed rgba(59,130,246,.4);color:#3b82f6;padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer">+ Sous-ligne KIT</button></td></tr>';
+      // Bouton ajouter sous-ligne (label adapté selon TASK/KIT)
+      var addLabel = isTaskMain ? '+ Sous-ligne TÂCHE' : '+ Sous-ligne KIT';
+      var addBgColor = isTaskMain ? 'rgba(167,139,250,.1)' : 'rgba(59,130,246,.1)';
+      var addBorderColor = isTaskMain ? 'rgba(167,139,250,.4)' : 'rgba(59,130,246,.4)';
+      var addTextColor = isTaskMain ? '#a78bfa' : '#3b82f6';
+      html+='<tr><td colspan="7" style="padding:2px 0 6px 24px"><button class="fa-subadd-btn" data-idx="'+i+'" style="background:'+addBgColor+';border:1px dashed '+addBorderColor+';color:'+addTextColor+';padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer">'+addLabel+'</button></td></tr>';
     }
     return html;
   }).join('');
@@ -17450,30 +17524,69 @@ function bFA(f){
     }
     var sec=ensureSection();
     var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
+    // === DÉTECTION TASK vs KIT ===
+    // Une ligne TASK : porteuse avec _isTaskMain=true ou qte=0+pu=0+subLines chiffrées.
+    // Ses sub-lignes sont valorisées (Hsup/Htech avec qte/pu réels).
+    // Une ligne KIT : porteuse chiffrée (qte=1, pu=120000) + sub-lignes descriptives à pu=0.
+    // Détection robuste : on remonte au header le plus proche s'il existe (mode='task'/'kit').
+    // Sinon on s'appuie sur _isTaskMain et la structure des subLines.
+    var isTaskMain = !!l._isTaskMain ||
+      (hasSubLines && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
+       l.subLines.some(function(sub){return (Number(sub.pu)||0)>0;}));
     var tgcDisplay=(l.tgc||0)+'%';
-    var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    // Pour TASK : la ligne mère affiche un total = somme des subLines chiffrées
+    // Pour ligne normale ou KIT : total = qte * pu (qte/pu de la ligne)
+    var tot;
+    if(isTaskMain){
+      tot=l.subLines.reduce(function(s,sub){
+        var subHt=(Number(sub.qte)||0)*(Number(sub.pu)||0);
+        return s+Math.round(subHt*(1+(isExo?0:Number(sub.tgc)||0)/100));
+      },0);
+    } else {
+      tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    }
+    // Affichage de la ligne mère
     sec.rowsHtml+='<tr>'+
       '<td>'+(l.ref?'<span style="font-family:monospace;font-size:10px;color:#64748b">'+esc(l.ref)+'</span><br>':'')+escNL(l.designation||'')+'</td>'+
-      '<td style="text-align:center">'+tgcDisplay+'</td>'+
-      '<td style="text-align:center">'+(l.unite||'U')+'</td>'+
-      '<td style="text-align:center">'+(l.qte||0)+'</td>'+
-      '<td style="text-align:right">'+fN(l.pu)+'</td>'+
+      '<td style="text-align:center">'+(isTaskMain?'—':tgcDisplay)+'</td>'+
+      '<td style="text-align:center">'+(isTaskMain?'—':(l.unite||'U'))+'</td>'+
+      '<td style="text-align:center">'+(isTaskMain?'—':(l.qte||0))+'</td>'+
+      '<td style="text-align:right">'+(isTaskMain?'—':fN(l.pu))+'</td>'+
       '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td>'+
     '</tr>';
     sec.lineCount++;
     if(hasSubLines){
       l.subLines.forEach(function(sub){
-        sec.rowsHtml+='<tr style="background:rgba(59,130,246,.04)">'+
-          '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
-            '<span style="color:#3b82f6;margin-right:4px">└</span>'+
-            (sub.ref?'<span style="font-family:monospace;font-size:9.5px;color:#64748b">'+esc(sub.ref)+'</span> — ':'')+
-            escNL(sub.designation||'')+
-          '</td>'+
-          '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
-          '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
-          '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
-          '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
-        '</tr>';
+        var subTgcDisplay=(sub.tgc||0)+'%';
+        if(isTaskMain){
+          // === SOUS-LIGNE TASK : chiffrée (qte, pu, total réels) ===
+          var subTot=Math.round((sub.qte||0)*(sub.pu||0)*(1+(isExo?0:Number(sub.tgc)||0)/100));
+          sec.rowsHtml+='<tr style="background:rgba(167,139,250,.04)">'+
+            '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
+              '<span style="color:#a78bfa;margin-right:4px">└</span>'+
+              (sub.ref?'<span style="font-family:monospace;font-size:9.5px;color:#64748b">'+esc(sub.ref)+'</span> — ':'')+
+              escNL(sub.designation||'')+
+            '</td>'+
+            '<td style="text-align:center;font-size:10px">'+subTgcDisplay+'</td>'+
+            '<td style="text-align:center;font-size:10px">'+(sub.unite||'U')+'</td>'+
+            '<td style="text-align:center;font-size:10px">'+(sub.qte||0)+'</td>'+
+            '<td style="text-align:right;font-size:10px">'+fN(sub.pu)+'</td>'+
+            '<td style="text-align:right;font-weight:700;font-size:10.5px">'+fN(subTot)+'</td>'+
+          '</tr>';
+        } else {
+          // === SOUS-LIGNE KIT : descriptive ("inclus dans KIT") ===
+          sec.rowsHtml+='<tr style="background:rgba(59,130,246,.04)">'+
+            '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
+              '<span style="color:#3b82f6;margin-right:4px">└</span>'+
+              (sub.ref?'<span style="font-family:monospace;font-size:9.5px;color:#64748b">'+esc(sub.ref)+'</span> — ':'')+
+              escNL(sub.designation||'')+
+            '</td>'+
+            '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
+            '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
+            '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
+            '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
+          '</tr>';
+        }
         sec.lineCount++;
       });
     }
