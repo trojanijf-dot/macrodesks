@@ -2209,14 +2209,24 @@ function getSuiviSource(){
       var existingInv=(DB.invoices||[]).find(function(x){return (x.num||'').toLowerCase().trim()===k;});
       if(existingInv&&existingInv.phase)phase=existingInv.phase;
     }
+    // === COHÉRENCE PHASE ↔ DATES ===
+    // f.date est TOUJOURS présent dans DB.factures (date de création de la facture).
+    // Mais pour la vue Suivi, "dateEnvoi" représente la date d'émission OFFICIELLE
+    // au client, qui n'a de sens QUE si la facture est dans une phase billed
+    // (livre / recu). Pour toutes les autres phases (transit, douane, chantier...),
+    // on remonte des dates VIDES → le tableau affiche "⏳ pas émise".
+    var phaseObj=(typeof PHASES!=='undefined')?PHASES[phase]:null;
+    var phaseIsBilled = phaseObj && phaseObj.billed===true;
+    var viewDateEnvoi  = phaseIsBilled ? (f.date||'') : '';
+    var viewDateButoir = phaseIsBilled ? dateButoir   : '';
     out.push({
       id:f.id,
       num:f.num,
       intitule:f.objet||'',
       montant:ttc,
       po:po,
-      dateEnvoi:f.date||'',
-      dateButoir:dateButoir,
+      dateEnvoi:viewDateEnvoi,
+      dateButoir:viewDateButoir,
       statut:statutSuivi,
       pct:pctEnc,
       type:f.type||'Prestation de service',
@@ -2811,47 +2821,82 @@ function migrateLegacyEmisePhase(){
 // =============================================================================
 // NETTOYAGE DATES INCOHÉRENTES
 // =============================================================================
-// Détecte les factures dont la phase est non-billed (transit, douane, chantier...)
-// mais qui ont une dateEnvoi/dateButoir renseignée — cas typique de l'historique
-// d'avant le patch où "Émise" était utilisée par défaut. Affiche la liste à
-// l'utilisateur et propose un nettoyage en bloc.
+// Détecte et corrige plusieurs cas d'incohérence entre la phase opérationnelle
+// d'une facture et ses dates :
+//   - DB.invoices : phase non-billed mais dateEnvoi/dateButoir renseignés
+//     → effacement des dates (la phase est conservée).
+//   - DB.factures : pas de problème direct (le champ f.date = date de création
+//     est légitime et toujours présent), mais on signale pour info.
+//
+// IMPORTANT : depuis le patch, getSuiviSource() et syncFactureToSuivi() filtrent
+// déjà à l'affichage les dates des factures GRC en phase non-billed. Ce bouton
+// reste utile pour nettoyer DB.invoices (cas legacy) et pour donner un retour
+// visuel "tout est cohérent" à l'utilisateur.
 function cleanIncoherentDates(){
-  var problems=[];
-  function scan(source,sourceName){
-    (DB[source]||[]).forEach(function(inv){
-      var ph=inv.phase||'';
-      var phaseObj=PHASES[ph];
-      // Cas problématique : phase définie ET non-billed ET dateEnvoi/butoir présent
-      if(phaseObj && phaseObj.billed===false && (inv.dateEnvoi || inv.dateButoir)){
-        problems.push({
-          source:sourceName,
-          inv:inv,
-          num:inv.num||'(sans n°)',
-          phase:phaseObj.label,
-          dateEnvoi:inv.dateEnvoi||'',
-          dateButoir:inv.dateButoir||''
-        });
-      }
-    });
-  }
-  scan('invoices','Suivi');
-  scan('factures','Factures');
+  var problemsInv=[];   // DB.invoices
+  var problemsFac=[];   // DB.factures (info uniquement)
 
-  if(problems.length===0){
-    alert('✅ Aucune incohérence détectée.\n\nToutes les factures avec une date d\'envoi sont en phase "Livré client" ou "Réceptionné PV".');
+  (DB.invoices||[]).forEach(function(inv){
+    var ph=inv.phase||'';
+    var phaseObj=PHASES[ph];
+    if(phaseObj && phaseObj.billed===false && (inv.dateEnvoi || inv.dateButoir)){
+      problemsInv.push({
+        inv:inv,
+        num:inv.num||'(sans n°)',
+        phase:phaseObj.label,
+        dateEnvoi:inv.dateEnvoi||'',
+        dateButoir:inv.dateButoir||''
+      });
+    }
+  });
+
+  // Pour DB.factures on signale les cas où la facture a un champ date alors
+  // que la phase est non-billed — ce n'est PAS un bug en soi (date = date de
+  // création de la facture), mais l'utilisateur voit ces dates virtuellement
+  // dans le tableau Suivi. Le filtre getSuiviSource() les masque déjà.
+  (DB.factures||[]).forEach(function(f){
+    var ph=f.phase||'';
+    var phaseObj=PHASES[ph];
+    if(phaseObj && phaseObj.billed===false && f.date){
+      problemsFac.push({
+        num:f.num||'(sans n°)',
+        phase:phaseObj.label,
+        date:f.date
+      });
+    }
+  });
+
+  if(problemsInv.length===0 && problemsFac.length===0){
+    alert('✅ Aucune incohérence détectée.\n\nToutes les factures sont cohérentes avec leur phase opérationnelle.');
     return;
   }
 
-  var msg='🔍 '+problems.length+' facture(s) avec dates incohérentes (phase non émise mais dateEnvoi présente) :\n\n';
-  msg += problems.slice(0,15).map(function(p){
+  // Si problème uniquement informatif (DB.factures, pas d\'action à prendre)
+  if(problemsInv.length===0 && problemsFac.length>0){
+    var infoMsg='ℹ️ Tout est déjà cohérent côté Suivi.\n\n';
+    infoMsg+=problemsFac.length+' facture(s) GRC ont une date de création + phase non-billed,\n';
+    infoMsg+='mais ces dates sont MASQUÉES automatiquement dans le tableau Suivi\n';
+    infoMsg+='grâce au filtre cohérence phase ↔ dates (getSuiviSource).\n\n';
+    infoMsg+='Aucune action requise.\n\nDétail (10 premières) :\n';
+    infoMsg+=problemsFac.slice(0,10).map(function(p){
+      return '• '+p.num+' — '+p.phase+' — date création: '+p.date;
+    }).join('\n');
+    if(problemsFac.length>10) infoMsg+='\n... et '+(problemsFac.length-10)+' autre(s).';
+    alert(infoMsg);
+    return;
+  }
+
+  // Cas où DB.invoices a des données réellement à nettoyer
+  var msg='🔍 '+problemsInv.length+' entrée(s) Suivi avec dates incohérentes (phase non émise mais dateEnvoi présente) :\n\n';
+  msg += problemsInv.slice(0,15).map(function(p){
     return '• '+p.num+' — '+p.phase+' — envoi: '+(p.dateEnvoi||'-')+' | butoir: '+(p.dateButoir||'-');
   }).join('\n');
-  if(problems.length>15) msg += '\n... et '+(problems.length-15)+' autre(s).';
-  msg += '\n\nVoulez-vous effacer dateEnvoi et dateButoir pour toutes ces factures ?\n(La phase opérationnelle est conservée, seules les dates sont effacées.)';
+  if(problemsInv.length>15) msg += '\n... et '+(problemsInv.length-15)+' autre(s).';
+  msg += '\n\nVoulez-vous effacer dateEnvoi et dateButoir pour toutes ces entrées ?\n(La phase opérationnelle est conservée, seules les dates sont effacées.)';
 
   if(!confirm(msg)) return;
 
-  problems.forEach(function(p){
+  problemsInv.forEach(function(p){
     p.inv.dateEnvoi='';
     p.inv.dateButoir='';
   });
@@ -2859,7 +2904,7 @@ function cleanIncoherentDates(){
   if(typeof renderSuivi==='function')renderSuivi();
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
   if(typeof rDash==='function'){try{rDash();}catch(e){}}
-  alert('✅ '+problems.length+' facture(s) nettoyée(s).');
+  alert('✅ '+problemsInv.length+' entrée(s) nettoyée(s).');
 }
 
 // ============================================================================
@@ -14059,6 +14104,14 @@ function syncFactureToSuivi(f){
     idx=DB.invoices.findIndex(function(x){return x.num===f.num;});
     if(idx>=0) f.suiviId=DB.invoices[idx].id; // créer le lien
   }
+  // === COHÉRENCE PHASE ↔ DATES ===
+  // Voir getSuiviSource() pour le rationnel : on ne propage dateEnvoi/dateButoir
+  // dans le miroir Suivi QUE si la phase est billed (livre / recu).
+  var fPhase=f.phase||'';
+  var fPhaseObj=(typeof PHASES!=='undefined')?PHASES[fPhase]:null;
+  var fPhaseIsBilled = fPhaseObj && fPhaseObj.billed===true;
+  var miroirDateEnvoi  = fPhaseIsBilled ? (f.date||'') : '';
+  var miroirDateButoir = fPhaseIsBilled ? bd           : '';
   var miroir={
     id: idx>=0 ? DB.invoices[idx].id : Date.now(),
     num: f.num,
@@ -14066,12 +14119,13 @@ function syncFactureToSuivi(f){
     montant: ttc,
     type: f.type||'Fourniture',
     po: (idx>=0 ? DB.invoices[idx].po : '') || f.dvlie || '', // préserve le PO existant
-    dateEnvoi: f.date||'',
-    dateButoir: bd,
+    dateEnvoi: miroirDateEnvoi,
+    dateButoir: miroirDateButoir,
     statut: statutSuivi,
     pct: pct,
     comment: (idx>=0 ? DB.invoices[idx].comment : '') || '',
     dateEncaissement: f.dateEncaissement||'',  // FIX: propager date encaissement vers Suivi
+    phase: fPhase,         // propager aussi la phase pour cohérence côté DB.invoices
     _fromGRC: true,        // marqueur : cette entrée est créée depuis une facture GRC
     grcFactureId: f.id,    // lien inverse vers la facture GRC
     _factureId: f.id       // alias utilisé par renderFA / getSuiviSource pour le bouton ✏️ et _faGetEncaissement
