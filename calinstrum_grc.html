@@ -19,11 +19,46 @@ if(typeof pdfjsLib!=='undefined'){
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@700;800&display=swap');
 :root{
   --bg:#020409;--bg1:#060c18;--bg2:#080e1c;--bg3:#0c1424;--bg4:#111827;
-  --border:rgba(255,255,255,0.07);--text:#e2e8f0;--muted:#64748b;
+  --border:rgba(255,255,255,0.07);
+  /* === PALETTE DE TEXTE (3 niveaux pour meilleure lisibilité) === */
+  --text:#f1f5f9;        /* Texte principal — blanc cassé clair (était #e2e8f0) */
+  --text-strong:#ffffff; /* Réservé aux gros chiffres / titres importants */
+  --muted:#94a3b8;       /* Texte secondaire — gris-bleu lisible (était #64748b, trop sombre) */
+  --muted-soft:#64748b;  /* Pour annotations / placeholders / labels d'axes graphiques */
   --red:#f43f5e;--green:#10b981;--amber:#fbbf24;--blue:#38bdf8;
   --teal:#2dd4bf;--purple:#a78bfa;--orange:#f97316;
   --mono:'JetBrains Mono',monospace;--display:'Syne',sans-serif;
 }
+/* === EFFET SHIMMER === */
+/* Animation : un highlight blanc-teal subtil traverse la surface en diagonale.
+   Appliqué via la classe .shimmer (à mettre sur les cartes ou éléments à mettre en valeur).
+   Pour limiter le coût CPU, l'animation utilise transform (composé sur GPU). */
+@keyframes shimmer{
+  0%{transform:translateX(-100%) skewX(-20deg);opacity:0}
+  20%{opacity:1}
+  60%{opacity:1}
+  100%{transform:translateX(250%) skewX(-20deg);opacity:0}
+}
+.shimmer{position:relative;overflow:hidden;isolation:isolate}
+.shimmer::after{
+  content:"";position:absolute;top:0;bottom:0;left:0;width:35%;
+  background:linear-gradient(90deg,transparent 0%,rgba(45,212,191,.06) 40%,rgba(255,255,255,.10) 50%,rgba(45,212,191,.06) 60%,transparent 100%);
+  animation:shimmer 4.5s ease-in-out infinite;
+  animation-delay:var(--shimmer-delay,0s);
+  pointer-events:none;z-index:1;
+  /* respecter la préférence "réduction des mouvements" */
+}
+@media (prefers-reduced-motion:reduce){
+  .shimmer::after{animation:none;display:none}
+}
+/* Variantes de délai pour décaler l'animation entre cartes voisines (évite l'effet "vague synchrone") */
+.shimmer-d1{--shimmer-delay:.5s}
+.shimmer-d2{--shimmer-delay:1.0s}
+.shimmer-d3{--shimmer-delay:1.5s}
+.shimmer-d4{--shimmer-delay:2.0s}
+.shimmer-d5{--shimmer-delay:2.5s}
+/* Les enfants de .shimmer doivent être au-dessus du pseudo-element pour rester nets */
+.shimmer > *{position:relative;z-index:2}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:12px;line-height:1.6;min-height:100vh;display:flex}
 body::before{content:"";position:fixed;inset:0;background-image:linear-gradient(rgba(45,212,191,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(45,212,191,0.025) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
@@ -47,9 +82,9 @@ body::before{content:"";position:fixed;inset:0;background-image:linear-gradient(
 .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
-.metric{background:var(--bg3);border-radius:6px;padding:10px 12px}
-.mlbl{font-size:8.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px}
-.mval{font-size:18px;font-weight:700;color:#fff;font-family:var(--mono)}
+.metric{background:var(--bg3);border-radius:6px;padding:10px 12px;box-shadow:0 1px 2px rgba(0,0,0,.2),0 0 0 1px rgba(255,255,255,.02)}
+.mlbl{font-size:8.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:3px;font-weight:600}
+.mval{font-size:18px;font-weight:700;color:var(--text-strong);font-family:var(--mono);text-shadow:0 0 12px rgba(255,255,255,.05)}
 .msub{font-size:9px;margin-top:2px;color:var(--muted)}
 .metric.m-teal{border-top:2px solid var(--teal)}
 .metric.m-green{border-top:2px solid var(--green)}
@@ -3798,11 +3833,11 @@ function renderSuviKPIs(){
   var dashState=(typeof getHgrState==='function')?getHgrState('suivi-dash'):{activeClient:''};
   var clientLbl=dashState.activeClient||'Tous';
   el.innerHTML=
-    // Ligne 1 : flux clients (label dynamique)
-    '<div class="metric m-green"><div class="mlbl">💰 Encaissé '+esc(clientLbl)+'</div><div class="mval green">'+fN(enc)+'</div><div class="msub">'+(totalEmis>0?Math.round(enc/totalEmis*100):0)+'% des factures émises</div></div>'+
-    '<div class="metric m-amber"><div class="mlbl">⏳ À recouvrer '+esc(clientLbl)+'</div><div class="mval amber">'+fN(aRecouvrer)+'</div><div class="msub">'+emises.filter(function(i){return getStatus(i)!=='paid';}).length+' factures émises en attente</div></div>'+
-    '<div class="metric m-purple"><div class="mlbl">📦 Backlog (pré-facturé)</div><div class="mval" style="color:#a78bfa">'+fN(prebilledMnt)+'</div><div class="msub">'+prebilled.length+' factures non émises</div></div>'+
-    '<div class="metric m-teal"><div class="mlbl">🎯 Total portefeuille</div><div class="mval">'+fN(totalBrut)+'</div><div class="msub">'+invoices.length+' lignes XPF (brut)</div></div>';
+    // Ligne 1 : flux clients (label dynamique). Effet shimmer décalé pour éviter la "vague synchronisée".
+    '<div class="metric m-green shimmer"><div class="mlbl">💰 Encaissé '+esc(clientLbl)+'</div><div class="mval green">'+fN(enc)+'</div><div class="msub">'+(totalEmis>0?Math.round(enc/totalEmis*100):0)+'% des factures émises</div></div>'+
+    '<div class="metric m-amber shimmer shimmer-d1"><div class="mlbl">⏳ À recouvrer '+esc(clientLbl)+'</div><div class="mval amber">'+fN(aRecouvrer)+'</div><div class="msub">'+emises.filter(function(i){return getStatus(i)!=='paid';}).length+' factures émises en attente</div></div>'+
+    '<div class="metric m-purple shimmer shimmer-d2"><div class="mlbl">📦 Backlog (pré-facturé)</div><div class="mval" style="color:#a78bfa">'+fN(prebilledMnt)+'</div><div class="msub">'+prebilled.length+' factures non émises</div></div>'+
+    '<div class="metric m-teal shimmer shimmer-d3"><div class="mlbl">🎯 Total portefeuille</div><div class="mval">'+fN(totalBrut)+'</div><div class="msub">'+invoices.length+' lignes XPF (brut)</div></div>';
 
   // Ligne 2 : flux EMERSON (fournisseur) — uniquement si au moins 1 BC lié
   var elEmerson=document.getElementById('suivi-kpis-emerson');
@@ -3811,10 +3846,10 @@ function renderSuviKPIs(){
       elEmerson.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:14px;background:rgba(167,139,250,0.05);border:1px dashed rgba(167,139,250,0.3);border-radius:8px;color:var(--muted);font-size:11px">💡 <b>Volet Emerson désactivé.</b> Liez vos factures à des BC Emerson (bouton 🔗 dans le tableau) pour voir apparaître coût Emerson, marge brute, marge nette et trésorerie nette.</div>';
     } else {
       elEmerson.innerHTML=
-        '<div class="metric m-red"><div class="mlbl">🏭 Coût Emerson total</div><div class="mval red">'+fN(coutEmersonTotal)+'</div><div class="msub">'+nbLies+' fact. liées · '+fN(coutEmersonPaye)+' déjà payés</div></div>'+
-        '<div class="metric m-amber"><div class="mlbl">⏳ Restant Emerson</div><div class="mval amber">'+fN(coutEmersonRestant)+'</div><div class="msub">'+(coutEmersonTotal>0?Math.round(coutEmersonRestant/coutEmersonTotal*100):0)+'% non payé chez Emerson</div></div>'+
-        '<div class="metric m-teal"><div class="mlbl">📊 Marge brute</div><div class="mval" style="color:'+(margeBrutTotal>=0?'var(--green)':'var(--red)')+'">'+fN(margeBrutTotal)+'</div><div class="msub">Net : '+fN(margeNetteTotal)+' ('+pctMargeNette.toFixed(1)+'%)</div></div>'+
-        '<div class="metric m-green"><div class="mlbl">💵 Trésorerie nette</div><div class="mval" style="color:'+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+fN(tresoNette)+'</div><div class="msub">Encaissé - Payé Emerson</div></div>';
+        '<div class="metric m-red shimmer shimmer-d4"><div class="mlbl">🏭 Coût Emerson total</div><div class="mval red">'+fN(coutEmersonTotal)+'</div><div class="msub">'+nbLies+' fact. liées · '+fN(coutEmersonPaye)+' déjà payés</div></div>'+
+        '<div class="metric m-amber shimmer shimmer-d5"><div class="mlbl">⏳ Restant Emerson</div><div class="mval amber">'+fN(coutEmersonRestant)+'</div><div class="msub">'+(coutEmersonTotal>0?Math.round(coutEmersonRestant/coutEmersonTotal*100):0)+'% non payé chez Emerson</div></div>'+
+        '<div class="metric m-teal shimmer"><div class="mlbl">📊 Marge brute</div><div class="mval" style="color:'+(margeBrutTotal>=0?'var(--green)':'var(--red)')+'">'+fN(margeBrutTotal)+'</div><div class="msub">Net : '+fN(margeNetteTotal)+' ('+pctMargeNette.toFixed(1)+'%)</div></div>'+
+        '<div class="metric m-green shimmer shimmer-d2"><div class="mlbl">💵 Trésorerie nette</div><div class="mval" style="color:'+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+fN(tresoNette)+'</div><div class="msub">Encaissé - Payé Emerson</div></div>';
     }
   }
 
