@@ -586,7 +586,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <button class="filter-btn active" onclick="setFilter('all',this)">Toutes <span class="filter-count" id="cnt-all"></span></button>
       <button class="filter-btn" onclick="setFilter('paid',this)">✓ Payées <span class="filter-count" id="cnt-paid"></span></button>
       <button class="filter-btn" onclick="setFilter('partial',this)">⟳ Partielles <span class="filter-count" id="cnt-partial"></span></button>
-      <button class="filter-btn" onclick="setFilter('pending',this)">○ En cours <span class="filter-count" id="cnt-pending"></span></button>
+      <button class="filter-btn" onclick="setFilter('pending',this)" title="Factures émises au client, en cours de paiement (pas encore encaissées, échéance non dépassée)">📤 Émise <span class="filter-count" id="cnt-pending"></span></button>
       <button class="filter-btn" onclick="setFilter('late',this)">⚠ En retard <span class="filter-count" id="cnt-late"></span></button>
       <button class="filter-btn" onclick="setFilter('prebilled',this)" style="border-color:#a78bfa;color:#a78bfa">📦 Backlog <span class="filter-count" id="cnt-prebilled"></span></button>
       <input class="search-input" id="search-input" placeholder="Rechercher..." oninput="renderTable()" style="margin-left:auto;max-width:200px">
@@ -997,7 +997,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       </div>
       <div class="form-row">
         <div class="form-group"><label>Statut</label>
-          <select class="form-select" id="fa-status"><option>En attente</option><option>Partiel</option><option>Payée</option><option>En retard</option></select>
+          <select class="form-select" id="fa-status"><option value="En attente">📤 Émise — en cours de paiement</option><option value="Partiel">⟳ Partiel</option><option value="Payée">✓ Payée</option><option value="En retard">⚠ En retard</option></select>
         </div>
         <div class="form-group"></div>
       </div>
@@ -1332,7 +1332,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <div class="form-row"><div class="form-group"><label>Date envoi</label><input type="date" class="form-input" id="si-envoi"></div>
     <div class="form-group"><label>Date butoir</label><input type="date" class="form-input" id="si-butoir"></div></div>
     <div class="form-row"><div class="form-group"><label>Statut</label>
-      <select class="form-select" id="si-statut"><option value="pending">En cours</option><option value="partial">Partielle</option><option value="paid">Payée</option></select></div>
+      <select class="form-select" id="si-statut"><option value="pending">📤 Émise — en cours de paiement</option><option value="partial">⟳ Partielle</option><option value="paid">✓ Payée</option></select></div>
     <div class="form-group"><label>% payé</label><input type="number" class="form-input" id="si-pct" min="0" max="100" value="0"></div></div>
     <div class="form-group"><label>📦 Phase opérationnelle <span style="color:var(--muted);font-weight:400;font-size:10px">(où en est le BC ?)</span></label>
       <select class="form-select" id="si-phase">
@@ -3341,7 +3341,7 @@ function getDaysLeft(inv){var bd=parseDate(inv.dateButoir);if(!bd)return null;re
 function statusLabel(st){
   var m={'paid':'<span class="badge b-paid">✓ Payée</span>','late':'<span class="badge b-late">⚠ RETARD</span>',
     'partial':'<span class="badge b-partial">⟳ Partielle</span>'};
-  return m[st]||'<span class="badge b-pending">○ En cours</span>';
+  return m[st]||'<span class="badge b-pending" title="Facture émise au client, en attente de paiement">📤 Émise</span>';
 }
 function daysLeftLabel(inv){
   var d=getDaysLeft(inv),st=getStatus(inv);
@@ -3833,7 +3833,7 @@ function renderCharts(){
   var late=invoices.filter(function(i){return getStatus(i)==='late';});
   var co=['rgba(16,185,129,.7)','rgba(56,189,248,.7)','rgba(251,191,36,.7)','rgba(244,63,94,.7)'];
   var cg=document.getElementById('chart-global');
-  if(cg){dChart('global');charts['global']=new Chart(cg,{type:'doughnut',data:{labels:['Payées','Partielles','En cours','En retard'],datasets:[{data:[paid.length,partial.length,pending.length,late.length],backgroundColor:co,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'right',labels:{color:'#94a3b8',font:{size:9},boxWidth:8}}}}});}
+  if(cg){dChart('global');charts['global']=new Chart(cg,{type:'doughnut',data:{labels:['Payées','Partielles','Émises','En retard'],datasets:[{data:[paid.length,partial.length,pending.length,late.length],backgroundColor:co,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'right',labels:{color:'#94a3b8',font:{size:9},boxWidth:8}}}}});}
   var cm2=document.getElementById('chart-montants');
   if(cm2){
     dChart('montants');
@@ -3841,7 +3841,7 @@ function renderCharts(){
     var mpa=partial.reduce(function(s,i){return s+i.montant*(i.pct/100);},0);
     var mpe=pending.reduce(function(s,i){return s+i.montant;},0);
     var ml=late.reduce(function(s,i){return s+i.montant;},0);
-    charts['montants']=new Chart(cm2,{type:'bar',data:{labels:['Encaissé','Partiel','En cours','En retard'],datasets:[{data:[mp,mpa,mpe,ml],backgroundColor:co,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#64748b',font:{size:8}},grid:{color:'rgba(255,255,255,0.04)'}},y:{ticks:{color:'#64748b',font:{size:8},callback:function(v){return Math.round(v/1000)+'K';}},grid:{color:'rgba(255,255,255,0.04)'}}}}});
+    charts['montants']=new Chart(cm2,{type:'bar',data:{labels:['Encaissé','Partiel','Émis','En retard'],datasets:[{data:[mp,mpa,mpe,ml],backgroundColor:co,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#64748b',font:{size:8}},grid:{color:'rgba(255,255,255,0.04)'}},y:{ticks:{color:'#64748b',font:{size:8},callback:function(v){return Math.round(v/1000)+'K';}},grid:{color:'rgba(255,255,255,0.04)'}}}}});
   }
   var cmen=document.getElementById('chart-mensuel');
   if(cmen){
@@ -4068,7 +4068,7 @@ function renderDossiers(){
       var stBadge=st==='paid'?'<span style="background:rgba(16,185,129,.15);color:#10b981;font-size:9px;padding:2px 7px;border-radius:6px">✓ Payée</span>'
         :st==='partial'?'<span style="background:rgba(59,130,246,.15);color:#60a5fa;font-size:9px;padding:2px 7px;border-radius:6px">⟳ Partielle '+(f.pct||0)+'%</span>'
         :st==='late'?'<span style="background:rgba(244,63,94,.15);color:#f87171;font-size:9px;padding:2px 7px;border-radius:6px">⚠ En retard</span>'
-        :'<span style="background:rgba(251,191,36,.15);color:#fbbf24;font-size:9px;padding:2px 7px;border-radius:6px">⏳ En attente</span>';
+        :'<span style="background:rgba(251,191,36,.15);color:#fbbf24;font-size:9px;padding:2px 7px;border-radius:6px" title="Facture émise — en cours de paiement">📤 Émise</span>';
       var intitule=(f.intitule||'').replace(/\n/g,' ').substring(0,55);
       return '<tr style="border-top:1px solid var(--border)">'+
         '<td style="padding:5px 6px;font-family:var(--mono);color:var(--blue);font-size:10.5px;font-weight:700">'+esc(f.num||'—')+'</td>'+
@@ -5893,7 +5893,7 @@ function avisRegBuildPreview(){
     } else if(f.matchType==='suivi'){
       srcLabel='<span style="color:#a78bfa;font-weight:700">'+esc(f.matchInvoice.num)+'</span> <span style="font-size:9px;color:var(--muted)">(Suivi)</span>';
       srcMontant=fN(f.matchInvoice.montant||0)+' XPF';
-      srcStatut=({pending:'En cours',partial:'Partiel',paid:'Payée'})[f.matchInvoice.statut]||esc(f.matchInvoice.statut||'pending');
+      srcStatut=({pending:'📤 Émise',partial:'Partiel',paid:'Payée'})[f.matchInvoice.statut]||esc(f.matchInvoice.statut||'pending');
       var alreadyPaidS=f.matchInvoice.statut==='paid';
       if(alreadyPaidS){
         action='<span style="color:var(--muted);font-size:10px">Déjà Payée</span>';
