@@ -18796,22 +18796,21 @@ function printPreviewBC(){
   //     <tbody>, ce qui peut casser la pagination CSS (page-break) du contenu.
   //   - position:fixed bottom:0 est respecté par Chrome window.print sur CHAQUE page
   //     imprimée et n'interfère pas avec le flux du <tbody>. Pas d'effet sur la pagination.
-  // Pour les devis, on ne touche pas (la pagination [PGW] gère déjà le footer par page).
+  // === MISE À JOUR (correctif chevauchement footer/signatures sur facture courte) ===
+  // Pour les FACTURES, on n'extrait PLUS le footer en position:fixed. La phrase
+  // rouge "Opération réalisée…" + le bandeau bleu sont laissés dans le flux normal
+  // du DOM, juste après les signatures. Avec @page margin standard (10mm), Chrome
+  // les positionne naturellement en bas de la dernière page sans chevauchement.
+  // Régression assumée : sur les factures multipages, le footer n'apparaît que sur
+  // la dernière page (avant il était répété par fixed). C'est exactement le
+  // comportement actuel des devis (qui utilisent PGW pour la répétition).
+  // Pour BC : on garde l'approche fixed (BC = 1 page le plus souvent, et la
+  // répétition du bandeau bleu reste appréciable).
   var fixedFooterHtml='';
-  if(!isDevisPrint){
+  if(!isDevisPrint && !isFacturePrint){
     var fbEl=docNode.querySelector('.doc-footer-bar');
-    var legalEl=docNode.querySelector('.doc-legal');
     if(fbEl){
-      // Pour les factures : on inclut AUSSI .doc-legal (la phrase rouge "Opération réalisée
-      // en franchise de taxe...") dans le wrapper fixed pour qu'elle apparaisse en bas de
-      // CHAQUE page imprimée, juste au-dessus du bandeau bleu CALINSTRUM.
-      // Pour les BC : seul le bandeau bleu est répété (pas de doc-legal en BC).
-      var legalHtml='';
-      if(isFacturePrint&&legalEl){
-        legalHtml=legalEl.outerHTML;
-        legalEl.parentNode.removeChild(legalEl);
-      }
-      fixedFooterHtml='<div class="doc-fixed-footer">'+legalHtml+fbEl.outerHTML+'</div>';
+      fixedFooterHtml='<div class="doc-fixed-footer">'+fbEl.outerHTML+'</div>';
       fbEl.parentNode.removeChild(fbEl);
     }
   }
@@ -18838,13 +18837,13 @@ function printPreviewBC(){
     '<style>'+
       // Marge basse @page :
       //  - DEVIS (isDevisPrint=true) : 10mm — pagination JS gère le footer par page
-      //  - FACTURE (isFacturePrint=true) : 32mm — réserve la zone pour bandeau bleu fixed +
-      //    le sous-total tfoot répété (lui-même prend ~8mm). Pourquoi 32mm : pour qu'il y ait
-      //    assez de place pour le bandeau footer (8mm) + le tfoot avec sous-total (8mm) +
-      //    une marge de respiration (16mm). Sinon le tfoot répété chevauche le bandeau.
+      //  - FACTURE (isFacturePrint=true) : 10mm — footer en flux DOM normal après signatures
+      //    (cf. correctif chevauchement appliqué dans le bloc d'extraction footer ci-dessus).
+      //    Avec un footer en flux et des marges symétriques, Chrome place naturellement
+      //    le bandeau bleu et la mention rouge en bas de la dernière page sans chevaucher.
       //  - BC + autres : 22mm — réserve la zone pour le bandeau bleu fixed seul
       (isDevisPrint?'@page{size:A4 portrait;margin:10mm 10mm 10mm 10mm;}':
-       isFacturePrint?'@page{size:A4 portrait;margin:10mm 10mm 38mm 10mm;}':
+       isFacturePrint?'@page{size:A4 portrait;margin:10mm 10mm 10mm 10mm;}':
        '@page{size:A4 portrait;margin:10mm 10mm 22mm 10mm;}')+
       '@page{@bottom-right{content:"Page " counter(page) " / " counter(pages);font-family:Inter,Calibri,Arial,sans-serif;font-size:9pt;color:#1e3a5f;}}'+
       'html,body{margin:0!important;padding:0!important;background:#fff!important;}'+
@@ -19356,8 +19355,11 @@ function printPreviewBC(){
   //      la VRAIE somme cumulée des lignes de cette page
   //   4. Force un saut de page (page-break-after:always) après ce tbody de sous-total
   //
-  // Pas de manipulation des header/info-bar (la facture utilise le système doc-fixed-footer
-  // déjà en place pour le bandeau footer répété, et le thead se répète automatiquement).
+  // Footer : depuis le correctif chevauchement (cf. extraction footer plus haut),
+  // le bandeau bleu et la mention rouge sont laissés dans le flux DOM (à l'intérieur du
+  // .doc-final-block) et apparaissent en bas de la dernière page grâce à page-break-inside:avoid.
+  // Régression assumée : sur facture multipage, le footer n'est plus répété sur chaque page
+  // (il était posé en position:fixed avant). En contrepartie, plus de chevauchement.
   var facturePaginationScript=isFacturePrint?(
     '<script>'+
     '(function(){'+
