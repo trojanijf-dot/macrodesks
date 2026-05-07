@@ -18746,12 +18746,47 @@ function printPreviewBC(){
   var isFacturePrint=/^Facture\s/i.test(docTitleStr);
 
   // === Titre de la fenêtre print (= nom de fichier proposé par Chrome "Enregistrer en PDF") ===
-  // Pour les devis : "DEVIS CALINSTRUM SLN-DVxxx Etalonnage / Pose de 6 transmetteurs..."
-  //   - "DEVIS CALINSTRUM" en préfixe fixe
-  //   - Numéro de devis extrait de "Devis — SLN-DVxxx" (le titre de la modal)
-  //   - Objet du devis extrait du DOM cloné (<p><strong>Objet :</strong> ...</p>)
-  // Pour les autres documents : on garde "Purchase Order" pour les BC, le titre modal sinon.
+  // Formats demandés :
+  //   - DEVIS    : "DEVIS CALINSTRUM SLN-DV163 Etalonnage / Pose de 6 transmetteurs..."
+  //   - FACTURE  : "FACTURE CALINSTRUM-SLN-F090 BC737634"
+  //                (préfixe + n°facture + " BC" + PO Client extrait de _importPONum)
+  //   - BC       : "CALINSTRUM Purchase Order 07052026 098_Customer Ref 300004202740031"
+  //                (date DDMMYYYY + suffixe NNN extrait de b.num "DDMMYYYY/NNN" + cref2)
+  //   - BL       : "BL22042026_084 BC734811"
+  //                (date DDMMYYYY + _NNN extrait de b.num + PO Client lié)
+  // Si une donnée est absente, on omet la partie correspondante (le PDF reste valide).
+  //
+  // Implémentation : on extrait le n° du document depuis docTitleStr (le titre de la modal
+  // d'aperçu) puis on retrouve l'objet en DB pour récupérer la date et les autres champs.
+  // On utilise les fonctions DB.factures/bcs/bls qui sont disponibles dans ce scope.
   var printWindowTitle='Purchase Order';
+
+  // Helper : convertit une date ISO 'YYYY-MM-DD' en DDMMYYYY (sans séparateur)
+  function _ddmmyyyy(iso){
+    if(!iso || typeof iso !== 'string') return '';
+    var m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(m) return m[3]+m[2]+m[1];
+    // Tolérance : déjà au format DD/MM/YYYY
+    var m2 = iso.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
+    if(m2) return m2[1]+m2[2]+m2[3];
+    return '';
+  }
+  // Helper : si num BC a la forme "DDMMYYYY/NNN", retourne {date:'DDMMYYYY', suffix:'NNN'}.
+  // Sinon retourne null (on tombera sur b.date / pas de suffix).
+  function _parseBcNum(num){
+    if(!num || typeof num !== 'string') return null;
+    var m = num.match(/^(\d{8})\s*\/\s*(\d+)$/);
+    if(m) return {date:m[1], suffix:m[2]};
+    return null;
+  }
+  // Helper : nettoyer une partie de titre (strip caractères que Chrome remplace par "_")
+  // Chrome remplace / \ : * ? " < > | par _ dans le nom de fichier proposé. On les
+  // remplace nous-mêmes par des espaces pour avoir un titre propre, sauf le "/" qu'on
+  // gère explicitement (transformé en espace dans BC, retiré dans facture).
+  function _cleanTitle(s){
+    return (s||'').toString().replace(/[\\:*?"<>|]/g,'').replace(/\s+/g,' ').trim();
+  }
+
   if(isDevisPrint){
     var dvNumPrint=docTitleStr.replace(/^Devis\s*[\u2014\-]\s*/i,'').trim();
     var objetTxt='';
@@ -18763,10 +18798,85 @@ function printPreviewBC(){
       if(m){objetTxt=m[1].trim();break;}
     }
     printWindowTitle='DEVIS CALINSTRUM '+dvNumPrint+(objetTxt?' '+objetTxt:'');
+  } else if(isFacturePrint){
+    // === FACTURE : "FACTURE CALINSTRUM-SLN-F090 BC737634" ===
+    var faNumPrint=docTitleStr.replace(/^Facture\s*[\u2014\-]\s*/i,'').trim();
+    var faParts=['FACTURE CALINSTRUM-'+faNumPrint];
+    // Récupérer le PO Client depuis DB.factures
+    if(typeof DB!=='undefined' && Array.isArray(DB.factures)){
+      var faRec=DB.factures.find(function(x){return (x.num||'')===faNumPrint;});
+      if(faRec){
+        // Priorité : _importPONum (champ unifié), fallback bcClientSLN.
+        // On prend uniquement la partie numérique principale (avant "/" éventuel) si présente.
+        var poRaw=faRec._importPONum || faRec.bcClientSLN || '';
+        var poClean=String(poRaw).split('/')[0].trim();
+        if(poClean){
+          faParts.push('BC'+poClean);
+        }
+      }
+    }
+    printWindowTitle=_cleanTitle(faParts.join(' '));
   } else if(docTitleStr){
-    // Documents non-devis et non-BC : utiliser le titre de la modal
     var isBCDocPrint=/^BC\s|Purchase\s*Order|^PO\s/i.test(docTitleStr);
-    if(!isBCDocPrint) printWindowTitle=docTitleStr;
+    var isBLPrint=/^BL\s/i.test(docTitleStr);
+    if(isBCDocPrint){
+      // === BC : "CALINSTRUM Purchase Order 07052026 098_Customer Ref 300004202740031" ===
+      // Extraire le n° BC depuis le titre modal "CALINSTRUM Purchase Order DDMMYYYY/NNN ..."
+      // On essaie d'abord une regex sur le titre modal, sinon on consulte DB.bcs en cherchant par titre.
+      var bcDateStr='', bcSuffix='', bcCref='';
+      // Cherche dans DB.bcs le BC dont le titre construit (buildBCTitle) match docTitleStr
+      if(typeof DB!=='undefined' && Array.isArray(DB.bcs) && typeof buildBCTitle==='function'){
+        var bcRec=DB.bcs.find(function(x){return buildBCTitle(x)===docTitleStr;});
+        if(bcRec){
+          var parsed=_parseBcNum(bcRec.num);
+          if(parsed){
+            bcDateStr=parsed.date;
+            bcSuffix=parsed.suffix;
+          } else {
+            // Fallback : BC sans format DDMMYYYY/NNN → on prend la date du BC + tout le num en suffix
+            bcDateStr=_ddmmyyyy(bcRec.date);
+            bcSuffix=(bcRec.num||'').replace(/[^\d]/g,'');
+          }
+          bcCref=bcRec.cref2||bcRec.cref||'';
+        }
+      }
+      // Si la lookup DB a échoué : essayer regex directe sur le titre modal
+      if(!bcDateStr){
+        var titleMatch=docTitleStr.match(/(\d{8})\s*\/\s*(\d+)/);
+        if(titleMatch){bcDateStr=titleMatch[1];bcSuffix=titleMatch[2];}
+      }
+      var bcParts=['CALINSTRUM Purchase Order'];
+      if(bcDateStr) bcParts.push(bcDateStr);
+      if(bcSuffix) bcParts.push(bcSuffix);
+      var bcStr=bcParts.join(' ');
+      if(bcCref) bcStr += '_Customer Ref '+bcCref;
+      printWindowTitle=_cleanTitle(bcStr);
+    } else if(isBLPrint){
+      // === BL : "BL22042026_084 BC734811" ===
+      // Extraire n° BL depuis "BL — XXXX" ou "BL — BL-040"
+      var blNumPrint=docTitleStr.replace(/^BL\s*[\u2014\-]\s*/i,'').trim();
+      var blDateStr='', blSuffix='', blPo='';
+      if(typeof DB!=='undefined' && Array.isArray(DB.bls)){
+        var blRec=DB.bls.find(function(x){return (x.num||'')===blNumPrint;});
+        if(blRec){
+          blDateStr=_ddmmyyyy(blRec.date);
+          // Suffixe : on extrait le numéro pur de bl.num (ex "BL-040" → "040", "084" → "084")
+          blSuffix=String(blRec.num||'').replace(/^BL[-\s]*/i,'').replace(/[^\d]/g,'');
+          blPo=blRec.po||'';
+        }
+      }
+      var blStr='BL';
+      if(blDateStr) blStr += blDateStr;
+      if(blSuffix) blStr += '_'+blSuffix;
+      if(blPo){
+        var poClean=String(blPo).split('/')[0].trim();
+        if(poClean) blStr += ' BC'+poClean;
+      }
+      printWindowTitle=_cleanTitle(blStr);
+    } else {
+      // Documents non-devis, non-facture, non-BC, non-BL : utiliser le titre de la modal
+      printWindowTitle=docTitleStr;
+    }
   }
 
   // Identifier les blocs d'en-tête À RÉPÉTER (thead) et ceux qui restent sur p.1 (tbody).
