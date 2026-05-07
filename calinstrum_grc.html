@@ -1006,14 +1006,20 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <div class="form-row">
         <div class="form-group"><label>Client <span class="req">*</span></label>
           <div class="client-select-row">
-            <select class="form-select" id="fa-client" onchange="fillCCFromSelect('fa')"></select>
+            <select class="form-select" id="fa-client" onchange="onFaClientChange()"></select>
             <button class="btn-add-cli" onclick="openQuickClient('fa')" title="Ajouter un client">+</button>
           </div>
         </div>
         <div class="form-group"><label>À M.</label><input class="form-input" id="fa-contact"></div>
       </div>
       <div class="form-group"><label>Adresse</label><textarea class="form-textarea" id="fa-adresse" rows="2"></textarea></div>
-      <div class="form-group"><label>Email</label><input class="form-input" id="fa-email"></div>
+      <div class="form-group">
+        <label>📧 Email comptabilité <span style="color:var(--muted);font-weight:400;font-size:10px">(destinataire de la facture — distinct du contact technique)</span></label>
+        <div style="display:flex;gap:6px;align-items:stretch">
+          <select class="form-select" id="fa-email" style="flex:1" onchange="onFaEmailSelectChange()" title="Email du service comptabilité du client final"></select>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="addFactureBillingEmail()" style="border-color:rgba(45,212,191,.4);color:var(--teal);white-space:nowrap" title="Ajouter un nouvel email de comptabilité (sera mémorisé pour les prochaines factures)">+ Email</button>
+        </div>
+      </div>
       <div class="form-group"><label>Objet <span class="req">*</span></label><textarea class="form-textarea" id="fa-objet" rows="2"></textarea></div>
       <div class="form-row">
         <div class="form-group"><label>Devis lié</label><input class="form-input" id="fa-dvlie"></div>
@@ -1868,8 +1874,21 @@ const DEFAULT_INVOICES=[
 
 // ===== DB =====
 function loadDB(){
-  try{var d=JSON.parse(localStorage.getItem('ci_grc3')||'null');if(d){dedupeDB(d);return d;}}catch(e){}
+  try{var d=JSON.parse(localStorage.getItem('ci_grc3')||'null');if(d){dedupeDB(d);ensureFactureBillingEmails(d);return d;}}catch(e){}
   return defDB();
+}
+// Migration ciblée : assure la présence de la liste d'emails de comptabilité pour les factures.
+// Cette liste est utilisée dans la modal Facture pour pré-remplir le champ destinataire.
+// Distincte de l'email de contact technique (utilisé sur les devis).
+function ensureFactureBillingEmails(d){
+  if(!Array.isArray(d.factureBillingEmails)||d.factureBillingEmails.length===0){
+    d.factureBillingEmails=[
+      'gen_sct.dbo@eramet-sln.com',          // SLN — comptabilité
+      'PRNC-Compta@pronyresources.com',       // PRNC — comptabilité
+      'comptabilite-aei@johncockerill.nc',    // John Cockerill — comptabilité
+      'rgtfactures@p.energy'                  // Pacific Energy — comptabilité
+    ];
+  }
 }
 // Déduplication défensive de DB.factures et DB.invoices par numéro.
 // Cause d'apparition : imports Excel multiples du même fichier → triplons dans la base.
@@ -1922,6 +1941,15 @@ function defDB(){
     clients:JSON.parse(JSON.stringify(DEFAULT_CLIENTS)),
     articles:[],nid:{dv:160,fa:94,bc:90,bl:40},
     invoices:DEFAULT_INVOICES.map(function(x){return Object.assign({},x);}),iid:DEFAULT_INVOICES.length,
+    // Emails de comptabilité utilisés pour le destinataire des factures.
+    // S'enrichit dynamiquement via le bouton "+ Email" dans la modal Facture.
+    // Distinct de client.email (qui est l'email du contact technique, utilisé sur les devis).
+    factureBillingEmails:[
+      'gen_sct.dbo@eramet-sln.com',
+      'PRNC-Compta@pronyresources.com',
+      'comptabilite-aei@johncockerill.nc',
+      'rgtfactures@p.energy'
+    ],
     params:{
       incoterms:['DDP SLN','DDP PE','DDP NOUMEA'],
       freightTerms:['Collect'],
@@ -13154,6 +13182,112 @@ function fixTGCForDV(devisId){
 
 // ===== FACTURES =====
 var eFAid=null,faL=[];
+// =============================================================================
+// EMAIL DE COMPTABILITÉ — DROPDOWN FACTURE
+// =============================================================================
+// Sur les factures, le destinataire est le service comptabilité (pas le contact technique
+// utilisé sur les devis). On maintient une liste éditable persistée dans DB.factureBillingEmails.
+//
+// Mapping client → email par défaut : SLN → gen_sct.dbo, PRNC → PRNC-Compta, etc.
+// Si le client courant n'a pas de mapping, on prend la 1ère valeur de la liste.
+
+// Retourne l'email de comptabilité par défaut pour un client donné (nom court tel que stocké).
+function defaultBillingEmailForClient(clientNom){
+  var n=(clientNom||'').toLowerCase();
+  // Préfixes/inclusions caractéristiques
+  if(/^sln\b|^sln\s|eramet|le\s*nickel/.test(n)) return 'gen_sct.dbo@eramet-sln.com';
+  if(/^prnc\b|^prnc\s|prony\s*resour/.test(n)) return 'PRNC-Compta@pronyresources.com';
+  if(/cockerill|aei/.test(n)) return 'comptabilite-aei@johncockerill.nc';
+  if(/pacific\s*energy|^p\.energy|@p\.energy/.test(n)) return 'rgtfactures@p.energy';
+  return ''; // pas de mapping — l'utilisateur choisira manuellement
+}
+
+// (Re)construit le <select> #fa-email avec la liste DB.factureBillingEmails.
+// Si forceValue est passé, sélectionne cette valeur ; sinon on garde la valeur courante du select.
+function rebuildFaEmailOptions(forceValue){
+  var sel=document.getElementById('fa-email');
+  if(!sel)return;
+  var emails=(DB.factureBillingEmails||[]).slice();
+  // S'assurer qu'il n'y a pas de doublons
+  emails=emails.filter(function(e,i){return e&&emails.indexOf(e)===i;});
+  // Si forceValue n'est pas dans la liste, l'ajouter (cas import facture legacy avec email custom)
+  var current=forceValue!==undefined?forceValue:sel.value;
+  if(current && emails.indexOf(current)<0) emails.unshift(current);
+  // Construire les options
+  var opts='<option value="">— Choisir un email de comptabilité —</option>';
+  emails.forEach(function(em){
+    opts+='<option value="'+esc(em)+'"'+(em===current?' selected':'')+'>'+esc(em)+'</option>';
+  });
+  sel.innerHTML=opts;
+}
+
+// Bouton "+ Email" : ajoute une nouvelle adresse à DB.factureBillingEmails de manière persistée.
+function addFactureBillingEmail(){
+  var newEmail=prompt('📧 Ajouter un email de comptabilité\n\nCet email sera mémorisé et disponible pour toutes les factures futures.\n\nFormat : nom@domaine.com');
+  if(!newEmail)return;
+  newEmail=newEmail.trim();
+  // Validation basique
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)){
+    alert('⚠ L\'adresse "'+newEmail+'" ne ressemble pas à un email valide.\n\nFormat attendu : nom@domaine.com');
+    return;
+  }
+  if(!Array.isArray(DB.factureBillingEmails)) DB.factureBillingEmails=[];
+  // Doublon (insensible à la casse)
+  var exists=DB.factureBillingEmails.some(function(e){return e.toLowerCase()===newEmail.toLowerCase();});
+  if(exists){
+    alert('ℹ️ Cet email est déjà dans la liste.');
+    // Le sélectionner quand même
+    rebuildFaEmailOptions(DB.factureBillingEmails.find(function(e){return e.toLowerCase()===newEmail.toLowerCase();}));
+    return;
+  }
+  DB.factureBillingEmails.push(newEmail);
+  saveDB();
+  rebuildFaEmailOptions(newEmail);
+  // Petit feedback visuel
+  var sel=document.getElementById('fa-email');
+  if(sel){
+    sel.style.transition='background .25s';
+    sel.style.background='rgba(45,212,191,.18)';
+    setTimeout(function(){ sel.style.background=''; },800);
+  }
+}
+
+// onChange du select : pour le moment on n'a rien d'autre à faire (la valeur est lue à getFA()).
+// Hook prévu si on veut afficher un indicateur "match auto OK" plus tard.
+function onFaEmailSelectChange(){
+  // no-op pour l'instant
+}
+
+// Quand le client de la facture change (via #fa-client), on met à jour l'email
+// en sélectionnant l'email de comptabilité par défaut pour ce client.
+// CETTE FONCTION REMPLACE l'auto-remplissage email/contact/adresse depuis client.email
+// (qui est l'email du contact technique — pertinent sur le devis, pas sur la facture).
+function onFaClientChange(){
+  var sel=document.getElementById('fa-client');
+  if(!sel)return;
+  var clientNom=sel.value||'';
+  var c=DB.clients.find(function(x){return x.nom===clientNom;})||{};
+  // Contact / Adresse : on prend ceux du client (cohérent avec sa fiche)
+  var ce=document.getElementById('fa-contact');
+  var ae=document.getElementById('fa-adresse');
+  if(ce) ce.value=c.contact||'';
+  if(ae) ae.value=(c.adresse||'').replace(/\\n/g,'\n');
+  // Email : pas client.email (contact technique), mais l'email comptabilité par défaut pour ce client.
+  // Si le mapping ne donne rien, on tombe sur la première valeur de la liste.
+  var defaultEmail=defaultBillingEmailForClient(clientNom);
+  if(!defaultEmail && Array.isArray(DB.factureBillingEmails) && DB.factureBillingEmails.length){
+    defaultEmail=DB.factureBillingEmails[0];
+  }
+  rebuildFaEmailOptions(defaultEmail);
+  // TGC mention (logique existante de fillCCFromSelect)
+  var tgcSel=document.getElementById('fa-tgc-mention');
+  if(tgcSel&&clientNom){
+    var t=(c.exo||'').toString().toLowerCase();
+    if(t==='oui')tgcSel.value='506-2';
+    else tgcSel.value='tgc';
+  }
+}
+
 function openFA(id,fromDV){
   eFAid=id||null;faL=[];faVersements=[];rebuildAllParamSelects();
   buildClientOptions('fa-client','');
@@ -13162,7 +13296,11 @@ function openFA(id,fromDV){
     if(f){
       gv('fa-num',f.num);gv('fa-date',f.date||td());
       buildClientOptions('fa-client',f.client);
-      gv('fa-contact',f.contact||'');gv('fa-adresse',f.adresse||'');gv('fa-email',f.email||'');gv('fa-objet',f.objet||'');
+      gv('fa-contact',f.contact||'');gv('fa-adresse',f.adresse||'');
+      // Email comptabilité : on construit le dropdown avec la valeur stockée (qui peut être custom).
+      // rebuildFaEmailOptions ajoutera l'email courant aux options s'il n'est pas dans la liste.
+      rebuildFaEmailOptions(f.email||'');
+      gv('fa-objet',f.objet||'');
       gv('fa-dvlie',f.dvlie||'');gv('fa-type',f.type||'Fourniture');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
       gv('fa-notes',f.notes||'');
@@ -13211,7 +13349,14 @@ function openFA(id,fromDV){
   } else if(fromDV){
     gv('fa-num',nxt('fa'));gv('fa-date',td());
     buildClientOptions('fa-client',fromDV.client||'');
-    gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');gv('fa-email',fromDV.email||'');
+    gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');
+    // Email facture : on NE reprend PAS fromDV.email (qui est le contact technique du devis).
+    // À la place on utilise le mapping client → email comptabilité par défaut.
+    var defaultEmailFromDV=defaultBillingEmailForClient(fromDV.client||'');
+    if(!defaultEmailFromDV && Array.isArray(DB.factureBillingEmails) && DB.factureBillingEmails.length){
+      defaultEmailFromDV=DB.factureBillingEmails[0];
+    }
+    rebuildFaEmailOptions(defaultEmailFromDV||'');
     gv('fa-objet',fromDV.objet||'');gv('fa-dvlie',fromDV.num||'');gv('fa-type',fromDV.type||'Fourniture');gv('fa-status','En attente');
     gv('fa-notes','');gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');
     // N° PO : récupérer depuis le devis source (champ bcClientSLN)
@@ -13227,7 +13372,9 @@ function openFA(id,fromDV){
     sv('mFAtitle','Facture depuis '+fromDV.num);
   } else {
     gv('fa-num',nxt('fa'));gv('fa-date',td());gv('fa-contact','');
-    gv('fa-adresse','');gv('fa-email','');gv('fa-objet','');gv('fa-dvlie','');
+    gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');
+    // Email vide → dropdown initialisé avec valeur courante = ''
+    rebuildFaEmailOptions('');
     gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
     gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');gv('fa-po','');
     sv('mFAtitle','Nouvelle Facture');
@@ -13406,11 +13553,11 @@ function importFromDevis(devisId){
       return;
     }
     buildClientOptions('fa-client',d.client);
-    if(typeof fillCCFromSelect==='function')fillCCFromSelect('fa');
+    if(typeof onFaClientChange==='function')onFaClientChange();
   } else if(!faClientCurrent && d.client){
     // Facture sans client → on initialise depuis le devis
     buildClientOptions('fa-client',d.client);
-    if(typeof fillCCFromSelect==='function')fillCCFromSelect('fa');
+    if(typeof onFaClientChange==='function')onFaClientChange();
   }
 
   // Appliquer l'import
