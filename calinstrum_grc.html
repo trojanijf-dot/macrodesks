@@ -20608,9 +20608,24 @@ function _setPinStored(pin){
 function _clearPinStored(){
   try{localStorage.removeItem('_grcPin');}catch(e){}
 }
+// === ÉTAT VERROUILLÉ PERSISTÉ ===
+// Flag dans localStorage qui dit "l'application est en état verrouillé".
+// Persiste entre les onglets/rechargements/redémarrages navigateur, indispensable
+// pour que copier-coller l'URL dans un nouvel onglet ne contourne pas le verrou.
+function _isLockedFlag(){
+  try{return localStorage.getItem('_grcLocked')==='1';}catch(e){return false;}
+}
+function _setLockedFlag(locked){
+  try{
+    if(locked) localStorage.setItem('_grcLocked','1');
+    else localStorage.removeItem('_grcLocked');
+  }catch(e){}
+}
 
 function lockApp(){
   // Affiche l'overlay de verrouillage. Si pas de PIN défini, déclenche le flux setPin.
+  // Pose le flag _grcLocked en localStorage pour que tout nouvel onglet ouvert sur la
+  // même URL soit AUSSI verrouillé (sécurité contre copier-coller d'URL).
   var pin=_getPinStored();
   _lockState.pinBuffer='';
   _lockState.attempts=0;
@@ -20624,6 +20639,10 @@ function lockApp(){
   } else {
     _lockState.setMode=false;
     _updateLockUI('🔒 Application verrouillée','lock');
+    // On ne pose le flag persisté QUE si un PIN existe déjà — sinon on bloquerait
+    // l'app sans moyen de la déverrouiller (cas du tout 1er verrouillage qui définit
+    // le PIN : le déverrouillage à la confirmation est instantané).
+    _setLockedFlag(true);
   }
   document.getElementById('lockScreen').classList.add('active');
   _renderPinDots();
@@ -20754,6 +20773,9 @@ function _startLockoutCountdown(){
 }
 
 function _unlockApp(){
+  // Retire le flag persisté : tout nouvel onglet ouvert ensuite ne sera plus
+  // automatiquement verrouillé.
+  _setLockedFlag(false);
   document.getElementById('lockScreen').classList.remove('active');
   if(window._lockTimeInterval){clearInterval(window._lockTimeInterval);window._lockTimeInterval=null;}
   _lockState.pinBuffer='';
@@ -20775,6 +20797,10 @@ function resetPinFlow(){
   }
   if(!confirm('⚠ Réinitialiser le PIN ?\n\nVous devrez en définir un nouveau au prochain verrouillage.'))return;
   _clearPinStored();
+  // Important : retirer aussi le flag verrouillé pour éviter d'avoir flag présent + pas de PIN
+  // (sinon le prochain chargement appellerait lockApp() qui afficherait l'écran de définition
+  // PIN, ce qui est OK fonctionnellement, mais reset = "tout repartir à zéro").
+  _setLockedFlag(false);
   alert('✓ PIN supprimé. Au prochain verrouillage, vous serez invité à en définir un nouveau.');
   if(document.getElementById('lockScreen').classList.contains('active')){
     // Si on est déjà sur l'écran de verrouillage, basculer en mode "définition"
@@ -20800,6 +20826,14 @@ document.addEventListener('DOMContentLoaded',function(){
       else if(action==='back')_onPinBack();
       else if(action==='clear')_onPinClear();
     });
+  }
+  // === AUTO-VERROUILLAGE AU CHARGEMENT ===
+  // Si l'utilisateur a verrouillé l'app dans un autre onglet (ou avant de fermer),
+  // on relance lockApp() ici pour qu'un nouvel onglet ouvert sur la même URL soit
+  // également verrouillé. Sécurité contre le contournement par copier-coller d'URL.
+  // Conditions : un PIN doit exister ET le flag _grcLocked doit être posé.
+  if(_isLockedFlag() && _getPinStored()){
+    lockApp();
   }
 });
 
