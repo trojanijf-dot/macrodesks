@@ -698,7 +698,13 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
 
 <!-- BC -->
 <div class="page" id="page-bc">
-  <div class="flex-between mb12"><div></div><button class="btn btn-teal no-print" onclick="openBC()">+ Nouveau bon de commande</button></div>
+  <div class="flex-between mb12">
+    <div></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm no-print" onclick="uploadPOCalinstrumPdf()" title="Importer un ou plusieurs PDFs de PO Calinstrum (Purchase Order) déjà créés avant le GRC. Détecte automatiquement N° PO, date, vendor, Customer Ref, Emerson Proposal, lignes et total. Anti-doublon strict sur le N° PO." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Importer PO PDF</button>
+      <button class="btn btn-teal no-print" onclick="openBC()">+ Nouveau bon de commande</button>
+    </div>
+  </div>
   <div class="search-bar no-print">
     <input class="search-input" placeholder="Rechercher..." id="sBC" oninput="renderBC()">
     <select class="filter-sel" id="fBCst" onchange="renderBC()">
@@ -16993,6 +16999,487 @@ function renderBC(){
     renderDataRow:renderBCRow,
     emptyMsg:'Aucun bon de commande'
   });
+}
+
+// =============================================================================
+// IMPORT PO CALINSTRUM (PDF) — pour récupérer les anciens PO créés avant le GRC
+// =============================================================================
+// Workflow :
+//   1. uploadPOCalinstrumPdf() → ouvre le file picker (multi-fichiers)
+//   2. Pour chaque PDF, parsePOCalinstrumText() extrait les champs via regex
+//   3. showPOCalinstrumImportPreview() affiche un modal récap validable
+//   4. confirmPOCalinstrumImport() crée les BC en DB (skip si N° existant)
+//
+// Format reconnu : PO Calinstrum standard (cf. exemple PO 30032026/095)
+//   - P.O. NUMBER + DATE en haut
+//   - VENDOR / CUSTOMER (2 colonnes alignées)
+//   - SHIPPING TERMS / FRET TERMS
+//   - Tableau Item / Description / Qty / PU / Amount
+//   - Customer Ref # + Emerson Proposal en bas
+//   - Total Amount (AUD)
+
+// État global pour le batch en cours
+var _poImportState = { items:[], skipped:[] };
+
+// Parser : extrait toutes les données structurées depuis le texte brut du PDF
+function parsePOCalinstrumText(text){
+  var result = {
+    num:'', date:'', devise:'AUD',
+    vcont:'', vemail:'', vphone:'', vaddr:'',
+    inco:'', fret:'',
+    propNum:'', propVer:'', propCref:'',
+    lines:[], total:0,
+    _rawText: text,
+    _parseErrors: []
+  };
+
+  // === N° PO + Date (format "30032026/095 30/03/2026") ===
+  var mNum = text.match(/(\d{8}\s*\/\s*\d+)\s+(\d{2}\/\d{2}\/\d{4})/);
+  if(mNum){
+    result.num = mNum[1].replace(/\s+/g,'');
+    var dParts = mNum[2].split('/');
+    if(dParts.length===3) result.date = dParts[2]+'-'+dParts[1]+'-'+dParts[0];
+  } else {
+    result._parseErrors.push('N° PO et/ou date introuvables');
+  }
+
+  // === Vendor : contact name (1ère colonne avant "RIZZO FABRICE" qui est le customer) ===
+  var mVcont = text.match(/NAME\s+NAME\s*\n\s*([^\n]+?)\s+RIZZO\s+FABRICE/i);
+  if(mVcont){
+    result.vcont = mVcont[1].trim();
+  } else {
+    var mAlt = text.match(/(\w+,\s+\w+)\s+RIZZO/i);
+    if(mAlt) result.vcont = mAlt[1].trim();
+  }
+
+  // === Vendor : email (1ère adresse de la ligne "EMAIL ADDRESS\nEMAIL ADDRESS") ===
+  var mEmails = text.match(/EMAIL ADDRESS\s+EMAIL ADDRESS\s*\n\s*(\S+@\S+)\s+(\S+@\S+)/);
+  if(mEmails){
+    result.vemail = mEmails[1].trim();
+  }
+
+  // === Vendor : phone (1ère valeur après "PHONE\nPHONE", avant le +687 customer) ===
+  var mPhones = text.match(/PHONE\s+PHONE\s*\n\s*(\+?\d[\d\s.\-]*)\s+\+?687/);
+  if(mPhones) result.vphone = mPhones[1].trim();
+
+  // === Vendor : société + adresse ===
+  // De "COMPANY NAME\nCOMPANY NAME" jusqu'à "PHONE\nPHONE", on extrait les lignes
+  // pertinentes (en retirant "ADDRESS ADDRESS", "CALINSTRUM", et les lignes du customer)
+  var mVendorBlock = text.match(/COMPANY NAME\s+COMPANY NAME\s*\n([\s\S]*?)\nPHONE\s+PHONE/);
+  if(mVendorBlock){
+    var lines = mVendorBlock[1].split('\n').map(function(s){return s.trim();}).filter(function(s){return s.length>0;});
+    var clean = [];
+    lines.forEach(function(l){
+      // Skip markers répétés
+      if(/^ADDRESS\s+ADDRESS$/i.test(l)) return;
+      if(/^ADDRESS$/i.test(l)) return;
+      // Skip lignes du customer Calinstrum (DUMBEA, ZAC PANDA, NOUVELLE-CALEDONIE)
+      if(/ZAC\s+PANDA|DUMBEA|NOUVELLE.?CAL/i.test(l)) return;
+      // Retirer suffixe "CALINSTRUM" en fin de la 1ère ligne (= colonne customer)
+      var cleanLine = l.replace(/\s+CALINSTRUM\s*$/i,'').trim();
+      if(cleanLine.length>2) clean.push(cleanLine);
+    });
+    if(clean.length){
+      result.vaddr = clean.slice(1).join('\n'); // 1ère ligne = société, le reste = adresse
+      // En fait, l'usage côté GRC : vaddr contient l'adresse seule. La société va aussi
+      // dans vaddr de fait dans la modal BC. On met tout (cohérent avec la saisie manuelle).
+      result.vaddr = clean.join('\n');
+    }
+  }
+
+  // === Shipping / Fret terms ===
+  var mShip = text.match(/SHIPPING TERMS\s+FRET TERMS\s*\n\s*(.+?)\s+(Collect|Prepaid)/i);
+  if(mShip){
+    result.inco = mShip[1].trim();
+    result.fret = mShip[2].trim();
+  }
+
+  // === Customer Ref + Emerson Proposal ===
+  var mCref = text.match(/Customer\s+Ref\s*#?\s*:\s*(\S+)/i);
+  if(mCref) result.propCref = mCref[1].trim();
+
+  var mProp = text.match(/Emerson\s+Proposal\s*:\s*(\S+)\s+Ver\s*:?\s*(\S+)/i);
+  if(mProp){
+    result.propNum = mProp[1].trim();
+    result.propVer = mProp[2].trim();
+  }
+
+  // === Total Amount (AUD) ===
+  var mTotal = text.match(/Total Amount\s*\(AUD\)\s+(\d[\d\s.,]*)/i);
+  if(mTotal){
+    result.total = Number(mTotal[1].replace(/[\s,]/g,''));
+  }
+
+  // === Lignes / articles ===
+  // Zone entre "Item Product Description Quantity Unit Price Amount" et "Signature:" (ou "Subtotal")
+  var mLineZone = text.match(/Item\s+Product Description\s+Quantity\s+Unit Price\s+Amount\s*\n([\s\S]*?)(?:Signature\s*:|Subtotal)/i);
+  if(mLineZone){
+    var zone = mLineZone[1];
+    // Découpage par bloc article (chaque bloc commence par un numéro item seul sur sa ligne)
+    var blocks = zone.split(/\n(?=\d+\s*\n)/);
+    blocks.forEach(function(blk){
+      blk = blk.trim();
+      if(!blk) return;
+      // Chercher 3 nombres en fin de bloc (qte / pu / total) précédés d'une ref
+      var mQpt = blk.match(/(\S+)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*$/);
+      if(mQpt){
+        var ref = mQpt[1];
+        var qte = Number(mQpt[2]);
+        var pu = Number(mQpt[3]);
+        // Désignation = tout sauf numéro item + bloc final chiffré
+        var beforeNumbers = blk.substring(0, blk.length - mQpt[0].length).trim();
+        var designation = beforeNumbers.replace(/^\d+\s*\n?/,'').trim();
+        result.lines.push({
+          ref: ref,
+          designation: designation,
+          unite: 'U', tgc: 0,
+          qte: qte, pu: pu
+        });
+      }
+    });
+  }
+
+  return result;
+}
+
+// Entrée : déclenchée au clic sur le bouton "📥 Importer PO PDF"
+function uploadPOCalinstrumPdf(){
+  if(typeof pdfjsLib==='undefined'){
+    alert('❌ Erreur : pdf.js non chargé. Rechargez la page.');
+    return;
+  }
+  // Créer un input file invisible et déclencher le picker
+  var input = document.createElement('input');
+  input.type='file'; input.accept='.pdf'; input.multiple=true; input.style.display='none';
+  document.body.appendChild(input);
+  input.onchange = function(e){
+    var files = Array.from(e.target.files||[]);
+    document.body.removeChild(input);
+    if(!files.length) return;
+    _poImportState = { items:[], skipped:[] };
+    // Parser tous les fichiers en parallèle, puis ouvrir le modal
+    var promises = files.map(function(file){
+      return parsePOPdfFile(file);
+    });
+    Promise.all(promises).then(function(results){
+      _poImportState.items = results.filter(function(r){return r;});
+      if(_poImportState.items.length===0){
+        alert('⚠ Aucun PO n\'a pu être lu. Vérifiez que les fichiers sont bien des PDFs Calinstrum.');
+        return;
+      }
+      // Anti-doublon : marquer ceux dont le N° existe déjà en DB
+      _poImportState.items.forEach(function(item){
+        if(item.parsed && item.parsed.num){
+          var existing = (DB.bcs||[]).find(function(b){return (b.num||'')===item.parsed.num;});
+          item.isDuplicate = !!existing;
+        }
+      });
+      showPOCalinstrumImportPreview();
+    });
+  };
+  input.click();
+}
+
+// Lit un PDF et retourne {fileName, parsed} (parsed = résultat de parsePOCalinstrumText)
+function parsePOPdfFile(file){
+  return new Promise(function(resolve){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      try{
+        var typedArray = new Uint8Array(e.target.result);
+        pdfjsLib.getDocument({data:typedArray}).promise.then(function(pdf){
+          var promises = [];
+          for(var p=1;p<=pdf.numPages;p++){
+            promises.push(pdf.getPage(p).then(function(page){
+              return page.getTextContent().then(function(tc){
+                return tc.items.map(function(it){return it.str;}).join(' ');
+              });
+            }));
+          }
+          Promise.all(promises).then(function(texts){
+            var fullText = texts.join('\n');
+            var parsed = parsePOCalinstrumText(fullText);
+            resolve({fileName: file.name, parsed: parsed});
+          });
+        }).catch(function(err){
+          resolve({fileName: file.name, parsed: null, error: err.message});
+        });
+      } catch(e){
+        resolve({fileName: file.name, parsed: null, error: e.message});
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Modal d'aperçu : affiche la liste des PO parsés avec tous les champs éditables.
+// L'utilisateur peut décocher des lignes, choisir le client final, le statut paiement,
+// puis valider tout le batch d'un coup.
+function showPOCalinstrumImportPreview(){
+  var existing = document.getElementById('mPOImport');
+  if(existing) existing.remove();
+
+  var modal = document.createElement('div');
+  modal.id='mPOImport';
+  modal.className='modal-overlay open';
+
+  // Construction des options clients pour le dropdown global
+  var clientOpts = '<option value="">— Aucun (à définir manuellement) —</option>';
+  (DB.clients||[]).forEach(function(c){
+    clientOpts += '<option value="'+esc(c.nom)+'">'+esc(c.nom)+'</option>';
+  });
+
+  var nbToImport = _poImportState.items.filter(function(it){return it.parsed && !it.isDuplicate;}).length;
+  var nbDuplicates = _poImportState.items.filter(function(it){return it.isDuplicate;}).length;
+  var nbErrors = _poImportState.items.filter(function(it){return !it.parsed;}).length;
+
+  modal.innerHTML =
+    '<div class="modal modal-lg" style="max-width:1100px">'+
+      '<div class="modal-header">'+
+        '<h3>📥 Import PO Calinstrum — '+_poImportState.items.length+' fichier(s)</h3>'+
+        '<button class="modal-close" onclick="cm(\'mPOImport\')">✕</button>'+
+      '</div>'+
+      '<div class="modal-body">'+
+        '<div style="background:rgba(45,212,191,.06);border:1px solid rgba(45,212,191,.25);border-radius:6px;padding:10px;margin-bottom:12px;font-size:11.5px;color:var(--muted)">'+
+          '✅ <b>'+nbToImport+'</b> PO prêts à être importés'+
+          (nbDuplicates>0?' · 🔁 <b style="color:var(--amber)">'+nbDuplicates+'</b> doublons (N° déjà existant, seront ignorés)':'')+
+          (nbErrors>0?' · ❌ <b style="color:var(--red)">'+nbErrors+'</b> erreurs de lecture':'')+
+          '<br><span style="font-size:10.5px">Vérifiez chaque PO ci-dessous, ajustez si besoin, puis validez l\'import.</span>'+
+        '</div>'+
+        // === RÉGLAGES GLOBAUX (appliqués à tous les PO) ===
+        '<div style="background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.2);border-radius:6px;padding:10px;margin-bottom:12px">'+
+          '<div style="font-weight:700;margin-bottom:6px;font-size:11.5px;color:#a78bfa">⚙️ Réglages globaux (appliqués à tous les PO sélectionnés)</div>'+
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'+
+            '<div>'+
+              '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Client final (par défaut)</label>'+
+              '<select class="form-select" id="poImp-clientFinal" style="margin-top:3px">'+clientOpts+'</select>'+
+              '<div style="font-size:9.5px;color:var(--muted);margin-top:2px;font-style:italic">Tu pourras le changer individuellement par PO ci-dessous</div>'+
+            '</div>'+
+            '<div>'+
+              '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Statut paiement Emerson</label>'+
+              '<select class="form-select" id="poImp-paidEmerson" style="margin-top:3px">'+
+                '<option value="false">❌ Non payé (à régler chez Emerson)</option>'+
+                '<option value="true">✅ Déjà payé chez Emerson (historique)</option>'+
+              '</select>'+
+              '<div style="font-size:9.5px;color:var(--muted);margin-top:2px;font-style:italic">Idem, modifiable par PO</div>'+
+            '</div>'+
+          '</div>'+
+        '</div>'+
+        // === LISTE DES PO ===
+        '<div id="poImp-list" style="max-height:50vh;overflow-y:auto"></div>'+
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08)">'+
+          '<button class="btn btn-ghost" onclick="cm(\'mPOImport\')">Annuler</button>'+
+          '<button class="btn btn-teal" onclick="confirmPOCalinstrumImport()" id="poImp-confirm-btn">✓ Importer '+nbToImport+' PO</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+
+  document.body.appendChild(modal);
+
+  // Listener : au changement du dropdown global client/paidEmerson, propager à tous les PO
+  document.getElementById('poImp-clientFinal').addEventListener('change', function(){
+    var v=this.value;
+    document.querySelectorAll('.poImp-clientSel').forEach(function(s){s.value=v;});
+  });
+  document.getElementById('poImp-paidEmerson').addEventListener('change', function(){
+    var v=this.value;
+    document.querySelectorAll('.poImp-paidEmersonSel').forEach(function(s){s.value=v;});
+  });
+
+  renderPOImportList();
+}
+
+// Render de la liste des PO dans le modal d'aperçu
+function renderPOImportList(){
+  var container = document.getElementById('poImp-list');
+  if(!container) return;
+  var html = '';
+  _poImportState.items.forEach(function(item, idx){
+    if(!item.parsed){
+      // Erreur de lecture
+      html += '<div style="background:rgba(244,63,94,.06);border:1px solid rgba(244,63,94,.25);border-radius:6px;padding:10px;margin-bottom:8px">'+
+        '<div style="font-weight:700;color:var(--red)">❌ '+esc(item.fileName)+'</div>'+
+        '<div style="font-size:10.5px;color:var(--muted);margin-top:3px">Erreur lecture PDF : '+esc(item.error||'inconnue')+'</div>'+
+        '</div>';
+      return;
+    }
+    var p = item.parsed;
+    var isDup = item.isDuplicate;
+    var bg = isDup ? 'rgba(251,191,36,.04)' : 'rgba(255,255,255,.02)';
+    var border = isDup ? 'rgba(251,191,36,.3)' : 'rgba(255,255,255,.08)';
+    var clientOptsLocal = '<option value="">— Aucun —</option>';
+    (DB.clients||[]).forEach(function(c){
+      clientOptsLocal += '<option value="'+esc(c.nom)+'">'+esc(c.nom)+'</option>';
+    });
+    html += '<div style="background:'+bg+';border:1px solid '+border+';border-radius:6px;padding:10px;margin-bottom:8px" data-idx="'+idx+'">'+
+      // Header avec nom du fichier + checkbox
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">'+
+        '<div style="display:flex;align-items:center;gap:8px;flex:1">'+
+          (isDup ?
+            '<input type="checkbox" disabled title="N° PO déjà présent en base — sera ignoré">' :
+            '<input type="checkbox" class="poImp-include" data-idx="'+idx+'" checked>'
+          )+
+          '<div>'+
+            '<div style="font-weight:700;font-size:11.5px">📄 '+esc(item.fileName)+'</div>'+
+            (isDup ?
+              '<div style="font-size:10px;color:var(--amber);margin-top:2px">⚠ N° '+esc(p.num)+' déjà existant — ignoré (le BC actuel sera conservé)</div>'
+              : ''
+            )+
+          '</div>'+
+        '</div>'+
+        '<div style="text-align:right">'+
+          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--teal)">'+fN(p.total)+' '+esc(p.devise)+'</div>'+
+        '</div>'+
+      '</div>'+
+      // Champs éditables (N°, date, props, client, paidEmerson)
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:6px">'+
+        '<div>'+
+          '<label style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">N° PO</label>'+
+          '<input class="form-input poImp-num" data-idx="'+idx+'" value="'+esc(p.num)+'" style="font-family:var(--mono);font-size:11px;margin-top:2px">'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">Date</label>'+
+          '<input type="date" class="form-input poImp-date" data-idx="'+idx+'" value="'+esc(p.date)+'" style="font-size:11px;margin-top:2px">'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">Customer Ref #</label>'+
+          '<input class="form-input poImp-cref" data-idx="'+idx+'" value="'+esc(p.propCref)+'" style="font-family:var(--mono);font-size:10.5px;margin-top:2px" placeholder="(vide)">'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">Emerson Prop.</label>'+
+          '<input class="form-input poImp-prop" data-idx="'+idx+'" value="'+esc(p.propNum)+(p.propVer?' Ver:'+esc(p.propVer):'')+'" style="font-family:var(--mono);font-size:10.5px;margin-top:2px" placeholder="(vide)">'+
+        '</div>'+
+      '</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px">'+
+        '<div>'+
+          '<label style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">Client final (BC)</label>'+
+          '<select class="form-select poImp-clientSel" data-idx="'+idx+'" style="font-size:11px;margin-top:2px">'+clientOptsLocal+'</select>'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">Statut Emerson</label>'+
+          '<select class="form-select poImp-paidEmersonSel" data-idx="'+idx+'" style="font-size:11px;margin-top:2px">'+
+            '<option value="false">❌ Non payé</option>'+
+            '<option value="true">✅ Déjà payé</option>'+
+          '</select>'+
+        '</div>'+
+      '</div>'+
+      // Récap lignes
+      (p.lines.length ?
+        '<div style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(255,255,255,.08)">'+
+          '<div style="font-size:9.5px;color:var(--muted);text-transform:uppercase;font-weight:600;margin-bottom:3px">Lignes extraites ('+p.lines.length+')</div>'+
+          p.lines.map(function(l){
+            return '<div style="display:flex;gap:8px;font-size:10.5px;padding:1px 0">'+
+              '<span style="font-family:var(--mono);color:var(--muted);min-width:160px">'+esc(l.ref)+'</span>'+
+              '<span style="flex:1">'+esc(l.designation)+'</span>'+
+              '<span style="color:var(--muted)">'+l.qte+' × '+fN(l.pu)+'</span>'+
+              '<span style="font-weight:700;min-width:70px;text-align:right">'+fN(l.qte*l.pu)+'</span>'+
+            '</div>';
+          }).join('')+
+        '</div>'
+        : '<div style="margin-top:6px;padding:5px 8px;background:rgba(251,191,36,.1);border-radius:4px;font-size:10px;color:var(--amber)">⚠ Aucune ligne extraite — le BC sera créé sans détail (total seul)</div>'
+      )+
+      (p._parseErrors && p._parseErrors.length ?
+        '<div style="margin-top:6px;padding:5px 8px;background:rgba(244,63,94,.08);border-radius:4px;font-size:10px;color:var(--red)">⚠ '+p._parseErrors.join(' · ')+'</div>'
+        : ''
+      )+
+    '</div>';
+  });
+  container.innerHTML = html;
+}
+
+// Validation finale : crée les BC en DB pour les PO cochés, skip les doublons
+function confirmPOCalinstrumImport(){
+  var nbCreated = 0, nbSkipped = 0;
+  var checkboxes = document.querySelectorAll('.poImp-include');
+  var includedIdxs = [];
+  checkboxes.forEach(function(cb){
+    if(cb.checked) includedIdxs.push(Number(cb.getAttribute('data-idx')));
+  });
+  if(includedIdxs.length===0){
+    alert('⚠ Aucun PO sélectionné.');
+    return;
+  }
+  // Récupérer les valeurs éditées par PO
+  includedIdxs.forEach(function(idx){
+    var item = _poImportState.items[idx];
+    if(!item || !item.parsed || item.isDuplicate){nbSkipped++; return;}
+    var p = item.parsed;
+    // Lire les overrides depuis le DOM
+    var elNum = document.querySelector('.poImp-num[data-idx="'+idx+'"]');
+    var elDate = document.querySelector('.poImp-date[data-idx="'+idx+'"]');
+    var elCref = document.querySelector('.poImp-cref[data-idx="'+idx+'"]');
+    var elProp = document.querySelector('.poImp-prop[data-idx="'+idx+'"]');
+    var elClient = document.querySelector('.poImp-clientSel[data-idx="'+idx+'"]');
+    var elPaid = document.querySelector('.poImp-paidEmersonSel[data-idx="'+idx+'"]');
+
+    var num = elNum ? elNum.value.trim() : p.num;
+    if(!num){nbSkipped++; return;} // sécurité
+    // Re-vérifier le doublon avec le N° éventuellement édité
+    var existing = (DB.bcs||[]).find(function(b){return (b.num||'')===num;});
+    if(existing){nbSkipped++; return;}
+
+    var date = elDate ? elDate.value : p.date;
+    var cref = elCref ? elCref.value.trim() : p.propCref;
+    var propRaw = elProp ? elProp.value.trim() : (p.propNum+(p.propVer?' Ver:'+p.propVer:''));
+    // Parse "29429380 Ver:2" en {num,ver}
+    var propMatch = propRaw.match(/^(\S+)(?:\s+Ver\s*:?\s*(\S+))?$/i);
+    var propNum = propMatch ? propMatch[1] : propRaw;
+    var propVer = propMatch && propMatch[2] ? propMatch[2] : '';
+
+    var clientFinal = elClient ? elClient.value : '';
+    var paidEmerson = elPaid ? (elPaid.value === 'true') : false;
+
+    // Construction du BC (structure identique à getBC())
+    var bc = {
+      id: Date.now() + Math.floor(Math.random()*1000), // id unique
+      num: num,
+      date: date,
+      devise: 'AUD',
+      vcont: p.vcont || 'Pacheco, Jose',
+      vemail: p.vemail || 'JosePacheco@Emerson.com',
+      vphone: p.vphone || '+61498026183',
+      vaddr: p.vaddr || 'Emerson Process Management Australia Pty Ltd\n471 Mountain Highway Bayswater\nVICTORIA 3153 AUSTRALIA',
+      inco: p.inco || 'Inco2020: FCA BAYSWATER',
+      fret: p.fret || 'Collect',
+      status: 'En attente',
+      clientFinal: clientFinal,
+      cref2: '', // legacy, on met cref dans props[0]
+      props: [{
+        id: Date.now() + Math.floor(Math.random()*1000),
+        num: propNum,
+        ver: propVer,
+        amount: p.total || 0,
+        cref: cref,
+        date: date,
+        project: ''
+      }],
+      bcNotes: '📥 Importé depuis PDF "'+(item.fileName||'PO Calinstrum')+'" le '+td(),
+      discount: '',
+      salesTax: '',
+      otherTax: '',
+      shipping: '',
+      devisLieId: '',
+      lines: p.lines.map(function(l){return Object.assign({},l);}),
+      total: p.total || 0,
+      paidEmerson: paidEmerson,
+      paidEmersonDate: paidEmerson ? td() : ''
+    };
+
+    DB.bcs = DB.bcs || [];
+    DB.bcs.push(bc);
+    nbCreated++;
+  });
+
+  saveDB();
+  cm('mPOImport');
+  if(typeof renderBC==='function') renderBC();
+  if(typeof renderSuivi==='function') renderSuivi();
+
+  // Rapport final
+  var msg = '✅ Import terminé !\n\n';
+  msg += '• '+nbCreated+' PO créé'+(nbCreated>1?'s':'')+'\n';
+  if(nbSkipped>0) msg += '• '+nbSkipped+' PO ignoré'+(nbSkipped>1?'s':'')+' (doublon ou erreur)\n';
+  alert(msg);
 }
 
 // ===== BL =====
