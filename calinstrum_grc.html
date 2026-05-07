@@ -608,6 +608,17 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <div class="card"><div class="ctitle">📦 Phase opérationnelle</div><div style="height:180px"><canvas id="chart-phase"></canvas></div></div>
       <div class="card"><div class="ctitle">Évolution mensuelle</div><div style="height:180px"><canvas id="chart-mensuel"></canvas></div></div>
     </div>
+    <!-- Vue "Marge par affaire" : pour chaque BC Emerson lié à au moins une facture
+         Client, affiche Σ ventes / Σ coûts / marge théorique / avancement encaissement.
+         Permet de visualiser les commandes facturées en plusieurs fois (acompte/solde)
+         comme une seule "affaire" et calculer correctement la marge globale. -->
+    <div class="card mt8" id="dashAffairesCard">
+      <div class="ctitle" style="display:flex;align-items:center;gap:10px">
+        📊 Marge par affaire
+        <span style="color:var(--muted);font-weight:400;font-size:10.5px">(une affaire = 1 BC Emerson + ses factures Client liées)</span>
+      </div>
+      <div id="dashAffaires"></div>
+    </div>
     <div class="card"><div class="ctitle">Progression paiement par date butoir</div><div id="progression-panel"></div></div>
     <div class="card mt8"><div class="ctitle">🚨 Factures urgentes</div><div id="urgent-list"></div></div>
   </div>
@@ -1033,7 +1044,19 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       </div>
       <div class="form-row">
         <div class="form-group"><label>📋 N° PO Client <span style="color:var(--muted);font-weight:400;font-size:10px">(synchronisé avec le N° PO du Suivi Factures)</span></label><input class="form-input" id="fa-po" placeholder="ex: 28042026/97 ou 00734811-01" title="Numéro de bon de commande du client final (SLN, PRNC...). Format Calinstrum interne : DDMMYYYY/NNN. Champ unifié avec le N° PO du Suivi Factures."></div>
-        <div class="form-group"></div>
+        <div class="form-group">
+          <label>💰 % de la commande <span style="color:var(--muted);font-weight:400;font-size:10px">(part du BC global facturée par cette facture)</span></label>
+          <div style="display:flex;gap:6px;align-items:stretch">
+            <select class="form-select" id="fa-pctOfBC" style="flex:1" onchange="onFaPctOfBCChange()" title="% de la commande totale (du BC) que représente cette facture. 30/70 = acompte/solde classique, 100 = facture complète, 50/50 = répartition équilibrée. Sert à calculer correctement la marge par affaire (un BC peut être facturé en plusieurs fois).">
+              <option value="100">100% — Facture complète (par défaut)</option>
+              <option value="30">30% — Acompte</option>
+              <option value="50">50% — Mi-prestation</option>
+              <option value="70">70% — Solde après acompte 30%</option>
+              <option value="__OTHER__">✏️ Autre — saisir une valeur</option>
+            </select>
+            <input class="form-input" id="fa-pctOfBC-custom" type="number" min="0" max="100" step="0.01" placeholder="%" style="width:70px;display:none" title="Saisir un pourcentage entre 0 et 100">
+          </div>
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group"><label>Statut</label>
@@ -3219,6 +3242,105 @@ function getPctEmerson(inv){
   if(fact===0)return 0;
   return getCoutEmerson(inv)/fact*100;
 }
+
+// =============================================================================
+// CALCUL DE MARGE PAR AFFAIRE (= par BC Emerson)
+// =============================================================================
+// Cas typique : un BC Emerson de 100 000 AUD (12 M XPF de coût) donne lieu à 2
+// factures clients : 30% acompte (4.5 M XPF) + 70% solde (10.5 M XPF).
+// Si on calcule la marge facture par facture comme avant, l'acompte affiche
+// "marge négative −7.5 M" et le solde "marge −1.5 M" alors qu'en réalité l'affaire
+// génère une marge de 3 M.
+//
+// La solution : agréger les factures par BC parent et calculer une fois pour toutes.
+// L'affaire est définie par un BC Emerson. On lie chaque facture au BC via inv.linkedBCs.
+// Chaque facture peut porter un % (inv.pctOfBC) qui dit quelle part de la commande
+// totale elle représente. La somme des % doit faire 100 (vérification douce).
+
+// Pour un BC donné, retourne la liste de toutes les factures qui le référencent
+// (DB.factures + DB.invoices, dédupliquées par num).
+function getInvoicesForBC(bcId){
+  var seenNums={};
+  var out=[];
+  function consider(inv){
+    if(!inv || !Array.isArray(inv.linkedBCs)) return;
+    if(inv.linkedBCs.indexOf(bcId)<0) return;
+    var key=(inv.num||'').toString().toLowerCase().trim();
+    if(!key||seenNums[key]) return;
+    seenNums[key]=true;
+    out.push(inv);
+  }
+  (DB.factures||[]).forEach(consider);
+  (DB.invoices||[]).forEach(consider);
+  return out;
+}
+
+// Pour un BC, calcule les KPIs de l'affaire :
+//   - facturesLiees : nb de factures clients liées
+//   - sommeFactures : Σ montants TTC des factures liées (= ventes facturées au client)
+//   - sommePcts    : Σ pctOfBC des factures liées (devrait être 100 pour cohérence)
+//   - sommeEncaisse : Σ paiements reçus (basé sur f.paye ou versements)
+//   - coutEmerson  : coût Emerson AUD converti en XPF
+//   - fraisAnnexes : frais annexes (douane, transit) s'il y en a (DEFAULT_FRAIS_PCT% du coût)
+//   - margeTheorique : sommeFactures − coutEmerson − fraisAnnexes (= marge si tout est facturé)
+//   - margeRealisee  : sommeEncaisse − (coutEmerson si bc.paidEmerson sinon 0)
+//   - pctAvancement  : sommeEncaisse / sommeFactures × 100 (où en est le client en paiement)
+//   - coherent       : true si sommePcts === 100 (alerte sinon)
+function getBCDealKPIs(bcId){
+  var bc=DB.bcs.find(function(x){return x.id===bcId;});
+  if(!bc) return null;
+  var factures=getInvoicesForBC(bcId);
+  var sommeFactures=0, sommePcts=0, sommeEncaisse=0;
+  factures.forEach(function(f){
+    sommeFactures += Number(f.montant)||Number(f.ttc)||0;
+    sommePcts += (typeof f.pctOfBC==='number') ? f.pctOfBC : 100;
+    // Calcul encaissé : f.paye en priorité, sinon somme versements
+    var encF=0;
+    if(typeof f.paye==='number' && f.paye>0) encF=f.paye;
+    else if(Array.isArray(f.versements)){
+      encF=f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
+    }
+    sommeEncaisse += encF;
+  });
+  var coutEmerson=getBCCoutXPF(bc);
+  var fraisAnnexes=getBCFraisXPF(bc);
+  var margeTheorique = sommeFactures - coutEmerson - fraisAnnexes;
+  // Réalisée : on n'enlève le coût Emerson que s'il a déjà été payé (cash réel sorti)
+  var margeRealisee = sommeEncaisse - (bc.paidEmerson ? coutEmerson : 0) - (bc.paidEmerson ? fraisAnnexes : 0);
+  var pctAvancement = sommeFactures>0 ? (sommeEncaisse/sommeFactures*100) : 0;
+  // Cohérence : tolérance 0.5% pour les arrondis (49.5%/50.5% → OK)
+  var coherent = factures.length===0 || Math.abs(sommePcts-100) < 0.5;
+  return {
+    bc:bc,
+    factures:factures,
+    sommeFactures:sommeFactures,
+    sommePcts:sommePcts,
+    sommeEncaisse:sommeEncaisse,
+    coutEmerson:coutEmerson,
+    fraisAnnexes:fraisAnnexes,
+    margeTheorique:margeTheorique,
+    margeRealisee:margeRealisee,
+    pctAvancement:pctAvancement,
+    pctMargeTheorique: sommeFactures>0 ? (margeTheorique/sommeFactures*100) : 0,
+    coherent:coherent
+  };
+}
+
+// Liste tous les BC qui ont au moins une facture liée, avec leurs KPIs.
+// Utilisé par renderDashAffaires() pour la vue "Marge par affaire".
+function getAllDealsKPIs(){
+  var deals=[];
+  (DB.bcs||[]).forEach(function(bc){
+    var k=getBCDealKPIs(bc.id);
+    if(!k) return;
+    if(k.factures.length===0) return; // n'afficher que les BC avec au moins une facture liée
+    deals.push(k);
+  });
+  // Trier par marge théorique décroissante (les plus rentables en haut)
+  deals.sort(function(a,b){return (b.margeTheorique||0)-(a.margeTheorique||0);});
+  return deals;
+}
+
 // Marquer un BC comme payé/non payé chez Emerson
 function setBCPaidEmerson(bcId,paid){
   var bc=DB.bcs.find(function(x){return x.id===bcId;});
@@ -3885,6 +4007,119 @@ function renderSuviKPIs(){
   var tot=lateCount+soonCount;
   var ap=document.getElementById('alert-pill');
   if(ap){if(tot>0){ap.style.display='inline-flex';sv('alert-count',tot+' alerte'+(tot>1?'s':''));}else{ap.style.display='none';}}
+
+  // Rendre la vue "Marge par affaire" (une affaire = un BC Emerson + ses factures liées)
+  if(typeof renderDashAffaires==='function') renderDashAffaires();
+}
+
+// =============================================================================
+// VUE "MARGE PAR AFFAIRE" — DASHBOARD SUIVI
+// =============================================================================
+// Liste tous les BC Emerson qui ont au moins une facture Client liée. Pour chacun :
+//   - identité du BC (n°, date, fournisseur, client final)
+//   - liste des factures Client liées avec leur % de la commande
+//   - Σ ventes facturées au client
+//   - coût Emerson AUD converti en XPF
+//   - marge théorique (= Σ ventes - coût Emerson - frais)
+//   - marge réalisée (= Σ encaissé - coût Emerson si payé)
+//   - % d'avancement encaissement
+//   - alerte si Σ % de la commande ≠ 100% (cohérence facturation)
+function renderDashAffaires(){
+  var el=document.getElementById('dashAffaires');
+  if(!el) return;
+  var deals=getAllDealsKPIs();
+  if(!deals || deals.length===0){
+    el.innerHTML='<div style="text-align:center;padding:18px;background:rgba(255,255,255,.02);border:1px dashed rgba(255,255,255,.08);border-radius:6px;color:var(--muted);font-size:11px">'+
+      '💡 Aucune affaire à afficher. Liez vos factures Client à des BC Emerson (bouton <span style="color:var(--teal)">🔗</span> dans le tableau Suivi) pour voir apparaître la marge par affaire.<br><br>'+
+      '<span style="font-size:10px">Une affaire = 1 BC Emerson + 1 ou plusieurs factures Client liées (acompte 30%, solde 70%, etc.)</span>'+
+      '</div>';
+    return;
+  }
+  // Filtre par client si onglet client actif
+  var clientFilter=(typeof activeClientFilter!=='undefined')?activeClientFilter:'all';
+
+  var html='<div style="font-size:10.5px;color:var(--muted);margin-bottom:8px;padding:6px 10px;background:rgba(167,139,250,.06);border-radius:5px;border-left:3px solid #a78bfa">'+
+    '📌 Une <b>affaire</b> regroupe 1 BC Emerson et toutes les factures Client liées (ex: acompte 30% + solde 70%). La marge se calcule au niveau de l\'affaire pour éviter le double-comptage du coût Emerson sur chaque facture.'+
+    '</div>';
+
+  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:10px">';
+  deals.forEach(function(d){
+    var bc=d.bc;
+    // Filtrage par client : on regarde si au moins une facture liée correspond au client actif
+    if(clientFilter && clientFilter!=='all'){
+      var anyMatch=d.factures.some(function(f){
+        var c=(f.client||'').toString();
+        return c===clientFilter || c.indexOf(clientFilter)===0;
+      });
+      if(!anyMatch) return;
+    }
+    var clientFinal=bc.clientFinal||(d.factures[0] && d.factures[0].client)||'?';
+    var devise=bc.devise||'AUD';
+    var coutAUDStr = bc.total ? fN(bc.total)+' '+devise : '—';
+    var margeColor = d.margeTheorique>=0 ? 'var(--green)' : 'var(--red)';
+    var pctAvancementColor = d.pctAvancement>=99 ? 'var(--green)' : (d.pctAvancement>=50 ? 'var(--amber)' : '#a78bfa');
+    var pctMargeColor = d.pctMargeTheorique>=15 ? 'var(--green)' : (d.pctMargeTheorique>=5 ? 'var(--amber)' : 'var(--red)');
+    // Alerte cohérence : si Σ pctOfBC ≠ 100, on prévient
+    var coherenceBadge='';
+    if(!d.coherent){
+      var diffPct = (100-d.sommePcts);
+      var pctSign = diffPct>0 ? 'manquent' : 'en trop';
+      var diffAbs = Math.abs(diffPct).toFixed(1);
+      coherenceBadge='<div style="margin-top:6px;padding:5px 8px;background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.3);border-radius:4px;font-size:10px;color:#f43f5e" title="La somme des % des factures liées à ce BC fait '+d.sommePcts.toFixed(1)+'% au lieu de 100%. Vérifiez les % de chaque facture (champ 💰 % de la commande).">⚠ Cohérence : Σ % = '+d.sommePcts.toFixed(1)+'% (' + diffAbs + '% ' + pctSign + ')</div>';
+    }
+    // Liste des factures liées
+    var faturesHtml='<div style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(255,255,255,.08);font-size:10.5px">'+
+      '<div style="color:var(--muted);font-size:9.5px;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;font-weight:600">Factures Client liées ('+d.factures.length+')</div>';
+    d.factures.forEach(function(f){
+      var pct=(typeof f.pctOfBC==='number')?f.pctOfBC:100;
+      var statusEmoji=(f.status==='Payée'||f.statut==='paid')?'✓':'⏳';
+      var statusColor=(f.status==='Payée'||f.statut==='paid')?'var(--green)':'var(--amber)';
+      faturesHtml+='<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0">'+
+        '<span><span style="color:'+statusColor+';font-weight:700">'+statusEmoji+'</span> '+
+        '<span style="color:var(--teal);font-weight:700;cursor:pointer" onclick="navigateToFA('+(f._factureId||f.id)+')" title="Ouvrir la facture">'+esc(f.num||'?')+'</span> '+
+        '<span style="color:var(--muted);font-size:9.5px">('+pct+'%)</span></span>'+
+        '<span style="font-weight:700">'+fN(f.montant||f.ttc||0)+' XPF</span>'+
+        '</div>';
+    });
+    faturesHtml+='</div>';
+
+    html+='<div class="metric" style="padding:11px 13px;border-top:2px solid #a78bfa">'+
+      // En-tête : BC + client final
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:6px">'+
+        '<div>'+
+          '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">BC Emerson</div>'+
+          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text-strong)">'+esc(bc.num||'?')+'</div>'+
+          '<div style="font-size:10px;color:var(--muted);margin-top:2px">→ '+esc(clientFinal)+'</div>'+
+        '</div>'+
+        '<div style="text-align:right">'+
+          '<div style="font-size:9.5px;color:var(--muted)">Coût Emerson</div>'+
+          '<div style="font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--red)">'+coutAUDStr+'</div>'+
+          '<div style="font-size:9.5px;color:var(--muted);margin-top:1px">'+fN(d.coutEmerson)+' XPF'+(bc.paidEmerson?' <span style="color:var(--green)">✓ payé</span>':'')+'</div>'+
+        '</div>'+
+      '</div>'+
+      // Ligne KPIs : ventes / marge théorique / avancement
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;padding:6px 0;border-top:1px solid rgba(255,255,255,.05);border-bottom:1px solid rgba(255,255,255,.05)">'+
+        '<div style="text-align:center">'+
+          '<div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Ventes</div>'+
+          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--teal)">'+fN(d.sommeFactures)+'</div>'+
+        '</div>'+
+        '<div style="text-align:center;border-left:1px dashed rgba(255,255,255,.06);border-right:1px dashed rgba(255,255,255,.06)">'+
+          '<div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Marge théo.</div>'+
+          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:'+margeColor+'">'+fN(d.margeTheorique)+'</div>'+
+          '<div style="font-size:9px;color:'+pctMargeColor+';font-weight:600">'+d.pctMargeTheorique.toFixed(1)+'%</div>'+
+        '</div>'+
+        '<div style="text-align:center">'+
+          '<div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Avancement</div>'+
+          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:'+pctAvancementColor+'">'+d.pctAvancement.toFixed(0)+'%</div>'+
+          '<div style="font-size:9px;color:var(--muted)">'+fN(d.sommeEncaisse)+' enc.</div>'+
+        '</div>'+
+      '</div>'+
+      coherenceBadge+
+      faturesHtml+
+      '</div>';
+  });
+  html+='</div>';
+  el.innerHTML=html;
 }
 function dChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
 function renderCharts(){
@@ -13288,6 +13523,69 @@ function onFaClientChange(){
   }
 }
 
+// =============================================================================
+// CHAMP "% de la commande" (pctOfBC) — DROPDOWN + INPUT CUSTOM
+// =============================================================================
+// Représente la part du BC global (= du montant total de la commande client) que
+// cette facture représente. Cas d'usage typique :
+//   - 100% : facture complète, mono-facturation
+//   - 30%/70% : acompte / solde (cas commande Emerson facturée en 2 temps)
+//   - 50%/50% : répartition équilibrée
+//   - Autre : valeur libre saisie par l'utilisateur (ex 25%, 33%, 65%...)
+// Stocké dans f.pctOfBC (number 0-100). Sert au calcul correct de la marge par BC :
+// quand un BC Emerson est lié à plusieurs factures (acompte + solde), la marge se
+// calcule au niveau du BC (Σ ventes facturées vs Σ coûts Emerson) sans
+// double-comptage du coût.
+
+// Définit la valeur du dropdown ET du champ custom selon la valeur passée.
+// Si la valeur est dans les options présélectionnées (30/50/70/100) → dropdown match.
+// Sinon → dropdown sur "__OTHER__" + input custom rempli.
+function setFaPctOfBC(pct){
+  pct = Number(pct);
+  if(isNaN(pct) || pct<0) pct=100;
+  if(pct>100) pct=100;
+  var sel=document.getElementById('fa-pctOfBC');
+  var inp=document.getElementById('fa-pctOfBC-custom');
+  if(!sel || !inp) return;
+  var preset=[30,50,70,100];
+  if(preset.indexOf(pct)>=0){
+    sel.value=String(pct);
+    inp.style.display='none';
+    inp.value='';
+  } else {
+    sel.value='__OTHER__';
+    inp.style.display='inline-block';
+    inp.value=String(pct);
+  }
+}
+
+// Lit la valeur effective du champ : si dropdown sur "Autre", retourne la valeur custom ;
+// sinon retourne la valeur du dropdown. Toujours number, toujours 0-100, défaut 100.
+function getFaPctOfBC(){
+  var sel=document.getElementById('fa-pctOfBC');
+  var inp=document.getElementById('fa-pctOfBC-custom');
+  if(!sel) return 100;
+  var raw=sel.value==='__OTHER__' ? (inp ? inp.value : '') : sel.value;
+  var n=Number(raw);
+  if(isNaN(n)||n<0) return 100;
+  if(n>100) return 100;
+  return n;
+}
+
+// onChange du dropdown : montre/cache l'input custom et lui donne le focus si "Autre".
+function onFaPctOfBCChange(){
+  var sel=document.getElementById('fa-pctOfBC');
+  var inp=document.getElementById('fa-pctOfBC-custom');
+  if(!sel || !inp) return;
+  if(sel.value==='__OTHER__'){
+    inp.style.display='inline-block';
+    inp.value=inp.value||'';
+    setTimeout(function(){inp.focus();inp.select();},10);
+  } else {
+    inp.style.display='none';
+  }
+}
+
 function openFA(id,fromDV){
   eFAid=id||null;faL=[];faVersements=[];rebuildAllParamSelects();
   buildClientOptions('fa-client','');
@@ -13319,6 +13617,10 @@ function openFA(id,fromDV){
         if(d&&d.bcClientSLN)fapo=d.bcClientSLN;
       }
       gv('fa-po', fapo);
+      // % de la commande totale (pour calcul marge correct quand un BC est facturé en
+      // plusieurs fois — typiquement acompte 30% + solde 70%).
+      // Default : 100 (facture complète) si pas encore renseigné.
+      setFaPctOfBC(typeof f.pctOfBC==='number' ? f.pctOfBC : 100);
       // Rétrocompat : si versements absents mais paye>0, créer 1 versement
       if(f.versements && f.versements.length){
         faVersements=JSON.parse(JSON.stringify(f.versements));
@@ -13361,6 +13663,7 @@ function openFA(id,fromDV){
     gv('fa-notes','');gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');
     // N° PO : récupérer depuis le devis source (champ bcClientSLN)
     gv('fa-po', fromDV.bcClientSLN || '');
+    setFaPctOfBC(100);
     if(isClientExo(fromDV.client))gv('fa-tgc-mention','506-2');else gv('fa-tgc-mention','tgc');
     var lf=fromDV.lines||{};
     // === COPIE STRUCTURELLE COMPLÈTE ===
@@ -13377,6 +13680,7 @@ function openFA(id,fromDV){
     rebuildFaEmailOptions('');
     gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
     gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');gv('fa-po','');
+    setFaPctOfBC(100);
     sv('mFAtitle','Nouvelle Facture');
   }
   rFAlines();
@@ -13981,6 +14285,11 @@ function getFA(){
     // Stocké dans _importPONum (champ historique d'import). Si vide dans le formulaire,
     // on retombe sur l'ancienne valeur côté `existing` pour préserver l'historique.
     _importPONum:gvg('fa-po') || (eFAid && DB.factures.find(function(x){return x.id===eFAid;})||{})._importPONum || '',
+    // % de la commande totale (BC) que représente cette facture.
+    // Utilisé pour le calcul de marge par affaire : un BC peut être facturé en plusieurs
+    // factures (acompte 30% + solde 70% par exemple). On évite ainsi le double-comptage
+    // du coût Emerson dans la vue "Marge par affaire".
+    pctOfBC:getFaPctOfBC(),
     lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc,suiviId:existingSuiviId};
   // Fusionner les flags préservés (écrasement IMPOSSIBLE car on assigne après le fa de base)
   Object.keys(preservedFlags).forEach(function(k){fa[k]=preservedFlags[k];});
