@@ -18837,7 +18837,17 @@ function printPreviewBC(){
             bcDateStr=_ddmmyyyy(bcRec.date);
             bcSuffix=(bcRec.num||'').replace(/[^\d]/g,'');
           }
-          bcCref=bcRec.cref2||bcRec.cref||'';
+          // === RÉFÉRENCE CLIENT ===
+          // Priorité 1 : props[0].cref (système actuel - une cref par proposition Emerson)
+          // Priorité 2 : bc.cref2 (champ global legacy - rarement renseigné)
+          // Priorité 3 : bc.cref (champ legacy ancien)
+          // Si plusieurs propositions ont des cref distinctes, on prend la première (la plupart
+          // des BC n'ont qu'une seule proposition). On peut adapter si besoin.
+          if(Array.isArray(bcRec.props) && bcRec.props.length){
+            var firstPropWithCref=bcRec.props.find(function(p){return p && p.cref;});
+            if(firstPropWithCref) bcCref=firstPropWithCref.cref;
+          }
+          if(!bcCref) bcCref=bcRec.cref2||bcRec.cref||'';
         }
       }
       // Si la lookup DB a échoué : essayer regex directe sur le titre modal
