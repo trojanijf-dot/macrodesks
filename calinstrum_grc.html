@@ -17847,12 +17847,18 @@ function bFA(f){
     cliCompany='SOCIETE LE NICKEL — ERAMET-SLN';
     cliAddr='Magasin Général, 2 Rue Desjardins<br>Doniambo BP E5 98845 NOUMEA CEDEX<br>NOUVELLE-CALÉDONIE';
     cliTel='+687 245446';
-    cliEmail='gen_sct.dbo@eramet-sln.com';
+    // Email comptabilité : on respecte le choix utilisateur (f.email = valeur du dropdown
+    // "Email comptabilité" dans la modal Facture). Si vide, fallback sur l'email SLN par défaut.
+    cliEmail=(f.email&&f.email.trim())?f.email:'gen_sct.dbo@eramet-sln.com';
   } else {
     var adr=(f.adresse||'').replace(/\n/g,'<br>');
     cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
     cliTel=clientDetail.tel||'';
-    cliEmail=clientDetail.email||f.email||'';
+    // Email comptabilité : f.email PRIME (= choix utilisateur dans le dropdown de la modal).
+    // C'est l'email du SERVICE COMPTABILITÉ (PRNC-Compta@…, comptabilite-aei@…, rgtfactures@…).
+    // On NE prend PAS clientDetail.email (qui est l'email du contact technique, ex:
+    // xavier.canel@pronyresources.com) — celui-ci serait erroné pour une facture.
+    cliEmail=(f.email&&f.email.trim())?f.email:(clientDetail.email||'');
     cliCompany='';
   }
   // Recalculate TTC with exo flag applied
