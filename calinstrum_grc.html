@@ -1401,6 +1401,71 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
           <span style="font-size:10px;color:var(--muted)">💡 Au moment de l'enregistrement, les <strong>lignes seront synchronisées automatiquement avec le catalogue articles</strong> pour être disponibles dans les BC SLN.</span>
         </div>
       </div>
+      <!-- ====================================================================
+           BLOC TRAÇABILITÉ — visible pour tous les devis (sauf Brouillon vide)
+           Permet de saisir : Phase, Réf Emerson, Réf ACT, PO Calinstrum + dates.
+           Chaque champ peut être laissé vide ; les pills correspondantes
+           apparaîtront grisées dans la colonne Traçabilité de la liste Devis.
+           ==================================================================== -->
+      <div id="dv-traca-block" style="margin-top:12px;padding:12px;background:rgba(124,58,237,0.05);border:1px solid rgba(124,58,237,0.22);border-radius:8px">
+        <div style="font-size:11px;font-weight:700;color:#a78bfa;margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:6px">
+          <i class="ti ti-route" style="font-size:14px"></i>Traçabilité — Cycle de vie
+        </div>
+        <div style="font-size:10.5px;color:var(--muted);line-height:1.5;margin-bottom:10px">
+          Ces 4 jalons s'affichent dans la liste Devis sous forme de pills compactes.<br>
+          La date "Phase" est saisie automatiquement quand vous changez la valeur du dropdown.<br>
+          Le PO Calinstrum est rempli automatiquement quand un BC est lié au devis.
+        </div>
+        <!-- Phase + date -->
+        <div class="form-row">
+          <div class="form-group" style="margin:0"><label><i class="ti ti-flag" style="font-size:12px;color:#a78bfa"></i> Phase actuelle</label>
+            <select class="form-select" id="dv-phase" onchange="onDVPhaseChange()">
+              <option value="">— Aucune —</option>
+              <option value="envoye">1. Devis envoyé</option>
+              <option value="bc_recu">2. BC client reçu</option>
+              <option value="po_emerson">3. PO Emerson envoyé</option>
+              <option value="confirm_emerson">4. Confirmation Emerson</option>
+              <option value="production">5. En production</option>
+              <option value="expedie">6. Expédié</option>
+              <option value="receptionne">7. Réceptionné</option>
+              <option value="facture">8. Facturé client</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0"><label>Date de la phase <span style="color:var(--muted);font-weight:400;font-size:10px">(auto)</span></label>
+            <input type="date" class="form-input" id="dv-phase-date">
+          </div>
+        </div>
+        <!-- Réf Emerson + date -->
+        <div class="form-row" style="margin-top:8px">
+          <div class="form-group" style="margin:0"><label><i class="ti ti-circuit-bulb" style="font-size:12px;color:#22d3ee"></i> Réf Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(N° proposition complet)</span></label>
+            <input class="form-input" id="dv-ref-emerson" placeholder="ex: 23306657 Ver 5">
+          </div>
+          <div class="form-group" style="margin:0"><label>Date réception devis Emerson</label>
+            <input type="date" class="form-input" id="dv-ref-emerson-date">
+          </div>
+        </div>
+        <!-- Réf ACT + date -->
+        <div class="form-row" style="margin-top:8px">
+          <div class="form-group" style="margin:0"><label><i class="ti ti-building-warehouse" style="font-size:12px;color:#fbbf24"></i> Réf ACT <span style="color:var(--muted);font-weight:400;font-size:10px">(cotation transitaire)</span>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(251,191,36,.4);color:#fbbf24" onclick="triggerACTPdfImport()" title="Importer une cotation ACT depuis un PDF : extraction auto du N°, date, montant fret">📤 Import PDF</button>
+            <input type="file" id="dv-act-pdf-input" accept=".pdf,application/pdf" style="display:none" onchange="handleACTPdfSelected(event)">
+          </label>
+            <input class="form-input" id="dv-ref-act" placeholder="ex: 2026-488 - LP - CALINSTRUM - EXW MELBOURNE">
+          </div>
+          <div class="form-group" style="margin:0"><label>Date cotation ACT</label>
+            <input type="date" class="form-input" id="dv-ref-act-date">
+          </div>
+        </div>
+        <!-- PO Calinstrum + date -->
+        <div class="form-row" style="margin-top:8px">
+          <div class="form-group" style="margin:0"><label><i class="ti ti-shopping-cart" style="font-size:12px;color:#a78bfa"></i> PO Calinstrum <span style="color:var(--muted);font-weight:400;font-size:10px">(rempli auto à la création du BC)</span></label>
+            <input class="form-input" id="dv-po-calinstrum" placeholder="ex: PO18102024051">
+          </div>
+          <div class="form-group" style="margin:0"><label>Date envoi PO Calinstrum</label>
+            <input type="date" class="form-input" id="dv-po-calinstrum-date">
+          </div>
+        </div>
+      </div>
     </div>
     <div class="tab-pane" id="dvt-lignes">
       <!-- Boutons par section : ligne simple, sous-titre ITEMS, KIT (1 prix global).
@@ -2307,6 +2372,50 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mEIMP')">Annuler</button>
     <button class="btn btn-teal" id="eimp-confirm-btn" onclick="confirmEmersonImport()" disabled>✓ Importer dans le BC</button>
+  </div>
+</div></div>
+
+<!-- IMPORT COTATION ACT (PDF) -->
+<div class="modal-overlay" id="mAIMP">
+<div class="modal modal-lg" style="max-width:780px">
+  <div class="modal-header"><h3>📤 Import cotation ACT (PDF) — Preview</h3><button class="modal-close" onclick="cm('mAIMP')">✕</button></div>
+  <div class="modal-body">
+    <div id="aimp-status" style="margin-bottom:12px;color:var(--muted);font-size:12px"></div>
+    <div id="aimp-header-preview" style="display:none;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.3);border-radius:6px;padding:12px;margin-bottom:14px">
+      <div style="font-weight:700;color:#fbbf24;font-size:12px;margin-bottom:8px">📋 Infos extraites de la cotation ACT</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:12px">
+        <div>N° cotation : <strong id="aimp-num"></strong></div>
+        <div>Date : <strong id="aimp-date"></strong></div>
+        <div>Incoterm : <strong id="aimp-incoterm"></strong></div>
+        <div>Voie : <strong id="aimp-voie"></strong></div>
+        <div>Cours AUD/XPF : <strong id="aimp-cours"></strong></div>
+        <div>Validité : <strong id="aimp-validite"></strong></div>
+        <div>Total Fret + Assurance : <strong id="aimp-fret"></strong></div>
+        <div>Total Frais Locaux : <strong id="aimp-frais"></strong></div>
+        <div style="grid-column:span 2;border-top:1px solid rgba(251,191,36,.2);padding-top:6px;margin-top:4px">TOTAL FACTURE ACT : <strong id="aimp-total" style="color:#fbbf24;font-size:14px"></strong></div>
+      </div>
+    </div>
+    <div id="aimp-options-wrap" style="display:none;margin-bottom:14px;padding:12px;background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.25);border-radius:6px">
+      <div style="font-weight:700;color:#22d3ee;font-size:12px;margin-bottom:8px">⚙ Options d'import</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+        <input type="checkbox" id="aimp-add-fret-line" style="width:14px;height:14px;cursor:pointer">
+        <span>Ajouter le total ACT en ligne <strong>Fret / Frais divers</strong> du devis (1 seule ligne consolidée)</span>
+      </label>
+      <div style="font-size:10.5px;color:var(--muted);margin-top:6px;padding-left:22px">
+        💡 La ligne ajoutée sera : "Frais de transit ACT - {N° cotation} ({incoterm} via {voie})" pour le montant total ACT.<br>
+        Les champs <code>refACT</code> + <code>refACTDate</code> du devis sont toujours mis à jour.
+      </div>
+    </div>
+    <div id="aimp-raw-wrap" style="display:none;margin-top:12px">
+      <details style="font-size:11px;color:var(--muted)">
+        <summary style="cursor:pointer">🔍 Voir le texte brut extrait du PDF (debug)</summary>
+        <pre id="aimp-raw-text" style="background:rgba(0,0,0,.2);padding:10px;border-radius:4px;max-height:200px;overflow:auto;font-family:var(--mono);font-size:10.5px;white-space:pre-wrap;margin-top:6px"></pre>
+      </details>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mAIMP')">Annuler</button>
+    <button class="btn btn-teal" id="aimp-confirm-btn" onclick="confirmACTImport()" disabled style="border-color:rgba(251,191,36,.5);color:#fbbf24;background:rgba(251,191,36,.1)">✓ Importer dans le devis</button>
   </div>
 </div></div>
 
@@ -8131,6 +8240,111 @@ var DV_STATUS_META={
 };
 
 // =============================================================================
+// PHASES_META — 8 phases du cycle de vie devis → livraison → facturation
+// =============================================================================
+// Ordonnées chronologiquement (idx). Chaque phase a un libellé, une couleur
+// (pour la pill), et une icône Tabler. Stockage : d.phase = clé (ex: 'envoye'),
+// d.phaseDate = ISO date (auto-saisie quand on change le dropdown).
+// =============================================================================
+var PHASES_META={
+  'envoye':           {idx:1,label:'Devis envoyé',         color:'#88aae0',icon:'send',         pill:'p-info'},
+  'bc_recu':          {idx:2,label:'BC client reçu',       color:'#5dcaa5',icon:'mail-check',   pill:'p-success'},
+  'po_emerson':       {idx:3,label:'PO Emerson envoyé',    color:'#818cf8',icon:'arrow-up-right',pill:'p-indigo'},
+  'confirm_emerson':  {idx:4,label:'Confirmation Emerson', color:'#22d3ee',icon:'check',        pill:'p-cyan'},
+  'production':       {idx:5,label:'En production',        color:'#ef9f27',icon:'tools',        pill:'p-warning'},
+  'expedie':          {idx:6,label:'Expédié',              color:'#a78bfa',icon:'truck-delivery',pill:'p-purple'},
+  'receptionne':      {idx:7,label:'Réceptionné',          color:'#86efac',icon:'package-import',pill:'p-success-soft'},
+  'facture':          {idx:8,label:'Facturé client',       color:'#7c3aed',icon:'receipt',      pill:'p-purple-deep'}
+};
+
+// =============================================================================
+// Helpers d'extraction des références "courtes" (zone rouge des spécifications)
+// =============================================================================
+// Réf Emerson : "23306657 Ver 5" → "23306657 V5"
+//               "Emerson Proposal: 27818948 Ver:1" → "27818948 V1"
+function _shortEmerson(s){
+  if(!s) return '';
+  s=String(s).trim();
+  var m=s.match(/(\d{6,9})[^\d]*Ver[^\d]*(\d+)/i);
+  if(m) return m[1]+' V'+m[2];
+  // Fallback : juste le numéro 6-9 chiffres en début ou seul
+  var m2=s.match(/(\d{6,9})/);
+  if(m2) return m2[1];
+  return s.length>14?s.substring(0,14)+'…':s;
+}
+// Réf ACT : "2026-488 - LP - CALINSTRUM - EXW MELBOURNE - LCL - DGX" → "2026-488"
+function _shortACT(s){
+  if(!s) return '';
+  s=String(s).trim();
+  var m=s.match(/(\d{4}\s*-\s*\d{2,5})/);
+  if(m) return m[1].replace(/\s+/g,'');
+  return s.length>14?s.substring(0,14)+'…':s;
+}
+// PO Calinstrum : NUMÉRO COMPLET (l'utilisateur veut le voir intégralement)
+// "Purchase Order CALINSTRUM PO18102024051 réf Emerson 23306657Ver5" → "PO18102024051"
+// Mais s'il n'y a pas de pattern "PO\d+" on retourne tel quel (cas où le user saisit la réf brute)
+function _shortPO(s){
+  if(!s) return '';
+  s=String(s).trim();
+  var m=s.match(/PO\s*[\-_]?\s*(\d[\d\-_\/]+)/i);
+  if(m) return 'PO'+m[1].replace(/\s+/g,'');
+  // Format CALINSTRUM "DDMMYYYY/NNN" (ex: 18102024/051)
+  var m2=s.match(/\d{2,8}[\/\-]\d{2,5}/);
+  if(m2) return m2[0];
+  return s; // numéro PO complet par défaut (pas de troncature)
+}
+// fmtD : formatte une ISO YYYY-MM-DD en DD/MM (utile pour les pills compactes)
+function _fmtDateShort(iso){
+  if(!iso || typeof iso!=='string') return '';
+  var m=iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return iso;
+  return m[3]+'/'+m[2];
+}
+
+// =============================================================================
+// _renderTraca(d) — rend la cellule "Traçabilité" pour la liste Devis (Option C)
+// =============================================================================
+// 4 mini-pills inline horizontales : 📋 phase · 🔧 emerson · 📦 act · 🛒 po-cali
+// Chaque pill : icône + valeur courte + date courte (DD/MM). Tooltip = valeur longue.
+// Si une donnée manque, la pill s'affiche grisée avec "—".
+// =============================================================================
+function _renderTraca(d){
+  if(!d) return '';
+  function pill(opts){
+    // opts: {icon, label, value, date, color, fullValue}
+    var hasVal=!!opts.value;
+    var clr=hasVal?opts.color:'rgba(120,120,120,0.4)';
+    var bg=hasVal?(opts.color+'1a'):'rgba(80,80,80,0.08)'; // 1a = ~10% alpha en hex
+    var bdr=hasVal?(opts.color+'40'):'rgba(120,120,120,0.18)';
+    var txtClr=hasVal?'var(--text)':'var(--muted-soft)';
+    var dt=opts.date?(' · '+_fmtDateShort(opts.date)):'';
+    var val=hasVal?opts.value:'—';
+    var title=esc((opts.label||'')+(hasVal?(' : '+(opts.fullValue||opts.value)):' : non renseigné')+(opts.date?(' ('+opts.date+')'):''));
+    return '<span class="traca-pill" title="'+title+'" '+
+      'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;'+
+      'background:'+bg+';border:0.5px solid '+bdr+';'+
+      'font-size:10px;line-height:1.3;color:'+txtClr+';font-family:JetBrains Mono,monospace;white-space:nowrap">'+
+      '<i class="ti ti-'+opts.icon+'" style="font-size:11px;color:'+clr+'"></i>'+
+      '<span>'+esc(val)+esc(dt)+'</span></span>';
+  }
+  // Phase : on utilise PHASES_META pour la couleur
+  var phaseMeta=d.phase&&PHASES_META[d.phase]?PHASES_META[d.phase]:null;
+  var phaseLabel=phaseMeta?phaseMeta.label:'';
+  // Truncation phase pour ne pas exploser la largeur
+  var phaseLabelShort=phaseLabel.length>16?(phaseLabel.substring(0,15)+'…'):phaseLabel;
+  var phaseColor=phaseMeta?phaseMeta.color:'#a3a39a';
+  var phaseIcon=phaseMeta?phaseMeta.icon:'flag';
+
+  var html='<div class="traca-cell" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">';
+  html+=pill({icon:phaseIcon,label:'Phase',value:phaseLabelShort,fullValue:phaseLabel,date:d.phaseDate||'',color:phaseColor});
+  html+=pill({icon:'circuit-bulb',label:'Réf Emerson',value:_shortEmerson(d.refEmerson),fullValue:d.refEmerson,date:d.refEmersonDate||'',color:'#22d3ee'});
+  html+=pill({icon:'building-warehouse',label:'Réf ACT',value:_shortACT(d.refACT),fullValue:d.refACT,date:d.refACTDate||'',color:'#fbbf24'});
+  html+=pill({icon:'shopping-cart',label:'PO Calinstrum',value:_shortPO(d.poCalinstrum),fullValue:d.poCalinstrum,date:d.poCalinstrumDate||'',color:'#a78bfa'});
+  html+='</div>';
+  return html;
+}
+
+// =============================================================================
 // _getStatusDate — date à afficher pour un devis selon son statut
 // Logique métier "smart finance" :
 //   - Accepté  → date de réception du BC Client SLN (champ d.bcClientSLNDate
@@ -8965,6 +9179,7 @@ function renderDVPro(){
       '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Type</th>'+
       '<th style="text-align:right;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">TTC</th>'+
       '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Statut</th>'+
+      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Traçabilité</th>'+
       '<th style="width:70px;padding:10px 14px"></th>'+
       '</tr></thead><tbody>';
 
@@ -9015,6 +9230,10 @@ function renderDVPro(){
       html+='<td style="padding:12px 14px;vertical-align:top">'+
         '<span class="pill-pro '+meta.pill+'">'+meta.label+'</span>'+
         statusDateHtml+
+        '</td>';
+      // Traçabilité : 4 mini-pills inline (Phase / Emerson / ACT / PO Cali)
+      html+='<td style="padding:12px 8px;vertical-align:top;max-width:340px">'+
+        ((typeof _renderTraca==='function')?_renderTraca(d):'')+
         '</td>';
       // Actions
       html+='<td style="padding:12px 14px;vertical-align:top;text-align:right" onclick="event.stopPropagation()">'+
@@ -10056,6 +10275,11 @@ function openDV(id){
       gv('dv-tgc-mention',d.tgcM||'506-2');gv('dv-link-emerson',d.linkEmerson||'');gv('dv-link-bc',d.linkBC||'');gv('dv-link-po',d.linkPO||'');gv('dv-link-other',d.linkOther||'');
       gv('dv-bc-client-sln',d.bcClientSLN||'');gv('dv-bc-client-sln-date',d.bcClientSLNDate||'');
       gv('dv-cadre-ref',d.cadreRef||'');gv('dv-cadre-start',d.cadreStart||'');
+      // Bloc Traçabilité — 8 champs pour le cycle de vie (cf. PHASES_META)
+      gv('dv-phase',d.phase||'');gv('dv-phase-date',d.phaseDate||'');
+      gv('dv-ref-emerson',d.refEmerson||'');gv('dv-ref-emerson-date',d.refEmersonDate||'');
+      gv('dv-ref-act',d.refACT||'');gv('dv-ref-act-date',d.refACTDate||'');
+      gv('dv-po-calinstrum',d.poCalinstrum||'');gv('dv-po-calinstrum-date',d.poCalinstrumDate||'');
       var elDvCond=document.getElementById('dv-conditionsCommerciales');
       if(elDvCond)elDvCond.value=d.conditionsCommerciales||'';
       var elDvRem=document.getElementById('dv-remarques');
@@ -10103,6 +10327,11 @@ function openDV(id){
     gv('dv-status','Brouillon');gv('dv-validite','1 mois');gv('dv-delai','');gv('dv-notes','');gv('dv-tgc-mention','506-2');gv('dv-link-emerson','');gv('dv-link-bc','');gv('dv-link-po','');gv('dv-link-other','');
     gv('dv-bc-client-sln','');gv('dv-bc-client-sln-date','');
     gv('dv-cadre-ref','');gv('dv-cadre-start','');
+    // Bloc Traçabilité — 8 champs vides pour nouveau devis
+    gv('dv-phase','');gv('dv-phase-date','');
+    gv('dv-ref-emerson','');gv('dv-ref-emerson-date','');
+    gv('dv-ref-act','');gv('dv-ref-act-date','');
+    gv('dv-po-calinstrum','');gv('dv-po-calinstrum-date','');
     var elDvCondNew=document.getElementById('dv-conditionsCommerciales');
     if(elDvCondNew)elDvCondNew.value='';
     var elDvRemNew=document.getElementById('dv-remarques');
@@ -10923,6 +11152,11 @@ function getDV(){
     remarques:(document.getElementById('dv-remarques')?document.getElementById('dv-remarques').value:''),
     bcClientSLN:gvg('dv-bc-client-sln'),bcClientSLNDate:gvg('dv-bc-client-sln-date'),
     cadreRef:gvg('dv-cadre-ref'),cadreStart:gvg('dv-cadre-start'),
+    // Traçabilité (8 champs)
+    phase:gvg('dv-phase'),phaseDate:gvg('dv-phase-date'),
+    refEmerson:gvg('dv-ref-emerson'),refEmersonDate:gvg('dv-ref-emerson-date'),
+    refACT:gvg('dv-ref-act'),refACTDate:gvg('dv-ref-act-date'),
+    poCalinstrum:gvg('dv-po-calinstrum'),poCalinstrumDate:gvg('dv-po-calinstrum-date'),
     linkFactureId:existing?existing.linkFactureId:undefined, // préserver si déjà créée
     linkEmerson:gvg('dv-link-emerson'),linkBC:gvg('dv-link-bc'),linkPO:gvg('dv-link-po'),linkOther:gvg('dv-link-other'),
     lines:JSON.parse(JSON.stringify(dvL)),ht:t.ht,t11:t.t11,t22:t.t22,t6:t.t6,fr:t.fr,ttc:t.ttc};
@@ -11189,6 +11423,26 @@ function onDVStatusChange(){
         info.innerHTML='';
       }
     }
+  }
+}
+
+// === GESTION DU CHANGEMENT DE PHASE (Traçabilité) ===
+// À chaque changement du dropdown Phase, on auto-saisit la date du jour dans
+// le champ associé `dv-phase-date` SI ce dernier est vide. Si l'utilisateur a
+// déjà saisi une date manuelle, on la respecte. Si la phase est remise à
+// "— Aucune —", on vide aussi la date.
+function onDVPhaseChange(){
+  var phase=gvg('dv-phase');
+  var dateInput=document.getElementById('dv-phase-date');
+  if(!dateInput) return;
+  if(!phase){
+    // Phase vidée → vider la date associée
+    dateInput.value='';
+    return;
+  }
+  // Phase sélectionnée et date vide → mettre la date du jour
+  if(!dateInput.value){
+    dateInput.value=(typeof td==='function')?td():new Date().toISOString().substring(0,10);
   }
 }
 
@@ -19820,6 +20074,264 @@ function openAttachDB(){
     req.onerror=function(e){reject(e.target.error);};
   });
 }
+
+// =============================================================================
+// IMPORT COTATION ACT (PDF) — Parser pour cotations transitaire ACT
+// =============================================================================
+// Format observé du PDF ACT (analysé sur 2 exemples : 2024-802 air, 2026-488 mer):
+//   - Société: CALINSTRUM
+//   - N/Ref: YYYY-NNN LP (ex: 2026-488 LP)
+//   - Date: DD/MM/YYYY
+//   - Incoterm: FCA SYDNEY / EXW MELBOURNE / etc.
+//   - Voie aérienne ou Voie maritime (avec compagnie)
+//   - Cours AUD/XPF
+//   - Total Fret + Assurance, Total Frais Locaux, TOTAL FACTURE ACT
+//   - Validité (Hors surcharges) DD/MM/YYYY
+// =============================================================================
+var aimpState={header:null,pdfFile:null,pdfBytes:null,rawText:''};
+
+function triggerACTPdfImport(){
+  var inp=document.getElementById('dv-act-pdf-input');
+  if(inp){inp.value='';inp.click();}
+}
+
+function handleACTPdfSelected(event){
+  var f=event.target.files&&event.target.files[0];
+  if(!f)return;
+  if(typeof pdfjsLib==='undefined'){
+    alert('La bibliothèque pdf.js n\'est pas chargée. Vérifie ta connexion internet.');
+    return;
+  }
+  aimpState={header:null,pdfFile:f,pdfBytes:null,rawText:''};
+  om('mAIMP');
+  setAimpStatus('⏳ Lecture du PDF ACT en cours...');
+  document.getElementById('aimp-header-preview').style.display='none';
+  document.getElementById('aimp-options-wrap').style.display='none';
+  document.getElementById('aimp-raw-wrap').style.display='none';
+  document.getElementById('aimp-confirm-btn').disabled=true;
+
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var arr=new Uint8Array(e.target.result);
+      aimpState.pdfBytes=arr.slice(0);
+      extractACTPdf(arr).then(function(result){
+        aimpState.header=result.header;
+        aimpState.rawText=result.rawText;
+        renderAimpPreview();
+      }).catch(function(err){
+        console.error('Parse ACT error:',err);
+        setAimpStatus('❌ Erreur lors de l\'analyse : '+(err.message||err));
+      });
+    }catch(ex){
+      console.error(ex);
+      setAimpStatus('❌ Erreur lors de la lecture du fichier : '+(ex.message||ex));
+    }
+  };
+  reader.onerror=function(){setAimpStatus('❌ Impossible de lire le fichier.');};
+  reader.readAsArrayBuffer(f);
+}
+
+function setAimpStatus(msg){
+  var el=document.getElementById('aimp-status');
+  if(el)el.innerHTML=msg;
+}
+
+// Extraction du texte brut du PDF via pdf.js (similaire à extractEmersonPdf)
+function extractACTPdf(uint8arr){
+  return pdfjsLib.getDocument({data:uint8arr}).promise.then(function(pdf){
+    var tasks=[];
+    for(var i=1;i<=pdf.numPages;i++){
+      tasks.push(pdf.getPage(i).then(function(page){
+        return page.getTextContent().then(function(tc){
+          var lineMap={};
+          tc.items.forEach(function(it){
+            if(!it.str||!it.transform)return;
+            var y=Math.round(it.transform[5]);
+            var x=it.transform[4];
+            if(!lineMap[y])lineMap[y]=[];
+            lineMap[y].push({x:x,str:it.str});
+          });
+          var ys=Object.keys(lineMap).map(Number).sort(function(a,b){return b-a;});
+          var lines=ys.map(function(y){
+            return lineMap[y].sort(function(a,b){return a.x-b.x;}).map(function(o){return o.str;}).join(' ').replace(/\s+/g,' ').trim();
+          }).filter(function(s){return s.length;});
+          return lines.join('\n');
+        });
+      }));
+    }
+    return Promise.all(tasks).then(function(pageTexts){
+      var rawText=pageTexts.join('\n\n---PAGE BREAK---\n\n');
+      var header=parseACTQuoteText(rawText);
+      return {header:header,rawText:rawText};
+    });
+  });
+}
+
+// Parser : extrait les champs structurés du texte brut du PDF ACT
+function parseACTQuoteText(text){
+  function parseNumXPF(s){
+    if(!s)return 0;
+    var cleaned=String(s).replace(/\s+/g,'').replace(/,/g,'.');
+    return parseFloat(cleaned)||0;
+  }
+  function isoDate(d){
+    // Convertit "12/09/2024" → "2024-09-12"
+    if(!d)return '';
+    var m=d.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if(!m)return '';
+    return m[3]+'-'+(m[2].length===1?'0'+m[2]:m[2])+'-'+(m[1].length===1?'0'+m[1]:m[1]);
+  }
+
+  var header={
+    num:'',          // ex: "2026-488"
+    refFull:'',      // ex: "2026-488 - LP - CALINSTRUM - EXW MELBOURNE"
+    date:'',         // ex: "2026-05-04" (ISO)
+    dateRaw:'',      // ex: "04/05/2026"
+    incoterm:'',     // ex: "EXW MELBOURNE"
+    voie:'',         // ex: "Voie maritime - groupage MSC"
+    cours:0,         // ex: 73.00 (AUD→XPF)
+    totalFret:0,     // ex: 104203
+    totalFrais:0,    // ex: 213606
+    totalACT:0,      // ex: 317809
+    validite:'',     // ex: "31/05/2026"
+    societe:''       // ex: "CALINSTRUM"
+  };
+
+  // N/Ref : "N/Ref: 2026-488 LP" → on capture "2026-488"
+  var mRef=text.match(/N\/Ref\s*:?\s*(\d{4}\s*-\s*\d{2,5})\s*LP/i);
+  if(mRef){header.num=mRef[1].replace(/\s+/g,'');}
+
+  // Date : première occurrence "Date: DD/MM/YYYY" en haut du document
+  var mDate=text.match(/Date\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
+  if(mDate){header.dateRaw=mDate[1];header.date=isoDate(mDate[1]);}
+
+  // Incoterm
+  var mIncoterm=text.match(/Incoterm\s*:?\s*([A-Z][A-Z\s]{2,40}?)(?:\s+(?:Devise|Marchandise|Cours)|$|\n)/i);
+  if(mIncoterm){header.incoterm=mIncoterm[1].trim().replace(/\s+/g,' ');}
+
+  // Voie : aérienne ou maritime, on prend la ligne complète
+  var mVoieAir=text.match(/Voie\s+a[eé]rienne\s*:?\s*([^\n]+?)(?:\n|CIE|Cie|Poids)/i);
+  var mVoieMer=text.match(/Voie\s+maritime\s*:?\s*([^\n]+?)(?:\n|Cie|Poids|Volume)/i);
+  if(mVoieAir){
+    var compAir=text.match(/CIE\s+AERIENNE\s+([^\n]+?)(?:\n|Volume|Poids)/i);
+    header.voie='Aérienne · '+mVoieAir[1].trim().replace(/\s+/g,' ')+(compAir?' · '+compAir[1].trim():'');
+  } else if(mVoieMer){
+    var compMer=text.match(/Cie\s+maritime\s*:?\s*([^\n]+?)(?:\n|Volume|Poids|FRET)/i);
+    header.voie='Maritime · '+mVoieMer[1].trim().replace(/\s+/g,' ')+(compMer?' · '+compMer[1].trim():'');
+  }
+
+  // Cours AUD/XPF
+  var mCours=text.match(/Cours\s*:?\s*(\d{1,3}[,\.]\d{1,4})/i);
+  if(mCours){header.cours=parseNumXPF(mCours[1]);}
+
+  // Société (validation)
+  var mSoc=text.match(/Soci[eé]t[eé]\s*:?\s*([A-Z][A-Z\s]{2,30}?)(?:\s+Date|\n)/i);
+  if(mSoc){header.societe=mSoc[1].trim().replace(/\s+/g,' ');}
+
+  // TOTAL FRET + ASSURANCE : on prend la valeur XPF (généralement la dernière sur la ligne)
+  // Format observé : "TOTAL FRET + ASSURANCE   706,47   AUD   52 928   XPF"
+  // On capture le dernier groupe numérique avant XPF
+  var mFret=text.match(/TOTAL\s+FRET\s*\+\s*ASSURANCE[\s\d,\.AUDPFX]*?(\d[\d\s,]*)\s*XPF/i);
+  if(mFret){header.totalFret=parseNumXPF(mFret[1]);}
+
+  // TOTAL FRAIS LOCAUX : "TOTAL FRAIS LOCAUX   807 372   XPF"
+  var mFrais=text.match(/TOTAL\s+FRAIS\s+LOCAUX[\s\d,\.XPF]*?(\d[\d\s,]*)\s*XPF/i);
+  if(mFrais){header.totalFrais=parseNumXPF(mFrais[1]);}
+
+  // TOTAL FACTURE ACT : ligne finale, en rouge dans le PDF original
+  var mTotal=text.match(/TOTAL\s+FACTURE\s+ACT[\s\d,\.XPF]*?(\d[\d\s,]*)\s*XPF/i);
+  if(mTotal){header.totalACT=parseNumXPF(mTotal[1]);}
+
+  // Validité (Hors surcharges) DD/MM/YYYY
+  var mValid=text.match(/Validit[eé][^\d]*(\d{1,2}\/\d{1,2}\/\d{4})/i);
+  if(mValid){header.validite=mValid[1];}
+
+  // Construction du refFull (ce qui sera stocké dans d.refACT)
+  // Format type : "2026-488 - LP - CALINSTRUM - EXW MELBOURNE - LCL - DGX"
+  // À partir des champs extraits, on reconstruit
+  var parts=[];
+  if(header.num) parts.push(header.num);
+  parts.push('LP');
+  if(header.societe) parts.push(header.societe);
+  if(header.incoterm) parts.push(header.incoterm);
+  header.refFull=parts.join(' - ');
+
+  return header;
+}
+
+// Affiche le contenu extrait dans la modale preview
+function renderAimpPreview(){
+  var h=aimpState.header;
+  if(!h){setAimpStatus('❌ Aucune donnée extraite.');return;}
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  document.getElementById('aimp-num').textContent=h.num||'—';
+  document.getElementById('aimp-date').textContent=h.dateRaw||'—';
+  document.getElementById('aimp-incoterm').textContent=h.incoterm||'—';
+  document.getElementById('aimp-voie').textContent=h.voie||'—';
+  document.getElementById('aimp-cours').textContent=h.cours?h.cours.toFixed(2)+' XPF/AUD':'—';
+  document.getElementById('aimp-validite').textContent=h.validite||'—';
+  document.getElementById('aimp-fret').textContent=h.totalFret?fNloc(h.totalFret)+' XPF':'—';
+  document.getElementById('aimp-frais').textContent=h.totalFrais?fNloc(h.totalFrais)+' XPF':'—';
+  document.getElementById('aimp-total').textContent=h.totalACT?fNloc(h.totalACT)+' XPF':'—';
+
+  document.getElementById('aimp-header-preview').style.display='block';
+  document.getElementById('aimp-options-wrap').style.display='block';
+  document.getElementById('aimp-raw-wrap').style.display='block';
+  document.getElementById('aimp-raw-text').textContent=aimpState.rawText||'';
+  document.getElementById('aimp-confirm-btn').disabled=false;
+
+  var msgParts=[];
+  if(h.num) msgParts.push('N° '+h.num);
+  if(h.totalACT) msgParts.push('Total '+fNloc(h.totalACT)+' XPF');
+  setAimpStatus('✅ Cotation ACT extraite ('+msgParts.join(' · ')+'). Vérifiez les valeurs avant import.');
+}
+
+// Confirmation : applique les modifs au devis en cours
+function confirmACTImport(){
+  var h=aimpState.header;
+  if(!h){alert('Aucune donnée à importer.');return;}
+  if(!h.num){
+    if(!confirm('⚠ Aucun N° de cotation ACT n\'a été détecté.\n\nImporter quand même ?')) return;
+  }
+
+  // 1. Remplir les champs Réf ACT + Date dans la modale Devis ouverte
+  var refField=document.getElementById('dv-ref-act');
+  var dateField=document.getElementById('dv-ref-act-date');
+  if(refField){refField.value=h.refFull||h.num||'';}
+  if(dateField){dateField.value=h.date||'';}
+
+  // 2. Si checkbox cochée → ajouter ligne fret au devis (dvL.fret)
+  var addFret=document.getElementById('aimp-add-fret-line').checked;
+  var lignesAjoutees=0;
+  if(addFret && h.totalACT>0){
+    if(typeof dvL!=='undefined' && dvL.fret){
+      var voieShort=h.voie?(' via '+h.voie.split('·')[0].trim()):'';
+      var desc='Frais de transit ACT - '+(h.num||'?')+' ('+(h.incoterm||'?')+voieShort+')';
+      dvL.fret.push({
+        ref:'ACT-'+(h.num||'').replace(/\s+/g,''),
+        desc:desc,
+        qte:1,
+        pu:h.totalACT,
+        tgc:6, // TGC services 6%
+        unite:'forfait'
+      });
+      lignesAjoutees=1;
+      // Re-render des lignes du devis pour visualiser l'ajout
+      if(typeof rDVlines==='function') rDVlines();
+    }
+  }
+
+  // 3. Fermer la modale et confirmer
+  cm('mAIMP');
+  var msg='✅ Cotation ACT importée';
+  if(h.num) msg+=' ('+h.num+')';
+  if(lignesAjoutees) msg+=' · '+lignesAjoutees+' ligne fret ajoutée';
+  // Toast léger via alert pour visibilité immédiate
+  if(typeof showBCSaveToast==='function') showBCSaveToast(msg);
+  else alert(msg);
+}
+
 function storeBCAttachment(att){
   return openAttachDB().then(function(db){
     return new Promise(function(resolve,reject){
@@ -19980,6 +20492,31 @@ function saveBC(){
   }
   if(eBCid){var i=DB.bcs.findIndex(function(x){return x.id===eBCid;});if(i>=0)DB.bcs[i]=b;else DB.bcs.push(b);}
   else {DB.bcs.push(b);eBCid=b.id;} // IMPORTANT : mémoriser l'ID pour que re-sauvegarder ne crée pas de doublon
+  // === SYNC BC → DEVIS LIÉ (Traçabilité) ===
+  // Si le BC est rattaché à un devis (devisLieId), on sync automatiquement
+  // les champs poCalinstrum + poCalinstrumDate sur le devis. Cela alimente
+  // la colonne Traçabilité de la liste Devis sans saisie manuelle.
+  // Le N° de PO Calinstrum = b.num, la date = b.date (date d'envoi du PO vers Emerson).
+  if(b.devisLieId){
+    var dvLink=DB.devis.find(function(x){return x.id===b.devisLieId || String(x.id)===String(b.devisLieId);});
+    if(dvLink){
+      // Toujours rafraîchir : si l'utilisateur a modifié le BC (date ou num), on propage.
+      dvLink.poCalinstrum=b.num||dvLink.poCalinstrum||'';
+      dvLink.poCalinstrumDate=b.date||dvLink.poCalinstrumDate||'';
+      // Auto-avancer la phase si elle est en amont du PO Emerson
+      if(typeof PHASES_META!=='undefined' && PHASES_META[dvLink.phase]){
+        var currentIdx=PHASES_META[dvLink.phase].idx;
+        if(currentIdx<3){ // < "PO Emerson envoyé"
+          dvLink.phase='po_emerson';
+          dvLink.phaseDate=b.date||((typeof td==='function')?td():new Date().toISOString().substring(0,10));
+        }
+      } else if(!dvLink.phase){
+        // Aucune phase → on initialise à "PO Emerson envoyé"
+        dvLink.phase='po_emerson';
+        dvLink.phaseDate=b.date||((typeof td==='function')?td():new Date().toISOString().substring(0,10));
+      }
+    }
+  }
   // === SYNC BC → FACTURE PRÉ-FACTURÉE ===
   // Déclenche la création/maj de la facture SLN-Fxxx liée si statut Confirmé
   // (et au passage on remet à jour si déjà confirmé pour propager d'éventuelles modifs de lignes/montants)
