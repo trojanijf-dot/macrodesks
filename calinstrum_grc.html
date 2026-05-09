@@ -7884,7 +7884,374 @@ function rDashPro(){
   }
 }
 
-// Génère un SVG line chart pour l'évolution mensuelle (3 séries)
+// =============================================================================
+// PAGE DEVIS — Version "smart finance"
+// =============================================================================
+// Layout :
+//   1. KPIs (4 cards) : Total devis · Taux acceptation · Montant moyen · Délai signature
+//   2. Pipeline horizontal : Brouillon → Envoyé → Accepté → Facturé/Refusé
+//   3. Filtres compacts (recherche + statut + client + tri)
+//   4. Liste type "feed" : lignes denses 56px, hiérarchie 2 lignes (titre + sous-titre)
+// Conventions : Inter pour le texte, JetBrains Mono pour les montants alignés à droite.
+// Pills de statut sobres (couleur de fond ~12% opacity).
+// =============================================================================
+
+// Couleur + label par statut (pour pipeline et pills)
+var DV_STATUS_META={
+  'Brouillon':{color:'#a3a39a',label:'Brouillon',pill:'p-muted'},
+  'Envoyé':   {color:'#88aae0',label:'Envoyé',pill:'p-info'},
+  'Accepté':  {color:'#5dcaa5',label:'Accepté',pill:'p-success'},
+  'Refusé':   {color:'#f09595',label:'Refusé',pill:'p-danger'},
+  'Facturé':  {color:'#a78bfa',label:'Facturé',pill:'p-purple'},
+  'Cadre':    {color:'#fbbf24',label:'Cadre',pill:'p-warning'},
+  'Obsolète': {color:'#6e6e66',label:'Obsolète',pill:'p-muted'}
+};
+
+// KPI : taux acceptation = Accepté / (Envoyé + Accepté + Refusé + Facturé)
+function _calcKpiDV(devis){
+  function fy(d){
+    var dt=d.date||'';
+    return parseInt((dt.substring(0,4))||'0',10);
+  }
+  var currentY=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
+  var dvFy=devis.filter(function(d){return fy(d)===currentY;});
+  function ttc(d){return (typeof _getDevisTTC==='function'?_getDevisTTC(d):d.ttc)||0;}
+  var total=dvFy.reduce(function(s,d){return s+ttc(d);},0);
+  var statusCount={Brouillon:0,Envoyé:0,Accepté:0,Refusé:0,Facturé:0,Cadre:0,Obsolète:0};
+  var statusMontant={Brouillon:0,Envoyé:0,Accepté:0,Refusé:0,Facturé:0,Cadre:0,Obsolète:0};
+  dvFy.forEach(function(d){
+    var st=d.status||'Brouillon';
+    if(statusCount[st]!==undefined){
+      statusCount[st]++;
+      statusMontant[st]+=ttc(d);
+    }
+  });
+  // Taux acceptation
+  var pertinents=statusCount['Envoyé']+statusCount['Accepté']+statusCount['Refusé']+statusCount['Facturé'];
+  var tauxAccept=pertinents>0?((statusCount['Accepté']+statusCount['Facturé'])/pertinents*100):0;
+  // Montant moyen
+  var moyen=dvFy.length>0?total/dvFy.length:0;
+  // Délai signature : pour chaque devis Accepté avec date d'envoi et date d'acceptation
+  // → différence en jours. dateEnvoi/dateAccept sont des champs custom — fallback sur date.
+  var delaisSign=[];
+  dvFy.forEach(function(d){
+    if(d.status!=='Accepté'&&d.status!=='Facturé')return;
+    var dEnvoi=d.dateEnvoi||d.date;
+    var dAccept=d.dateAcceptation||d.dateAccept;
+    if(!dEnvoi||!dAccept)return;
+    var diff=(new Date(dAccept)-new Date(dEnvoi))/(1000*60*60*24);
+    if(diff>=0&&diff<365) delaisSign.push(diff);
+  });
+  var delaiMoyen=delaisSign.length>0?(delaisSign.reduce(function(s,v){return s+v;},0)/delaisSign.length):0;
+  // Cumul mensuel pour sparklines
+  var monthlyTotal=new Array(12).fill(0);
+  var monthlyCount=new Array(12).fill(0);
+  var monthlyAccepted=new Array(12).fill(0);
+  dvFy.forEach(function(d){
+    var m=parseInt((d.date||'').substring(5,7),10)-1;
+    if(m<0||m>11)return;
+    monthlyTotal[m]+=ttc(d);
+    monthlyCount[m]++;
+    if(d.status==='Accepté'||d.status==='Facturé') monthlyAccepted[m]++;
+  });
+  // Cumulatifs (pour sparkline progression)
+  function cum(arr){var o=[],s=0;arr.forEach(function(v){s+=v;o.push(s);});return o;}
+  return {
+    total:total,
+    count:dvFy.length,
+    tauxAccept:tauxAccept,
+    moyen:moyen,
+    delaiMoyen:delaiMoyen,
+    statusCount:statusCount,
+    statusMontant:statusMontant,
+    sparkTotal:cum(monthlyTotal),
+    sparkCount:cum(monthlyCount),
+    sparkAccept:cum(monthlyAccepted)
+  };
+}
+
+// Pipeline horizontal : barre empilée segmentée par statut
+function _renderDVPipeline(kpi){
+  var totalCount=Object.values(kpi.statusCount).reduce(function(s,v){return s+v;},0);
+  if(totalCount===0){
+    return '<div style="text-align:center;padding:18px;color:var(--muted-soft);font-size:12px">Aucun devis</div>';
+  }
+  // Pipeline ordonné : Brouillon → Envoyé → Accepté → Facturé / Refusé / Cadre / Obsolète
+  var ordered=['Brouillon','Envoyé','Accepté','Facturé','Cadre','Refusé','Obsolète'];
+  var html='<div class="dv-pipeline" style="display:flex;height:36px;border-radius:8px;overflow:hidden;background:rgba(255,255,250,0.04);border:0.5px solid rgba(255,255,250,0.10)">';
+  ordered.forEach(function(st){
+    var n=kpi.statusCount[st]||0;
+    if(n===0) return;
+    var meta=DV_STATUS_META[st];
+    var pct=(n/totalCount*100).toFixed(1);
+    var mtTotal=kpi.statusMontant[st]||0;
+    function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+    var tooltip=meta.label+' · '+n+' devis · '+fNloc(mtTotal)+' XPF';
+    html+='<div class="dv-pipeline-seg" data-status="'+st+'" title="'+tooltip+'" style="flex:'+n+';background:'+meta.color+';display:flex;align-items:center;justify-content:center;color:rgba(0,0,0,0.6);font-size:11px;font-weight:500;letter-spacing:0.02em;cursor:pointer;transition:all .15s">';
+    if(parseFloat(pct)>=8){
+      html+='<span style="color:rgba(20,20,15,0.85)">'+meta.label+' <span style="opacity:0.7">('+n+')</span></span>';
+    }
+    html+='</div>';
+  });
+  html+='</div>';
+  // Légende détaillée sous la barre
+  html+='<div class="dv-pipeline-legend" style="display:flex;gap:18px;margin-top:10px;font-size:11px;color:var(--muted);flex-wrap:wrap">';
+  ordered.forEach(function(st){
+    var n=kpi.statusCount[st]||0;
+    if(n===0) return;
+    var meta=DV_STATUS_META[st];
+    function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+    var mtTotal=kpi.statusMontant[st]||0;
+    html+='<span style="display:inline-flex;align-items:center;gap:6px">'+
+      '<span style="width:8px;height:8px;border-radius:2px;background:'+meta.color+'"></span>'+
+      '<span>'+meta.label+'</span>'+
+      '<span class="num" style="color:var(--text);font-size:11px" data-money>'+n+'</span>'+
+      '<span style="color:var(--muted-soft);font-size:10.5px">·</span>'+
+      '<span class="num" style="color:var(--muted-soft);font-size:10.5px" data-money>'+fNloc(mtTotal)+' XPF</span>'+
+      '</span>';
+  });
+  html+='</div>';
+  return html;
+}
+
+// Mini sparkline (réutilise makeSparkline du dashboard)
+function _miniSparkline(values, color){
+  if(typeof makeSparkline==='function') return makeSparkline(values, color, true);
+  // Fallback minimal
+  if(!values||values.length===0) return '';
+  var w=100,h=22;
+  var max=Math.max.apply(null,values)||1;
+  var pts=values.map(function(v,i){
+    return ((i/(values.length-1))*w).toFixed(1)+','+(h-(v/max)*h).toFixed(1);
+  }).join(' ');
+  return '<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" style="width:100%;height:'+h+'px"><polyline points="'+pts+'" fill="none" stroke="'+color+'" stroke-width="1.5"/></svg>';
+}
+
+// Page Devis pro
+function renderDVPro(){
+  var page=document.getElementById('page-devis');
+  if(!page) return;
+
+  // === Récupérer / nettoyer les filtres existants (réutilise les contrôles HTML) ===
+  var s=(gvg('sDV')||'').toLowerCase();
+  var fc=gvg('fDVcli')||'';
+  var fs=gvg('fDVst')||'';
+  var sortKey=gvg('fDVsort')||'date-desc';
+
+  // === Filtre par client actif (onglet) ===
+  var dvAll=DB.devis||[];
+  var dataPre=dvAll.filter(function(x){return(!fc||x.client===fc)&&(!fs||x.status===fs)&&(!s||(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)>=0);});
+  var data=(typeof filterByActiveClient==='function')?filterByActiveClient(dataPre,'dv'):dataPre;
+
+  // === KPIs sur l'ensemble (avant filtre, pour refléter l'année fiscale globale) ===
+  var kpi=_calcKpiDV(dvAll);
+
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+
+  // === HTML ===
+  var html='<div class="dvpro-wrap">';
+
+  // ========== Toolbar (boutons d'import/création) ==========
+  html+='<div class="dvpro-toolbar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">';
+  html+='<div style="font-size:13px;color:var(--muted);letter-spacing:0.04em" class="no-pm-blur">'+
+    '<span style="color:var(--text);font-weight:500" data-money>'+kpi.count+'</span> devis · '+
+    '<span class="num" style="color:var(--text)" data-money>'+fNloc(kpi.total)+' XPF</span> total émis cette année'+
+    '</div>';
+  html+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  html+='<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'dv-import-file\').click()" title="Importer un ancien devis PDF"><i class="ti ti-file-import" style="font-size:13px"></i> Import PDF</button>';
+  html+='<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'dv-import-emerson-file\').click()" title="Importer un devis Emerson"><i class="ti ti-cloud-download" style="font-size:13px"></i> Emerson PDF</button>';
+  html+='<button class="btn btn-ghost btn-sm" onclick="uploadExcelSyncStandard()" title="Sync Excel multi-clients" style="color:#5dcaa5;border-color:rgba(93,202,165,0.3)"><i class="ti ti-table-import" style="font-size:13px"></i> Excel multi</button>';
+  html+='<button class="btn btn-ghost btn-sm" onclick="generateCadreFromInvoices()" title="Auto-générer devis cadre depuis factures" style="color:#88aae0;border-color:rgba(136,170,224,0.3)"><i class="ti ti-wand" style="font-size:13px"></i> Auto cadre</button>';
+  html+='<button class="btn btn-ghost btn-sm" onclick="openDV()" style="color:#5dcaa5;border-color:rgba(93,202,165,0.4);background:rgba(93,202,165,0.06)"><i class="ti ti-plus" style="font-size:13px"></i> Nouveau devis</button>';
+  html+='</div>';
+  html+='</div>';
+
+  // ========== KPIs (4 cards) ==========
+  html+='<div class="kpi-grid-pro" style="margin-bottom:16px">';
+  // 1. Total devis
+  html+='<div class="kpi-pro kpi-blue">'+
+    '<div class="kpi-label"><i class="ti ti-file-text"></i>Total devis '+(typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear())+'</div>'+
+    '<div class="kpi-value" data-money>'+fNloc(kpi.total)+'</div>'+
+    '<div class="kpi-sub">XPF · '+kpi.count+' devis</div>'+
+    _miniSparkline(kpi.sparkTotal,'#88aae0')+
+    '</div>';
+  // 2. Taux acceptation
+  var tauxColor=kpi.tauxAccept>=70?'#5dcaa5':(kpi.tauxAccept>=40?'#fbbf24':'#f09595');
+  html+='<div class="kpi-pro" style="border-top:2px solid '+tauxColor+'">'+
+    '<div class="kpi-label"><i class="ti ti-target-arrow"></i>Taux acceptation</div>'+
+    '<div class="kpi-value" data-money style="color:'+tauxColor+'">'+kpi.tauxAccept.toFixed(0)+'%</div>'+
+    '<div class="kpi-sub">'+kpi.statusCount['Accepté']+kpi.statusCount['Facturé']+' acceptés · '+kpi.statusCount['Refusé']+' refusés</div>'+
+    _miniSparkline(kpi.sparkAccept,tauxColor)+
+    '</div>';
+  // 3. Montant moyen
+  html+='<div class="kpi-pro">'+
+    '<div class="kpi-label"><i class="ti ti-calculator"></i>Montant moyen</div>'+
+    '<div class="kpi-value" data-money>'+fNloc(kpi.moyen)+'</div>'+
+    '<div class="kpi-sub">XPF par devis</div>'+
+    _miniSparkline(kpi.sparkTotal,'#a3a39a')+
+    '</div>';
+  // 4. Délai signature
+  var delaiTxt=kpi.delaiMoyen>0?Math.round(kpi.delaiMoyen)+' jours':'—';
+  var delaiColor=kpi.delaiMoyen<14?'#5dcaa5':(kpi.delaiMoyen<30?'#fbbf24':'#f09595');
+  html+='<div class="kpi-pro" style="border-top:2px solid '+delaiColor+'">'+
+    '<div class="kpi-label"><i class="ti ti-clock"></i>Délai signature</div>'+
+    '<div class="kpi-value" style="color:'+delaiColor+'">'+delaiTxt+'</div>'+
+    '<div class="kpi-sub">moyenne envoi → accepté</div>'+
+    '</div>';
+  html+='</div>';
+
+  // ========== Pipeline horizontal ==========
+  html+='<div class="card-pro" style="margin-bottom:16px">';
+  html+='<div class="card-pro-title"><i class="ti ti-funnel"></i>Pipeline commercial '+(typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear())+'</div>';
+  html+=_renderDVPipeline(kpi);
+  html+='</div>';
+
+  // ========== Filtres ==========
+  html+='<div class="dvpro-filters" style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">';
+  // Recherche
+  html+='<div style="position:relative;flex:1;min-width:240px">'+
+    '<i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted-soft);font-size:14px"></i>'+
+    '<input type="text" id="sDV2" placeholder="Rechercher par n°, client, objet..." value="'+esc(s)+'" oninput="document.getElementById(\'sDV\').value=this.value;renderDV()" style="width:100%;background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:8px 12px 8px 32px;color:var(--text);font-size:12px;font-family:inherit">'+
+    '</div>';
+  // Statut
+  html+='<select id="fDVst2" onchange="document.getElementById(\'fDVst\').value=this.value;renderDV()" style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:8px 28px 8px 12px;color:var(--text);font-size:12px;cursor:pointer;font-family:inherit">';
+  ['','Brouillon','Envoyé','Accepté','Refusé','Facturé','Cadre','Obsolète'].forEach(function(st){
+    html+='<option value="'+st+'"'+(fs===st?' selected':'')+'>'+(st||'Tous statuts')+'</option>';
+  });
+  html+='</select>';
+  // Tri
+  html+='<select id="fDVsort2" onchange="document.getElementById(\'fDVsort\').value=this.value;renderDV()" style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:8px 28px 8px 12px;color:var(--text);font-size:12px;cursor:pointer;font-family:inherit">';
+  [['date-desc','Date ↓'],['date-asc','Date ↑'],['num-desc','N° ↓'],['num-asc','N° ↑'],['ttc-desc','Montant ↓'],['ttc-asc','Montant ↑']].forEach(function(opt){
+    html+='<option value="'+opt[0]+'"'+(sortKey===opt[0]?' selected':'')+'>'+opt[1]+'</option>';
+  });
+  html+='</select>';
+  // Compteur résultats
+  html+='<span style="margin-left:auto;color:var(--muted-soft);font-size:11px;letter-spacing:0.04em" class="no-pm-blur">'+
+    '<span data-money>'+data.length+'</span> résultat'+(data.length>1?'s':'')+
+    '</span>';
+  html+='</div>';
+
+  // ========== Onglets clients (réutilise renderClientTabs) ==========
+  html+='<div class="client-tabs no-print" id="dvClientTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px"></div>';
+
+  // ========== Liste type "feed" ==========
+  html+='<div class="card-pro" style="padding:0;overflow:hidden">';
+  if(data.length===0){
+    html+='<div style="text-align:center;padding:40px 20px;color:var(--muted-soft);font-size:13px">'+
+      '<i class="ti ti-file-x" style="font-size:32px;display:block;margin-bottom:10px;opacity:0.3"></i>'+
+      'Aucun devis ne correspond aux filtres'+
+      '</div>';
+  } else {
+    // Tri
+    var sorted=data.slice();
+    function getDvTTC(x){return (typeof _getDevisTTC==='function')?_getDevisTTC(x):x.ttc||0;}
+    sorted.sort(function(a,b){
+      switch(sortKey){
+        case 'date-asc': return (a.date||'').localeCompare(b.date||'');
+        case 'date-desc': return (b.date||'').localeCompare(a.date||'');
+        case 'num-asc': return (a.num||'').localeCompare(b.num||'');
+        case 'num-desc': return (b.num||'').localeCompare(a.num||'');
+        case 'ttc-asc': return getDvTTC(a)-getDvTTC(b);
+        case 'ttc-desc': return getDvTTC(b)-getDvTTC(a);
+        default: return (b.date||'').localeCompare(a.date||'');
+      }
+    });
+
+    html+='<table class="dvpro-table" style="width:100%;border-collapse:collapse">';
+    html+='<thead><tr style="background:rgba(255,255,250,0.02);border-bottom:0.5px solid var(--border)">'+
+      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">N° / Date</th>'+
+      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Client / Objet</th>'+
+      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Type</th>'+
+      '<th style="text-align:right;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">TTC</th>'+
+      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Statut</th>'+
+      '<th style="width:70px;padding:10px 14px"></th>'+
+      '</tr></thead><tbody>';
+
+    sorted.forEach(function(d){
+      var meta=DV_STATUS_META[d.status]||DV_STATUS_META['Brouillon'];
+      var ttc=getDvTTC(d);
+      var typeColor={Fourniture:'#88aae0',Prestation:'#5dcaa5',Mixte:'#a78bfa'}[d.type]||'#a3a39a';
+      var clientShort=esc((d.client||'').substring(0,40));
+      var objet=esc((d.objet||d.intitule||'').replace(/\n/g,' ').substring(0,60));
+      var dateF=(typeof fD==='function')?fD(d.date):(d.date||'');
+      // Indicateur révision si présent
+      var revBadge=d._revisionNumber?' <span style="background:rgba(251,191,36,0.15);color:#fbbf24;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:500;margin-left:4px;letter-spacing:0.04em">REV'+d._revisionNumber+'</span>':'';
+
+      html+='<tr class="dvpro-row" style="border-bottom:0.5px solid rgba(255,255,250,0.06);transition:background .12s;cursor:pointer" onclick="editDV('+d.id+')" onmouseover="this.style.background=\'rgba(255,255,250,0.025)\'" onmouseout="this.style.background=\'\'">';
+      // N° / Date
+      html+='<td style="padding:12px 14px;vertical-align:top">'+
+        '<div class="ref" style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--blue);font-weight:500">'+esc(d.num||'?')+revBadge+'</div>'+
+        '<div style="font-size:10.5px;color:var(--muted-soft);margin-top:2px">'+esc(dateF)+'</div>'+
+        '</td>';
+      // Client / Objet
+      html+='<td style="padding:12px 14px;vertical-align:top;max-width:340px">'+
+        '<div style="font-size:13px;color:var(--text);font-weight:500">'+clientShort+'</div>'+
+        '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+objet+'</div>'+
+        '</td>';
+      // Type
+      html+='<td style="padding:12px 14px;vertical-align:top">'+
+        '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)">'+
+        '<span style="width:7px;height:7px;border-radius:50%;background:'+typeColor+'"></span>'+
+        esc(d.type||'—')+
+        '</span>'+
+        '</td>';
+      // TTC
+      html+='<td style="padding:12px 14px;text-align:right;vertical-align:top">'+
+        '<div class="num" data-money style="font-family:JetBrains Mono,monospace;font-size:13px;color:var(--text);font-weight:500">'+fNloc(ttc)+'</div>'+
+        '<div style="font-size:10px;color:var(--muted-soft);margin-top:2px">XPF</div>'+
+        '</td>';
+      // Statut
+      html+='<td style="padding:12px 14px;vertical-align:top">'+
+        '<span class="pill-pro '+meta.pill+'">'+meta.label+'</span>'+
+        '</td>';
+      // Actions
+      html+='<td style="padding:12px 14px;vertical-align:top;text-align:right" onclick="event.stopPropagation()">'+
+        '<button class="btn btn-ghost btn-sm" onclick="editDV('+d.id+')" title="Éditer" style="padding:5px 8px;border:0.5px solid var(--border)"><i class="ti ti-pencil" style="font-size:12px"></i></button>'+
+        '</td>';
+      html+='</tr>';
+    });
+    html+='</tbody></table>';
+  }
+  html+='</div>';
+
+  html+='</div>'; // /.dvpro-wrap
+
+  // === Injection ===
+  // On vide la page-devis et on remplace par notre HTML pro.
+  // Mais ATTENTION : le tbody #tbDV existe en HTML statique en dehors. On crée un
+  // wrapper interne et on garde les inputs originaux cachés (sDV/fDVcli/fDVst/fDVsort)
+  // car des fonctions externes les lisent via gvg().
+  // Solution : on insère html dans page-devis SAUF qu'on doit conserver les contrôles
+  // cachés. Approche simple : on crée un container .dvpro-content qui remplace le
+  // contenu visible, et on injecte des contrôles invisibles synchronisés.
+  // Cherche ou crée un container dédié au mode pro.
+  var existingPro=page.querySelector('.dvpro-content');
+  if(existingPro){
+    existingPro.innerHTML=html;
+  } else {
+    // Cacher tout le contenu original
+    Array.from(page.children).forEach(function(c){
+      if(!c.classList.contains('dvpro-content')) c.style.display='none';
+    });
+    var container=document.createElement('div');
+    container.className='dvpro-content';
+    container.innerHTML=html;
+    page.appendChild(container);
+  }
+
+  // S'assurer que les contrôles legacy (utilisés par gvg) existent toujours quelque part
+  // → ils sont dans page-devis (cachés), donc gvg('sDV') etc continuent de marcher.
+
+  // Onglets clients (utilise la fonction existante)
+  if(typeof renderClientTabs==='function') renderClientTabs('dv',dvAll,'dvClientTabs');
+
+  // Re-flou si privacy actif
+  if(_getPrivacyStored() && typeof _privacyWrapAmounts==='function'){
+    _privacyWrapAmounts(page);
+  }
+}
+
+
 // =============================================================================
 // Graphique mensuel — version "smart finance"
 // Features :
@@ -8476,10 +8843,11 @@ function renderActivePagePro(){
   var activeBtn=document.querySelector('.sb-item.active');
   if(!activeBtn) return;
   var page=activeBtn.getAttribute('data-page')||'';
-  // Le toggle reactivate les fonctions natives (rDash, renderSuivi, etc.)
+  // Le toggle reactivate les fonctions natives (rDash, renderSuivi, renderDV, etc.)
   // qui détectent maintenant le mode pro et rendent en conséquence.
   if(typeof rDash==='function') rDash();
   if(typeof renderSuivi==='function') renderSuivi();
+  if(typeof renderDV==='function') renderDV();
 }
 
 
@@ -14607,6 +14975,27 @@ function attachDVRowsDnD(){
 }
 
 function renderDV(){
+  // Si on est en mode pro, on délègue au rendu fintech (renderDVPro)
+  // qui réécrit complètement le contenu de #page-devis.
+  if(document.body.classList.contains('theme-pro')){
+    if(typeof renderDVPro==='function') {
+      renderDVPro();
+      return;
+    }
+  } else {
+    // Mode classique : restaurer la visibilité du contenu original au cas où
+    // on vient de basculer depuis le mode pro
+    var page=document.getElementById('page-devis');
+    if(page){
+      // Retirer l'éventuel container pro
+      var pro=page.querySelector('.dvpro-content');
+      if(pro) pro.remove();
+      // Re-show le contenu original
+      Array.from(page.children).forEach(function(c){
+        if(c.style.display==='none') c.style.display='';
+      });
+    }
+  }
   updFC('fDVcli',DB.devis);
   var s=(gvg('sDV')||'').toLowerCase(),fc=gvg('fDVcli'),fs=gvg('fDVst');
   // Onglets clients : on les construit à partir de TOUS les devis (avant filtrage)
