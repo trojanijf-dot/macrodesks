@@ -3143,6 +3143,10 @@ setTimeout(function(){
     try{ normalizeAllBCs(); }
     catch(e){ console.warn('[CALINSTRUM] Normalisation BCs échouée :', e); }
   }
+  if(typeof normalizeAllBcClientSLN==='function'){
+    try{ normalizeAllBcClientSLN(); }
+    catch(e){ console.warn('[CALINSTRUM] Normalisation bcClientSLN échouée :', e); }
+  }
 },0);
 
 // =============================================================================
@@ -3496,6 +3500,87 @@ function normalizeAllBCs(){
   DB._bcsNormalizedV1=true;
   if(changed>0){
     console.log('[CALINSTRUM] Normalisation BC terminée : '+changed+' BC(s) renommé(s)');
+    if(typeof saveDB==='function') saveDB();
+  }
+  return changed;
+}
+
+// =============================================================================
+// cleanBcClientNum(s) — Extrait le N° de BC client propre depuis un texte
+// =============================================================================
+// Le champ d.bcClientSLN peut contenir des données parasitées (texte de l'email
+// du contact, mention "BC", espaces, etc.) qui empêchent le matching et nuisent
+// à la lisibilité dans la liste Devis.
+//
+// Cette fonction extrait le numéro réel en préservant les suffixes métier
+// significatifs (-01, -05-37, etc.) qui peuvent porter une information de
+// version ou de ligne de BC GMAO.
+//
+// Patterns gérés (par ordre de priorité) :
+//   1. "/ Phone Fax yannick@... BC 00727165-01-"  → "00727165-01"
+//   2. "L72923 / 0001 ( à été mis à jour...)"      → "L72923/0001"
+//   3. "L72923 / 0001"                              → "L72923/0001"
+//   4. "00722464-01-"                               → "00722464-01"
+//   5. "737125_01"                                  → "737125-01"  (underscore→tiret)
+//   6. "740704-05-37"                               → "740704-05-37"  (déjà propre)
+//   7. "743380"                                     → "743380"  (déjà propre)
+// =============================================================================
+function cleanBcClientNum(s){
+  if(!s) return '';
+  var orig=String(s).trim();
+  if(!orig) return '';
+
+  // Pattern 1 : "BC <numéro>" dans une chaîne potentiellement parasitée
+  // Capture le numéro après "BC" + suffixe optionnel "-NN" ou "-NN-NN"
+  var m=orig.match(/BC\s*:?\s*(\d{5,}(?:[-_]\d+)*)/i);
+  if(m){
+    return m[1].replace(/[_]/g,'-').replace(/-+$/,'');
+  }
+
+  // Pattern 2 : "L<digits> / <digits>" (format PRNC) avec ou sans parasites après
+  m=orig.match(/^(L\d+)\s*\/\s*(\d+)/i);
+  if(m){
+    return m[1]+'/'+m[2];
+  }
+
+  // Pattern 3 : numéro pur ou avec suffixes "-NN" / "-NN-NN" / "_NN"
+  // Capture jusqu'au premier élément non numérique/tiret
+  m=orig.match(/^(\d{4,}(?:[-_]\d+)*)/);
+  if(m){
+    return m[1].replace(/[_]/g,'-').replace(/-+$/,'');
+  }
+
+  // Pas de pattern reconnu → retour tel quel (l'utilisateur verra l'original)
+  return orig;
+}
+
+// =============================================================================
+// normalizeAllBcClientSLN() — Migration one-shot pour nettoyer bcClientSLN
+// =============================================================================
+// Applique cleanBcClientNum() à tous les devis qui ont un bcClientSLN. Préserve
+// les suffixes métier (-01, -05-37, etc.). Loggue chaque transformation pour
+// traçabilité. Protégé par flag DB._bcClientNormalizedV1.
+// =============================================================================
+function normalizeAllBcClientSLN(){
+  if(!DB || DB._bcClientNormalizedV1) return 0;
+  if(!Array.isArray(DB.devis)) return 0;
+
+  var changed=0;
+  DB.devis.forEach(function(d){
+    if(!d || !d.bcClientSLN) return;
+    var orig=String(d.bcClientSLN).trim();
+    if(!orig) return;
+    var cleaned=cleanBcClientNum(orig);
+    if(cleaned && cleaned!==orig){
+      console.log('[CALINSTRUM] BC client : '+(d.num||'?')+' : "'+orig+'" → "'+cleaned+'"');
+      d.bcClientSLN=cleaned;
+      changed++;
+    }
+  });
+
+  DB._bcClientNormalizedV1=true;
+  if(changed>0){
+    console.log('[CALINSTRUM] Normalisation bcClientSLN terminée : '+changed+' BC(s) client nettoyé(s)');
     if(typeof saveDB==='function') saveDB();
   }
   return changed;
@@ -10274,12 +10359,22 @@ function renderDVPro(){
         '<div style="font-size:13px;color:var(--text);font-weight:500">'+clientShort+'</div>'+
         '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+objet+'</div>'+
         '</td>';
-      // Type
+      // Type + BC Client (sous-ligne)
+      // - Type raccourci : "Prestation de service" → "Prestation" (cohérence avec "Fourniture")
+      // - BC Client affiché sous le type si renseigné, ellipsis pour les cas longs avec tooltip complet
+      var typeLabel=esc(d.type||'—').replace(/Prestation de service/i,'Prestation');
+      var bcClient=String(d.bcClientSLN||'').trim();
+      var bcClientHtml='';
+      if(bcClient){
+        var bcClientFull=esc(bcClient);
+        bcClientHtml='<div title="BC Client : '+bcClientFull+'" style="font-size:10px;color:var(--muted-soft);margin-top:3px;padding-left:13px;font-family:JetBrains Mono,monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">BC: '+bcClientFull+'</div>';
+      }
       html+='<td style="padding:12px 14px;vertical-align:top">'+
         '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)">'+
         '<span style="width:7px;height:7px;border-radius:50%;background:'+typeColor+'"></span>'+
-        esc(d.type||'—')+
+        typeLabel+
         '</span>'+
+        bcClientHtml+
         '</td>';
       // TTC
       html+='<td style="padding:12px 14px;text-align:right;vertical-align:top">'+
