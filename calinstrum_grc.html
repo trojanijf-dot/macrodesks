@@ -1455,18 +1455,25 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         <div style="font-size:10px;font-weight:600;color:#a78bfa;margin-bottom:6px;text-transform:uppercase">🔖 Références externes</div>
         <!-- Réf Emerson + date -->
         <div class="form-row">
-          <div class="form-group" style="margin:0"><label><i class="ti ti-circuit-bulb" style="font-size:12px;color:#22d3ee"></i> Réf Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(N° proposition complet)</span></label>
+          <div class="form-group" style="margin:0"><label><i class="ti ti-circuit-bulb" style="font-size:12px;color:#22d3ee"></i> Réf Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(N° proposition complet)</span>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(34,211,238,.4);color:#22d3ee" onclick="triggerDevisPdfUpload('emerson')" title="Stocker une copie locale du PDF Emerson (visible via 👁 dans la liste)">📎 Joindre PDF</button>
+            <input type="file" id="dv-emerson-pdf-input" accept=".pdf,application/pdf" style="display:none" onchange="handleDevisPdfSelected(event,'emerson')">
+          </label>
             <input class="form-input" id="dv-ref-emerson" placeholder="ex: 23306657 Ver 5">
           </div>
           <div class="form-group" style="margin:0"><label>Date réception devis Emerson</label>
             <input type="date" class="form-input" id="dv-ref-emerson-date">
           </div>
         </div>
+        <!-- Carte fichier PDF Emerson (si attaché) -->
+        <div id="dv-emerson-pdf-card" style="display:none;margin-top:6px"></div>
         <!-- Réf ACT + date -->
         <div class="form-row" style="margin-top:8px">
           <div class="form-group" style="margin:0"><label><i class="ti ti-building-warehouse" style="font-size:12px;color:#fbbf24"></i> Réf ACT <span style="color:var(--muted);font-weight:400;font-size:10px">(cotation transitaire)</span>
             <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(251,191,36,.4);color:#fbbf24" onclick="triggerACTPdfImport()" title="Importer une cotation ACT depuis un PDF : extraction auto du N°, date, montant fret">📤 Import PDF</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:4px;border-color:rgba(251,191,36,.4);color:#fbbf24" onclick="triggerDevisPdfUpload('act')" title="Stocker une copie locale du PDF ACT sans extraction (visible via 👁 dans la liste)">📎 Joindre</button>
             <input type="file" id="dv-act-pdf-input" accept=".pdf,application/pdf" style="display:none" onchange="handleACTPdfSelected(event)">
+            <input type="file" id="dv-act-pdf-attach-input" accept=".pdf,application/pdf" style="display:none" onchange="handleDevisPdfSelected(event,'act')">
           </label>
             <input class="form-input" id="dv-ref-act" placeholder="ex: 2026-488 - LP - CALINSTRUM - EXW MELBOURNE">
           </div>
@@ -1474,6 +1481,8 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
             <input type="date" class="form-input" id="dv-ref-act-date">
           </div>
         </div>
+        <!-- Carte fichier PDF ACT (si attaché) -->
+        <div id="dv-act-pdf-card" style="display:none;margin-top:6px"></div>
         <!-- PO Calinstrum + date -->
         <div class="form-row" style="margin-top:8px">
           <div class="form-group" style="margin:0"><label><i class="ti ti-shopping-cart" style="font-size:12px;color:#a78bfa"></i> PO Calinstrum <span style="color:var(--muted);font-weight:400;font-size:10px">(rempli auto à la création du BC)</span></label>
@@ -8759,7 +8768,9 @@ function _fmtDateShort(iso){
 function _renderTraca(d){
   if(!d) return '';
   function pill(opts){
-    // opts: {icon, label, value, date, color, fullValue}
+    // opts: {icon, label, value, date, color, fullValue, pdfDevisId, pdfKind}
+    // Si pdfDevisId + pdfKind sont fournis ET qu'un PDF est stocké pour cette
+    // combinaison (cache), on ajoute une icône 👁 cliquable qui ouvre le PDF.
     var hasVal=!!opts.value;
     var clr=hasVal?opts.color:'rgba(120,120,120,0.4)';
     var bg=hasVal?(opts.color+'1a'):'rgba(80,80,80,0.08)';
@@ -8767,13 +8778,27 @@ function _renderTraca(d){
     var txtClr=hasVal?'var(--text)':'var(--muted-soft)';
     var dt=opts.date?(' · '+_fmtDateShort(opts.date)):'';
     var val=hasVal?opts.value:'—';
-    var title=esc((opts.label||'')+(hasVal?(' : '+(opts.fullValue||opts.value)):' : non renseigné')+(opts.date?(' ('+opts.date+')'):''));
+    var hasPdf=false;
+    if(opts.pdfDevisId && opts.pdfKind){
+      var setRef=opts.pdfKind==='emerson'?window.devisIdsWithEmersonPdf:
+                 opts.pdfKind==='act'?window.devisIdsWithACTPdf:null;
+      if(setRef && setRef.has(String(opts.pdfDevisId))) hasPdf=true;
+    }
+    var titleBase=(opts.label||'')+(hasVal?(' : '+(opts.fullValue||opts.value)):' : non renseigné')+(opts.date?(' ('+opts.date+')'):'');
+    var title=esc(titleBase+(hasPdf?' — 📎 PDF stocké, cliquer 👁 pour ouvrir':''));
+    var pdfBtn='';
+    if(hasPdf){
+      pdfBtn=' <span class="traca-pill-pdf" '+
+        'onclick="event.stopPropagation();openDevisPdf(\''+esc(String(opts.pdfDevisId))+'\',\''+opts.pdfKind+'\');" '+
+        'title="Ouvrir le PDF '+(opts.pdfKind==='emerson'?'Emerson':'ACT')+' stocké" '+
+        'style="cursor:pointer;margin-left:4px;padding:0 4px;border-radius:6px;background:rgba(255,255,255,.12);font-size:10px">👁</span>';
+    }
     return '<span class="traca-pill" title="'+title+'" '+
       'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;'+
       'background:'+bg+';border:0.5px solid '+bdr+';'+
       'font-size:10px;line-height:1.3;color:'+txtClr+';font-family:JetBrains Mono,monospace;white-space:nowrap">'+
       '<i class="ti ti-'+opts.icon+'" style="font-size:11px;color:'+clr+'"></i>'+
-      '<span>'+esc(val)+esc(dt)+'</span></span>';
+      '<span>'+esc(val)+esc(dt)+'</span>'+pdfBtn+'</span>';
   }
 
   // === Phase actuelle + historique (pill cliquable) ===
@@ -8810,9 +8835,9 @@ function _renderTraca(d){
     html+=pill({icon:'flag',label:'Phase',value:'',color:'#a3a39a'});
   }
 
-  // 3 pills réfs externes
-  html+=pill({icon:'circuit-bulb',label:'Réf Emerson',value:_shortEmerson(d.refEmerson),fullValue:d.refEmerson,date:d.refEmersonDate||'',color:'#22d3ee'});
-  html+=pill({icon:'building-warehouse',label:'Réf ACT',value:_shortACT(d.refACT),fullValue:d.refACT,date:d.refACTDate||'',color:'#fbbf24'});
+  // 3 pills réfs externes (Emerson + ACT supportent l'icône 👁 si PDF stocké)
+  html+=pill({icon:'circuit-bulb',label:'Réf Emerson',value:_shortEmerson(d.refEmerson),fullValue:d.refEmerson,date:d.refEmersonDate||'',color:'#22d3ee',pdfDevisId:d.id,pdfKind:'emerson'});
+  html+=pill({icon:'building-warehouse',label:'Réf ACT',value:_shortACT(d.refACT),fullValue:d.refACT,date:d.refACTDate||'',color:'#fbbf24',pdfDevisId:d.id,pdfKind:'act'});
   html+=pill({icon:'shopping-cart',label:'PO Calinstrum',value:_shortPO(d.poCalinstrum),fullValue:d.poCalinstrum,date:d.poCalinstrumDate||'',color:'#a78bfa'});
   html+='</div>';
   return html;
@@ -11447,6 +11472,11 @@ function openDV(id){
       gv('dv-ref-emerson',d.refEmerson||'');gv('dv-ref-emerson-date',d.refEmersonDate||'');
       gv('dv-ref-act',d.refACT||'');gv('dv-ref-act-date',d.refACTDate||'');
       gv('dv-po-calinstrum',d.poCalinstrum||'');gv('dv-po-calinstrum-date',d.poCalinstrumDate||'');
+      // Render des cartes PDF attachés (Emerson + ACT) si présents
+      if(typeof renderDevisPdfCard==='function'){
+        renderDevisPdfCard(d.id,'emerson');
+        renderDevisPdfCard(d.id,'act');
+      }
       // Initialise l'historique éditable de phases — lazy migration si manquant
       if(Array.isArray(d.phaseHistory) && d.phaseHistory.length>0){
         _dvPhaseHistoryEdit=JSON.parse(JSON.stringify(d.phaseHistory));
@@ -11513,6 +11543,9 @@ function openDV(id){
     gv('dv-ref-emerson','');gv('dv-ref-emerson-date','');
     gv('dv-ref-act','');gv('dv-ref-act-date','');
     gv('dv-po-calinstrum','');gv('dv-po-calinstrum-date','');
+    // Cartes PDF masquées (rien d'attaché à un nouveau devis sans id)
+    var _eC1=document.getElementById('dv-emerson-pdf-card');if(_eC1){_eC1.style.display='none';_eC1.innerHTML='';}
+    var _eC2=document.getElementById('dv-act-pdf-card');if(_eC2){_eC2.style.display='none';_eC2.innerHTML='';}
     _dvPhaseHistoryEdit=[];
     setTimeout(function(){renderPhaseHistoryTable();_refreshPhaseNextBtn();},0);
     var elDvCondNew=document.getElementById('dv-conditionsCommerciales');
@@ -21401,22 +21434,317 @@ function confirmEmersonImport(){
 }
 
 // ========================================================================
-// IndexedDB — Stockage local des PDF devis Emerson attachés aux BC
+// IndexedDB — Stockage local des PDF
+//   - bc_pdfs    : PDF devis Emerson attachés aux BC (legacy v1)
+//   - devis_pdfs : PDF Emerson + ACT attachés aux Devis (v2, P1 mai 2026)
 // ========================================================================
 var BC_ATTACH_DB_NAME='calinstrum_attachments';
 var BC_ATTACH_STORE='bc_pdfs';
+var DEVIS_PDF_STORE='devis_pdfs';
+var ATTACH_DB_VERSION=2;
 function openAttachDB(){
   return new Promise(function(resolve,reject){
-    var req=indexedDB.open(BC_ATTACH_DB_NAME,1);
+    var req=indexedDB.open(BC_ATTACH_DB_NAME,ATTACH_DB_VERSION);
     req.onupgradeneeded=function(e){
       var db=e.target.result;
+      // v1 : bc_pdfs
       if(!db.objectStoreNames.contains(BC_ATTACH_STORE)){
         var store=db.createObjectStore(BC_ATTACH_STORE,{keyPath:'id',autoIncrement:true});
         store.createIndex('bcId','bcId',{unique:false});
       }
+      // v2 : devis_pdfs (1 PDF Emerson + 1 PDF ACT par devis)
+      if(!db.objectStoreNames.contains(DEVIS_PDF_STORE)){
+        var dStore=db.createObjectStore(DEVIS_PDF_STORE,{keyPath:'id',autoIncrement:true});
+        dStore.createIndex('devisId','devisId',{unique:false});
+        dStore.createIndex('devisKind',['devisId','kind'],{unique:true});
+      }
     };
     req.onsuccess=function(e){resolve(e.target.result);};
     req.onerror=function(e){reject(e.target.error);};
+  });
+}
+
+// ========================================================================
+// HELPERS Devis PDFs (Emerson + ACT)
+// ========================================================================
+
+// Sauvegarde / remplacement atomique d'un PDF lié à un devis pour un kind donné.
+// Si un PDF existe déjà pour (devisId, kind), il est supprimé et remplacé.
+// att = {devisId, kind:'emerson'|'act', filename, refValue, refDate, bytes}
+function storeDevisPdf(att){
+  if(!att||!att.devisId||!att.kind||!att.bytes)
+    return Promise.reject(new Error('storeDevisPdf: paramètres incomplets'));
+  if(att.kind!=='emerson' && att.kind!=='act')
+    return Promise.reject(new Error('storeDevisPdf: kind doit être emerson ou act'));
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
+      var store=tx.objectStore(DEVIS_PDF_STORE);
+      var idx=store.index('devisKind');
+      // 1. Cherche un record existant avec la même clé (devisId, kind)
+      var getReq=idx.get([String(att.devisId),att.kind]);
+      getReq.onsuccess=function(){
+        var existing=getReq.result;
+        var blob=new Blob([att.bytes],{type:'application/pdf'});
+        var record={
+          devisId:String(att.devisId),
+          kind:att.kind,
+          filename:att.filename||'devis.pdf',
+          refValue:att.refValue||'',
+          refDate:att.refDate||'',
+          fileSize:att.bytes.byteLength||(att.bytes.length||0),
+          blob:blob,
+          savedAt:new Date().toISOString()
+        };
+        if(existing && existing.id){
+          record.id=existing.id;
+          var putReq=store.put(record);
+          putReq.onsuccess=function(){resolve({id:existing.id,replaced:true});};
+          putReq.onerror=function(ev){reject(ev.target.error);};
+        } else {
+          var addReq=store.add(record);
+          addReq.onsuccess=function(){resolve({id:addReq.result,replaced:false});};
+          addReq.onerror=function(ev){reject(ev.target.error);};
+        }
+      };
+      getReq.onerror=function(ev){reject(ev.target.error);};
+    });
+  });
+}
+
+// Récupère le record PDF (avec le blob) pour (devisId, kind). Retourne null si rien.
+function getDevisPdf(devisId,kind){
+  if(!devisId||!kind) return Promise.resolve(null);
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(DEVIS_PDF_STORE,'readonly');
+      var idx=tx.objectStore(DEVIS_PDF_STORE).index('devisKind');
+      var req=idx.get([String(devisId),kind]);
+      req.onsuccess=function(){resolve(req.result||null);};
+      req.onerror=function(e){reject(e.target.error);};
+    });
+  });
+}
+
+// Liste les métadonnées (sans blob) de TOUS les PDFs de devis. Utilisé pour
+// construire les sets devisIdsWithEmersonPdf / devisIdsWithACTPdf au boot.
+function listAllDevisPdfMeta(){
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(DEVIS_PDF_STORE,'readonly');
+      var store=tx.objectStore(DEVIS_PDF_STORE);
+      var req=store.getAll();
+      req.onsuccess=function(){
+        var rows=req.result||[];
+        // On ne renvoie pas le blob (plus léger pour le cache mémoire)
+        resolve(rows.map(function(r){
+          return {id:r.id,devisId:r.devisId,kind:r.kind,filename:r.filename,
+                  refValue:r.refValue,refDate:r.refDate,fileSize:r.fileSize,savedAt:r.savedAt};
+        }));
+      };
+      req.onerror=function(e){reject(e.target.error);};
+    });
+  });
+}
+
+// Supprime le PDF (devisId, kind) s'il existe.
+function deleteDevisPdf(devisId,kind){
+  if(!devisId||!kind) return Promise.resolve(false);
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
+      var store=tx.objectStore(DEVIS_PDF_STORE);
+      var idx=store.index('devisKind');
+      var getReq=idx.get([String(devisId),kind]);
+      getReq.onsuccess=function(){
+        var rec=getReq.result;
+        if(!rec){resolve(false);return;}
+        var delReq=store.delete(rec.id);
+        delReq.onsuccess=function(){resolve(true);};
+        delReq.onerror=function(ev){reject(ev.target.error);};
+      };
+      getReq.onerror=function(e){reject(e.target.error);};
+    });
+  });
+}
+
+// =============================================================================
+// CACHE MÉMOIRE — Sets devis ayant un PDF (Emerson / ACT) pour render synchrone
+// =============================================================================
+// Le rendu de la liste Devis est synchrone, on ne peut pas await IndexedDB.
+// Au boot et à chaque mutation, on rafraîchit ces sets pour qu'ils soient
+// disponibles instantanément lors du render.
+window.devisIdsWithEmersonPdf=new Set();
+window.devisIdsWithACTPdf=new Set();
+function refreshDevisPdfCache(){
+  return listAllDevisPdfMeta().then(function(metas){
+    var setE=new Set(),setA=new Set();
+    for(var i=0;i<metas.length;i++){
+      var m=metas[i];
+      if(m.kind==='emerson') setE.add(m.devisId);
+      else if(m.kind==='act') setA.add(m.devisId);
+    }
+    window.devisIdsWithEmersonPdf=setE;
+    window.devisIdsWithACTPdf=setA;
+    return {emerson:setE.size,act:setA.size};
+  }).catch(function(err){
+    console.warn('refreshDevisPdfCache failed:',err);
+    return {emerson:0,act:0};
+  });
+}
+
+// =============================================================================
+// UI — Upload, render carte, ouvrir / télécharger / supprimer PDF devis
+// =============================================================================
+
+// Formatte une taille en bytes en chaîne lisible (Ko / Mo)
+function _fmtFileSize(bytes){
+  if(!bytes||isNaN(bytes)) return '';
+  if(bytes<1024) return bytes+' o';
+  if(bytes<1024*1024) return (bytes/1024).toFixed(0)+' Ko';
+  return (bytes/(1024*1024)).toFixed(1)+' Mo';
+}
+
+// Formatte une date ISO en DD/MM/YYYY HH:mm
+function _fmtSavedAt(iso){
+  if(!iso) return '';
+  try{
+    var d=new Date(iso);
+    var pad=function(n){return n<10?'0'+n:n;};
+    return pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear()+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+  }catch(e){return iso;}
+}
+
+// Déclenche le sélecteur de fichier (appelé par le bouton "📎 Joindre PDF")
+function triggerDevisPdfUpload(kind){
+  var inputId=kind==='emerson'?'dv-emerson-pdf-input':'dv-act-pdf-attach-input';
+  var inp=document.getElementById(inputId);
+  if(inp){inp.value='';inp.click();}
+}
+
+// Handler : un fichier a été choisi via input file
+function handleDevisPdfSelected(event,kind){
+  var f=event.target.files&&event.target.files[0];
+  if(!f) return;
+  if(!eDVid){
+    alert('⚠️ Le devis doit être enregistré au moins une fois avant d\'attacher un PDF.\n\n👉 Cliquez sur Enregistrer, puis ré-ouvrez le devis pour joindre un PDF.');
+    return;
+  }
+  if(f.type!=='application/pdf' && !/\.pdf$/i.test(f.name)){
+    alert('⚠️ Seuls les fichiers PDF sont acceptés.');
+    return;
+  }
+  var maxBytes=20*1024*1024; // 20 Mo (généreux : un devis Emerson fait 200-500 Ko en général)
+  if(f.size>maxBytes){
+    alert('⚠️ Fichier trop volumineux ('+_fmtFileSize(f.size)+'). Max : '+_fmtFileSize(maxBytes)+'.');
+    return;
+  }
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var bytes=new Uint8Array(e.target.result);
+    var refValue=kind==='emerson'?(gvg('dv-ref-emerson')||''):(gvg('dv-ref-act')||'');
+    var refDate=kind==='emerson'?(gvg('dv-ref-emerson-date')||''):(gvg('dv-ref-act-date')||'');
+    storeDevisPdf({
+      devisId:eDVid,kind:kind,filename:f.name,
+      refValue:refValue,refDate:refDate,bytes:bytes
+    }).then(function(res){
+      // Rafraîchit le cache, la carte fichier dans la modale, et la liste devis
+      return refreshDevisPdfCache().then(function(){
+        renderDevisPdfCard(eDVid,kind);
+        if(typeof rDV==='function'){try{rDV();}catch(e){}}
+        if(typeof showBCSaveToast==='function'){
+          showBCSaveToast('✓ PDF '+(kind==='emerson'?'Emerson':'ACT')+' attaché ('+(res.replaced?'remplacé':'ajouté')+')');
+        }
+      });
+    }).catch(function(err){
+      console.error('storeDevisPdf failed:',err);
+      alert('❌ Échec du stockage du PDF : '+(err.message||err));
+    });
+  };
+  reader.onerror=function(){alert('❌ Échec de la lecture du fichier.');};
+  reader.readAsArrayBuffer(f);
+}
+
+// Rend la carte fichier sous le champ Réf Emerson ou Réf ACT
+// Si pas de PDF stocké : masque la carte. Sinon : affiche filename, taille,
+// 3 boutons (👁 Voir, ⬇ Télécharger, 🗑 Supprimer).
+function renderDevisPdfCard(devisId,kind){
+  var cardId=kind==='emerson'?'dv-emerson-pdf-card':'dv-act-pdf-card';
+  var card=document.getElementById(cardId);
+  if(!card) return;
+  if(!devisId){card.style.display='none';card.innerHTML='';return;}
+  getDevisPdf(devisId,kind).then(function(rec){
+    if(!rec){card.style.display='none';card.innerHTML='';return;}
+    var color=kind==='emerson'?'#22d3ee':'#fbbf24';
+    var icon=kind==='emerson'?'circuit-bulb':'building-warehouse';
+    var labelKind=kind==='emerson'?'Emerson':'ACT';
+    card.style.display='block';
+    card.innerHTML=
+      '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;'+
+      'background:'+color+'12;border:1px solid '+color+'40;font-size:11px">'+
+        '<i class="ti ti-file-type-pdf" style="font-size:18px;color:'+color+'"></i>'+
+        '<div style="flex:1;min-width:0">'+
+          '<div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(rec.filename)+'">'+
+            esc(rec.filename)+
+          '</div>'+
+          '<div style="color:var(--muted);font-size:10px;margin-top:1px">'+
+            'PDF '+labelKind+' · '+esc(_fmtFileSize(rec.fileSize))+' · ajouté le '+esc(_fmtSavedAt(rec.savedAt))+
+          '</div>'+
+        '</div>'+
+        '<div style="display:flex;gap:4px;flex-shrink:0">'+
+          '<button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px" onclick="openDevisPdf(\''+esc(devisId)+'\',\''+kind+'\')" title="Ouvrir le PDF dans un nouvel onglet">👁 Voir</button>'+
+          '<button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px" onclick="downloadDevisPdf(\''+esc(devisId)+'\',\''+kind+'\')" title="Télécharger le PDF">⬇</button>'+
+          '<button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px;color:#ef4444" onclick="confirmDeleteDevisPdf(\''+esc(devisId)+'\',\''+kind+'\')" title="Supprimer le PDF stocké">🗑</button>'+
+        '</div>'+
+      '</div>';
+  }).catch(function(err){
+    console.warn('renderDevisPdfCard failed:',err);
+    card.style.display='none';card.innerHTML='';
+  });
+}
+
+// Ouvre le PDF dans un nouvel onglet (object URL)
+function openDevisPdf(devisId,kind){
+  getDevisPdf(devisId,kind).then(function(rec){
+    if(!rec){alert('PDF introuvable.');return;}
+    var url=URL.createObjectURL(rec.blob);
+    var w=window.open(url,'_blank');
+    // Révoque l'URL après un délai (le nouvel onglet a eu le temps de charger)
+    setTimeout(function(){URL.revokeObjectURL(url);},60000);
+    if(!w){
+      alert('⚠️ Pop-up bloqué. Autorise les pop-ups pour ce site, ou utilise le bouton ⬇ Télécharger.');
+    }
+  }).catch(function(err){
+    alert('❌ Échec : '+(err.message||err));
+  });
+}
+
+// Télécharge le PDF stocké
+function downloadDevisPdf(devisId,kind){
+  getDevisPdf(devisId,kind).then(function(rec){
+    if(!rec){alert('PDF introuvable.');return;}
+    var url=URL.createObjectURL(rec.blob);
+    var a=document.createElement('a');a.href=url;a.download=rec.filename||(kind+'.pdf');
+    document.body.appendChild(a);a.click();
+    setTimeout(function(){URL.revokeObjectURL(url);a.remove();},500);
+  });
+}
+
+// Supprime le PDF stocké (avec confirmation)
+function confirmDeleteDevisPdf(devisId,kind){
+  if(!confirm('Supprimer le PDF '+(kind==='emerson'?'Emerson':'ACT')+' stocké pour ce devis ?\n\n(Le PDF source sur ton disque n\'est pas affecté.)')) return;
+  deleteDevisPdf(devisId,kind).then(function(deleted){
+    if(deleted){
+      refreshDevisPdfCache().then(function(){
+        renderDevisPdfCard(devisId,kind);
+        if(typeof rDV==='function'){try{rDV();}catch(e){}}
+        if(typeof showBCSaveToast==='function'){
+          showBCSaveToast('✓ PDF '+(kind==='emerson'?'Emerson':'ACT')+' supprimé');
+        }
+      });
+    }
+  }).catch(function(err){
+    alert('❌ Échec de la suppression : '+(err.message||err));
   });
 }
 
@@ -21667,7 +21995,22 @@ function confirmACTImport(){
     }
   }
 
-  // 3. Fermer la modale et confirmer
+  // 3. Si on a les bytes du PDF + un devis ouvert (eDVid), on stocke aussi le
+  //    PDF dans IndexedDB pour qu'il soit consultable via 👁 dans la liste.
+  //    Non bloquant : l'import continue même si le stockage échoue.
+  if(eDVid && aimpState.pdfBytes && aimpState.pdfFile && typeof storeDevisPdf==='function'){
+    storeDevisPdf({
+      devisId:eDVid,kind:'act',filename:aimpState.pdfFile.name,
+      refValue:h.refFull||h.num||'',refDate:h.date||'',bytes:aimpState.pdfBytes
+    }).then(function(){
+      if(typeof refreshDevisPdfCache==='function') return refreshDevisPdfCache();
+    }).then(function(){
+      if(typeof renderDevisPdfCard==='function') renderDevisPdfCard(eDVid,'act');
+      if(typeof rDV==='function'){try{rDV();}catch(e){}}
+    }).catch(function(err){console.warn('Stockage PDF ACT échoué (non bloquant):',err);});
+  }
+
+  // 4. Fermer la modale et confirmer
   cm('mAIMP');
   var msg='✅ Cotation ACT importée';
   if(h.num) msg+=' ('+h.num+')';
@@ -26038,6 +26381,16 @@ document.addEventListener('DOMContentLoaded',function(){
   rebuildAllParamSelects();
   rDash();
   renderHist();
+  // Init cache PDFs devis (Emerson + ACT) pour render synchrone de la liste
+  if(typeof refreshDevisPdfCache==='function'){
+    refreshDevisPdfCache().then(function(stats){
+      console.log('PDFs devis en cache:',stats);
+      // Re-render la liste si elle est visible (les pills 👁 vont apparaître)
+      if(typeof rDV==='function' && document.getElementById('view-devis')){
+        try{rDV();}catch(e){}
+      }
+    });
+  }
   // Close modal on backdrop click
   document.querySelectorAll('.modal-overlay').forEach(function(o){
     o.addEventListener('click',function(e){if(e.target===o)o.classList.remove('open');});
