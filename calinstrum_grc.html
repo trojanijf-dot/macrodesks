@@ -3452,6 +3452,8 @@ function renderBCLinker(){
   });
 
   // === SUMMARY EN HAUT ===
+  // KPI principal : MARGE NETTE (= facture - coût Emerson - frais annexes), c'est la vraie
+  // marge dans la poche. La marge brute (sans frais) est affichée en sous-info pour info.
   var coutTot=getCoutEmerson(inv);
   var coutPaye=getCoutEmersonPaye(inv);
   var coutRestant=getCoutEmersonRestant(inv);
@@ -3459,16 +3461,20 @@ function renderBCLinker(){
   var margeNette=getMargeNette(inv);
   var pctMarge=getMargeNettePct(inv);
   var pctEmerson=getPctEmerson(inv);
+  var fraisLies=getFraisLies(inv);
+  // Détecter si au moins un BC lié a des frais réels saisis (sinon = forfait 20%)
+  var hasFraisReels=linked.some(function(b){return bcHasFraisReels(b);});
+  var fraisLabel=hasFraisReels?'frais réels':'forfait 20%';
   var sm=document.getElementById('bclink-summary');
   if(sm){
     if(linked.length===0){
-      sm.innerHTML='<div style="background:rgba(167,139,250,0.05);border:1px dashed rgba(167,139,250,0.3);border-radius:8px;padding:12px;font-size:11px;color:var(--muted)">💡 Aucun BC Emerson lié à cette facture. Cliquez sur un BC dans la liste ci-dessous pour le lier. Le coût Emerson, la marge brute et la marge nette seront calculés automatiquement.</div>';
+      sm.innerHTML='<div style="background:rgba(167,139,250,0.05);border:1px dashed rgba(167,139,250,0.3);border-radius:8px;padding:12px;font-size:11px;color:var(--muted)">💡 Aucun BC Emerson lié à cette facture. Cliquez sur un BC dans la liste ci-dessous pour le lier. Le coût Emerson, les frais annexes et la marge nette seront calculés automatiquement.</div>';
     } else {
       sm.innerHTML=
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'+
           '<div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Facture SLN</div><div style="font-size:14px;font-weight:700;color:var(--teal);margin-top:2px">'+fN(inv.montant||0)+' XPF</div></div>'+
-          '<div style="background:rgba(244,63,94,0.06);border:1px solid rgba(244,63,94,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Coût Emerson</div><div style="font-size:14px;font-weight:700;color:var(--red);margin-top:2px">'+fN(coutTot)+' XPF</div><div style="font-size:9px;color:var(--muted);margin-top:2px">'+pctEmerson.toFixed(1)+'% de la facture</div></div>'+
-          '<div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Marge brute</div><div style="font-size:14px;font-weight:700;color:'+(margeBrut>=0?'var(--green)':'var(--red)')+';margin-top:2px">'+fN(margeBrut)+' XPF</div><div style="font-size:9px;color:var(--muted);margin-top:2px">Net: '+fN(margeNette)+' ('+pctMarge.toFixed(1)+'%)</div></div>'+
+          '<div style="background:rgba(244,63,94,0.06);border:1px solid rgba(244,63,94,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Coût Emerson + Frais</div><div style="font-size:14px;font-weight:700;color:var(--red);margin-top:2px">'+fN(coutTot+fraisLies)+' XPF</div><div style="font-size:9px;color:var(--muted);margin-top:2px">Emerson: '+fN(coutTot)+' · Frais: '+fN(fraisLies)+' ('+fraisLabel+')</div></div>'+
+          '<div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Marge nette</div><div style="font-size:14px;font-weight:700;color:'+(margeNette>=0?'var(--green)':'var(--red)')+';margin-top:2px">'+fN(margeNette)+' XPF</div><div style="font-size:9px;color:var(--muted);margin-top:2px">'+pctMarge.toFixed(1)+'% net · Brut (s/frais): '+fN(margeBrut)+'</div></div>'+
           '<div style="background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Restant Emerson</div><div style="font-size:14px;font-weight:700;color:var(--amber);margin-top:2px">'+fN(coutRestant)+' XPF</div><div style="font-size:9px;color:var(--muted);margin-top:2px">'+(coutTot>0?Math.round(coutPaye/coutTot*100):0)+'% déjà payé</div></div>'+
         '</div>';
     }
@@ -4001,9 +4007,9 @@ function renderSuviKPIs(){
       elEmerson.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:14px;background:rgba(167,139,250,0.05);border:1px dashed rgba(167,139,250,0.3);border-radius:8px;color:var(--muted);font-size:11px">💡 <b>Volet Emerson désactivé.</b> Liez vos factures à des BC Emerson (bouton 🔗 dans le tableau) pour voir apparaître coût Emerson, marge brute, marge nette et trésorerie nette.</div>';
     } else {
       elEmerson.innerHTML=
-        '<div class="metric m-red shimmer shimmer-d4"><div class="mlbl">🏭 Coût Emerson total</div><div class="mval red">'+fN(coutEmersonTotal)+'</div><div class="msub">'+nbLies+' fact. liées · '+fN(coutEmersonPaye)+' déjà payés</div></div>'+
-        '<div class="metric m-amber shimmer shimmer-d5"><div class="mlbl">⏳ Restant Emerson</div><div class="mval amber">'+fN(coutEmersonRestant)+'</div><div class="msub">'+(coutEmersonTotal>0?Math.round(coutEmersonRestant/coutEmersonTotal*100):0)+'% non payé chez Emerson</div></div>'+
-        '<div class="metric m-teal shimmer"><div class="mlbl">📊 Marge brute</div><div class="mval" style="color:'+(margeBrutTotal>=0?'var(--green)':'var(--red)')+'">'+fN(margeBrutTotal)+'</div><div class="msub">Net : '+fN(margeNetteTotal)+' ('+pctMargeNette.toFixed(1)+'%)</div></div>'+
+        '<div class="metric m-red shimmer shimmer-d4"><div class="mlbl">🏭 Coût Emerson + Frais</div><div class="mval red">'+fN(coutEmersonTotal+fraisTotal)+'</div><div class="msub">Emerson: '+fN(coutEmersonTotal)+' · Frais: '+fN(fraisTotal)+'</div></div>'+
+        '<div class="metric m-amber shimmer shimmer-d5"><div class="mlbl">⏳ Restant Emerson</div><div class="mval amber">'+fN(coutEmersonRestant)+'</div><div class="msub">'+(coutEmersonTotal>0?Math.round(coutEmersonRestant/coutEmersonTotal*100):0)+'% non payé · '+nbLies+' fact. liées</div></div>'+
+        '<div class="metric m-teal shimmer"><div class="mlbl">📊 Marge nette</div><div class="mval" style="color:'+(margeNetteTotal>=0?'var(--green)':'var(--red)')+'">'+fN(margeNetteTotal)+'</div><div class="msub">'+pctMargeNette.toFixed(1)+'% net · Brut (s/frais): '+fN(margeBrutTotal)+'</div></div>'+
         '<div class="metric m-green shimmer shimmer-d2"><div class="mlbl">💵 Trésorerie nette</div><div class="mval" style="color:'+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+fN(tresoNette)+'</div><div class="msub">Encaissé - Payé Emerson</div></div>';
     }
   }
