@@ -16,7 +16,8 @@ if(typeof pdfjsLib!=='undefined'){
 }
 </script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@700;800&display=swap');
+@import url('https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css');
 :root{
   --bg:#020409;--bg1:#060c18;--bg2:#080e1c;--bg3:#0c1424;--bg4:#111827;
   --border:rgba(255,255,255,0.07);
@@ -29,6 +30,390 @@ if(typeof pdfjsLib!=='undefined'){
   --teal:#2dd4bf;--purple:#a78bfa;--orange:#f97316;
   --mono:'JetBrains Mono',monospace;--display:'Syne',sans-serif;
 }
+
+/* ============================================================================
+   THÈME "PRO FINTECH" — palette warm-dark inspirée Anthropic / Claude.ai / Mercury
+   Activé via class="theme-pro" sur <body>. Persisté en localStorage._grcTheme.
+   ============================================================================ */
+body.theme-pro{
+  --bg:#0e0e0c;          /* fond canvas chaud (était bleu glacial) */
+  --bg1:#0a0a08;         /* sidebar */
+  --bg2:#1a1a17;         /* cards */
+  --bg3:#14140f;         /* metric cards / table headers */
+  --bg4:#222220;         /* hover / surfaces actives */
+  --border:rgba(255,255,250,0.08);
+  --text:#f5f5f0;
+  --text-strong:#ffffff;
+  --muted:#a3a39a;
+  --muted-soft:#6e6e66;
+  /* Accents : palette Anthropic/Tabler — moins saturés, plus pros */
+  --red:#f09595;
+  --green:#5dcaa5;
+  --amber:#ef9f27;
+  --blue:#88aae0;
+  --teal:#5dcaa5;        /* aligné sur green pour cohérence (gain = teal en pro) */
+  --purple:#a78bfa;
+  --orange:#ef9f27;
+  --display:'Inter',-apple-system,sans-serif; /* plus de Syne en mode pro */
+}
+/* Le body en mode pro switch entièrement vers Inter (sauf chiffres = mono) */
+body.theme-pro{
+  font-family:'Inter',system-ui,-apple-system,sans-serif;
+  font-size:13px;
+  letter-spacing:-0.005em;
+  -webkit-font-smoothing:antialiased;
+}
+/* Cartes / surfaces : borders 0.5px en mode pro, plus fins */
+body.theme-pro .card,
+body.theme-pro .metric,
+body.theme-pro .modal,
+body.theme-pro #sb,
+body.theme-pro #topbar{
+  border-width:0.5px;
+}
+/* Désactive l'effet shimmer en mode pro (incompatible avec l'esthétique flat) */
+body.theme-pro .shimmer::after{display:none}
+/* En mode pro, les chiffres financiers gardent JetBrains Mono pour alignement */
+body.theme-pro .metric .mval,
+body.theme-pro .tbl-mono,
+body.theme-pro [data-financial-num]{
+  font-family:'JetBrains Mono',ui-monospace,monospace;
+  letter-spacing:-0.02em;
+}
+/* Sentence case : surcharge le text-transform:uppercase qui traîne partout */
+body.theme-pro .mlbl,
+body.theme-pro th,
+body.theme-pro .section-title-pro{
+  text-transform:uppercase;  /* on garde, c'est lisible petit */
+  letter-spacing:0.05em;
+  font-size:10.5px;
+  font-weight:500;
+}
+/* Pills plus arrondis */
+body.theme-pro .b-paid,
+body.theme-pro .b-late,
+body.theme-pro .b-pending,
+body.theme-pro .b-partial,
+body.theme-pro .b-accepted,
+body.theme-pro .b-refused,
+body.theme-pro .b-invoiced,
+body.theme-pro .b-cadre,
+body.theme-pro .b-sent,
+body.theme-pro .b-prebilled{
+  border-radius:9999px;
+  font-weight:500;
+  letter-spacing:-0.005em;
+  border:none;
+  padding:2px 9px;
+}
+/* En mode pro, les boutons sont plus aérés et less aggressive */
+body.theme-pro .btn{
+  border-radius:8px;
+  font-weight:500;
+  letter-spacing:-0.005em;
+}
+body.theme-pro .btn-teal{
+  background:var(--blue);
+  color:var(--bg);
+}
+body.theme-pro .btn-teal:hover{
+  background:#a4c0ed;
+}
+/* Sidebar : items avec icône Tabler intégrée */
+body.theme-pro .sb-item{
+  border-radius:6px;
+  padding:7px 10px;
+  font-size:13px;
+}
+body.theme-pro .sb-item.active{
+  background:rgba(136,170,224,0.08);
+  color:var(--text);
+  border-color:rgba(136,170,224,0.25);
+}
+body.theme-pro .sb-item.active i{color:var(--blue)}
+
+/* ============================================================================
+   PRIVACY MODE — flou CSS auto-détecté via classe .pm-blur ajoutée par JS
+   Activable depuis le bouton flottant. Persiste en localStorage._grcPrivacy.
+   ============================================================================ */
+.pm-blur{
+  filter:blur(6px);
+  transition:filter .18s ease;
+  user-select:none;
+  cursor:help;
+}
+.pm-blur:hover{filter:blur(0)}
+
+/* ============================================================================
+   FAB (Floating Action Button) pour le thème — coin bas-droite
+   ============================================================================ */
+#themeFab{
+  position:fixed;
+  bottom:18px;
+  right:18px;
+  z-index:9000;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  align-items:flex-end;
+}
+.fab-btn{
+  width:42px;height:42px;
+  border-radius:50%;
+  background:var(--bg2);
+  border:1px solid var(--border);
+  color:var(--text);
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;
+  transition:all .15s;
+  box-shadow:0 4px 12px rgba(0,0,0,.4);
+}
+.fab-btn:hover{
+  background:var(--bg3);
+  border-color:var(--blue);
+  transform:translateY(-1px);
+}
+.fab-btn.fab-active{
+  background:rgba(136,170,224,0.15);
+  color:var(--blue);
+  border-color:var(--blue);
+}
+body.theme-pro .fab-btn{
+  border-width:0.5px;
+}
+.fab-label{
+  position:absolute;
+  right:50px;
+  top:50%;
+  transform:translateY(-50%);
+  background:var(--bg3);
+  border:1px solid var(--border);
+  padding:4px 9px;
+  border-radius:6px;
+  font-size:11px;
+  white-space:nowrap;
+  opacity:0;
+  pointer-events:none;
+  transition:opacity .15s;
+}
+.fab-btn:hover .fab-label{opacity:1}
+.fab-wrapper{position:relative}
+
+/* ============================================================================
+   PAGE PRO : Dashboard + Suivi factures redessinés
+   Activés UNIQUEMENT quand body.theme-pro. Sinon reste invisible.
+   ============================================================================ */
+
+/* KPI cards "fintech" avec sparklines */
+.kpi-pro{
+  background:var(--bg3);
+  border:0.5px solid var(--border);
+  border-radius:8px;
+  padding:14px 16px;
+  position:relative;
+  overflow:hidden;
+  transition:border-color .12s;
+}
+.kpi-pro:hover{border-color:rgba(255,255,250,0.18)}
+.kpi-pro .kpi-label{
+  font-size:10.5px;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+  font-weight:500;
+  margin-bottom:4px;
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.kpi-pro .kpi-label i{font-size:12px;color:var(--muted-soft)}
+.kpi-pro .kpi-value{
+  font-family:'JetBrains Mono',monospace;
+  font-size:22px;
+  font-weight:500;
+  letter-spacing:-0.02em;
+  line-height:1.1;
+  color:var(--text);
+}
+.kpi-pro .kpi-sub{
+  font-size:11px;
+  color:var(--muted-soft);
+  margin-top:4px;
+  display:flex;
+  align-items:center;
+  gap:5px;
+}
+.kpi-pro .kpi-spark{
+  height:30px;
+  margin-top:8px;
+  margin-left:-2px;
+  margin-right:-2px;
+}
+.kpi-pro.kpi-blue .kpi-value{color:var(--blue)}
+.kpi-pro.kpi-green .kpi-value{color:var(--green)}
+.kpi-pro.kpi-amber .kpi-value{color:var(--amber)}
+.kpi-pro.kpi-red .kpi-value{color:var(--red)}
+.kpi-pro .delta-up{color:var(--green)}
+.kpi-pro .delta-down{color:var(--red)}
+
+/* Bordure top accent en mode pro */
+body.theme-pro .kpi-pro.kpi-blue{border-top:2px solid var(--blue)}
+body.theme-pro .kpi-pro.kpi-green{border-top:2px solid var(--green)}
+body.theme-pro .kpi-pro.kpi-amber{border-top:2px solid var(--amber)}
+body.theme-pro .kpi-pro.kpi-red{border-top:2px solid var(--red)}
+
+/* Card pro avec titre simple */
+.card-pro{
+  background:var(--bg2);
+  border:0.5px solid var(--border);
+  border-radius:12px;
+  padding:18px;
+  margin-bottom:12px;
+}
+.card-pro-title{
+  font-size:12px;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+  font-weight:500;
+  margin-bottom:14px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.card-pro-title i{font-size:14px}
+
+/* Grid 4 colonnes pour les KPIs */
+.kpi-grid-pro{
+  display:grid;
+  grid-template-columns:repeat(4, 1fr);
+  gap:12px;
+  margin-bottom:14px;
+}
+.kpi-grid-pro-3{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:12px;
+  margin-bottom:14px;
+}
+.row-2-pro{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:12px}
+.row-eq-pro{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+
+/* Tables pro */
+.tbl-pro{width:100%;border-collapse:collapse;font-size:13px}
+.tbl-pro th{
+  text-align:left;
+  font-size:10.5px;
+  color:var(--muted-soft);
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+  font-weight:500;
+  padding:10px 14px;
+  border-bottom:0.5px solid var(--border);
+  background:transparent;
+}
+.tbl-pro td{
+  padding:11px 14px;
+  border-bottom:0.5px solid var(--border);
+}
+.tbl-pro tr:last-child td{border-bottom:0}
+.tbl-pro tr:hover td{background:rgba(255,255,250,0.02)}
+.tbl-pro .num{
+  font-family:'JetBrains Mono',monospace;
+  font-weight:500;
+  text-align:right;
+  font-size:12.5px;
+  letter-spacing:-0.01em;
+}
+.tbl-pro .ref{
+  font-family:'JetBrains Mono',monospace;
+  font-weight:500;
+  color:var(--blue);
+  font-size:12.5px;
+}
+
+/* Pill (badges) style fintech */
+.pill-pro{
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:2px 9px;
+  border-radius:9999px;
+  font-size:11px;
+  font-weight:500;
+  letter-spacing:-0.005em;
+  white-space:nowrap;
+}
+.pill-pro.p-success{background:rgba(93,202,165,0.12);color:var(--green)}
+.pill-pro.p-warning{background:rgba(239,159,39,0.12);color:var(--amber)}
+.pill-pro.p-danger{background:rgba(240,149,149,0.12);color:var(--red)}
+.pill-pro.p-info{background:rgba(136,170,224,0.12);color:var(--blue)}
+.pill-pro.p-muted{background:rgba(255,255,250,0.06);color:var(--muted)}
+
+/* Affaire (deal) cards */
+.deal-pro{
+  background:var(--bg2);
+  border:0.5px solid var(--border);
+  border-radius:12px;
+  padding:18px;
+  margin-bottom:10px;
+}
+.deal-pro-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:14px;
+  margin-bottom:12px;
+}
+.deal-pro-marge{text-align:right;flex-shrink:0}
+.deal-pro-marge-label{
+  font-size:10px;
+  color:var(--muted-soft);
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+  font-weight:500;
+}
+.deal-pro-marge-val{
+  font-family:'JetBrains Mono',monospace;
+  font-size:18px;
+  font-weight:500;
+  letter-spacing:-0.02em;
+  line-height:1.2;
+  margin-top:2px;
+}
+.deal-pro-stats{
+  display:grid;
+  grid-template-columns:repeat(4, 1fr);
+  gap:8px;
+  padding:12px 14px;
+  background:var(--bg3);
+  border-radius:8px;
+  margin-bottom:12px;
+}
+.deal-pro-stat-label{
+  font-size:10.5px;
+  color:var(--muted-soft);
+  display:flex;
+  align-items:center;
+  gap:4px;
+}
+.deal-pro-stat-val{
+  font-family:'JetBrains Mono',monospace;
+  font-weight:500;
+  font-size:13.5px;
+  margin-top:3px;
+  letter-spacing:-0.015em;
+}
+.deal-pro-substat{font-size:10px;color:var(--muted-soft);margin-top:2px}
+
+/* Le sélecteur d'année dans le topbar pro */
+body.theme-pro #yearFiscal{font-family:'JetBrains Mono',monospace}
+
+/* Sparkline SVG inline */
+.sparkline{display:block;width:100%;overflow:visible}
+.sparkline polyline{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.sparkline-area{fill-opacity:0.12}
 /* === EFFET SHIMMER === */
 /* Animation : un highlight blanc-teal traverse la surface en diagonale.
    Appliqué via la classe .shimmer (à mettre sur les cartes ou éléments à mettre en valeur).
@@ -597,6 +982,10 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <button class="tab" onclick="st('suiviTab','alertes')">🚨 Alertes</button>
   </div>
   <div class="tab-pane active" id="suiviTab-dash">
+    <!-- ===== MODE PRO : container fintech qui s'affiche en mode 'theme-pro' ===== -->
+    <div id="suiviDashPro" style="display:none"></div>
+    <!-- ===== MODE CLASSIC : version d'origine (cachée en mode pro) ===== -->
+    <div id="suiviDashClassic">
     <!-- Onglets par client (Tous + 1 par client détecté). Filtre TOUT le dashboard :
          KPIs, graphiques, progression, urgentes. Détection auto des clients via extractClientGroup. -->
     <div id="suiviDashClientTabs" class="client-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
@@ -621,6 +1010,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     </div>
     <div class="card"><div class="ctitle">Progression paiement par date butoir</div><div id="progression-panel"></div></div>
     <div class="card mt8"><div class="ctitle">🚨 Factures urgentes</div><div id="urgent-list"></div></div>
+    </div>
   </div>
   <div class="tab-pane" id="suiviTab-liste">
     <!-- Onglets par client (Tous + 1 par client). Compteurs reflètent le nombre de factures
@@ -1501,7 +1891,9 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     </div>
     <div class="form-group">
       <label>Client final</label>
-      <input class="form-input" id="bc-client-final" placeholder="Rempli automatiquement ou saisir manuellement">
+      <select class="form-select" id="bc-client-final">
+        <option value="">— Sélectionner un client (rempli auto si devis lié) —</option>
+      </select>
     </div>
     <hr class="sep">
     <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
@@ -2123,7 +2515,7 @@ function checkDraftRecovery(){
               eBCid=bcDraft.id||null;bcL=bcDraft.lines||[];
               om('mBC');
               gv('bc-num',bcDraft.num||'');gv('bc-date',bcDraft.date||td());gv('bc-devise',bcDraft.devise||'AUD');
-              gv('bc-status',bcDraft.status||'En attente');gv('bc-client-final',bcDraft.clientFinal||'');
+              gv('bc-status',bcDraft.status||'En attente');populateBCClientFinalSelect(bcDraft.clientFinal||'');gv('bc-client-final',bcDraft.clientFinal||'');
               gv('bc-cref2',bcDraft.cref2||bcDraft.cref||'');
               // Restaurer la liste props (ou migration depuis l'ancien prop2/prop)
               if(Array.isArray(bcDraft.props)&&bcDraft.props.length){bcProps=JSON.parse(JSON.stringify(bcDraft.props));}
@@ -2230,6 +2622,203 @@ function exportDBBackup(){
 }
 var DB=loadDB();
 var invoices=DB.invoices||[];
+
+// =============================================================================
+// SYSTÈME DE THÈME (ancien teal/red ↔ nouveau pro fintech warm-dark)
+// =============================================================================
+// Fonctionnement :
+// - Le thème "pro" est activé en ajoutant la classe `theme-pro` au <body>.
+// - L'état est persisté dans localStorage._grcTheme ('pro' ou 'classic').
+// - Par défaut : 'classic' (l'ancien thème, transition douce demandée).
+// - Le bouton flottant en bas-droite permet de basculer.
+// - Toutes les pages se rendent identiquement quel que soit le thème ; seules
+//   les variables CSS et quelques règles spécifiques changent (cf. body.theme-pro
+//   dans la <style>).
+function _getThemeStored(){
+  try{return localStorage.getItem('_grcTheme')||'classic';}catch(e){return 'classic';}
+}
+function _setThemeStored(theme){
+  try{localStorage.setItem('_grcTheme',theme);}catch(e){}
+}
+function applyTheme(theme){
+  if(theme==='pro') document.body.classList.add('theme-pro');
+  else document.body.classList.remove('theme-pro');
+  // Mettre à jour l'état visuel du FAB
+  var fab=document.getElementById('fabTheme');
+  if(fab){
+    if(theme==='pro') fab.classList.add('fab-active');
+    else fab.classList.remove('fab-active');
+  }
+}
+function toggleProTheme(){
+  var current=_getThemeStored();
+  var next=current==='pro'?'classic':'pro';
+  _setThemeStored(next);
+  applyTheme(next);
+  // Si le mode pro vient de s'activer ET qu'on est sur le dashboard ou suivi,
+  // on relance leur rendu pour basculer sur la version pro (qui contient les
+  // sparklines et la mise en page fintech).
+  if(typeof renderActivePagePro==='function') renderActivePagePro();
+}
+// Application initiale (avant tout rendu) — appelée plus bas via DOMContentLoaded.
+
+// =============================================================================
+// PRIVACY MODE — flou CSS auto-détecté via regex sur les patterns monétaires
+// =============================================================================
+// Stratégie : un MutationObserver scanne le DOM et applique la classe `.pm-blur`
+// à tout élément texte contenant un motif monétaire (XPF, AUD, %).
+// Activé/désactivé via le FAB. Persisté dans localStorage._grcPrivacy.
+//
+// Cibles détectées :
+//   - "1 234 567 XPF" / "1234567 XPF"
+//   - "29 019 AUD" / "29019 AUD"
+//   - "26.5%" / "32%"
+//   - Symboles € $ pour usage futur
+//
+// On NE floute PAS :
+//   - Les inputs (textareas, type=number, etc.) — la saisie reste normale
+//   - Les éléments déjà marqués no-pm-blur (= exclusion explicite)
+//   - Les noeuds parents (.kpi-pro, .kpi-grid-pro, etc.) — on cible la feuille
+function _getPrivacyStored(){
+  try{return localStorage.getItem('_grcPrivacy')==='1';}catch(e){return false;}
+}
+function _setPrivacyStored(on){
+  try{
+    if(on) localStorage.setItem('_grcPrivacy','1');
+    else localStorage.removeItem('_grcPrivacy');
+  }catch(e){}
+}
+// Regex : matche un montant ou un % entier dans un texte.
+// On accepte espaces fins (\u202f) et insécables (\u00a0) en plus des espaces normaux.
+var PRIVACY_RX=/(\d[\d\s\u00a0\u202f.,]*\s*(?:XPF|AUD|EUR|USD|€|\$)\b|\d[\d\s\u00a0\u202f.,]*\s*%|\d{4,})/i;
+// Sélecteur des conteneurs où chercher des montants à flouter
+function _privacyShouldSkipNode(node){
+  if(!node||!node.parentElement)return true;
+  var p=node.parentElement;
+  // Skip les zones de saisie
+  if(p.closest('input,textarea,select,option,[contenteditable]')) return true;
+  // Skip les boutons et les nav (généralement pas de montants sensibles)
+  if(p.closest('button.fab-btn,#themeFab,.fab-label')) return true;
+  // Skip ce qui est explicitement marqué
+  if(p.closest('.no-pm-blur')) return true;
+  // Si déjà dans un .pm-blur (ne pas re-créer un span imbriqué)
+  if(p.classList && p.classList.contains('pm-blur')) return true;
+  return false;
+}
+// Applique le flou : on parcourt tous les noeuds texte et on wrappe les
+// montants détectés dans un <span class="pm-blur">.
+// Cette fonction est idempotente (elle ne re-wrappe pas les spans déjà créés).
+function _privacyWrapAmounts(root){
+  if(!root)root=document.body;
+  var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
+    acceptNode:function(n){
+      if(_privacyShouldSkipNode(n))return NodeFilter.FILTER_REJECT;
+      if(!PRIVACY_RX.test(n.nodeValue||''))return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var nodes=[];
+  var cur;
+  while((cur=walker.nextNode())) nodes.push(cur);
+  nodes.forEach(function(textNode){
+    var txt=textNode.nodeValue;
+    var rx=/(\d[\d\s\u00a0\u202f.,]*\s*(?:XPF|AUD|EUR|USD|€|\$)\b|\d[\d\s\u00a0\u202f.,]*\s*%|\d{4,})/gi;
+    var lastIdx=0,m,frag=document.createDocumentFragment(),any=false;
+    while((m=rx.exec(txt))!==null){
+      // Texte avant le match
+      if(m.index>lastIdx){
+        frag.appendChild(document.createTextNode(txt.substring(lastIdx,m.index)));
+      }
+      // Wrap du match
+      var span=document.createElement('span');
+      span.className='pm-blur pm-auto';
+      span.textContent=m[0];
+      frag.appendChild(span);
+      lastIdx=m.index+m[0].length;
+      any=true;
+    }
+    if(any){
+      if(lastIdx<txt.length){
+        frag.appendChild(document.createTextNode(txt.substring(lastIdx)));
+      }
+      textNode.parentNode.replaceChild(frag,textNode);
+    }
+  });
+}
+// Retire le flou : on déballe tous les spans .pm-auto (= ceux qu'on a créés).
+function _privacyUnwrapAmounts(root){
+  if(!root)root=document.body;
+  var spans=root.querySelectorAll('span.pm-auto');
+  spans.forEach(function(s){
+    var t=document.createTextNode(s.textContent);
+    s.parentNode.replaceChild(t,s);
+  });
+  // Fusionner les noeuds texte adjacents (sinon le DOM se fragmente progressivement)
+  if(root.normalize) root.normalize();
+}
+var _privacyObserver=null;
+function _privacyStartObserver(){
+  if(_privacyObserver)return;
+  _privacyObserver=new MutationObserver(function(mutations){
+    // Pour chaque mutation, on relance le wrap sur le sous-arbre modifié
+    // (debouncé : on collecte tout puis on traite en 1 pass)
+    var nodes=new Set();
+    mutations.forEach(function(m){
+      if(m.type==='childList'){
+        m.addedNodes.forEach(function(n){
+          if(n.nodeType===1) nodes.add(n);
+          else if(n.nodeType===3 && n.parentElement) nodes.add(n.parentElement);
+        });
+      } else if(m.type==='characterData' && m.target.parentElement){
+        nodes.add(m.target.parentElement);
+      }
+    });
+    if(!nodes.size) return;
+    nodes.forEach(function(n){
+      // On ré-applique sur le parent (pour matcher les noeuds texte)
+      _privacyWrapAmounts(n);
+    });
+  });
+  _privacyObserver.observe(document.body,{
+    childList:true,
+    subtree:true,
+    characterData:true
+  });
+}
+function _privacyStopObserver(){
+  if(_privacyObserver){_privacyObserver.disconnect();_privacyObserver=null;}
+}
+function applyPrivacy(on){
+  var fab=document.getElementById('fabPrivacy');
+  if(fab){
+    if(on) fab.classList.add('fab-active');
+    else fab.classList.remove('fab-active');
+    var icon=fab.querySelector('i');
+    if(icon) icon.className=on?'ti ti-eye':'ti ti-eye-off';
+  }
+  if(on){
+    _privacyWrapAmounts(document.body);
+    _privacyStartObserver();
+  } else {
+    _privacyStopObserver();
+    _privacyUnwrapAmounts(document.body);
+  }
+}
+function togglePrivacyMode(){
+  var current=_getPrivacyStored();
+  var next=!current;
+  _setPrivacyStored(next);
+  applyPrivacy(next);
+}
+// Application initiale (au chargement, après que tout le DOM soit rendu).
+document.addEventListener('DOMContentLoaded',function(){
+  applyTheme(_getThemeStored());
+  // Délai : laisser les autres handlers DOMContentLoaded faire leur rendu initial
+  // avant de scanner pour le flou (sinon on flouterait dans des zones vides).
+  setTimeout(function(){
+    if(_getPrivacyStored()) applyPrivacy(true);
+  },200);
+});
 
 // Migration legacy : factures phase='' → 'livre' ou 'recu' selon type.
 // + Migration dateReceptionBC : auto-remplit pour les pré-facturées.
@@ -2767,6 +3356,11 @@ function rebuildClientSelects(){
     var sel=document.getElementById(id);
     if(sel) buildClientOptions(id,sel.value);
   });
+  // bc-client-final utilise sa propre fonction de remplissage (avec gestion legacy)
+  // Appelé seulement si la modal BC est actuellement ouverte (sinon le DOM existe mais
+  // le populate sera de toute façon refait à la prochaine ouverture).
+  var bcCf=document.getElementById('bc-client-final');
+  if(bcCf && typeof populateBCClientFinalSelect==='function') populateBCClientFinalSelect(bcCf.value);
 }
 
 function st(grp,tab){
@@ -4036,6 +4630,11 @@ function renderSuviKPIs(){
 
   // Rendre la vue "Marge par affaire" (une affaire = un BC Emerson + ses factures liées)
   if(typeof renderDashAffaires==='function') renderDashAffaires();
+
+  // Si le thème pro est actif, on bascule vers la version fintech qui remplace
+  // tout le contenu du onglet "Dashboard" du suivi factures par un layout
+  // sparklines + courbes + cards "affaire" stylées.
+  if(typeof renderSuiviPro==='function') renderSuiviPro();
 }
 
 // =============================================================================
@@ -6844,7 +7443,625 @@ function onBCStatusChange(){
     }
   }
 }
+// =============================================================================
+// HELPERS DE RENDU MODE PRO (sparklines, données mensuelles, etc.)
+// =============================================================================
+
+// Génère un SVG sparkline à partir d'un tableau de valeurs.
+// Renvoie une string HTML prête à insérer.
+//   values : [n1, n2, ...]
+//   color  : couleur (utiliser var(--blue/green/...))
+//   filled : true → ajoute un dégradé sous la courbe
+function makeSparkline(values, color, filled){
+  if(!values || values.length<2) return '';
+  var w=140, h=30, pad=2;
+  var max=Math.max.apply(null, values), min=Math.min.apply(null, values);
+  if(max===min){max=max+1;min=min-1;}
+  var pts=values.map(function(v,i){
+    var x=pad+(w-2*pad)*(i/(values.length-1));
+    var y=pad+(h-2*pad)*(1-(v-min)/(max-min));
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  var areaPath='';
+  if(filled){
+    areaPath='<polyline points="'+pts+' '+(w-pad)+','+(h-pad)+' '+pad+','+(h-pad)+'" '+
+      'class="sparkline-area" style="fill:'+color+';stroke:none"/>';
+  }
+  return '<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none">'+
+    areaPath+
+    '<polyline points="'+pts+'" style="stroke:'+color+'"/>'+
+    '</svg>';
+}
+
+// Calcule les totaux mensuels d'un tableau de docs (devis/factures) sur l'année.
+// Renvoie [m1, m2, ..., m12] où chaque valeur = somme des montants émis ce mois-là.
+function getMonthlyTotals(docs, getAmount, getDateField){
+  if(!docs)return new Array(12).fill(0);
+  getAmount=getAmount||function(d){return d.ttc||d.montant||0;};
+  getDateField=getDateField||'date';
+  // fiscalYear peut être undefined dans certains contextes (init, JSDOM tests).
+  // Fallback sur l'année en cours.
+  var fy=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
+  var totals=new Array(12).fill(0);
+  docs.forEach(function(d){
+    var ds=d[getDateField]||d.date||'';
+    if(!ds) return;
+    var year=parseInt(ds.substring(0,4),10);
+    if(year!==fy) return;
+    var month=parseInt(ds.substring(5,7),10);
+    if(isNaN(month)||month<1||month>12) return;
+    totals[month-1] += Number(getAmount(d))||0;
+  });
+  return totals;
+}
+
+// Sparkline d'évolution cumulée (les valeurs s'additionnent au fil des mois).
+// Utile pour les KPIs "Devis / Factures / Encaissé" qui croissent dans le temps.
+function getMonthlyCumulative(monthly){
+  var out=[],sum=0;
+  for(var i=0;i<monthly.length;i++){sum+=monthly[i];out.push(sum);}
+  return out;
+}
+
+// =============================================================================
+// RENDU DASHBOARD MODE PRO
+// =============================================================================
+// Appelé quand body.theme-pro est actif. Remplace le HTML du dashboard par
+// la version "fintech" : KPIs avec sparklines, gros graphique d'évolution,
+// donut, alertes.
+function rDashPro(){
+  var page=document.getElementById('page-dashboard');
+  if(!page) return;
+  var fy=typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear();
+
+  // --- Données ---
+  var dv=DB.devis||[];
+  var fa=DB.factures||[];
+  var dvFy=dv.filter(function(d){return (d.date||'').substring(0,4)==String(fy);});
+  var faFy=fa.filter(function(f){return (f.date||'').substring(0,4)==String(fy);});
+
+  // Totaux annuels
+  function devisTtc(d){return Number(d.ttc)||0;}
+  function factureMt(f){return Number(f.montant||f.ttc||0);}
+  var totalDevis=dvFy.reduce(function(s,d){return s+devisTtc(d);},0);
+  var totalFa=faFy.reduce(function(s,f){return s+factureMt(f);},0);
+  // Encaissé : on prend les factures avec status Payée ou Partiel
+  var totalEnc=0;
+  faFy.forEach(function(f){
+    var st=(f.status||f.statut||'').toLowerCase();
+    if(st.indexOf('payée')>=0||st==='paid') totalEnc+=factureMt(f);
+    else if(st.indexOf('partiel')>=0||st==='partial') totalEnc+=factureMt(f)*((f.pct||0)/100);
+  });
+  var totalRest=totalFa-totalEnc;
+
+  // Sparklines (cumul mensuel)
+  var dvMonthly=getMonthlyTotals(dvFy,devisTtc);
+  var faMonthly=getMonthlyTotals(faFy,factureMt);
+  var dvCum=getMonthlyCumulative(dvMonthly);
+  var faCum=getMonthlyCumulative(faMonthly);
+  // Encaissé mensuel
+  var encMonthly=new Array(12).fill(0);
+  faFy.forEach(function(f){
+    var ds=f.dateEncaissement||(((f.status||'').toLowerCase().indexOf('payée')>=0)?f.date:'');
+    if(!ds)return;
+    var m=parseInt(ds.substring(5,7),10);
+    if(m>=1&&m<=12) encMonthly[m-1]+=factureMt(f);
+  });
+  var encCum=getMonthlyCumulative(encMonthly);
+
+  // Répartition par type
+  var byType={Fourniture:0,Prestation:0,Mixte:0};
+  dvFy.forEach(function(d){
+    var t=d.type||'Fourniture';
+    if(byType[t]!==undefined) byType[t]+=devisTtc(d);
+    else byType.Mixte+=devisTtc(d);
+  });
+  var totalByType=byType.Fourniture+byType.Prestation+byType.Mixte;
+  function pctType(v){return totalByType>0?(v/totalByType*100):0;}
+
+  // Devis récents (5 derniers)
+  var recentDv=dv.slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,5);
+
+  // Alertes (factures en retard)
+  var alerts=[];
+  var today=new Date();
+  faFy.forEach(function(f){
+    var st=(f.status||f.statut||'').toLowerCase();
+    if(st.indexOf('payée')>=0||st==='paid')return;
+    if(!f.dateEcheance)return;
+    var ech=new Date(f.dateEcheance);
+    var diff=Math.floor((today-ech)/(1000*60*60*24));
+    if(diff>0) alerts.push({f:f, days:diff, status:'late'});
+    else if(diff>=-7) alerts.push({f:f, days:-diff, status:'soon'});
+  });
+  alerts.sort(function(a,b){return b.days-a.days;});
+  alerts=alerts.slice(0,5);
+
+  // --- HTML ---
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  var html='<div class="kpi-grid-pro">';
+  // KPI Devis
+  html+='<div class="kpi-pro kpi-blue">'+
+    '<div class="kpi-label"><i class="ti ti-file-text"></i>Devis '+fy+'</div>'+
+    '<div class="kpi-value">'+fNloc(totalDevis)+'</div>'+
+    '<div class="kpi-sub">XPF · '+dvFy.length+' devis</div>'+
+    makeSparkline(dvCum,'#88aae0',true)+
+    '</div>';
+  // KPI Factures
+  html+='<div class="kpi-pro">'+
+    '<div class="kpi-label"><i class="ti ti-receipt-2"></i>Facturation</div>'+
+    '<div class="kpi-value">'+fNloc(totalFa)+'</div>'+
+    '<div class="kpi-sub">XPF · '+faFy.length+' factures</div>'+
+    makeSparkline(faCum,'#a3a39a',true)+
+    '</div>';
+  // KPI Encaissé
+  html+='<div class="kpi-pro kpi-green">'+
+    '<div class="kpi-label"><i class="ti ti-trending-up"></i>Encaissé</div>'+
+    '<div class="kpi-value">'+fNloc(totalEnc)+'</div>'+
+    '<div class="kpi-sub">XPF · '+(totalFa>0?Math.round(totalEnc/totalFa*100):0)+'% des émises</div>'+
+    makeSparkline(encCum,'#5dcaa5',true)+
+    '</div>';
+  // KPI À recouvrer
+  html+='<div class="kpi-pro kpi-red">'+
+    '<div class="kpi-label"><i class="ti ti-alert-circle"></i>À recouvrer</div>'+
+    '<div class="kpi-value">'+fNloc(totalRest)+'</div>'+
+    '<div class="kpi-sub">XPF restants · '+alerts.filter(function(a){return a.status==='late';}).length+' en retard</div>'+
+    makeSparkline(faCum.map(function(v,i){return v-encCum[i];}),'#f09595',true)+
+    '</div>';
+  html+='</div>';
+
+  // Sous-grille : 3 KPIs par type d'activité
+  html+='<div class="kpi-grid-pro-3">';
+  html+='<div class="kpi-pro" style="border-top:2px solid var(--blue)">'+
+    '<div class="kpi-label"><i class="ti ti-tools"></i>Fourniture</div>'+
+    '<div class="kpi-value" style="color:var(--blue)">'+fNloc(byType.Fourniture)+'</div>'+
+    '<div class="kpi-sub">XPF · '+pctType(byType.Fourniture).toFixed(0)+'% du total</div>'+
+    '</div>';
+  html+='<div class="kpi-pro" style="border-top:2px solid var(--green)">'+
+    '<div class="kpi-label"><i class="ti ti-stethoscope"></i>Prestation</div>'+
+    '<div class="kpi-value" style="color:var(--green)">'+fNloc(byType.Prestation)+'</div>'+
+    '<div class="kpi-sub">XPF · '+pctType(byType.Prestation).toFixed(0)+'% du total</div>'+
+    '</div>';
+  html+='<div class="kpi-pro" style="border-top:2px solid var(--purple)">'+
+    '<div class="kpi-label"><i class="ti ti-asterisk"></i>Mixte</div>'+
+    '<div class="kpi-value" style="color:var(--purple)">'+fNloc(byType.Mixte)+'</div>'+
+    '<div class="kpi-sub">XPF · '+pctType(byType.Mixte).toFixed(0)+'% du total</div>'+
+    '</div>';
+  html+='</div>';
+
+  // Row : devis récents + alertes
+  html+='<div class="row-2-pro">';
+  // Devis récents
+  html+='<div class="card-pro">';
+  html+='<div class="card-pro-title"><i class="ti ti-file-text"></i>Devis récents</div>';
+  if(recentDv.length===0){
+    html+='<div style="text-align:center;padding:20px;color:var(--muted-soft);font-size:12px">Aucun devis</div>';
+  } else {
+    html+='<table class="tbl-pro">';
+    recentDv.forEach(function(d){
+      var st=(d.status||'').toLowerCase();
+      var pillClass='p-info', pillText=d.status||'—';
+      if(st.indexOf('accept')>=0){pillClass='p-success';pillText='Accepté';}
+      else if(st.indexOf('factur')>=0){pillClass='p-success';pillText='Facturé';}
+      else if(st.indexOf('refus')>=0){pillClass='p-danger';pillText='Refusé';}
+      else if(st.indexOf('envoy')>=0){pillClass='p-info';pillText='Envoyé';}
+      var clientShort=(d.client||'').substring(0,32);
+      var objet=(d.objet||d.intitule||'').replace(/\n/g,' ').substring(0,40);
+      html+='<tr>'+
+        '<td><span class="ref">'+esc(d.num||'?')+(d.rev?' '+esc(d.rev):'')+'</span></td>'+
+        '<td><div style="font-weight:500">'+esc(clientShort)+'</div><div style="font-size:11px;color:var(--muted-soft)">'+esc(objet)+'</div></td>'+
+        '<td class="num">'+fNloc(devisTtc(d))+' XPF</td>'+
+        '<td><span class="pill-pro '+pillClass+'">'+esc(pillText)+'</span></td>'+
+        '</tr>';
+    });
+    html+='</table>';
+  }
+  html+='</div>';
+
+  // Alertes
+  html+='<div class="card-pro">';
+  html+='<div class="card-pro-title"><i class="ti ti-bell"></i>Alertes facturation</div>';
+  if(alerts.length===0){
+    html+='<div style="text-align:center;padding:20px;color:var(--muted-soft);font-size:12px">Aucune alerte</div>';
+  } else {
+    html+='<div style="display:flex;flex-direction:column;gap:8px">';
+    alerts.forEach(function(a){
+      var bg=a.status==='late'?'rgba(240,149,149,0.06)':'rgba(239,159,39,0.06)';
+      var border=a.status==='late'?'rgba(240,149,149,0.25)':'rgba(239,159,39,0.25)';
+      var color=a.status==='late'?'var(--red)':'var(--amber)';
+      var label=a.status==='late'?'En retard de '+a.days+' jours':'Échéance dans '+a.days+' jours';
+      html+='<div style="padding:10px 12px;background:'+bg+';border:0.5px solid '+border+';border-radius:8px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">'+
+          '<span class="ref">'+esc(a.f.num||'?')+'</span>'+
+          '<span class="num" style="color:'+color+'">'+fNloc(factureMt(a.f))+' XPF</span>'+
+        '</div>'+
+        '<div style="font-size:11px;color:var(--muted-soft)">'+label+' · échéance '+esc(a.f.dateEcheance||'?')+'</div>'+
+        '</div>';
+    });
+    html+='</div>';
+  }
+  html+='</div>';
+  html+='</div>';
+
+  // Charts row : évolution mensuelle + donut répartition
+  html+='<div class="row-eq-pro">';
+  // Évolution mensuelle (gros graphique avec aires)
+  html+='<div class="card-pro">';
+  html+='<div class="card-pro-title"><i class="ti ti-chart-line"></i>Évolution mensuelle '+fy+'</div>';
+  html+=renderMonthlyChartPro(dvMonthly, faMonthly, encMonthly);
+  html+='<div style="display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--muted)">'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88aae0;margin-right:5px"></span>Devis émis</span>'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a3a39a;margin-right:5px"></span>Facturé</span>'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dcaa5;margin-right:5px"></span>Encaissé</span>'+
+    '</div>';
+  html+='</div>';
+
+  // Donut répartition par type
+  html+='<div class="card-pro">';
+  html+='<div class="card-pro-title"><i class="ti ti-chart-donut-3"></i>Répartition par type</div>';
+  html+=renderDonutPro(byType, totalByType);
+  html+='</div>';
+  html+='</div>';
+
+  page.innerHTML=html;
+}
+
+// Génère un SVG line chart pour l'évolution mensuelle (3 séries)
+function renderMonthlyChartPro(dvM, faM, encM){
+  var w=380,h=180,padX=30,padY=20;
+  var allVals=[].concat(dvM,faM,encM);
+  var max=Math.max.apply(null,allVals)||1;
+  if(max===0)max=1;
+  function xPos(i){return padX+(w-2*padX)*(i/11);}
+  function yPos(v){return h-padY-(h-2*padY)*(v/max);}
+  function poly(arr){
+    return arr.map(function(v,i){return xPos(i).toFixed(1)+','+yPos(v).toFixed(1);}).join(' ');
+  }
+  var months=['jan','fév','mar','avr','mai','juin','jui','aoû','sep','oct','nov','déc'];
+  var html='<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:200px" preserveAspectRatio="xMidYMid meet">';
+  // Grille horizontale
+  for(var i=0;i<=4;i++){
+    var y=padY+(h-2*padY)*(i/4);
+    html+='<line x1="'+padX+'" y1="'+y.toFixed(1)+'" x2="'+(w-padX)+'" y2="'+y.toFixed(1)+'" stroke="rgba(255,255,250,0.05)" stroke-width="0.5"/>';
+  }
+  // Aires (sous chaque courbe)
+  function area(arr,color){
+    var p=arr.map(function(v,i){return xPos(i).toFixed(1)+','+yPos(v).toFixed(1);}).join(' ');
+    return '<polygon points="'+p+' '+(w-padX)+','+(h-padY)+' '+padX+','+(h-padY)+'" fill="'+color+'" fill-opacity="0.1"/>';
+  }
+  html+=area(dvM,'#88aae0');
+  html+=area(faM,'#a3a39a');
+  // Courbes
+  html+='<polyline points="'+poly(dvM)+'" fill="none" stroke="#88aae0" stroke-width="1.8" stroke-linejoin="round"/>';
+  html+='<polyline points="'+poly(faM)+'" fill="none" stroke="#a3a39a" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round"/>';
+  html+='<polyline points="'+poly(encM)+'" fill="none" stroke="#5dcaa5" stroke-width="1.8" stroke-linejoin="round"/>';
+  // Points sur la dernière série (encaissé)
+  encM.forEach(function(v,i){
+    if(v>0) html+='<circle cx="'+xPos(i).toFixed(1)+'" cy="'+yPos(v).toFixed(1)+'" r="2.5" fill="#5dcaa5"/>';
+  });
+  // Labels axe X
+  for(var i=0;i<12;i++){
+    html+='<text x="'+xPos(i).toFixed(1)+'" y="'+(h-2)+'" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="rgba(255,255,250,0.4)">'+months[i]+'</text>';
+  }
+  // Labels axe Y (valeurs max)
+  var maxLabel=(max>=1e6?(max/1e6).toFixed(1)+'M':(max>=1e3?(max/1e3).toFixed(0)+'k':max));
+  html+='<text x="'+(padX-4)+'" y="'+(padY+4)+'" text-anchor="end" font-family="Inter,sans-serif" font-size="9" fill="rgba(255,255,250,0.4)">'+maxLabel+'</text>';
+  html+='<text x="'+(padX-4)+'" y="'+(h-padY+3)+'" text-anchor="end" font-family="Inter,sans-serif" font-size="9" fill="rgba(255,255,250,0.4)">0</text>';
+  html+='</svg>';
+  return html;
+}
+
+// Donut chart en SVG
+function renderDonutPro(byType, total){
+  if(total===0){
+    return '<div style="text-align:center;padding:30px;color:var(--muted-soft);font-size:12px">Aucune donnée</div>';
+  }
+  var data=[
+    {label:'Fourniture',val:byType.Fourniture,color:'#88aae0'},
+    {label:'Prestation',val:byType.Prestation,color:'#5dcaa5'},
+    {label:'Mixte',val:byType.Mixte,color:'#a78bfa'}
+  ].filter(function(d){return d.val>0;});
+  var html='<div style="display:flex;align-items:center;gap:18px">';
+  // SVG donut (circumference = 2π × 15.915 ≈ 100, donc strokeDasharray = pct fait l'affaire)
+  html+='<svg width="140" height="140" viewBox="0 0 42 42">';
+  html+='<circle cx="21" cy="21" r="15.915" fill="transparent" stroke="rgba(255,255,250,0.04)" stroke-width="3.5"/>';
+  var offset=0;
+  data.forEach(function(d){
+    var pct=(d.val/total)*100;
+    html+='<circle cx="21" cy="21" r="15.915" fill="transparent" stroke="'+d.color+'" stroke-width="3.5" '+
+      'stroke-dasharray="'+pct.toFixed(2)+' '+(100-pct).toFixed(2)+'" stroke-dashoffset="-'+offset.toFixed(2)+'"/>';
+    offset+=pct;
+  });
+  // Centre : total
+  var totalDisplay=total>=1e6?(total/1e6).toFixed(1)+'M':(total>=1e3?(total/1e3).toFixed(0)+'k':total);
+  html+='<text x="21" y="20" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="6" font-weight="500" fill="#f5f5f0">'+totalDisplay+'</text>';
+  html+='<text x="21" y="25" text-anchor="middle" font-family="Inter,sans-serif" font-size="3" fill="#a3a39a">XPF</text>';
+  html+='</svg>';
+  // Légende
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  html+='<div style="flex:1;display:flex;flex-direction:column;gap:8px">';
+  data.forEach(function(d){
+    var pct=(d.val/total)*100;
+    html+='<div style="display:flex;align-items:center;gap:8px;font-size:12px">'+
+      '<span style="width:10px;height:10px;border-radius:50%;background:'+d.color+'"></span>'+
+      '<span style="flex:1;color:var(--muted)">'+d.label+'</span>'+
+      '<span class="num" style="font-size:12px">'+fNloc(d.val)+'</span>'+
+      '<span style="color:var(--muted-soft);font-size:11px;min-width:34px;text-align:right">'+pct.toFixed(0)+'%</span>'+
+      '</div>';
+  });
+  html+='</div></div>';
+  return html;
+}
+
+// =============================================================================
+// RENDU SUIVI FACTURES MODE PRO
+// =============================================================================
+// Active le container #suiviDashPro et masque le classique. Calcule les KPIs
+// (encaissé, à recouvrer, coût Emerson, marge nette) et les rend dans le style
+// fintech. Inclut sparklines, gros graphique de progression mensuelle, et la
+// vue "Affaires" déjà calculée par buildDossiers().
+function renderSuiviPro(){
+  var classic=document.getElementById('suiviDashClassic');
+  var pro=document.getElementById('suiviDashPro');
+  if(!pro) return;
+  if(!document.body.classList.contains('theme-pro')){
+    if(classic) classic.style.display='';
+    pro.style.display='none';
+    return;
+  }
+  if(classic) classic.style.display='none';
+  pro.style.display='';
+
+  var fy=typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear();
+  var src=(typeof getSuiviSource==='function')?getSuiviSource():(invoices||[]);
+  // Filtrer par année fiscale
+  var srcFy=src.filter(function(f){return (f.date||'').substring(0,4)==String(fy);});
+
+  function getMt(f){return Number(f.montant||f.ttc||0);}
+  function isPaid(f){
+    var st=(f.status||f.statut||'').toLowerCase();
+    return st.indexOf('payée')>=0||st==='paid';
+  }
+  function isPartial(f){
+    var st=(f.status||f.statut||'').toLowerCase();
+    return st.indexOf('partiel')>=0||st==='partial';
+  }
+  function isPrebilled(f){
+    return f.phase==='prebilled' || (f.statut||'').toLowerCase().indexOf('pré')>=0;
+  }
+
+  // Totaux
+  var totalEmis=0,totalEnc=0,nbEmis=0;
+  srcFy.forEach(function(f){
+    if(isPrebilled(f)) return; // ignorer les pré-facturées
+    var mt=getMt(f);
+    totalEmis+=mt; nbEmis++;
+    if(isPaid(f)) totalEnc+=mt;
+    else if(isPartial(f)) totalEnc+=mt*((f.pct||0)/100);
+  });
+  var totalReste=totalEmis-totalEnc;
+
+  // Coût Emerson + frais (BC liés aux factures de l'année)
+  var totalCoutEm=0,totalFrais=0,totalCoutPaye=0;
+  var bcsLies={};
+  srcFy.forEach(function(f){
+    if(typeof getLinkedBCs!=='function')return;
+    var bcs=getLinkedBCs(f);
+    bcs.forEach(function(bc){if(!bcsLies[bc.id]) bcsLies[bc.id]=bc;});
+  });
+  Object.values(bcsLies).forEach(function(bc){
+    var c=getBCCoutXPF(bc), fr=getBCFraisXPF(bc);
+    totalCoutEm+=c; totalFrais+=fr;
+    if(bc.paidEmerson) totalCoutPaye+=c;
+  });
+  var totalCoutRest=totalCoutEm-totalCoutPaye;
+  var margeNette=totalEmis-totalCoutEm-totalFrais;
+  var margeBrute=totalEmis-totalCoutEm;
+  var pctMargeNette=totalEmis>0?(margeNette/totalEmis*100):0;
+  var tresoNette=totalEnc-totalCoutPaye;
+
+  // Sparklines monthly
+  var emisM=getMonthlyTotals(srcFy.filter(function(f){return !isPrebilled(f);}),getMt);
+  var encM=new Array(12).fill(0);
+  srcFy.forEach(function(f){
+    if(isPrebilled(f))return;
+    var ds=f.dateEncaissement||(isPaid(f)?f.date:'');
+    if(!ds)return;
+    var m=parseInt(ds.substring(5,7),10);
+    if(m>=1&&m<=12) encM[m-1]+=getMt(f);
+  });
+  var emisCum=getMonthlyCumulative(emisM);
+  var encCum=getMonthlyCumulative(encM);
+
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+
+  // Build HTML
+  var html='<div class="kpi-grid-pro">';
+  // KPI émis
+  html+='<div class="kpi-pro kpi-blue">'+
+    '<div class="kpi-label"><i class="ti ti-receipt-2"></i>Total émis '+fy+'</div>'+
+    '<div class="kpi-value">'+fNloc(totalEmis)+'</div>'+
+    '<div class="kpi-sub">XPF · '+nbEmis+' factures</div>'+
+    makeSparkline(emisCum,'#88aae0',true)+
+    '</div>';
+  // Encaissé
+  html+='<div class="kpi-pro kpi-green">'+
+    '<div class="kpi-label"><i class="ti ti-cash"></i>Encaissé</div>'+
+    '<div class="kpi-value">'+fNloc(totalEnc)+'</div>'+
+    '<div class="kpi-sub">'+(totalEmis>0?Math.round(totalEnc/totalEmis*100):0)+'% des émises</div>'+
+    makeSparkline(encCum,'#5dcaa5',true)+
+    '</div>';
+  // Coût Emerson + frais
+  html+='<div class="kpi-pro kpi-amber">'+
+    '<div class="kpi-label"><i class="ti ti-package"></i>Coût Emerson + frais</div>'+
+    '<div class="kpi-value">'+fNloc(totalCoutEm+totalFrais)+'</div>'+
+    '<div class="kpi-sub">Emerson '+fNloc(totalCoutEm)+' · Frais '+fNloc(totalFrais)+'</div>'+
+    '</div>';
+  // Marge nette
+  html+='<div class="kpi-pro kpi-green">'+
+    '<div class="kpi-label"><i class="ti ti-chart-pie"></i>Marge nette</div>'+
+    '<div class="kpi-value" style="color:'+(margeNette>=0?'var(--green)':'var(--red)')+'">'+fNloc(margeNette)+'</div>'+
+    '<div class="kpi-sub">'+pctMargeNette.toFixed(1)+'% net · brut '+fNloc(margeBrute)+'</div>'+
+    '</div>';
+  html+='</div>';
+
+  // 2nde row : trésorerie + restant à payer
+  html+='<div class="kpi-grid-pro" style="grid-template-columns:1fr 1fr">';
+  html+='<div class="kpi-pro" style="border-top:2px solid '+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+
+    '<div class="kpi-label"><i class="ti ti-wallet"></i>Trésorerie nette</div>'+
+    '<div class="kpi-value" style="color:'+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+(tresoNette>=0?'+':'')+fNloc(tresoNette)+'</div>'+
+    '<div class="kpi-sub">Encaissé '+fNloc(totalEnc)+' − Payé Emerson '+fNloc(totalCoutPaye)+'</div>'+
+    '</div>';
+  html+='<div class="kpi-pro kpi-red">'+
+    '<div class="kpi-label"><i class="ti ti-alert-triangle"></i>Restant Emerson</div>'+
+    '<div class="kpi-value">'+fNloc(totalCoutRest)+'</div>'+
+    '<div class="kpi-sub">'+(totalCoutEm>0?Math.round(totalCoutRest/totalCoutEm*100):0)+'% non payé · '+Object.keys(bcsLies).length+' BC liés</div>'+
+    '</div>';
+  html+='</div>';
+
+  // Gros graphique : émis vs encaissé mensuel
+  html+='<div class="card-pro">';
+  html+='<div class="card-pro-title"><i class="ti ti-trending-up"></i>Évolution mensuelle '+fy+'</div>';
+  html+=renderMonthlyChartPro(emisM, emisM.map(function(v,i){return Math.max(0,v);}), encM);
+  html+='<div style="display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--muted)">'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88aae0;margin-right:5px"></span>Émis</span>'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dcaa5;margin-right:5px"></span>Encaissé</span>'+
+    '</div>';
+  html+='</div>';
+
+  // Vue "affaires" si la fonction existe
+  if(typeof buildDossiers==='function' && typeof getDealMargeData!=='undefined' || typeof renderDossiers==='function'){
+    html+='<div class="card-pro">';
+    html+='<div class="card-pro-title"><i class="ti ti-folder"></i>Marge par affaire</div>';
+    var dossiers=buildDossiers();
+    if(!dossiers||dossiers.length===0){
+      html+='<div style="text-align:center;padding:20px;color:var(--muted-soft);font-size:12px">Aucune affaire — un dossier apparaît dès qu\'un BC Emerson est lié à au moins 1 facture.</div>';
+    } else {
+      html+='<div id="dealsListPro"></div>';
+    }
+    html+='</div>';
+  }
+
+  pro.innerHTML=html;
+
+  // Si on a des dossiers, on rend les cards "affaire" version pro
+  if(typeof buildDossiers==='function'){
+    var dossiers=buildDossiers();
+    if(dossiers && dossiers.length>0){
+      var listEl=document.getElementById('dealsListPro');
+      if(listEl) listEl.innerHTML=dossiers.map(renderDealCardPro).join('');
+    }
+  }
+}
+
+// Carte "affaire" (deal) version pro
+function renderDealCardPro(d){
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  var rec=d.factures.reduce(function(s,f){return s+(Number(f.montant||f.ttc||0));},0);
+  var cout=d.bcs.reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
+  var frais=d.bcs.reduce(function(s,bc){return s+getBCFraisXPF(bc);},0);
+  var marge=rec-cout-frais;
+  var pct=rec>0?(marge/rec*100):0;
+  var enc=d.factures.reduce(function(s,f){
+    var st=(f.status||f.statut||'').toLowerCase();
+    if(st.indexOf('payée')>=0||st==='paid')return s+(Number(f.montant||f.ttc||0));
+    if(st.indexOf('partiel')>=0||st==='partial')return s+(Number(f.montant||f.ttc||0))*((f.pct||0)/100);
+    return s;
+  },0);
+  var paye=d.bcs.filter(function(bc){return bc.paidEmerson;}).reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
+  var treso=enc-paye;
+  var nbPaid=d.bcs.filter(function(bc){return bc.paidEmerson;}).length;
+  var allBcsPaid=nbPaid===d.bcs.length;
+  var statutPill;
+  if(allBcsPaid) statutPill='<span class="pill-pro p-success"><i class="ti ti-check"></i>Emerson payé ('+nbPaid+'/'+d.bcs.length+')</span>';
+  else if(nbPaid>0) statutPill='<span class="pill-pro p-info">◐ Emerson partiel ('+nbPaid+'/'+d.bcs.length+')</span>';
+  else statutPill='<span class="pill-pro p-warning"><i class="ti ti-clock"></i>Emerson à payer</span>';
+  var multiPill='';
+  if(d.bcs.length>1 && d.factures.length>1) multiPill='<span class="pill-pro p-info"><i class="ti ti-link"></i>Affaire '+d.bcs.length+'BC × '+d.factures.length+'F</span>';
+  else if(d.bcs.length>1) multiPill='<span class="pill-pro p-info"><i class="ti ti-package"></i>'+d.bcs.length+' BC groupés</span>';
+  else if(d.factures.length>1) multiPill='<span class="pill-pro p-warning"><i class="ti ti-coin"></i>'+d.factures.length+' factures</span>';
+  // Frais réels ou forfait
+  var nbReels=d.bcs.filter(function(bc){return bcHasFraisReels(bc);}).length;
+  var fraisLabel=(nbReels===d.bcs.length)?'Frais réels':(nbReels===0?'Frais 20%':'Frais (mixte)');
+  var fraisColor=(nbReels===d.bcs.length)?'var(--green)':(nbReels===0?'var(--amber)':'var(--purple)');
+  // Client final
+  var clientFinal='—';
+  for(var ci=0;ci<d.bcs.length;ci++){
+    if(d.bcs[ci].clientFinal){clientFinal=d.bcs[ci].clientFinal;break;}
+  }
+  // Titre
+  var titre;
+  if(d.bcs.length===1){
+    titre='<span style="font-family:JetBrains Mono,monospace;font-size:14px;font-weight:500">'+esc(d.bcs[0].num||'?')+'</span>';
+  } else {
+    titre='<span style="font-family:JetBrains Mono,monospace;font-size:13px;font-weight:500">'+d.bcs.map(function(bc){return esc(bc.num||'?');}).join(' + ')+'</span>';
+  }
+  var html='<div class="deal-pro">';
+  html+='<div class="deal-pro-head">';
+  html+='<div style="flex:1">';
+  html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">'+titre+multiPill+statutPill+'</div>';
+  html+='<div style="font-size:11.5px;color:var(--muted-soft)">'+esc(clientFinal)+' · '+d.factures.length+' facture'+(d.factures.length>1?'s':'')+' · '+d.bcs.length+' BC</div>';
+  html+='</div>';
+  html+='<div class="deal-pro-marge">';
+  html+='<div class="deal-pro-marge-label">Marge nette</div>';
+  html+='<div class="deal-pro-marge-val" style="color:'+(marge>=0?'var(--green)':'var(--red)')+'">'+fNloc(marge)+'</div>';
+  html+='<div style="font-size:11px;color:var(--muted-soft)">'+pct.toFixed(1)+'% · XPF</div>';
+  html+='</div>';
+  html+='</div>';
+  // Stats
+  html+='<div class="deal-pro-stats">';
+  html+='<div><div class="deal-pro-stat-label"><i class="ti ti-cash"></i>Recette client</div><div class="deal-pro-stat-val" style="color:var(--blue)">'+fNloc(rec)+'</div></div>';
+  html+='<div><div class="deal-pro-stat-label"><i class="ti ti-package"></i>Coût Emerson</div><div class="deal-pro-stat-val">'+fNloc(cout)+'</div><div class="deal-pro-substat">'+d.bcs.length+' BC · '+fNloc(paye)+' payé</div></div>';
+  html+='<div><div class="deal-pro-stat-label"><i class="ti ti-truck"></i>'+fraisLabel+'</div><div class="deal-pro-stat-val" style="color:'+fraisColor+'">'+fNloc(frais)+'</div></div>';
+  html+='<div><div class="deal-pro-stat-label"><i class="ti ti-wallet"></i>Trésorerie</div><div class="deal-pro-stat-val" style="color:'+(treso>=0?'var(--green)':'var(--red)')+'">'+(treso>=0?'+':'')+fNloc(treso)+'</div><div class="deal-pro-substat">encaissé − payé</div></div>';
+  html+='</div>';
+  // Tableau factures
+  html+='<table class="tbl-pro" style="font-size:12px">';
+  d.factures.forEach(function(f){
+    var st=(f.status||f.statut||'').toLowerCase();
+    var pill;
+    if(st.indexOf('payée')>=0||st==='paid') pill='<span class="pill-pro p-success"><i class="ti ti-check"></i>Payée</span>';
+    else if(st.indexOf('partiel')>=0) pill='<span class="pill-pro p-info">⟳ Partielle</span>';
+    else if(st.indexOf('retard')>=0) pill='<span class="pill-pro p-danger"><i class="ti ti-alert-triangle"></i>En retard</span>';
+    else pill='<span class="pill-pro p-warning"><i class="ti ti-send"></i>Émise</span>';
+    var intitule=(f.intitule||'').replace(/\n/g,' ').substring(0,55);
+    html+='<tr>'+
+      '<td><span class="ref">'+esc(f.num||'?')+'</span></td>'+
+      '<td style="color:var(--muted-soft);font-size:11.5px">'+esc(intitule)+'</td>'+
+      '<td class="num">'+fNloc(Number(f.montant||f.ttc||0))+' XPF</td>'+
+      '<td>'+pill+'</td>'+
+      '</tr>';
+  });
+  html+='</table>';
+  html+='</div>';
+  return html;
+}
+
+
+// =============================================================================
+// FONCTION DISPATCH : appelée par toggleProTheme pour rerendre la page active
+// =============================================================================
+function renderActivePagePro(){
+  // On regarde quelle page est active et on relance son render
+  var activeBtn=document.querySelector('.sb-item.active');
+  if(!activeBtn) return;
+  var page=activeBtn.getAttribute('data-page')||'';
+  // Le toggle reactivate les fonctions natives (rDash, renderSuivi, etc.)
+  // qui détectent maintenant le mode pro et rendent en conséquence.
+  if(typeof rDash==='function') rDash();
+  if(typeof renderSuivi==='function') renderSuivi();
+}
+
+
 function rDash(){
+  // Si on est en mode pro, on délègue au rendu fintech (rDashPro)
+  // qui réécrit complètement le contenu de #page-dashboard.
+  // Le rendu classique reste actif pour le mode 'classic' (l'ancien thème).
+  if(document.body.classList.contains('theme-pro')){
+    rDashPro();
+    return;
+  }
+
   var dv=DB.devis,fa=DB.factures;
   // BUG FIX : Le champ x.ttc figé sur le devis peut être obsolète si le devis
   // a été modifié sans réenregistrer (ex: ajout d'un bloc TÂCHE après un save).
@@ -15475,7 +16692,7 @@ function openBC(id){
   eBCid=id||null;bcL=[];rebuildAllParamSelects();
   if(id){
     var b=DB.bcs.find(function(x){return x.id===id;});
-    if(b){gv('bc-num',b.num);gv('bc-date',b.date||td());gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:(b.cref||''));
+    if(b){gv('bc-num',b.num);gv('bc-date',b.date||td());gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');populateBCClientFinalSelect(b.clientFinal||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:(b.cref||''));
     // Migration : props (nouveau format liste) sinon prop2/prop (ancien format unique)
     if(Array.isArray(b.props)&&b.props.length){bcProps=JSON.parse(JSON.stringify(b.props));}
     else if(b.prop2||b.prop){
@@ -15497,7 +16714,7 @@ function openBC(id){
     bindCoutReelLive();updateCoutReelPreview();
     sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
-    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');gv('bc-client-final','');gv('bc-cref2','');
+    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');populateBCClientFinalSelect('');gv('bc-client-final','');gv('bc-cref2','');
     bcProps=[];renderEmersonProps();
     gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');
     // Nouveaux champs Coût réel : vides = utiliser défauts
@@ -15912,6 +17129,31 @@ function populateBCDevisSelect(){
   });
   if(current)sel.value=current;
 }
+// Remplit le <select id="bc-client-final"> avec la liste de DB.clients.
+// Préserve la valeur courante si elle existe (cas d'un BC ouvert avec un clientFinal
+// déjà saisi). Si la valeur n'est dans aucun client connu (BC legacy importé,
+// migration depuis ancien input texte), on ajoute quand même l'option pour ne
+// pas perdre la donnée — affichée avec un préfixe "(legacy)" pour la repérer.
+function populateBCClientFinalSelect(currentVal){
+  var sel=document.getElementById('bc-client-final');
+  if(!sel) return;
+  if(currentVal===undefined || currentVal===null) currentVal=sel.value||'';
+  var opts='<option value="">— Sélectionner un client (rempli auto si devis lié) —</option>';
+  var found=false;
+  (DB.clients||[]).forEach(function(c){
+    var nom=c.nom||'';
+    if(!nom) return;
+    var sel_=(nom===currentVal);
+    if(sel_) found=true;
+    opts+='<option value="'+esc(nom)+'"'+(sel_?' selected':'')+'>'+esc(nom)+'</option>';
+  });
+  // Si la valeur courante n'est dans aucun client, on l'ajoute en tête (legacy/manuel)
+  if(currentVal && !found){
+    opts+='<option value="'+esc(currentVal)+'" selected>(legacy) '+esc(currentVal)+'</option>';
+  }
+  sel.innerHTML=opts;
+}
+
 function onBCDevisLie(){
   var sel=document.getElementById('bc-devis-lie');
   var id=sel?+sel.value:0;
@@ -15919,7 +17161,13 @@ function onBCDevisLie(){
   var d=DB.devis.find(function(x){return x.id===id;});
   if(!d)return;
   var cf=document.getElementById('bc-client-final');
-  if(cf&&!cf.value)cf.value=d.client||'';
+  if(cf && !cf.value){
+    // Avec un <select>, on doit s'assurer que l'option existe avant de pouvoir la sélectionner.
+    // Si le client du devis n'est pas dans DB.clients (cas rare : client supprimé),
+    // populateBCClientFinalSelect l'ajoute en mode "legacy".
+    populateBCClientFinalSelect(d.client||'');
+    cf.value=d.client||'';
+  }
   var lDevis=document.getElementById('bc-link-devis');
   if(lDevis&&!lDevis.value)lDevis.value=d.num||'';
 }
@@ -18106,11 +19354,27 @@ var _txtExpanderSource=null;          // référence au textarea source en cours
 var _txtExpanderOriginalValue='';     // valeur d'origine (pour le bouton Annuler)
 
 function _isExpandableTextarea(el){
-  if(!el || el.tagName!=='TEXTAREA')return false;
+  if(!el)return false;
   if(el.disabled || el.readOnly)return false;
   // Exclure le textarea de la modale d'expansion elle-même (sinon double-clic dedans → boucle)
   if(el.id==='txtExpanderArea')return false;
-  return true;
+  // Les <textarea> sont toujours candidats : conçus pour du texte long.
+  if(el.tagName==='TEXTAREA')return true;
+  // Les <input> textuels sont candidats SOUS CONDITION : seulement si le contenu est
+  // long ou tronqué visuellement. Sinon on laisserait le navigateur faire son
+  // double-clic naturel (sélection du mot sous le curseur — UX classique).
+  // Critère : input de type texte ET contenu suffisamment long (≥ 30 caractères) OU
+  // visuellement tronqué (scrollWidth > clientWidth = du texte dépasse).
+  if(el.tagName==='INPUT'){
+    var t=(el.getAttribute('type')||'text').toLowerCase();
+    var textTypes=['text','search','url','email','tel'];
+    if(textTypes.indexOf(t)<0) return false;
+    var v=el.value||'';
+    if(v.length>=30) return true;             // texte assez long pour mériter une grande zone
+    if(el.scrollWidth>el.clientWidth+1) return true; // texte tronqué visuellement
+    return false;
+  }
+  return false;
 }
 
 function openTextareaExpander(sourceEl){
@@ -18121,7 +19385,15 @@ function openTextareaExpander(sourceEl){
   var label='';
   // 1. Chercher un <label for="..."> dans le DOM
   if(sourceEl.id){
-    var lab=document.querySelector('label[for="'+CSS.escape(sourceEl.id)+'"]');
+    // CSS.escape n'est pas garanti partout (anciens navigateurs, environnements de test).
+    // Fallback : échappement manuel des caractères spéciaux des sélecteurs CSS.
+    var safeId;
+    if(typeof CSS!=='undefined' && CSS.escape){
+      safeId=CSS.escape(sourceEl.id);
+    } else {
+      safeId=sourceEl.id.replace(/([\\#.:[\]()',>+~*=^$|"&%])/g,'\\$1');
+    }
+    var lab=document.querySelector('label[for="'+safeId+'"]');
     if(lab)label=lab.textContent.trim();
   }
   // 2. Chercher un <label> ancêtre direct
@@ -21808,6 +23080,24 @@ function critProceed(){
         <button class="btn btn-teal" onclick="txtExpanderApply()">✓ Valider</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ============================================================================
+     FAB : bouton flottant en bas-droite pour basculer thème + privacy mode
+     ============================================================================ -->
+<div id="themeFab">
+  <div class="fab-wrapper">
+    <button class="fab-btn" id="fabPrivacy" onclick="togglePrivacyMode()" aria-label="Mode privacy">
+      <i class="ti ti-eye-off"></i>
+      <span class="fab-label">Privacy</span>
+    </button>
+  </div>
+  <div class="fab-wrapper">
+    <button class="fab-btn" id="fabTheme" onclick="toggleProTheme()" aria-label="Changer de thème">
+      <i class="ti ti-palette"></i>
+      <span class="fab-label">Thème</span>
+    </button>
   </div>
 </div>
 
