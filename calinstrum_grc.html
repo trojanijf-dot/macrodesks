@@ -8307,13 +8307,31 @@ function _interactiveSparkline(values, color, monthlyData, formatter, idSuffix){
     pts:pts.map(function(p){return [p.x,p.y];})
   };
   var dataJson=JSON.stringify(dataPayload).replace(/"/g,'&quot;');
+  // === Découpage acquis / prévision ===
+  // Le mois en cours marque la limite : tout ce qui est <= mois en cours est de
+  // l'acquis (trait plein), au-delà c'est de la prévision (trait pointillé).
+  var todayMonth=new Date().getMonth();
+  var ptsAcquis=[],ptsPrev=[];
+  pts.forEach(function(p,i){
+    if(i<=todayMonth) ptsAcquis.push(p.x.toFixed(1)+','+p.y.toFixed(1));
+    if(i>=todayMonth) ptsPrev.push(p.x.toFixed(1)+','+p.y.toFixed(1));
+  });
+  var ptsAcquisStr=ptsAcquis.join(' ');
+  var ptsPrevStr=ptsPrev.join(' ');
   // Le wrapper porte data-payload + data-fmt-key (clé qui dit à _mountInteractiveSparklines
   // quel formatter utiliser, parce qu'on ne peut pas sérialiser une fonction)
   var html='<div class="ispark-wrap" data-id="'+idPrefix+'" data-payload="'+dataJson+'" data-fmt="'+(idSuffix||'')+'" style="position:relative;width:100%">';
   html+='<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" style="display:block">';
-  // Aire sous courbe
+  // Aire sous courbe (toute la période, en fond translucide)
   html+='<polyline points="'+ptsStr+' '+(w-pad)+','+(h-pad)+' '+pad+','+(h-pad)+'" class="sparkline-area" style="fill:'+color+';stroke:none"/>';
-  html+='<polyline points="'+ptsStr+'" style="stroke:'+color+';fill:none;stroke-width:1;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:2.5 1.5"/>';
+  // Segment ACQUIS — trait plein, fin
+  if(ptsAcquis.length>=2){
+    html+='<polyline points="'+ptsAcquisStr+'" style="stroke:'+color+';fill:none;stroke-width:0.8;stroke-linejoin:round;stroke-linecap:round"/>';
+  }
+  // Segment PRÉVISION — trait pointillé, même finesse
+  if(ptsPrev.length>=2){
+    html+='<polyline points="'+ptsPrevStr+'" style="stroke:'+color+';fill:none;stroke-width:0.8;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:2.5 1.5;opacity:0.65"/>';
+  }
   // Crosshair caché par défaut
   html+='<line id="'+idPrefix+'_ch" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" stroke="rgba(255,255,250,0.4)" stroke-width="0.5" stroke-dasharray="1.5 1.5" style="display:none;pointer-events:none"/>';
   html+='<circle id="'+idPrefix+'_dot" cx="0" cy="0" r="2.2" fill="'+color+'" stroke="var(--bg)" stroke-width="0.8" style="display:none;pointer-events:none"/>';
@@ -8473,10 +8491,65 @@ function renderDVPro(){
   var fc=gvg('fDVcli')||'';
   var fs=gvg('fDVst')||'';
   var sortKey=gvg('fDVsort')||'date-desc';
+  // === Filtres avancés propres au mode pro (persistés sur window) ===
+  // - type    : 'Fourniture' / 'Prestation' / 'Mixte' / ''
+  // - prefix  : préfixe client extrait du nom (ex: 'SLN', 'PRNC', 'EMR') / ''
+  // - contact : nom du contact (ex: 'Norbert PATCHE', 'Yannick PAKORO') / ''
+  if(!window._dvProFilters) window._dvProFilters={type:'',prefix:'',contact:''};
+  var fType=window._dvProFilters.type||'';
+  var fPrefix=window._dvProFilters.prefix||'';
+  var fContact=window._dvProFilters.contact||'';
 
-  // === Filtre par client actif (onglet) ===
   var dvAll=DB.devis||[];
-  var dataPre=dvAll.filter(function(x){return(!fc||x.client===fc)&&(!fs||x.status===fs)&&(!s||(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)>=0);});
+
+  // === Helpers d'extraction préfixe & contact ===
+  // Le client peut avoir 2 formats observés :
+  //   "SLN - Norbert PATCHE"           → préfixe SLN / contact Norbert PATCHE
+  //   "PRNC - Comptabilité Facturation"→ préfixe PRNC / contact Comptabilité Facturation
+  //   "Emerson"                        → préfixe Emerson / contact ''
+  // Le contact peut aussi être dans le champ explicite d.contact si renseigné.
+  function extractPrefix(d){
+    var raw=(d.client||'').trim();
+    if(!raw) return '';
+    var sep=raw.indexOf(' - ');
+    return sep>0?raw.substring(0,sep).trim():raw;
+  }
+  function extractContact(d){
+    if(d.contact) return d.contact.trim();
+    var raw=(d.client||'').trim();
+    var sep=raw.indexOf(' - ');
+    return sep>0?raw.substring(sep+3).trim():'';
+  }
+  // Normalise le type pour matcher les 3 buckets standards
+  function normType(t){
+    t=(t||'').toString();
+    if(t.indexOf('Prestation')>=0&&t.indexOf('Fourniture')>=0) return 'Mixte';
+    if(t.indexOf('Prestation')>=0) return 'Prestation';
+    if(t.indexOf('Fourniture')>=0) return 'Fourniture';
+    return t||'Fourniture';
+  }
+
+  // === Liste des options dynamiques pour les selects ===
+  var prefixSet={},contactSet={},typeSet={};
+  dvAll.forEach(function(d){
+    var p=extractPrefix(d); if(p) prefixSet[p]=(prefixSet[p]||0)+1;
+    var c=extractContact(d); if(c) contactSet[c]=(contactSet[c]||0)+1;
+    var t=normType(d.type); if(t) typeSet[t]=(typeSet[t]||0)+1;
+  });
+  var prefixOptions=Object.keys(prefixSet).sort();
+  var contactOptions=Object.keys(contactSet).sort();
+  var typeOptions=['Fourniture','Prestation','Mixte'].filter(function(t){return typeSet[t];});
+
+  // === Filtre par client actif (onglet) + nouveaux filtres avancés ===
+  var dataPre=dvAll.filter(function(x){
+    if(fc&&x.client!==fc) return false;
+    if(fs&&x.status!==fs) return false;
+    if(s&&(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)<0) return false;
+    if(fType&&normType(x.type)!==fType) return false;
+    if(fPrefix&&extractPrefix(x)!==fPrefix) return false;
+    if(fContact&&extractContact(x)!==fContact) return false;
+    return true;
+  });
   var data=(typeof filterByActiveClient==='function')?filterByActiveClient(dataPre,'dv'):dataPre;
 
   // === KPIs sur l'ensemble (avant filtre, pour refléter l'année fiscale globale) ===
@@ -8596,6 +8669,8 @@ function renderDVPro(){
   html+='</div>';
 
   // ========== Filtres ==========
+  // Style commun pour les selects pro
+  var selStyle='background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:8px 28px 8px 12px;color:var(--text);font-size:12px;cursor:pointer;font-family:inherit';
   html+='<div class="dvpro-filters" style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">';
   // Recherche
   html+='<div style="position:relative;flex:1;min-width:240px">'+
@@ -8603,17 +8678,49 @@ function renderDVPro(){
     '<input type="text" id="sDV2" placeholder="Rechercher par n°, client, objet..." value="'+esc(s)+'" oninput="document.getElementById(\'sDV\').value=this.value;renderDV()" style="width:100%;background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:8px 12px 8px 32px;color:var(--text);font-size:12px;font-family:inherit">'+
     '</div>';
   // Statut
-  html+='<select id="fDVst2" onchange="document.getElementById(\'fDVst\').value=this.value;renderDV()" style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:8px 28px 8px 12px;color:var(--text);font-size:12px;cursor:pointer;font-family:inherit">';
+  html+='<select id="fDVst2" title="Filtrer par statut" onchange="document.getElementById(\'fDVst\').value=this.value;renderDV()" style="'+selStyle+'">';
   ['','Brouillon','Envoyé','Accepté','Refusé','Facturé','Cadre','Obsolète'].forEach(function(st){
-    html+='<option value="'+st+'"'+(fs===st?' selected':'')+'>'+(st||'Tous statuts')+'</option>';
+    var lbl=st==='Envoyé'?'En attente client':(st||'Tous statuts');
+    html+='<option value="'+st+'"'+(fs===st?' selected':'')+'>'+lbl+'</option>';
+  });
+  html+='</select>';
+  // === NOUVEAU : Type de devis ===
+  // Filtre par catégorie (Fourniture / Prestation / Mixte). Cohérent avec les
+  // dots colorés de la liste et avec le donut "Répartition par type".
+  html+='<select id="fDVtype2" title="Filtrer par type de devis" onchange="window._dvProFilters.type=this.value;renderDV()" style="'+selStyle+'">';
+  html+='<option value=""'+(!fType?' selected':'')+'>Tous types</option>';
+  typeOptions.forEach(function(t){
+    html+='<option value="'+esc(t)+'"'+(fType===t?' selected':'')+'>'+esc(t)+' ('+typeSet[t]+')</option>';
+  });
+  html+='</select>';
+  // === NOUVEAU : Préfixe client (SLN / PRNC / Emerson…) ===
+  // Le préfixe est extrait automatiquement du début du champ client.
+  // Permet de filtrer rapidement par société cliente.
+  html+='<select id="fDVpfx2" title="Filtrer par société cliente (préfixe)" onchange="window._dvProFilters.prefix=this.value;renderDV()" style="'+selStyle+'">';
+  html+='<option value=""'+(!fPrefix?' selected':'')+'>Toutes sociétés</option>';
+  prefixOptions.forEach(function(p){
+    html+='<option value="'+esc(p)+'"'+(fPrefix===p?' selected':'')+'>'+esc(p)+' ('+prefixSet[p]+')</option>';
+  });
+  html+='</select>';
+  // === NOUVEAU : Contact client ===
+  // Extrait du suffixe après " - " ou du champ d.contact si renseigné.
+  // Liste alphabétique des contacts uniques rencontrés dans la base.
+  html+='<select id="fDVct2" title="Filtrer par contact client" onchange="window._dvProFilters.contact=this.value;renderDV()" style="'+selStyle+'">';
+  html+='<option value=""'+(!fContact?' selected':'')+'>Tous contacts</option>';
+  contactOptions.forEach(function(c){
+    html+='<option value="'+esc(c)+'"'+(fContact===c?' selected':'')+'>'+esc(c)+' ('+contactSet[c]+')</option>';
   });
   html+='</select>';
   // Tri
-  html+='<select id="fDVsort2" onchange="document.getElementById(\'fDVsort\').value=this.value;renderDV()" style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:8px 28px 8px 12px;color:var(--text);font-size:12px;cursor:pointer;font-family:inherit">';
+  html+='<select id="fDVsort2" title="Tri" onchange="document.getElementById(\'fDVsort\').value=this.value;renderDV()" style="'+selStyle+'">';
   [['date-desc','Date ↓'],['date-asc','Date ↑'],['num-desc','N° ↓'],['num-asc','N° ↑'],['ttc-desc','Montant ↓'],['ttc-asc','Montant ↑']].forEach(function(opt){
     html+='<option value="'+opt[0]+'"'+(sortKey===opt[0]?' selected':'')+'>'+opt[1]+'</option>';
   });
   html+='</select>';
+  // Bouton reset filtres (apparaît uniquement si au moins un filtre est actif)
+  if(s||fs||fType||fPrefix||fContact){
+    html+='<button title="Réinitialiser les filtres" onclick="document.getElementById(\'sDV\').value=\'\';document.getElementById(\'fDVst\').value=\'\';window._dvProFilters={type:\'\',prefix:\'\',contact:\'\'};renderDV()" style="background:transparent;border:0.5px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--muted-soft);cursor:pointer;font-size:11px;display:flex;align-items:center;gap:5px"><i class="ti ti-x" style="font-size:13px"></i>Effacer</button>';
+  }
   // Compteur résultats
   html+='<span style="margin-left:auto;color:var(--muted-soft);font-size:11px;letter-spacing:0.04em" class="no-pm-blur">'+
     '<span data-money>'+data.length+'</span> résultat'+(data.length>1?'s':'')+
