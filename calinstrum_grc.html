@@ -7865,11 +7865,6 @@ function rDashPro(){
   html+='<div class="card-pro">';
   html+='<div class="card-pro-title"><i class="ti ti-chart-line"></i>Évolution mensuelle '+fy+'</div>';
   html+=renderMonthlyChartPro(dvMonthly, faMonthly, encMonthly);
-  html+='<div style="display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--muted)">'+
-    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88aae0;margin-right:5px"></span>Devis émis</span>'+
-    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a3a39a;margin-right:5px"></span>Facturé</span>'+
-    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dcaa5;margin-right:5px"></span>Encaissé</span>'+
-    '</div>';
   html+='</div>';
 
   // Donut répartition par type
@@ -7880,6 +7875,8 @@ function rDashPro(){
   html+='</div>';
 
   page.innerHTML=html;
+  // Mount des graphiques mensuels interactifs (crosshair, toggle, etc.)
+  if(typeof _mountMonthlyCharts==='function') _mountMonthlyCharts(page);
   // Si le mode privacy est actif, on re-scan le contenu fraîchement injecté
   // car le MutationObserver peut louper des cas (ré-écriture massive d'innerHTML).
   if(_getPrivacyStored() && typeof _privacyWrapAmounts==='function'){
@@ -7888,48 +7885,297 @@ function rDashPro(){
 }
 
 // Génère un SVG line chart pour l'évolution mensuelle (3 séries)
-function renderMonthlyChartPro(dvM, faM, encM){
-  var w=380,h=180,padX=30,padY=20;
-  var allVals=[].concat(dvM,faM,encM);
-  var max=Math.max.apply(null,allVals)||1;
-  if(max===0)max=1;
-  function xPos(i){return padX+(w-2*padX)*(i/11);}
-  function yPos(v){return h-padY-(h-2*padY)*(v/max);}
-  function poly(arr){
-    return arr.map(function(v,i){return xPos(i).toFixed(1)+','+yPos(v).toFixed(1);}).join(' ');
-  }
-  var months=['jan','fév','mar','avr','mai','juin','jui','aoû','sep','oct','nov','déc'];
-  var html='<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:200px" preserveAspectRatio="xMidYMid meet">';
-  // Grille horizontale
-  for(var i=0;i<=4;i++){
-    var y=padY+(h-2*padY)*(i/4);
-    html+='<line x1="'+padX+'" y1="'+y.toFixed(1)+'" x2="'+(w-padX)+'" y2="'+y.toFixed(1)+'" stroke="rgba(255,255,250,0.05)" stroke-width="0.5"/>';
-  }
-  // Aires (sous chaque courbe)
-  function area(arr,color){
-    var p=arr.map(function(v,i){return xPos(i).toFixed(1)+','+yPos(v).toFixed(1);}).join(' ');
-    return '<polygon points="'+p+' '+(w-padX)+','+(h-padY)+' '+padX+','+(h-padY)+'" fill="'+color+'" fill-opacity="0.1"/>';
-  }
-  html+=area(dvM,'#88aae0');
-  html+=area(faM,'#a3a39a');
-  // Courbes
-  html+='<polyline points="'+poly(dvM)+'" fill="none" stroke="#88aae0" stroke-width="1.8" stroke-linejoin="round"/>';
-  html+='<polyline points="'+poly(faM)+'" fill="none" stroke="#a3a39a" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round"/>';
-  html+='<polyline points="'+poly(encM)+'" fill="none" stroke="#5dcaa5" stroke-width="1.8" stroke-linejoin="round"/>';
-  // Points sur la dernière série (encaissé)
-  encM.forEach(function(v,i){
-    if(v>0) html+='<circle cx="'+xPos(i).toFixed(1)+'" cy="'+yPos(v).toFixed(1)+'" r="2.5" fill="#5dcaa5"/>';
+// =============================================================================
+// Graphique mensuel — version "smart finance"
+// Features :
+//   - Crosshair vertical interactif au survol (avec tooltip)
+//   - Graduations Y en montants XPF lisibles (0, 5M, 10M...)
+//   - Toggle mensuel/cumulé (bouton dans le coin)
+//   - Moyenne mobile (ligne pointillée gris pâle, référence pour juger un mois)
+//   - Mois en cours mis en évidence (point plus gros, label "Aujourd'hui")
+// On garde la signature (dvM, faM, encM) pour rétrocompat avec les 2 appels.
+// =============================================================================
+
+// Algorithme "nice numbers" pour générer des graduations rondes (5M, 10M, etc.)
+function _niceTicks(maxValue, targetCount){
+  if(maxValue<=0) return [0];
+  targetCount=targetCount||4;
+  var rawStep=maxValue/targetCount;
+  var magnitude=Math.pow(10,Math.floor(Math.log10(rawStep)));
+  var normalized=rawStep/magnitude;
+  var niceStep;
+  if(normalized<1.5) niceStep=1;
+  else if(normalized<3) niceStep=2;
+  else if(normalized<7) niceStep=5;
+  else niceStep=10;
+  var step=niceStep*magnitude;
+  var niceMax=Math.ceil(maxValue/step)*step;
+  var ticks=[];
+  for(var v=0;v<=niceMax+0.0001;v+=step) ticks.push(v);
+  return ticks;
+}
+
+// Formatte un montant en abréviation lisible (1.5M, 800k, 0)
+function _fmtAxisVal(v){
+  if(v===0) return '0';
+  if(v>=1e6) return (v/1e6).toFixed(v%1e6===0?0:1)+'M';
+  if(v>=1e3) return (v/1e3).toFixed(0)+'k';
+  return String(Math.round(v));
+}
+
+// Calcule la moyenne mobile sur N mois (window=3 par défaut)
+function _movingAverage(arr, window){
+  window=window||3;
+  return arr.map(function(_,i){
+    var start=Math.max(0,i-window+1);
+    var slice=arr.slice(start,i+1);
+    var sum=slice.reduce(function(s,v){return s+v;},0);
+    return sum/slice.length;
   });
-  // Labels axe X
-  for(var i=0;i<12;i++){
-    html+='<text x="'+xPos(i).toFixed(1)+'" y="'+(h-2)+'" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="rgba(255,255,250,0.4)">'+months[i]+'</text>';
-  }
-  // Labels axe Y (valeurs max)
-  var maxLabel=(max>=1e6?(max/1e6).toFixed(1)+'M':(max>=1e3?(max/1e3).toFixed(0)+'k':max));
-  html+='<text x="'+(padX-4)+'" y="'+(padY+4)+'" text-anchor="end" font-family="Inter,sans-serif" font-size="9" fill="rgba(255,255,250,0.4)">'+maxLabel+'</text>';
-  html+='<text x="'+(padX-4)+'" y="'+(h-padY+3)+'" text-anchor="end" font-family="Inter,sans-serif" font-size="9" fill="rgba(255,255,250,0.4)">0</text>';
-  html+='</svg>';
+}
+
+// Cumul mensuel
+function _toCumul(arr){
+  var out=[],s=0;
+  arr.forEach(function(v){s+=v;out.push(s);});
+  return out;
+}
+
+// Compteur global pour générer un ID unique par chart (évite collision quand
+// le dashboard et la page suivi affichent chacun un chart sur la même page)
+var _chartIdCounter=0;
+
+function renderMonthlyChartPro(dvM, faM, encM){
+  var chartId='mchart_'+(++_chartIdCounter);
+  var w=560, h=220, padX=50, padY=24, padBottom=30;
+  var months=['jan','fév','mar','avr','mai','juin','jui','aoû','sep','oct','nov','déc'];
+  // Le mois en cours (0-11)
+  var todayMonth=new Date().getMonth();
+  // Données initiales : on mémorise les versions cumulée et mensuelle pour le toggle
+  var dvMonthly=dvM.slice(), faMonthly=faM.slice(), encMonthly=encM.slice();
+  var dvCumul=_toCumul(dvMonthly), faCumul=_toCumul(faMonthly), encCumul=_toCumul(encMonthly);
+  // Sérialiser les données pour les passer au JS du widget (escape pour éviter injection)
+  var dataPayload={
+    monthly:{dv:dvMonthly,fa:faMonthly,enc:encMonthly},
+    cumul:{dv:dvCumul,fa:faCumul,enc:encCumul},
+    months:months,
+    todayMonth:todayMonth
+  };
+  var dataJson=JSON.stringify(dataPayload).replace(/"/g,'&quot;');
+
+  // Container avec toggle en haut à droite
+  var html='<div class="mchart-wrap" data-chart-id="'+chartId+'" data-payload="'+dataJson+'" style="position:relative">';
+  html+='<div class="mchart-toggle" style="position:absolute;top:0;right:0;display:flex;gap:1px;background:rgba(255,255,250,0.04);border:0.5px solid rgba(255,255,250,0.10);border-radius:6px;padding:2px;font-size:10px;z-index:2">';
+  html+='<button data-mode="monthly" class="mchart-toggle-btn active" style="border:0;background:rgba(136,170,224,0.15);color:var(--text);padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;letter-spacing:0.04em">Mensuel</button>';
+  html+='<button data-mode="cumul" class="mchart-toggle-btn" style="border:0;background:transparent;color:var(--muted-soft);padding:3px 9px;border-radius:4px;cursor:pointer;font-size:10px;letter-spacing:0.04em">Cumulé</button>';
+  html+='</div>';
+
+  // SVG : on calcule un rendu initial en mode mensuel, le JS pourra le re-rendre
+  // au toggle. La fonction _renderMChartSVG est appelée côté JS au mount + au toggle.
+  html+='<svg id="'+chartId+'_svg" viewBox="0 0 '+w+' '+h+'" style="width:100%;height:240px;display:block" preserveAspectRatio="xMidYMid meet"></svg>';
+
+  // Tooltip flottant (caché par défaut, repositionné au mousemove)
+  html+='<div id="'+chartId+'_tooltip" class="mchart-tooltip" style="position:absolute;display:none;background:rgba(20,20,15,0.95);border:0.5px solid rgba(255,255,250,0.15);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--text);pointer-events:none;z-index:3;backdrop-filter:blur(8px);min-width:180px;box-shadow:0 4px 14px rgba(0,0,0,0.4)"></div>';
+
+  // Légende (statique sous le SVG)
+  html+='<div class="mchart-legend" style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--muted)">'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88aae0;margin-right:5px"></span>Devis émis</span>'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a3a39a;margin-right:5px"></span>Facturé</span>'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dcaa5;margin-right:5px"></span>Encaissé</span>'+
+    '<span style="margin-left:auto;color:var(--muted-soft);font-size:10px"><span style="display:inline-block;width:14px;height:1.5px;background:rgba(255,255,250,0.3);margin-right:5px;vertical-align:middle"></span>Moyenne mobile (3 mois)</span>'+
+    '</div>';
+  html+='</div>'; // /.mchart-wrap
+
   return html;
+}
+
+// Mount/render côté client : trouve tous les .mchart-wrap et les active
+// Appelé après chaque insertion dans le DOM (rDashPro, renderSuiviPro)
+function _mountMonthlyCharts(root){
+  root=root||document.body;
+  var wraps=root.querySelectorAll('.mchart-wrap');
+  wraps.forEach(function(wrap){
+    if(wrap.dataset.mounted==='1') return;
+    wrap.dataset.mounted='1';
+    var payload;
+    try{ payload=JSON.parse(wrap.dataset.payload.replace(/&quot;/g,'"')); }
+    catch(e){ return; }
+    var chartId=wrap.dataset.chartId;
+    var svg=document.getElementById(chartId+'_svg');
+    var tooltip=document.getElementById(chartId+'_tooltip');
+    if(!svg||!tooltip) return;
+
+    var mode='monthly'; // 'monthly' | 'cumul'
+    var w=560, h=220, padX=50, padY=24, padBottom=30;
+    var todayMonth=payload.todayMonth;
+
+    function getData(){
+      return mode==='cumul'?payload.cumul:payload.monthly;
+    }
+
+    function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+
+    function render(){
+      var d=getData();
+      var allVals=[].concat(d.dv,d.fa,d.enc);
+      var max=Math.max.apply(null,allVals)||1;
+      var ticks=_niceTicks(max,4);
+      var displayMax=ticks[ticks.length-1];
+      function xPos(i){return padX+(w-padX-20)*(i/11);}
+      function yPos(v){return h-padBottom-(h-padY-padBottom)*(v/displayMax);}
+      function poly(arr){return arr.map(function(v,i){return xPos(i).toFixed(1)+','+yPos(v).toFixed(1);}).join(' ');}
+
+      var s='';
+      // Grille horizontale + labels Y (à chaque tick)
+      ticks.forEach(function(t){
+        var y=yPos(t);
+        s+='<line x1="'+padX+'" y1="'+y.toFixed(1)+'" x2="'+(w-20)+'" y2="'+y.toFixed(1)+'" stroke="rgba(255,255,250,0.06)" stroke-width="0.5"/>';
+        s+='<text x="'+(padX-6)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9.5" fill="rgba(255,255,250,0.45)" data-money>'+_fmtAxisVal(t)+'</text>';
+      });
+      // Petit "XPF" sous le label Y le plus haut
+      s+='<text x="'+(padX-6)+'" y="'+(padY-6)+'" text-anchor="end" font-family="Inter,sans-serif" font-size="8" fill="rgba(255,255,250,0.3)" letter-spacing="0.05em">XPF</text>';
+
+      // Aires sous courbes (Devis et Facturé)
+      function area(arr,color,opacity){
+        var p=arr.map(function(v,i){return xPos(i).toFixed(1)+','+yPos(v).toFixed(1);}).join(' ');
+        return '<polygon points="'+p+' '+xPos(11).toFixed(1)+','+(h-padBottom)+' '+xPos(0).toFixed(1)+','+(h-padBottom)+'" fill="'+color+'" fill-opacity="'+(opacity||0.08)+'"/>';
+      }
+      s+=area(d.dv,'#88aae0',0.10);
+      s+=area(d.fa,'#a3a39a',0.06);
+
+      // Moyenne mobile (sur Devis émis, fenêtre 3 mois) — référence visuelle
+      var ma=_movingAverage(d.dv,3);
+      s+='<polyline points="'+poly(ma)+'" fill="none" stroke="rgba(255,255,250,0.25)" stroke-width="1" stroke-dasharray="3 3" stroke-linejoin="round"/>';
+
+      // Courbes
+      s+='<polyline points="'+poly(d.dv)+'" fill="none" stroke="#88aae0" stroke-width="1.8" stroke-linejoin="round"/>';
+      s+='<polyline points="'+poly(d.fa)+'" fill="none" stroke="#a3a39a" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round"/>';
+      s+='<polyline points="'+poly(d.enc)+'" fill="none" stroke="#5dcaa5" stroke-width="1.8" stroke-linejoin="round"/>';
+
+      // Points sur la courbe Encaissé (valeurs > 0)
+      d.enc.forEach(function(v,i){
+        if(v>0) s+='<circle cx="'+xPos(i).toFixed(1)+'" cy="'+yPos(v).toFixed(1)+'" r="2.5" fill="#5dcaa5"/>';
+      });
+
+      // Mois en cours : repère vertical pointillé + point gros sur la courbe Encaissé
+      if(todayMonth>=0 && todayMonth<=11){
+        var xT=xPos(todayMonth);
+        s+='<line x1="'+xT.toFixed(1)+'" y1="'+padY+'" x2="'+xT.toFixed(1)+'" y2="'+(h-padBottom)+'" stroke="rgba(239,159,39,0.35)" stroke-width="0.7" stroke-dasharray="2 3"/>';
+        // Marker "Aujourd'hui" en haut
+        s+='<text x="'+xT.toFixed(1)+'" y="'+(padY-8)+'" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--amber)" letter-spacing="0.04em">aujourd\'hui</text>';
+        // Point gros sur la courbe Devis (la plus haute en général)
+        s+='<circle cx="'+xT.toFixed(1)+'" cy="'+yPos(d.dv[todayMonth]).toFixed(1)+'" r="4" fill="#88aae0" stroke="var(--bg)" stroke-width="1.5"/>';
+      }
+
+      // Labels axe X
+      payload.months.forEach(function(m,i){
+        var fill=i===todayMonth?'var(--amber)':'rgba(255,255,250,0.45)';
+        var weight=i===todayMonth?'500':'400';
+        s+='<text x="'+xPos(i).toFixed(1)+'" y="'+(h-padBottom+14)+'" text-anchor="middle" font-family="Inter,sans-serif" font-size="9.5" fill="'+fill+'" font-weight="'+weight+'">'+m+'</text>';
+      });
+
+      // Crosshair (caché par défaut)
+      s+='<line id="'+chartId+'_crosshair" x1="0" y1="'+padY+'" x2="0" y2="'+(h-padBottom)+'" stroke="rgba(255,255,250,0.4)" stroke-width="0.6" stroke-dasharray="2 2" style="display:none;pointer-events:none"/>';
+      // Cercles du crosshair (3 points sur les courbes)
+      s+='<circle id="'+chartId+'_dot_dv" cx="0" cy="0" r="3.5" fill="#88aae0" stroke="var(--bg)" stroke-width="1.2" style="display:none;pointer-events:none"/>';
+      s+='<circle id="'+chartId+'_dot_fa" cx="0" cy="0" r="3.5" fill="#a3a39a" stroke="var(--bg)" stroke-width="1.2" style="display:none;pointer-events:none"/>';
+      s+='<circle id="'+chartId+'_dot_enc" cx="0" cy="0" r="3.5" fill="#5dcaa5" stroke="var(--bg)" stroke-width="1.2" style="display:none;pointer-events:none"/>';
+
+      // Zone hover invisible (sur tout le graph) pour capter mousemove
+      s+='<rect id="'+chartId+'_hitarea" x="'+padX+'" y="'+padY+'" width="'+(w-padX-20)+'" height="'+(h-padY-padBottom)+'" fill="transparent" style="cursor:crosshair"/>';
+
+      svg.innerHTML=s;
+
+      // Bind crosshair
+      var hit=document.getElementById(chartId+'_hitarea');
+      var ch=document.getElementById(chartId+'_crosshair');
+      var dotDv=document.getElementById(chartId+'_dot_dv');
+      var dotFa=document.getElementById(chartId+'_dot_fa');
+      var dotEnc=document.getElementById(chartId+'_dot_enc');
+
+      function showCrosshair(monthIdx,evt){
+        if(monthIdx<0||monthIdx>11)return hideCrosshair();
+        var x=xPos(monthIdx);
+        ch.setAttribute('x1',x.toFixed(1));
+        ch.setAttribute('x2',x.toFixed(1));
+        ch.style.display='block';
+        dotDv.setAttribute('cx',x.toFixed(1));dotDv.setAttribute('cy',yPos(d.dv[monthIdx]).toFixed(1));dotDv.style.display='block';
+        dotFa.setAttribute('cx',x.toFixed(1));dotFa.setAttribute('cy',yPos(d.fa[monthIdx]).toFixed(1));dotFa.style.display='block';
+        dotEnc.setAttribute('cx',x.toFixed(1));dotEnc.setAttribute('cy',yPos(d.enc[monthIdx]).toFixed(1));dotEnc.style.display='block';
+        // Tooltip
+        var modeLabel=mode==='cumul'?' (cumulé)':'';
+        var tip='<div style="font-weight:500;margin-bottom:5px;font-size:11.5px;color:var(--text)">'+payload.months[monthIdx]+' '+(new Date().getFullYear())+modeLabel+'</div>'+
+          '<div style="display:flex;justify-content:space-between;gap:14px;line-height:1.6"><span style="color:#88aae0">●</span><span style="flex:1;color:var(--muted)">Devis émis</span><span class="num" data-money>'+fNloc(d.dv[monthIdx])+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;gap:14px;line-height:1.6"><span style="color:#a3a39a">●</span><span style="flex:1;color:var(--muted)">Facturé</span><span class="num" data-money>'+fNloc(d.fa[monthIdx])+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;gap:14px;line-height:1.6"><span style="color:#5dcaa5">●</span><span style="flex:1;color:var(--muted)">Encaissé</span><span class="num" data-money>'+fNloc(d.enc[monthIdx])+'</span></div>';
+        tooltip.innerHTML=tip;
+        // Re-flou si privacy ON
+        if(typeof _getPrivacyStored==='function' && _getPrivacyStored() && typeof _privacyWrapAmounts==='function'){
+          _privacyWrapAmounts(tooltip);
+        }
+        tooltip.style.display='block';
+        // Position : à droite du curseur, ou à gauche si on est dans la moitié droite
+        var rect=svg.getBoundingClientRect();
+        var wrapRect=wrap.getBoundingClientRect();
+        var mouseX=evt.clientX-wrapRect.left;
+        var mouseY=evt.clientY-wrapRect.top;
+        var ttW=tooltip.offsetWidth;
+        var px=mouseX+14;
+        if(px+ttW>wrap.clientWidth-8) px=mouseX-ttW-14;
+        if(px<8) px=8;
+        var py=mouseY-tooltip.offsetHeight/2;
+        if(py<8) py=8;
+        if(py+tooltip.offsetHeight>wrap.clientHeight-8) py=wrap.clientHeight-tooltip.offsetHeight-8;
+        tooltip.style.left=px+'px';
+        tooltip.style.top=py+'px';
+      }
+      function hideCrosshair(){
+        ch.style.display='none';
+        dotDv.style.display='none';
+        dotFa.style.display='none';
+        dotEnc.style.display='none';
+        tooltip.style.display='none';
+      }
+
+      hit.addEventListener('mousemove',function(evt){
+        // Convertir coordonnées écran → coord SVG → mois le plus proche
+        var pt=svg.createSVGPoint();
+        pt.x=evt.clientX;pt.y=evt.clientY;
+        var ctm=svg.getScreenCTM();
+        if(!ctm) return;
+        var loc=pt.matrixTransform(ctm.inverse());
+        // Trouver le mois le plus proche
+        var monthFloat=(loc.x-padX)/((w-padX-20)/11);
+        var monthIdx=Math.round(monthFloat);
+        if(monthIdx<0)monthIdx=0;
+        if(monthIdx>11)monthIdx=11;
+        showCrosshair(monthIdx,evt);
+      });
+      hit.addEventListener('mouseleave',hideCrosshair);
+    }
+
+    // Toggle handlers
+    var btns=wrap.querySelectorAll('.mchart-toggle-btn');
+    btns.forEach(function(b){
+      b.addEventListener('click',function(){
+        mode=b.dataset.mode;
+        btns.forEach(function(other){
+          if(other===b){
+            other.classList.add('active');
+            other.style.background='rgba(136,170,224,0.15)';
+            other.style.color='var(--text)';
+          } else {
+            other.classList.remove('active');
+            other.style.background='transparent';
+            other.style.color='var(--muted-soft)';
+          }
+        });
+        render();
+      });
+    });
+
+    render();
+  });
 }
 
 // Donut chart en SVG
@@ -8104,10 +8350,6 @@ function renderSuiviPro(){
   html+='<div class="card-pro">';
   html+='<div class="card-pro-title"><i class="ti ti-trending-up"></i>Évolution mensuelle '+fy+'</div>';
   html+=renderMonthlyChartPro(emisM, emisM.map(function(v,i){return Math.max(0,v);}), encM);
-  html+='<div style="display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--muted)">'+
-    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88aae0;margin-right:5px"></span>Émis</span>'+
-    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dcaa5;margin-right:5px"></span>Encaissé</span>'+
-    '</div>';
   html+='</div>';
 
   // Vue "affaires" si la fonction existe
@@ -8133,6 +8375,8 @@ function renderSuiviPro(){
       if(listEl) listEl.innerHTML=dossiers.map(renderDealCardPro).join('');
     }
   }
+  // Mount des graphiques mensuels interactifs
+  if(typeof _mountMonthlyCharts==='function') _mountMonthlyCharts(pro);
   // Re-scan privacy si actif (innerHTML a écrasé l'arbre, le MutationObserver
   // peut avoir manqué des cas)
   if(_getPrivacyStored() && typeof _privacyWrapAmounts==='function'){
