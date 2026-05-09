@@ -8971,6 +8971,466 @@ function _togglePhaseHistory(event,devisId){
 // `f.dateReceptionBC` (champ facture, date de réception du BC pour le classement
 // fiscal des factures pré-facturées). Ce sont deux choses différentes.
 // =============================================================================
+// =============================================================================
+// _findLinkedFactures(d) — Retrouve toutes les factures (GRC + Suivi) liées au devis
+// =============================================================================
+// Multi-passes en cascade pour maximiser les matches malgré les linkFactureId obsolètes :
+//   Pass 1 : id direct (d.linkFactureId → DB.factures.id ou DB.invoices.id/grcFactureId)
+//   Pass 2 : champ dvlie (factures) ou po (invoices) contient le N° devis
+//   Pass 3 : champ objet/intitule contient le N° devis
+// Returns: { factures: [], invoices: [], hasMatch: bool }
+//
+// IMPORTANT : Pour les devis Cadre, on retourne TOUTES les factures liées au cadre.
+// =============================================================================
+function _findLinkedFactures(d){
+  if(!d) return {factures:[],invoices:[],hasMatch:false};
+  var fac=Array.isArray(DB.factures)?DB.factures:[];
+  var inv=Array.isArray(DB.invoices)?DB.invoices:[];
+  var dvNumUp=String(d.num||'').toUpperCase();
+  var foundF=[], foundI=[];
+  var seenF={}, seenI={};
+
+  // Pass 1: lookup direct par id
+  if(d.linkFactureId){
+    var f1=fac.find(function(x){return x.id===d.linkFactureId;});
+    if(f1){foundF.push(f1);seenF[f1.id]=1;}
+    var i1=inv.find(function(x){return x.id===d.linkFactureId || x.grcFactureId===d.linkFactureId;});
+    if(i1){foundI.push(i1);seenI[i1.id]=1;}
+  }
+
+  // Pass 2: match par champ dvlie/po contenant le num devis
+  if(dvNumUp){
+    fac.forEach(function(f){
+      if(seenF[f.id]) return;
+      var dvlie=String(f.dvlie||'').toUpperCase();
+      if(dvlie && dvlie.indexOf(dvNumUp)>=0){
+        foundF.push(f);seenF[f.id]=1;
+      }
+    });
+    inv.forEach(function(i){
+      if(seenI[i.id]) return;
+      var po=String(i.po||'').toUpperCase();
+      if(po && po.indexOf(dvNumUp)>=0){
+        foundI.push(i);seenI[i.id]=1;
+      }
+    });
+  }
+
+  // Pass 3: match par objet/intitule
+  if(dvNumUp){
+    fac.forEach(function(f){
+      if(seenF[f.id]) return;
+      var objet=String(f.objet||'').toUpperCase();
+      if(objet && objet.indexOf(dvNumUp)>=0){
+        foundF.push(f);seenF[f.id]=1;
+      }
+    });
+    inv.forEach(function(i){
+      if(seenI[i.id]) return;
+      var intitule=String(i.intitule||'').toUpperCase();
+      if(intitule && intitule.indexOf(dvNumUp)>=0){
+        foundI.push(i);seenI[i.id]=1;
+      }
+    });
+  }
+
+  // Pass 4: pour les devis cadre, on cherche aussi par cadreRef
+  if(d.cadreRef || (d.num||'').indexOf('CADRE')>=0){
+    var cadreRef=String(d.cadreRef||'').toUpperCase();
+    if(cadreRef){
+      fac.forEach(function(f){
+        if(seenF[f.id]) return;
+        var objet=String(f.objet||'').toUpperCase();
+        if(objet && objet.indexOf(cadreRef)>=0){
+          foundF.push(f);seenF[f.id]=1;
+        }
+      });
+    }
+  }
+
+  // Pass 5: variants de numéro pour les cas particuliers
+  // - "SLN-DV-147"  → essayer aussi "SLN-DV147" (sans tiret avant N°)
+  // - "SLN-DV144-145" → essayer "SLN-DV144" et "SLN-DV145"
+  // - "SLN-DV-BCGMAO-00722464" → essayer "00722464" seul (N° GMAO standalone)
+  var numVariants=[];
+  // Variant 1 : normaliser "PFX-DV-NNN" → "PFX-DVNNN"
+  var v1=dvNumUp.replace(/^([A-Z]+)-DV-(\d+)/i,'$1-DV$2');
+  if(v1!==dvNumUp) numVariants.push(v1);
+  // Variant 2 : split sur tiret pour multi-numéros "PFX-DV144-145"
+  var multiMatch=dvNumUp.match(/^([A-Z]+)-DV(\d+)-(\d+)$/i);
+  if(multiMatch){
+    numVariants.push(multiMatch[1]+'-DV'+multiMatch[2]);
+    numVariants.push(multiMatch[1]+'-DV'+multiMatch[3]);
+  }
+  // Variant 3 : pour BCGMAO, le N° GMAO seul (mais dangereux car peut matcher trop)
+  // → désactivé pour l'instant car les factures GMAO n'ont pas de lien explicite
+  numVariants.forEach(function(vn){
+    if(!vn) return;
+    fac.forEach(function(f){
+      if(seenF[f.id]) return;
+      var dvlie=String(f.dvlie||'').toUpperCase();
+      var objet=String(f.objet||'').toUpperCase();
+      if((dvlie && dvlie.indexOf(vn)>=0) || (objet && objet.indexOf(vn)>=0)){
+        foundF.push(f);seenF[f.id]=1;
+      }
+    });
+    inv.forEach(function(i){
+      if(seenI[i.id]) return;
+      var po=String(i.po||'').toUpperCase();
+      var intitule=String(i.intitule||'').toUpperCase();
+      if((po && po.indexOf(vn)>=0) || (intitule && intitule.indexOf(vn)>=0)){
+        foundI.push(i);seenI[i.id]=1;
+      }
+    });
+  });
+
+  // === DÉDUPLICATION par numéro de facture ===
+  // Un même num peut apparaître à la fois dans DB.factures (GRC) et DB.invoices
+  // (Suivi) — c'est même le cas standard quand une facture est créée via la GRC
+  // (suiviId pointe vers son équivalent dans invoices). On garde la version GRC
+  // (plus complète) en priorité et on filtre les invoices doublons.
+  var grcNums={};
+  foundF.forEach(function(f){grcNums[String(f.num||'').toUpperCase()]=1;});
+  foundI=foundI.filter(function(i){
+    return !grcNums[String(i.num||'').toUpperCase()];
+  });
+
+  return {
+    factures: foundF,
+    invoices: foundI,
+    hasMatch: foundF.length>0 || foundI.length>0
+  };
+}
+
+// =============================================================================
+// _normalizeFactureStatus(f) — Statut unifié pour facture GRC ou invoice Suivi
+// =============================================================================
+// Retourne {key, label, color} pour rendu cohérent dans la pill et popover.
+// Statuts factures GRC : "Payée", "En attente", etc.
+// Statuts invoices : "paid", "pending", etc.
+// Détection retard : si dateButoir dépassée et non payée.
+// =============================================================================
+function _normalizeFactureStatus(f){
+  if(!f) return {key:'unknown',label:'?',color:'#a3a39a'};
+  // Reconnaître facture GRC (status) ou invoice Suivi (statut)
+  var s=String(f.status||f.statut||'').toLowerCase();
+  var isPaid=(s.indexOf('payé')>=0 || s==='paid' || s==='payée');
+  // Vérification retard
+  var today=new Date().toISOString().substring(0,10);
+  var isLate=false, daysLate=0;
+  if(!isPaid && f.dateButoir && f.dateButoir<today){
+    isLate=true;
+    var diff=Math.floor((new Date(today)-new Date(f.dateButoir))/(1000*60*60*24));
+    daysLate=diff;
+  }
+  if(isPaid) return {key:'paid',label:'Payée',color:'#10b981',icon:'check-bold'};
+  if(isLate) return {key:'late',label:'Retard '+daysLate+'j',color:'#ef4444',icon:'alert-triangle'};
+  return {key:'pending',label:'En attente',color:'#fbbf24',icon:'clock'};
+}
+
+// =============================================================================
+// _renderFactureCell(d) — Cellule "Facture" dans la liste Devis
+// =============================================================================
+// 3 cas d'affichage :
+//   - Aucune facture : pill grisée "Pas de facture"
+//   - 1 facture : pill cliquable "📄 SLN-F068 ▾" → popover détaillé
+//   - N factures (cadre) : pill compteur "📄 Cadre · 12 ▾" → popover liste
+// =============================================================================
+function _renderFactureCell(d){
+  if(!d) return '';
+  var linked=_findLinkedFactures(d);
+  // Cas 1 : aucune facture liée
+  if(!linked.hasMatch){
+    return '<span class="traca-pill" title="Aucune facture liée à ce devis" '+
+      'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;'+
+      'background:rgba(80,80,80,0.08);border:0.5px solid rgba(120,120,120,0.18);'+
+      'font-size:10px;line-height:1.3;color:var(--muted-soft);font-family:JetBrains Mono,monospace;white-space:nowrap">'+
+      '<i class="ti ti-file-off" style="font-size:11px;color:rgba(120,120,120,0.4)"></i>'+
+      '<span>Pas de facture</span></span>';
+  }
+
+  // Concatener factures et invoices, en évitant les doublons par lookup grcFactureId
+  var allItems=[];
+  linked.factures.forEach(function(f){
+    allItems.push({type:'F',obj:f,num:f.num,date:f.date,ttc:f.ttc||f.ht||0,
+      dateEnc:f.dateEncaissement||'',dateButoir:f.dateButoir||'',
+      paye:f.paye||0,statut:f.status||f.statut||''});
+  });
+  // Invoices : si déjà liée à une facture GRC du même num, on skip
+  var existingNums={};
+  linked.factures.forEach(function(f){existingNums[f.num]=1;});
+  linked.invoices.forEach(function(i){
+    if(existingNums[i.num]) return; // Doublon
+    allItems.push({type:'I',obj:i,num:i.num,date:i.dateEnvoi,ttc:i.montant||0,
+      dateEnc:i.dateEncaissement||'',dateButoir:i.dateButoir||'',
+      paye:i.statut==='paid'?(i.montant||0):0,statut:i.statut||''});
+  });
+
+  var nbItems=allItems.length;
+  var isCadre=d.cadreRef || String(d.num||'').toUpperCase().indexOf('CADRE')>=0;
+
+  // Cas 2 : devis cadre (multi-factures) ou plus d'1 facture
+  if(isCadre || nbItems>1){
+    // Calcul total payé
+    var totalPaid=0, totalTTC=0;
+    allItems.forEach(function(it){
+      totalTTC+=Number(it.ttc)||0;
+      totalPaid+=Number(it.paye)||0;
+    });
+    var totalShort=(totalTTC>=1000000)?(Math.round(totalTTC/100000)/10)+'M':(Math.round(totalTTC/1000))+'K';
+    var label=(isCadre?'Cadre · ':'')+nbItems+' fact.';
+    var titleHover='Devis '+(isCadre?'cadre ':'')+' avec '+nbItems+' factures liées · Total '+
+      (typeof fNloc==='function'?fNloc(totalTTC):totalTTC)+' XPF · Cliquer pour détails';
+    return '<span class="traca-pill traca-facture-pill" '+
+      'data-devis-id="'+d.id+'" '+
+      'onclick="event.stopPropagation();_toggleFacturePopover(event,'+d.id+');" '+
+      'title="'+esc(titleHover)+'" '+
+      'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;cursor:pointer;'+
+      'background:rgba(124,58,237,0.12);border:0.5px solid rgba(124,58,237,0.4);'+
+      'font-size:10px;line-height:1.3;color:var(--text);font-family:JetBrains Mono,monospace;white-space:nowrap">'+
+      '<i class="ti ti-files" style="font-size:11px;color:#a78bfa"></i>'+
+      '<span>'+esc(label)+'</span>'+
+      '<span style="font-size:9px;color:var(--muted);margin-left:3px;background:rgba(255,255,255,.08);padding:0 4px;border-radius:6px">'+esc(totalShort)+' ▾</span>'+
+      '</span>';
+  }
+
+  // Cas 3 : 1 seule facture liée
+  var item=allItems[0];
+  var statusInfo=_normalizeFactureStatus(item.obj);
+  var dateShort=_fmtDateShort(item.date);
+  var titleHover=('Facture '+esc(item.num)+(item.date?(' du '+item.date):'')+
+    ' · '+statusInfo.label+
+    (item.dateEnc?(' le '+item.dateEnc):'')+
+    ' · '+(typeof fNloc==='function'?fNloc(item.ttc):item.ttc)+' XPF'+
+    ' · Cliquer pour détails');
+  return '<span class="traca-pill traca-facture-pill" '+
+    'data-devis-id="'+d.id+'" '+
+    'onclick="event.stopPropagation();_toggleFacturePopover(event,'+d.id+');" '+
+    'title="'+esc(titleHover)+'" '+
+    'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;cursor:pointer;'+
+    'background:'+statusInfo.color+'1a;border:0.5px solid '+statusInfo.color+'66;'+
+    'font-size:10px;line-height:1.3;color:var(--text);font-family:JetBrains Mono,monospace;white-space:nowrap">'+
+    '<i class="ti ti-file-invoice" style="font-size:11px;color:'+statusInfo.color+'"></i>'+
+    '<span>'+esc(item.num)+(dateShort?' · '+esc(dateShort):'')+'</span>'+
+    '<span style="font-size:9px;color:var(--muted);margin-left:2px">▾</span>'+
+    '</span>';
+}
+
+// =============================================================================
+// _toggleFacturePopover(event, devisId) — Popover détaillé de la/des facture(s)
+// =============================================================================
+// Style cohérent avec _togglePhaseHistory : fond opaque, header gradient,
+// liste des factures avec statut/montant/dates, bouton "Ouvrir" pour chaque.
+// =============================================================================
+function _toggleFacturePopover(event,devisId){
+  // Ferme tout popover existant
+  var existing=document.getElementById('facture-popover');
+  if(existing){
+    var sameDevis=existing.dataset.devisId===String(devisId);
+    existing.remove();
+    var bd=document.getElementById('facture-popover-backdrop');
+    if(bd)bd.remove();
+    if(sameDevis) return;
+  }
+  // Ferme aussi le popover de phase si ouvert
+  var phasePop=document.getElementById('phase-history-popover');
+  if(phasePop)phasePop.remove();
+  var phaseBd=document.getElementById('phase-history-backdrop');
+  if(phaseBd)phaseBd.remove();
+
+  var d=(DB.devis||[]).find(function(x){return x.id===devisId;});
+  if(!d) return;
+  var linked=_findLinkedFactures(d);
+  if(!linked.hasMatch) return;
+
+  // Fusionner factures + invoices uniques
+  var allItems=[];
+  linked.factures.forEach(function(f){
+    allItems.push({type:'F',obj:f,num:f.num,date:f.date,ttc:f.ttc||f.ht||0,
+      dateEnc:f.dateEncaissement||'',dateButoir:f.dateButoir||'',
+      paye:f.paye||0,statut:f.status||f.statut||''});
+  });
+  var existingNums={};
+  linked.factures.forEach(function(f){existingNums[f.num]=1;});
+  linked.invoices.forEach(function(i){
+    if(existingNums[i.num]) return;
+    allItems.push({type:'I',obj:i,num:i.num,date:i.dateEnvoi,ttc:i.montant||0,
+      dateEnc:i.dateEncaissement||'',dateButoir:i.dateButoir||'',
+      paye:i.statut==='paid'?(i.montant||0):0,statut:i.statut||''});
+  });
+
+  // Tri par date d'émission
+  allItems.sort(function(a,b){return (a.date||'').localeCompare(b.date||'');});
+
+  // Calculs agrégés
+  var totalTTC=0, totalPaid=0, nbPaid=0, nbLate=0;
+  allItems.forEach(function(it){
+    totalTTC+=Number(it.ttc)||0;
+    totalPaid+=Number(it.paye)||0;
+    var status=_normalizeFactureStatus(it.obj);
+    if(status.key==='paid') nbPaid++;
+    if(status.key==='late') nbLate++;
+  });
+  var pctPaid=totalTTC>0?Math.round((totalPaid/totalTTC)*100):0;
+
+  // Build rows
+  var rows='';
+  allItems.forEach(function(it,i){
+    var statusInfo=_normalizeFactureStatus(it.obj);
+    var typeLabel=it.type==='F'?'GRC':'Suivi';
+    var ttcDisp=(typeof fNloc==='function')?fNloc(it.ttc):String(it.ttc);
+    var payeDisp=(typeof fNloc==='function')?fNloc(it.paye):String(it.paye);
+    var dateEmis=it.date?_fmtDateShort(it.date):'—';
+    var dateEnc=it.dateEnc?_fmtDateShort(it.dateEnc):'';
+    var dateBut=it.dateButoir?_fmtDateShort(it.dateButoir):'';
+
+    // Click → open la facture (selon type)
+    var openCmd=it.type==='F'
+      ? 'openFA('+it.obj.id+')'
+      : '(function(){var p=document.getElementById(\'facture-popover\');if(p)p.remove();var b=document.getElementById(\'facture-popover-backdrop\');if(b)b.remove();sw(\'view-suivi\');})()';
+
+    rows+='<div style="display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px 12px;'+
+      'background:rgba(255,255,255,0.02);border-radius:6px;border:1px solid rgba(255,255,255,0.05);'+
+      'margin-bottom:6px">'+
+      '<div style="min-width:0">'+
+        // Ligne 1 : N° facture + statut
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'+
+          '<span style="font-family:JetBrains Mono,monospace;font-size:12px;color:#fff;font-weight:600">'+esc(it.num)+'</span>'+
+          '<span style="display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:10px;'+
+          'background:'+statusInfo.color+'22;color:'+statusInfo.color+';font-size:10px;font-weight:600;border:0.5px solid '+statusInfo.color+'55">'+
+            '<i class="ti ti-'+(statusInfo.icon||'circle')+'" style="font-size:10px"></i>'+
+            esc(statusInfo.label)+
+          '</span>'+
+          '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.4);font-weight:500;letter-spacing:0.05em">'+typeLabel+'</span>'+
+        '</div>'+
+        // Ligne 2 : dates
+        '<div style="display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:rgba(255,255,255,0.55);font-family:JetBrains Mono,monospace">'+
+          '<span title="Date émission">📅 '+esc(dateEmis)+'</span>'+
+          (dateBut?'<span title="Date butoir">⏰ '+esc(dateBut)+'</span>':'')+
+          (dateEnc?'<span title="Date encaissement">💰 '+esc(dateEnc)+'</span>':'')+
+        '</div>'+
+      '</div>'+
+      '<div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">'+
+        // Montant TTC
+        '<div style="font-family:JetBrains Mono,monospace;font-size:12px;color:#fff;font-weight:600">'+esc(ttcDisp)+' <span style="font-size:9px;color:rgba(255,255,255,0.4)">XPF</span></div>'+
+        // Bouton ouvrir
+        (it.type==='F'?
+          '<button onclick="event.stopPropagation();(function(){var p=document.getElementById(\'facture-popover\');if(p)p.remove();var b=document.getElementById(\'facture-popover-backdrop\');if(b)b.remove();})();openFA('+it.obj.id+')" '+
+          'style="font-size:9px;padding:2px 8px;background:rgba(124,58,237,0.15);color:#c4b5fd;border:0.5px solid rgba(124,58,237,0.35);border-radius:3px;cursor:pointer;font-weight:500">Ouvrir →</button>'
+          :
+          '<span style="font-size:9px;color:rgba(255,255,255,0.4);font-style:italic">Voir Suivi</span>'
+        )+
+      '</div>'+
+    '</div>';
+  });
+
+  var typeBadge=d.type?'<span style="margin-left:8px;padding:2px 6px;background:rgba(124,58,237,0.15);color:#c4b5fd;font-size:9px;border-radius:3px;font-weight:600;letter-spacing:0.05em">'+esc((d.type||'').toUpperCase())+'</span>':'';
+  var titleStr=allItems.length>1?(allItems.length+' factures liées'):'Facture liée';
+  var totalTTCDisp=(typeof fNloc==='function')?fNloc(totalTTC):String(totalTTC);
+  var totalPaidDisp=(typeof fNloc==='function')?fNloc(totalPaid):String(totalPaid);
+
+  // Build popover
+  var popover=document.createElement('div');
+  popover.id='facture-popover';
+  popover.dataset.devisId=String(devisId);
+  popover.style.cssText='position:fixed;z-index:100000;'+
+    'background:#161922;'+
+    'border:1px solid rgba(124,58,237,0.4);'+
+    'border-radius:10px;'+
+    'box-shadow:0 12px 40px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.04);'+
+    'padding:0;width:440px;max-width:calc(100vw - 24px);'+
+    'font-family:Inter,system-ui,sans-serif';
+
+  popover.innerHTML=
+    // Header
+    '<div style="padding:12px 16px;background:linear-gradient(135deg,rgba(124,58,237,0.18) 0%,rgba(124,58,237,0.06) 100%);border-bottom:1px solid rgba(124,58,237,0.25);border-radius:10px 10px 0 0">'+
+      '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px;margin-bottom:8px">'+
+        '<div>'+
+          '<div style="font-size:9.5px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;display:flex;align-items:center;gap:5px">'+
+            '<i class="ti ti-file-invoice" style="font-size:11px"></i> '+esc(titleStr)+
+          '</div>'+
+          '<div style="font-size:13px;font-weight:600;color:#fff;font-family:JetBrains Mono,monospace">'+esc(d.num||'?')+typeBadge+'</div>'+
+        '</div>'+
+        '<button onclick="(function(){var p=document.getElementById(\'facture-popover\');if(p)p.remove();var b=document.getElementById(\'facture-popover-backdrop\');if(b)b.remove();})()" '+
+          'style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.6);'+
+          'cursor:pointer;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;'+
+          'font-size:13px;flex-shrink:0;line-height:1" title="Fermer (Échap)">✕</button>'+
+      '</div>'+
+      // Stats agrégées si > 1 facture
+      (allItems.length>1?
+        '<div style="display:flex;gap:14px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(124,58,237,0.15);font-size:10.5px">'+
+          '<span style="color:rgba(255,255,255,0.7)">'+
+            '<span style="color:#10b981;font-weight:600">'+nbPaid+'</span>'+
+            ' payée'+(nbPaid>1?'s':'')+
+          '</span>'+
+          (nbLate>0?'<span style="color:#ef4444;font-weight:600">⚠ '+nbLate+' en retard</span>':'')+
+          '<span style="margin-left:auto;color:rgba(255,255,255,0.7);font-family:JetBrains Mono,monospace">'+
+            'Total : <strong style="color:#fff">'+esc(totalTTCDisp)+' XPF</strong>'+
+          '</span>'+
+        '</div>'+
+        // Progress bar
+        '<div style="display:flex;align-items:center;gap:10px;margin-top:6px">'+
+          '<div style="flex:1;height:5px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden">'+
+            '<div style="width:'+pctPaid+'%;height:100%;background:linear-gradient(90deg,#10b981 0%,#059669 100%);transition:width .3s"></div>'+
+          '</div>'+
+          '<span style="font-size:10px;color:rgba(255,255,255,0.7);font-family:JetBrains Mono,monospace;font-weight:600;white-space:nowrap">'+
+            esc(totalPaidDisp)+' / '+esc(totalTTCDisp)+' · '+pctPaid+'%'+
+          '</span>'+
+        '</div>'
+      :'')+
+    '</div>'+
+    // Body
+    '<div style="padding:10px 8px;max-height:60vh;overflow-y:auto">'+
+      rows+
+    '</div>'+
+    // Footer
+    '<div style="padding:8px 14px;border-top:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.15);'+
+      'border-radius:0 0 10px 10px;font-size:9.5px;color:rgba(255,255,255,0.45);'+
+      'font-family:Inter,system-ui">'+
+      'Cliquer sur "Ouvrir →" pour éditer une facture · GRC = facture complète · Suivi = pré-facturation'+
+    '</div>';
+
+  // Position
+  var rect=event.target.closest('.traca-facture-pill').getBoundingClientRect();
+  var popoverHeight=Math.min(window.innerHeight*0.6+200,560);
+  var popoverWidth=440;
+  var top=rect.bottom+8;
+  var left=rect.left;
+  if(left+popoverWidth>window.innerWidth-12) left=window.innerWidth-popoverWidth-12;
+  if(left<12) left=12;
+  if(top+popoverHeight>window.innerHeight-12){
+    top=Math.max(12,rect.top-popoverHeight-8);
+  }
+  popover.style.top=top+'px';
+  popover.style.left=left+'px';
+
+  // Backdrop
+  var backdrop=document.createElement('div');
+  backdrop.id='facture-popover-backdrop';
+  backdrop.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;'+
+    'background:rgba(0,0,0,0.35);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)';
+  backdrop.onclick=function(){
+    backdrop.remove();
+    var p=document.getElementById('facture-popover');
+    if(p)p.remove();
+  };
+
+  document.body.appendChild(backdrop);
+  document.body.appendChild(popover);
+
+  // Échap pour fermer
+  var escHandler=function(ev){
+    if(ev.key==='Escape'){
+      var p=document.getElementById('facture-popover');
+      if(p)p.remove();
+      var b=document.getElementById('facture-popover-backdrop');
+      if(b)b.remove();
+      document.removeEventListener('keydown',escHandler);
+    }
+  };
+  document.addEventListener('keydown',escHandler);
+}
+
 function _getStatusDate(d){
   if(!d) return null;
   var st=d.status||'Brouillon';
@@ -9787,6 +10247,7 @@ function renderDVPro(){
       '<th style="text-align:right;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">TTC</th>'+
       '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Statut</th>'+
       '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Traçabilité</th>'+
+      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Facture</th>'+
       '<th style="width:70px;padding:10px 14px"></th>'+
       '</tr></thead><tbody>';
 
@@ -9841,6 +10302,10 @@ function renderDVPro(){
       // Traçabilité : 4 mini-pills inline (Phase / Emerson / ACT / PO Cali)
       html+='<td style="padding:12px 8px;vertical-align:top;max-width:340px">'+
         ((typeof _renderTraca==='function')?_renderTraca(d):'')+
+        '</td>';
+      // Facture : pill cliquable (1 facture, cadre, ou "Pas de facture")
+      html+='<td style="padding:12px 8px;vertical-align:top">'+
+        ((typeof _renderFactureCell==='function')?_renderFactureCell(d):'')+
         '</td>';
       // Actions
       html+='<td style="padding:12px 14px;vertical-align:top;text-align:right" onclick="event.stopPropagation()">'+
