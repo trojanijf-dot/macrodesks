@@ -349,6 +349,7 @@ body.theme-pro .kpi-pro.kpi-red{border-top:2px solid var(--red)}
 .pill-pro.p-warning{background:rgba(239,159,39,0.12);color:var(--amber)}
 .pill-pro.p-danger{background:rgba(240,149,149,0.12);color:var(--red)}
 .pill-pro.p-info{background:rgba(136,170,224,0.12);color:var(--blue)}
+.pill-pro.p-purple{background:rgba(167,139,250,0.12);color:var(--purple)}
 .pill-pro.p-muted{background:rgba(255,255,250,0.06);color:var(--muted)}
 
 /* Affaire (deal) cards */
@@ -7725,14 +7726,27 @@ function rDashPro(){
   });
   var encCum=getMonthlyCumulative(encMonthly);
 
-  // Répartition par type
-  var byType={Fourniture:0,Prestation:0,Mixte:0};
+  // Répartition par type — étendu pour le mini donut interactif
+  // Format compatible _miniDonut : {Fourniture:{count,montant,color}}
+  var byType={
+    Fourniture:{count:0,montant:0,color:'#88aae0'},
+    Prestation:{count:0,montant:0,color:'#5dcaa5'},
+    Mixte:     {count:0,montant:0,color:'#a78bfa'}
+  };
   dvFy.forEach(function(d){
     var t=d.type||'Fourniture';
-    if(byType[t]!==undefined) byType[t]+=devisTtc(d);
-    else byType.Mixte+=devisTtc(d);
+    if(t.indexOf('Prestation')>=0&&t.indexOf('Fourniture')>=0) t='Mixte';
+    else if(t.indexOf('Prestation')>=0) t='Prestation';
+    else if(t.indexOf('Fourniture')>=0) t='Fourniture';
+    if(byType[t]){
+      byType[t].count++;
+      byType[t].montant+=devisTtc(d);
+    } else {
+      byType.Mixte.count++;
+      byType.Mixte.montant+=devisTtc(d);
+    }
   });
-  var totalByType=byType.Fourniture+byType.Prestation+byType.Mixte;
+  var totalByType=byType.Fourniture.montant+byType.Prestation.montant+byType.Mixte.montant;
   function pctType(v){return totalByType>0?(v/totalByType*100):0;}
 
   // Devis récents (5 derniers)
@@ -7755,34 +7769,82 @@ function rDashPro(){
 
   // --- HTML ---
   function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  // Calcul des mensuels nb devis/factures pour les tooltips détaillés
+  var dvMonthlyCount=new Array(12).fill(0);
+  dvFy.forEach(function(d){
+    var m=parseInt((d.date||'').substring(5,7),10)-1;
+    if(m>=0&&m<=11) dvMonthlyCount[m]++;
+  });
+  var faMonthlyCount=new Array(12).fill(0);
+  faFy.forEach(function(f){
+    var m=parseInt((f.date||'').substring(5,7),10)-1;
+    if(m>=0&&m<=11) faMonthlyCount[m]++;
+  });
+  // Restant à recouvrer mensuel = facturé - encaissé (cumulatif)
+  var restMonthly=faMonthly.map(function(v,i){return Math.max(0,v-encMonthly[i]);});
+
   var html='<div class="kpi-grid-pro">';
-  // KPI Devis
+  // KPI Devis (sparkline interactive)
+  var sparkDv=(typeof _interactiveSparkline==='function')?
+    _interactiveSparkline(dvCum,'#88aae0',dvMonthly,function(idx,monthlyV,cumV,months){
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Émis ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Devis</span><span class="num" data-money>'+(dvMonthlyCount[idx]||0)+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
+    },'dash_dv'):
+    makeSparkline(dvCum,'#88aae0',true);
   html+='<div class="kpi-pro kpi-blue">'+
     '<div class="kpi-label"><i class="ti ti-file-text"></i>Devis '+fy+'</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalDevis)+'</div>'+
     '<div class="kpi-sub">XPF · '+dvFy.length+' devis</div>'+
-    makeSparkline(dvCum,'#88aae0',true)+
+    sparkDv+
     '</div>';
-  // KPI Factures
+  // KPI Factures (sparkline interactive)
+  var sparkFa=(typeof _interactiveSparkline==='function')?
+    _interactiveSparkline(faCum,'#a3a39a',faMonthly,function(idx,monthlyV,cumV,months){
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Facturé ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Factures</span><span class="num" data-money>'+(faMonthlyCount[idx]||0)+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
+    },'dash_fa'):
+    makeSparkline(faCum,'#a3a39a',true);
   html+='<div class="kpi-pro">'+
     '<div class="kpi-label"><i class="ti ti-receipt-2"></i>Facturation</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalFa)+'</div>'+
     '<div class="kpi-sub">XPF · '+faFy.length+' factures</div>'+
-    makeSparkline(faCum,'#a3a39a',true)+
+    sparkFa+
     '</div>';
-  // KPI Encaissé
+  // KPI Encaissé (sparkline interactive)
+  var sparkEnc=(typeof _interactiveSparkline==='function')?
+    _interactiveSparkline(encCum,'#5dcaa5',encMonthly,function(idx,monthlyV,cumV,months){
+      var pctRecouv=faCum[idx]>0?Math.round(cumV/faCum[idx]*100):0;
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Encaissé ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Taux recouvrement</span><span class="num" data-money>'+pctRecouv+'%</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
+    },'dash_enc'):
+    makeSparkline(encCum,'#5dcaa5',true);
   html+='<div class="kpi-pro kpi-green">'+
     '<div class="kpi-label"><i class="ti ti-trending-up"></i>Encaissé</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalEnc)+'</div>'+
     '<div class="kpi-sub">XPF · '+(totalFa>0?Math.round(totalEnc/totalFa*100):0)+'% des émises</div>'+
-    makeSparkline(encCum,'#5dcaa5',true)+
+    sparkEnc+
     '</div>';
-  // KPI À recouvrer
+  // KPI À recouvrer (sparkline interactive)
+  var restCum=faCum.map(function(v,i){return Math.max(0,v-encCum[i]);});
+  var nbLate=alerts.filter(function(a){return a.status==='late';}).length;
+  var sparkRest=(typeof _interactiveSparkline==='function')?
+    _interactiveSparkline(restCum,'#f09595',restMonthly,function(idx,monthlyV,cumV,months){
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Restant ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul restant</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
+    },'dash_rest'):
+    makeSparkline(faCum.map(function(v,i){return v-encCum[i];}),'#f09595',true);
   html+='<div class="kpi-pro kpi-red">'+
     '<div class="kpi-label"><i class="ti ti-alert-circle"></i>À recouvrer</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalRest)+'</div>'+
-    '<div class="kpi-sub">XPF restants · '+alerts.filter(function(a){return a.status==='late';}).length+' en retard</div>'+
-    makeSparkline(faCum.map(function(v,i){return v-encCum[i];}),'#f09595',true)+
+    '<div class="kpi-sub">XPF restants · '+nbLate+' en retard</div>'+
+    sparkRest+
     '</div>';
   html+='</div>';
 
@@ -7790,18 +7852,18 @@ function rDashPro(){
   html+='<div class="kpi-grid-pro-3">';
   html+='<div class="kpi-pro" style="border-top:2px solid var(--blue)">'+
     '<div class="kpi-label"><i class="ti ti-tools"></i>Fourniture</div>'+
-    '<div class="kpi-value" data-money style="color:var(--blue)" data-money>'+fNloc(byType.Fourniture)+'</div>'+
-    '<div class="kpi-sub">XPF · '+pctType(byType.Fourniture).toFixed(0)+'% du total</div>'+
+    '<div class="kpi-value" data-money style="color:var(--blue)" data-money>'+fNloc(byType.Fourniture.montant)+'</div>'+
+    '<div class="kpi-sub">XPF · '+pctType(byType.Fourniture.montant).toFixed(0)+'% · '+byType.Fourniture.count+' devis</div>'+
     '</div>';
   html+='<div class="kpi-pro" style="border-top:2px solid var(--green)">'+
     '<div class="kpi-label"><i class="ti ti-stethoscope"></i>Prestation</div>'+
-    '<div class="kpi-value" data-money style="color:var(--green)" data-money>'+fNloc(byType.Prestation)+'</div>'+
-    '<div class="kpi-sub">XPF · '+pctType(byType.Prestation).toFixed(0)+'% du total</div>'+
+    '<div class="kpi-value" data-money style="color:var(--green)" data-money>'+fNloc(byType.Prestation.montant)+'</div>'+
+    '<div class="kpi-sub">XPF · '+pctType(byType.Prestation.montant).toFixed(0)+'% · '+byType.Prestation.count+' devis</div>'+
     '</div>';
   html+='<div class="kpi-pro" style="border-top:2px solid var(--purple)">'+
     '<div class="kpi-label"><i class="ti ti-asterisk"></i>Mixte</div>'+
-    '<div class="kpi-value" data-money style="color:var(--purple)" data-money>'+fNloc(byType.Mixte)+'</div>'+
-    '<div class="kpi-sub">XPF · '+pctType(byType.Mixte).toFixed(0)+'% du total</div>'+
+    '<div class="kpi-value" data-money style="color:var(--purple)" data-money>'+fNloc(byType.Mixte.montant)+'</div>'+
+    '<div class="kpi-sub">XPF · '+pctType(byType.Mixte.montant).toFixed(0)+'% · '+byType.Mixte.count+' devis</div>'+
     '</div>';
   html+='</div>';
 
@@ -7867,16 +7929,20 @@ function rDashPro(){
   html+=renderMonthlyChartPro(dvMonthly, faMonthly, encMonthly);
   html+='</div>';
 
-  // Donut répartition par type
+  // Donut répartition par type — version interactive (hover segments → tooltip)
   html+='<div class="card-pro">';
   html+='<div class="card-pro-title"><i class="ti ti-chart-donut-3"></i>Répartition par type</div>';
-  html+=renderDonutPro(byType, totalByType);
+  html+=(typeof _miniDonut==='function')?_miniDonut(byType, totalByType, 'dash'):renderDonutPro(byType, totalByType);
   html+='</div>';
   html+='</div>';
 
   page.innerHTML=html;
   // Mount des graphiques mensuels interactifs (crosshair, toggle, etc.)
   if(typeof _mountMonthlyCharts==='function') _mountMonthlyCharts(page);
+  // Mount des sparklines interactives des KPIs (crosshair + tooltip)
+  if(typeof _mountInteractiveSparklines==='function') _mountInteractiveSparklines(page);
+  // Mount du mini donut interactif (hover segments)
+  if(typeof _mountMiniDonuts==='function') _mountMiniDonuts(page);
   // Si le mode privacy est actif, on re-scan le contenu fraîchement injecté
   // car le MutationObserver peut louper des cas (ré-écriture massive d'innerHTML).
   if(_getPrivacyStored() && typeof _privacyWrapAmounts==='function'){
@@ -7899,7 +7965,7 @@ function rDashPro(){
 // Couleur + label par statut (pour pipeline et pills)
 var DV_STATUS_META={
   'Brouillon':{color:'#a3a39a',label:'Brouillon',pill:'p-muted'},
-  'Envoyé':   {color:'#88aae0',label:'Envoyé',pill:'p-info'},
+  'Envoyé':   {color:'#88aae0',label:'En attente client',pill:'p-info'},
   'Accepté':  {color:'#5dcaa5',label:'Accepté',pill:'p-success'},
   'Refusé':   {color:'#f09595',label:'Refusé',pill:'p-danger'},
   'Facturé':  {color:'#a78bfa',label:'Facturé',pill:'p-purple'},
@@ -7907,7 +7973,7 @@ var DV_STATUS_META={
   'Obsolète': {color:'#6e6e66',label:'Obsolète',pill:'p-muted'}
 };
 
-// KPI : taux acceptation = Accepté / (Envoyé + Accepté + Refusé + Facturé)
+// KPI : calcule toutes les métriques smart finance pour la page Devis
 function _calcKpiDV(devis){
   function fy(d){
     var dt=d.date||'';
@@ -7926,51 +7992,313 @@ function _calcKpiDV(devis){
       statusMontant[st]+=ttc(d);
     }
   });
-  // Taux acceptation
+  // Taux acceptation : (Accepté + Facturé) / (Envoyé + Accepté + Refusé + Facturé)
+  // (Brouillons et Cadres exclus du calcul car non-pertinents)
   var pertinents=statusCount['Envoyé']+statusCount['Accepté']+statusCount['Refusé']+statusCount['Facturé'];
   var tauxAccept=pertinents>0?((statusCount['Accepté']+statusCount['Facturé'])/pertinents*100):0;
   // Montant moyen
   var moyen=dvFy.length>0?total/dvFy.length:0;
-  // Délai signature : pour chaque devis Accepté avec date d'envoi et date d'acceptation
-  // → différence en jours. dateEnvoi/dateAccept sont des champs custom — fallback sur date.
-  var delaisSign=[];
+  // === Répartition par TYPE (pour le donut interactif) ===
+  // Compte le nombre de devis et la somme des montants par type d'activité.
+  var byType={
+    Fourniture:{count:0,montant:0,color:'#88aae0'},
+    Prestation:{count:0,montant:0,color:'#5dcaa5'},
+    Mixte:     {count:0,montant:0,color:'#a78bfa'}
+  };
   dvFy.forEach(function(d){
-    if(d.status!=='Accepté'&&d.status!=='Facturé')return;
-    var dEnvoi=d.dateEnvoi||d.date;
-    var dAccept=d.dateAcceptation||d.dateAccept;
-    if(!dEnvoi||!dAccept)return;
-    var diff=(new Date(dAccept)-new Date(dEnvoi))/(1000*60*60*24);
-    if(diff>=0&&diff<365) delaisSign.push(diff);
+    var t=d.type||'Fourniture';
+    if(t.indexOf('Prestation')>=0&&t.indexOf('Fourniture')>=0) t='Mixte';
+    else if(t.indexOf('Prestation')>=0) t='Prestation';
+    else if(t.indexOf('Fourniture')>=0) t='Fourniture';
+    if(byType[t]){
+      byType[t].count++;
+      byType[t].montant+=ttc(d);
+    } else {
+      byType.Mixte.count++;
+      byType.Mixte.montant+=ttc(d);
+    }
   });
-  var delaiMoyen=delaisSign.length>0?(delaisSign.reduce(function(s,v){return s+v;},0)/delaisSign.length):0;
-  // Cumul mensuel pour sparklines
+  // === Taux de devis RÉVISÉS ===
+  // Un devis est dit "révisé" s'il a des enfants (révisions REV1, REV2...) OU
+  // s'il porte lui-même un _revisionNumber (= c'est une révision).
+  // On compte combien de devis "racines" ont au moins une révision.
+  var rootsWithRev={};
+  var revisionsCount=0;
+  dvFy.forEach(function(d){
+    if(d._parentDevisId){
+      revisionsCount++;
+      rootsWithRev[d._parentDevisId]=true;
+    }
+  });
+  var rootsTotal=dvFy.filter(function(d){return !d._parentDevisId;}).length;
+  var rootsRevised=Object.keys(rootsWithRev).length;
+  var tauxRev=rootsTotal>0?(rootsRevised/rootsTotal*100):0;
+  // === Sparklines : cumul mensuel ===
   var monthlyTotal=new Array(12).fill(0);
   var monthlyCount=new Array(12).fill(0);
   var monthlyAccepted=new Array(12).fill(0);
+  var monthlyRev=new Array(12).fill(0);  // Nb de révisions par mois (pour sparkline taux rev)
   dvFy.forEach(function(d){
     var m=parseInt((d.date||'').substring(5,7),10)-1;
     if(m<0||m>11)return;
     monthlyTotal[m]+=ttc(d);
     monthlyCount[m]++;
     if(d.status==='Accepté'||d.status==='Facturé') monthlyAccepted[m]++;
+    if(d._parentDevisId) monthlyRev[m]++;
   });
-  // Cumulatifs (pour sparkline progression)
   function cum(arr){var o=[],s=0;arr.forEach(function(v){s+=v;o.push(s);});return o;}
   return {
     total:total,
     count:dvFy.length,
     tauxAccept:tauxAccept,
     moyen:moyen,
-    delaiMoyen:delaiMoyen,
     statusCount:statusCount,
     statusMontant:statusMontant,
+    byType:byType,
+    revisionsCount:revisionsCount,
+    rootsRevised:rootsRevised,
+    rootsTotal:rootsTotal,
+    tauxRev:tauxRev,
+    // Données mensuelles non cumulées (pour les tooltips au crosshair)
+    monthlyTotal:monthlyTotal,
+    monthlyCount:monthlyCount,
+    monthlyAccepted:monthlyAccepted,
+    monthlyRev:monthlyRev,
+    // Sparklines cumulatifs (pour la courbe de progression)
     sparkTotal:cum(monthlyTotal),
     sparkCount:cum(monthlyCount),
-    sparkAccept:cum(monthlyAccepted)
+    sparkAccept:cum(monthlyAccepted),
+    sparkRev:cum(monthlyRev)
   };
 }
 
 // Pipeline horizontal : barre empilée segmentée par statut
+// =============================================================================
+// MINI DONUT INTERACTIF (KPI Répartition par type)
+// SVG donut avec hover sur chaque segment → tooltip avec count + montant.
+// =============================================================================
+function _miniDonut(byType, total, idSuffix){
+  var data=[
+    {key:'Fourniture',d:byType.Fourniture},
+    {key:'Prestation',d:byType.Prestation},
+    {key:'Mixte',     d:byType.Mixte}
+  ].filter(function(x){return x.d.count>0;});
+  if(data.length===0||total===0){
+    return '<div style="text-align:center;padding:20px 8px;color:var(--muted-soft);font-size:11px;line-height:1.5">'+
+      '<i class="ti ti-chart-pie" style="font-size:24px;display:block;margin-bottom:6px;opacity:0.3"></i>'+
+      'Aucun devis<br>cette année'+
+      '</div>';
+  }
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  var totalCount=data.reduce(function(s,x){return s+x.d.count;},0);
+  var idPrefix='donut_'+(idSuffix||'1');
+  // Layout : SVG à gauche, légende compacte à droite
+  var html='<div class="dv-mini-donut-wrap" style="display:flex;align-items:center;gap:14px;margin-top:6px;position:relative">';
+  html+='<svg width="74" height="74" viewBox="0 0 42 42" style="flex-shrink:0">';
+  // Fond
+  html+='<circle cx="21" cy="21" r="15.915" fill="transparent" stroke="rgba(255,255,250,0.05)" stroke-width="3.5"/>';
+  // Segments
+  var offset=0;
+  data.forEach(function(x,i){
+    var pct=(x.d.montant/total)*100;
+    var segId=idPrefix+'_seg'+i;
+    html+='<circle data-seg-id="'+segId+'" data-key="'+x.key+'" data-count="'+x.d.count+'" data-montant="'+x.d.montant+'" data-pct="'+pct.toFixed(1)+'" '+
+      'cx="21" cy="21" r="15.915" fill="transparent" stroke="'+x.d.color+'" stroke-width="3.5" '+
+      'stroke-dasharray="'+pct.toFixed(2)+' '+(100-pct).toFixed(2)+'" stroke-dashoffset="-'+offset.toFixed(2)+'" '+
+      'style="cursor:pointer;transition:stroke-width .15s"/>';
+    offset+=pct;
+  });
+  // Centre : compteur total
+  html+='<text x="21" y="22" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="6" font-weight="500" fill="#f5f5f0" data-money>'+totalCount+'</text>';
+  html+='<text x="21" y="27" text-anchor="middle" font-family="Inter,sans-serif" font-size="2.6" fill="#a3a39a" class="no-pm-blur">devis</text>';
+  html+='</svg>';
+  // Légende compacte
+  html+='<div style="flex:1;display:flex;flex-direction:column;gap:4px;font-size:10.5px">';
+  data.forEach(function(x){
+    var pct=(x.d.montant/total)*100;
+    html+='<div class="dv-donut-legend-row" data-key="'+x.key+'" style="display:flex;align-items:center;gap:6px;line-height:1.3">'+
+      '<span style="width:7px;height:7px;border-radius:2px;background:'+x.d.color+';flex-shrink:0"></span>'+
+      '<span style="color:var(--muted);flex:1">'+x.key+'</span>'+
+      '<span class="num" data-money style="color:var(--text);font-size:10.5px">'+x.d.count+'</span>'+
+      '<span style="color:var(--muted-soft);font-size:10px">·</span>'+
+      '<span class="num" data-money style="color:var(--muted-soft);font-size:10px">'+pct.toFixed(0)+'%</span>'+
+      '</div>';
+  });
+  html+='</div>';
+  // Tooltip absolu (caché par défaut)
+  html+='<div class="dv-donut-tooltip" id="'+idPrefix+'_tooltip" style="position:absolute;display:none;background:rgba(20,20,15,0.95);border:0.5px solid rgba(255,255,250,0.15);border-radius:6px;padding:7px 10px;font-size:11px;color:var(--text);pointer-events:none;z-index:5;backdrop-filter:blur(8px);min-width:140px;box-shadow:0 4px 14px rgba(0,0,0,0.4)"></div>';
+  html+='</div>';
+  return html;
+}
+
+// Mount du mini donut (binding hover)
+function _mountMiniDonuts(root){
+  root=root||document.body;
+  root.querySelectorAll('.dv-mini-donut-wrap').forEach(function(wrap){
+    if(wrap.dataset.mounted==='1') return;
+    wrap.dataset.mounted='1';
+    var tooltip=wrap.querySelector('.dv-donut-tooltip');
+    var segs=wrap.querySelectorAll('circle[data-seg-id]');
+    function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+    segs.forEach(function(seg){
+      seg.addEventListener('mouseenter',function(evt){
+        // Mettre en évidence le segment hovered
+        segs.forEach(function(s){s.setAttribute('stroke-width','3.5');});
+        seg.setAttribute('stroke-width','5');
+        var key=seg.dataset.key;
+        var count=seg.dataset.count;
+        var montant=parseInt(seg.dataset.montant,10);
+        var pct=parseFloat(seg.dataset.pct);
+        tooltip.innerHTML='<div style="font-weight:500;color:var(--text);margin-bottom:4px;font-size:11.5px">'+key+'</div>'+
+          '<div style="display:flex;justify-content:space-between;gap:10px;line-height:1.5"><span style="color:var(--muted)">Devis</span><span class="num" data-money>'+count+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;gap:10px;line-height:1.5"><span style="color:var(--muted)">Montant</span><span class="num" data-money>'+fNloc(montant)+' XPF</span></div>'+
+          '<div style="display:flex;justify-content:space-between;gap:10px;line-height:1.5"><span style="color:var(--muted)">Part</span><span class="num" data-money>'+pct.toFixed(0)+'%</span></div>';
+        if(typeof _getPrivacyStored==='function'&&_getPrivacyStored()&&typeof _privacyWrapAmounts==='function') _privacyWrapAmounts(tooltip);
+        tooltip.style.display='block';
+        // Position : à côté du curseur, dans la wrap
+        var wrapRect=wrap.getBoundingClientRect();
+        var px=evt.clientX-wrapRect.left+12;
+        var py=evt.clientY-wrapRect.top-tooltip.offsetHeight/2;
+        if(px+tooltip.offsetWidth>wrap.clientWidth-4) px=evt.clientX-wrapRect.left-tooltip.offsetWidth-12;
+        if(py<2) py=2;
+        tooltip.style.left=px+'px';
+        tooltip.style.top=py+'px';
+      });
+      seg.addEventListener('mousemove',function(evt){
+        var wrapRect=wrap.getBoundingClientRect();
+        var px=evt.clientX-wrapRect.left+12;
+        var py=evt.clientY-wrapRect.top-tooltip.offsetHeight/2;
+        if(px+tooltip.offsetWidth>wrap.clientWidth-4) px=evt.clientX-wrapRect.left-tooltip.offsetWidth-12;
+        if(py<2) py=2;
+        tooltip.style.left=px+'px';
+        tooltip.style.top=py+'px';
+      });
+      seg.addEventListener('mouseleave',function(){
+        segs.forEach(function(s){s.setAttribute('stroke-width','3.5');});
+        tooltip.style.display='none';
+      });
+    });
+  });
+}
+
+// =============================================================================
+// SPARKLINE INTERACTIVE avec crosshair (pour les KPIs)
+// values  : tableau de 12 valeurs cumulées (pour la courbe)
+// monthlyData : tableau de 12 valeurs mensuelles brutes (pour le tooltip)
+// formatter : fonction(idx, monthlyVal, cumulVal) → HTML du tooltip
+// =============================================================================
+function _interactiveSparkline(values, color, monthlyData, formatter, idSuffix){
+  if(!values || values.length<2) return '';
+  var w=140, h=30, pad=2;
+  var max=Math.max.apply(null, values), min=Math.min.apply(null, values);
+  if(max===min){max=max+1;min=min-1;}
+  var pts=values.map(function(v,i){
+    var x=pad+(w-2*pad)*(i/(values.length-1));
+    var y=pad+(h-2*pad)*(1-(v-min)/(max-min));
+    return {x:x,y:y};
+  });
+  var ptsStr=pts.map(function(p){return p.x.toFixed(1)+','+p.y.toFixed(1);}).join(' ');
+  var idPrefix='spark_'+(idSuffix||(Math.random().toString(36).substr(2,6)));
+  // Sérialise les data nécessaires au tooltip
+  var dataPayload={
+    values:values,
+    monthly:monthlyData||values,
+    pts:pts.map(function(p){return [p.x,p.y];})
+  };
+  var dataJson=JSON.stringify(dataPayload).replace(/"/g,'&quot;');
+  // Le wrapper porte data-payload + data-fmt-key (clé qui dit à _mountInteractiveSparklines
+  // quel formatter utiliser, parce qu'on ne peut pas sérialiser une fonction)
+  var html='<div class="ispark-wrap" data-id="'+idPrefix+'" data-payload="'+dataJson+'" data-fmt="'+(idSuffix||'')+'" style="position:relative;width:100%">';
+  html+='<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" style="display:block">';
+  // Aire sous courbe
+  html+='<polyline points="'+ptsStr+' '+(w-pad)+','+(h-pad)+' '+pad+','+(h-pad)+'" class="sparkline-area" style="fill:'+color+';stroke:none"/>';
+  html+='<polyline points="'+ptsStr+'" style="stroke:'+color+';fill:none;stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round"/>';
+  // Crosshair caché par défaut
+  html+='<line id="'+idPrefix+'_ch" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" stroke="rgba(255,255,250,0.4)" stroke-width="0.5" stroke-dasharray="1.5 1.5" style="display:none;pointer-events:none"/>';
+  html+='<circle id="'+idPrefix+'_dot" cx="0" cy="0" r="2.2" fill="'+color+'" stroke="var(--bg)" stroke-width="0.8" style="display:none;pointer-events:none"/>';
+  // Hit area
+  html+='<rect class="ispark-hitarea" x="0" y="0" width="'+w+'" height="'+h+'" fill="transparent" style="cursor:crosshair"/>';
+  html+='</svg>';
+  // Tooltip
+  html+='<div class="ispark-tooltip" id="'+idPrefix+'_tooltip" style="position:absolute;display:none;background:rgba(20,20,15,0.95);border:0.5px solid rgba(255,255,250,0.15);border-radius:6px;padding:6px 9px;font-size:10.5px;color:var(--text);pointer-events:none;z-index:5;backdrop-filter:blur(8px);min-width:130px;box-shadow:0 4px 14px rgba(0,0,0,0.4);line-height:1.5"></div>';
+  html+='</div>';
+  // Stocker le formatter dans une map globale pour qu'il soit accessible au mount
+  if(typeof formatter==='function'){
+    if(!window._isparkFormatters) window._isparkFormatters={};
+    window._isparkFormatters[idSuffix||idPrefix]=formatter;
+  }
+  return html;
+}
+
+// Mount des sparklines interactives
+function _mountInteractiveSparklines(root){
+  root=root||document.body;
+  var months=['jan','fév','mar','avr','mai','juin','jui','aoû','sep','oct','nov','déc'];
+  var todayMonth=new Date().getMonth();
+  root.querySelectorAll('.ispark-wrap').forEach(function(wrap){
+    if(wrap.dataset.mounted==='1') return;
+    wrap.dataset.mounted='1';
+    var payload;
+    try{ payload=JSON.parse(wrap.dataset.payload.replace(/&quot;/g,'"')); }catch(e){return;}
+    var idPrefix=wrap.dataset.id;
+    var fmtKey=wrap.dataset.fmt;
+    var fmtFn=(window._isparkFormatters||{})[fmtKey]||function(idx,monthlyV,cumV){
+      return '<div>'+months[idx]+' : '+monthlyV+'</div>';
+    };
+    var svg=wrap.querySelector('svg');
+    var hit=wrap.querySelector('.ispark-hitarea');
+    var ch=document.getElementById(idPrefix+'_ch');
+    var dot=document.getElementById(idPrefix+'_dot');
+    var tooltip=document.getElementById(idPrefix+'_tooltip');
+    if(!hit||!ch||!dot||!tooltip)return;
+
+    function show(idx,evt){
+      if(idx<0||idx>=payload.pts.length) return hide();
+      var pt=payload.pts[idx];
+      ch.setAttribute('x1',pt[0].toFixed(1));
+      ch.setAttribute('x2',pt[0].toFixed(1));
+      ch.style.display='block';
+      dot.setAttribute('cx',pt[0].toFixed(1));
+      dot.setAttribute('cy',pt[1].toFixed(1));
+      dot.style.display='block';
+      tooltip.innerHTML=fmtFn(idx,payload.monthly[idx],payload.values[idx],months);
+      if(typeof _getPrivacyStored==='function'&&_getPrivacyStored()&&typeof _privacyWrapAmounts==='function') _privacyWrapAmounts(tooltip);
+      tooltip.style.display='block';
+      var wrapRect=wrap.getBoundingClientRect();
+      var mouseX=evt.clientX-wrapRect.left;
+      var mouseY=evt.clientY-wrapRect.top;
+      var ttW=tooltip.offsetWidth;
+      // Position : centré sur le curseur, mais au-dessus du sparkline si possible
+      var px=mouseX-ttW/2;
+      if(px<2) px=2;
+      if(px+ttW>wrap.clientWidth-2) px=wrap.clientWidth-ttW-2;
+      var py=-tooltip.offsetHeight-6; // au-dessus
+      tooltip.style.left=px+'px';
+      tooltip.style.top=py+'px';
+    }
+    function hide(){
+      ch.style.display='none';
+      dot.style.display='none';
+      tooltip.style.display='none';
+    }
+    hit.addEventListener('mousemove',function(evt){
+      var pt=svg.createSVGPoint();
+      pt.x=evt.clientX;pt.y=evt.clientY;
+      var ctm=svg.getScreenCTM();
+      if(!ctm)return;
+      var loc=pt.matrixTransform(ctm.inverse());
+      // Trouver le point le plus proche en x
+      var best=0,bestDist=Infinity;
+      payload.pts.forEach(function(p,i){
+        var d=Math.abs(p[0]-loc.x);
+        if(d<bestDist){bestDist=d;best=i;}
+      });
+      show(best,evt);
+    });
+    hit.addEventListener('mouseleave',hide);
+  });
+}
+
 function _renderDVPipeline(kpi){
   var totalCount=Object.values(kpi.statusCount).reduce(function(s,v){return s+v;},0);
   if(totalCount===0){
@@ -8067,37 +8395,90 @@ function renderDVPro(){
   html+='</div>';
 
   // ========== KPIs (4 cards) ==========
+  // Note : les sparklines sont interactives — au survol, crosshair vertical
+  // + tooltip qui affiche les valeurs du mois pointé.
+  var fy_=(typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear());
   html+='<div class="kpi-grid-pro" style="margin-bottom:16px">';
-  // 1. Total devis
+
+  // === 1. Total devis (avec crosshair sur sparkline) ===
+  // Au survol : tooltip affiche "mois X : N devis émis · Y XPF"
+  var sparkTotal=_interactiveSparkline(
+    kpi.sparkTotal, '#88aae0', kpi.monthlyTotal,
+    function(idx, monthlyV, cumulV, months){
+      var nMonth=kpi.monthlyCount[idx]||0;
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy_+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Émis ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Devis</span><span class="num" data-money>'+nMonth+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumulV)+' XPF</span></div>';
+    },
+    'kpi_total'
+  );
   html+='<div class="kpi-pro kpi-blue">'+
-    '<div class="kpi-label"><i class="ti ti-file-text"></i>Total devis '+(typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear())+'</div>'+
+    '<div class="kpi-label"><i class="ti ti-file-text"></i>Total devis '+fy_+'</div>'+
     '<div class="kpi-value" data-money>'+fNloc(kpi.total)+'</div>'+
     '<div class="kpi-sub">XPF · '+kpi.count+' devis</div>'+
-    _miniSparkline(kpi.sparkTotal,'#88aae0')+
+    sparkTotal+
     '</div>';
-  // 2. Taux acceptation
+
+  // === 2. Taux acceptation (avec crosshair) ===
   var tauxColor=kpi.tauxAccept>=70?'#5dcaa5':(kpi.tauxAccept>=40?'#fbbf24':'#f09595');
+  var sparkAccept=_interactiveSparkline(
+    kpi.sparkAccept, tauxColor, kpi.monthlyAccepted,
+    function(idx, monthlyV, cumulV, months){
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy_+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Acceptés ce mois</span><span class="num" data-money>'+monthlyV+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+cumulV+'</span></div>';
+    },
+    'kpi_accept'
+  );
   html+='<div class="kpi-pro" style="border-top:2px solid '+tauxColor+'">'+
     '<div class="kpi-label"><i class="ti ti-target-arrow"></i>Taux acceptation</div>'+
     '<div class="kpi-value" data-money style="color:'+tauxColor+'">'+kpi.tauxAccept.toFixed(0)+'%</div>'+
-    '<div class="kpi-sub">'+kpi.statusCount['Accepté']+kpi.statusCount['Facturé']+' acceptés · '+kpi.statusCount['Refusé']+' refusés</div>'+
-    _miniSparkline(kpi.sparkAccept,tauxColor)+
+    '<div class="kpi-sub">'+(kpi.statusCount['Accepté']+kpi.statusCount['Facturé'])+' acceptés · '+kpi.statusCount['Refusé']+' refusés</div>'+
+    sparkAccept+
     '</div>';
-  // 3. Montant moyen
+
+  // === 3. Montant moyen + Taux de révisions (split en 2 valeurs sur la même card) ===
+  // Le KPI principal = montant moyen XPF par devis.
+  // Sous-info = taux de devis révisés (% de devis racines qui ont au moins 1 révision).
+  // Au survol de la sparkline → tooltip avec montant moyen ET nb de révisions du mois.
+  var revColor=kpi.tauxRev<10?'#5dcaa5':(kpi.tauxRev<25?'#fbbf24':'#f09595');
+  var sparkMoyen=_interactiveSparkline(
+    kpi.sparkTotal, '#a3a39a', kpi.monthlyTotal,
+    function(idx, monthlyV, cumulV, months){
+      var nMonth=kpi.monthlyCount[idx]||0;
+      var moyenMonth=nMonth>0?(monthlyV/nMonth):0;
+      var nRev=kpi.monthlyRev[idx]||0;
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy_+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Montant moyen</span><span class="num" data-money>'+fNloc(moyenMonth)+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Devis</span><span class="num" data-money>'+nMonth+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Révisions ce mois</span><span class="num" data-money>'+nRev+'</span></div>';
+    },
+    'kpi_moyen'
+  );
   html+='<div class="kpi-pro">'+
     '<div class="kpi-label"><i class="ti ti-calculator"></i>Montant moyen</div>'+
-    '<div class="kpi-value" data-money>'+fNloc(kpi.moyen)+'</div>'+
-    '<div class="kpi-sub">XPF par devis</div>'+
-    _miniSparkline(kpi.sparkTotal,'#a3a39a')+
+    // Le bloc valeur principale + valeur secondaire (split horizontal)
+    '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:8px;margin-bottom:2px">'+
+      '<div>'+
+        '<div class="kpi-value" data-money style="font-size:22px;line-height:1">'+fNloc(kpi.moyen)+'</div>'+
+        '<div class="kpi-sub" style="margin-top:2px">XPF par devis</div>'+
+      '</div>'+
+      '<div style="text-align:right;border-left:0.5px solid rgba(255,255,250,0.10);padding-left:10px;margin-left:6px">'+
+        '<div data-money style="font-size:16px;line-height:1;color:'+revColor+';font-family:JetBrains Mono,monospace;font-weight:500">'+kpi.tauxRev.toFixed(0)+'%</div>'+
+        '<div class="kpi-sub" style="margin-top:2px;font-size:9.5px">'+kpi.rootsRevised+' rév. · '+kpi.revisionsCount+' tot.</div>'+
+      '</div>'+
+    '</div>'+
+    sparkMoyen+
     '</div>';
-  // 4. Délai signature
-  var delaiTxt=kpi.delaiMoyen>0?Math.round(kpi.delaiMoyen)+' jours':'—';
-  var delaiColor=kpi.delaiMoyen<14?'#5dcaa5':(kpi.delaiMoyen<30?'#fbbf24':'#f09595');
-  html+='<div class="kpi-pro" style="border-top:2px solid '+delaiColor+'">'+
-    '<div class="kpi-label"><i class="ti ti-clock"></i>Délai signature</div>'+
-    '<div class="kpi-value" style="color:'+delaiColor+'">'+delaiTxt+'</div>'+
-    '<div class="kpi-sub">moyenne envoi → accepté</div>'+
+
+  // === 4. Mini donut interactif : répartition par TYPE ===
+  // Au survol d'un segment → tooltip avec count + montant + part %
+  html+='<div class="kpi-pro" style="border-top:2px solid #a78bfa">'+
+    '<div class="kpi-label"><i class="ti ti-chart-pie-2"></i>Répartition par type</div>'+
+    _miniDonut(kpi.byType, kpi.total, 'kpi')+
     '</div>';
+
   html+='</div>';
 
   // ========== Pipeline horizontal ==========
@@ -8177,7 +8558,7 @@ function renderDVPro(){
       // Indicateur révision si présent
       var revBadge=d._revisionNumber?' <span style="background:rgba(251,191,36,0.15);color:#fbbf24;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:500;margin-left:4px;letter-spacing:0.04em">REV'+d._revisionNumber+'</span>':'';
 
-      html+='<tr class="dvpro-row" style="border-bottom:0.5px solid rgba(255,255,250,0.06);transition:background .12s;cursor:pointer" onclick="editDV('+d.id+')" onmouseover="this.style.background=\'rgba(255,255,250,0.025)\'" onmouseout="this.style.background=\'\'">';
+      html+='<tr class="dvpro-row" style="border-bottom:0.5px solid rgba(255,255,250,0.06);transition:background .12s;cursor:pointer" onclick="openDV('+d.id+')" onmouseover="this.style.background=\'rgba(255,255,250,0.025)\'" onmouseout="this.style.background=\'\'">';
       // N° / Date
       html+='<td style="padding:12px 14px;vertical-align:top">'+
         '<div class="ref" style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--blue);font-weight:500">'+esc(d.num||'?')+revBadge+'</div>'+
@@ -8206,7 +8587,7 @@ function renderDVPro(){
         '</td>';
       // Actions
       html+='<td style="padding:12px 14px;vertical-align:top;text-align:right" onclick="event.stopPropagation()">'+
-        '<button class="btn btn-ghost btn-sm" onclick="editDV('+d.id+')" title="Éditer" style="padding:5px 8px;border:0.5px solid var(--border)"><i class="ti ti-pencil" style="font-size:12px"></i></button>'+
+        '<button class="btn btn-ghost btn-sm" onclick="openDV('+d.id+')" title="Éditer" style="padding:5px 8px;border:0.5px solid var(--border)"><i class="ti ti-pencil" style="font-size:12px"></i></button>'+
         '</td>';
       html+='</tr>';
     });
@@ -8244,6 +8625,11 @@ function renderDVPro(){
 
   // Onglets clients (utilise la fonction existante)
   if(typeof renderClientTabs==='function') renderClientTabs('dv',dvAll,'dvClientTabs');
+
+  // Mount des composants interactifs : sparklines KPI (crosshair + tooltip)
+  // et mini-donut "Répartition par type" (hover segments).
+  if(typeof _mountInteractiveSparklines==='function') _mountInteractiveSparklines(page);
+  if(typeof _mountMiniDonuts==='function') _mountMiniDonuts(page);
 
   // Re-flou si privacy actif
   if(_getPrivacyStored() && typeof _privacyWrapAmounts==='function'){
