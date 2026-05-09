@@ -21320,12 +21320,16 @@ document.addEventListener('DOMContentLoaded',function(){
       else if(action==='clear')_onPinClear();
     });
   }
-  // === AUTO-VERROUILLAGE AU CHARGEMENT ===
-  // Si l'utilisateur a verrouillé l'app dans un autre onglet (ou avant de fermer),
-  // on relance lockApp() ici pour qu'un nouvel onglet ouvert sur la même URL soit
-  // également verrouillé. Sécurité contre le contournement par copier-coller d'URL.
-  // Conditions : un PIN doit exister ET le flag _grcLocked doit être posé.
-  if(_isLockedFlag() && _getPinStored()){
+  // === AUTO-VERROUILLAGE AU CHARGEMENT (scénario B) ===
+  // Stratégie : si un PIN est défini, l'app verrouille SYSTÉMATIQUEMENT à chaque
+  // ouverture / rechargement de la page, peu importe l'état du flag _grcLocked.
+  // Cela protège contre :
+  //   - Le copier-coller d'URL dans un nouvel onglet
+  //   - Le rechargement (F5) qui pourrait court-circuiter le verrou
+  //   - L'oubli de cliquer 🔒 avant de fermer le navigateur
+  // Si aucun PIN n'a encore été défini : l'app démarre déverrouillée. L'utilisateur
+  // pourra définir un PIN via le bouton 🔒 Verrouiller, ce qui activera la protection.
+  if(_getPinStored()){
     lockApp();
   }
 });
