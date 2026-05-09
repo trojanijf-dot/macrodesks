@@ -1448,7 +1448,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         </div>
         <div style="font-size:10px;color:var(--muted);line-height:1.5;margin:8px 0">
           ✨ Les entrées avec bordure pointillée sont des dates <strong>estimées par reconstruction</strong> (à vérifier).<br>
-          🚫 Les phases non pertinentes selon le type de devis sont indiquées dans le popover de la liste.
+          🚫 Les phases non pertinentes pour le type de ce devis sont signalées ici (visible uniquement dans cette modale d'édition).
         </div>
         <hr style="border:none;border-top:1px solid rgba(124,58,237,0.2);margin:12px 0">
         <!-- ============== 4 jalons traçabilité ============== -->
@@ -3343,14 +3343,95 @@ function td(){
 }
 function fD(d){if(!d)return'';var p=d.split('-');return p[2]+'/'+p[1]+'/'+p[0];}
 function fN(n){if(!n&&n!==0)return'—';return Math.round(Number(n)).toLocaleString('fr-FR');}
-function nxt(t){
-  var n=DB.nid[t]||1;DB.nid[t]=n+1;saveDB();
-  var now=new Date(),dd=String(now.getDate()).padStart(2,'0'),mm=String(now.getMonth()+1).padStart(2,'0'),yy=now.getFullYear();
-  if(t==='dv')return'SLN-DV'+n;
-  if(t==='fa')return'SLN-F'+pad(n);
-  if(t==='bc')return dd+mm+yy+'/'+pad(n);
-  if(t==='bl')return'BL'+dd+mm+yy+'/'+pad(n);
-  return n;
+// =============================================================================
+// nxt(t, prefix) — Génère le prochain N° pour devis / facture / BC / BL
+// =============================================================================
+// Logique : 3 compteurs INDÉPENDANTS basés UNIQUEMENT sur le scan des données
+// réelles (DB.devis, DB.factures, DB.invoices, DB.bcs, DB.bls). DB.nid est
+// volontairement ignoré pour éviter les désynchronisations historiques.
+//
+//   - DV : N° séquentiel par préfixe client (SLN-DV{NNN}, PRNC-DV{NNN}, etc.)
+//          → max scanné dans DB.devis sur ce préfixe + 1
+//   - F  : N° séquentiel partagé entre Prestation et Fourniture, par préfixe
+//          → max scanné dans DB.factures + DB.invoices sur ce préfixe + 1
+//   - BC : N° séquentiel global Emerson (DDMMYYYY/{NNN})
+//          → max scanné dans DB.bcs + 1
+//   - BL : idem BC mais préfixe BL
+//
+// Important : DB.nid n'est plus utilisé en lecture pour calculer le prochain
+// numéro, juste mis à jour en miroir pour rétrocompat des anciens codes qui
+// pourraient le lire. Le scan réel garantit l'absence de doublons et de sauts.
+//
+// Important pour F : les factures peuvent exister dans 2 sources :
+//   - DB.factures (factures GRC complètes)
+//   - DB.invoices (factures Suivi pré-facturées, parfois pas migrées en GRC)
+// On scanne les DEUX et on prend le max global pour éviter tout doublon.
+// =============================================================================
+function nxt(t, prefix){
+  if(!DB.nid) DB.nid={};
+  // Préfixe par défaut = SLN (cohérent avec l'existant)
+  var pfx=prefix||'SLN';
+
+  // Scanner les entrées existantes pour trouver le max NNN sur ce préfixe
+  function scanMax(arr, regex){
+    if(!Array.isArray(arr)) return 0;
+    var max=0;
+    arr.forEach(function(item){
+      var num=(item&&item.num)?String(item.num):'';
+      var m=num.match(regex);
+      if(m){var n=parseInt(m[1],10);if(n>max) max=n;}
+    });
+    return max;
+  }
+
+  var now=new Date();
+  var dd=String(now.getDate()).padStart(2,'0');
+  var mm=String(now.getMonth()+1).padStart(2,'0');
+  var yy=now.getFullYear();
+
+  if(t==='dv'){
+    // Échappe les caractères spéciaux du préfixe pour l'usage en regex
+    var escPfx=pfx.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    var re=new RegExp('^'+escPfx+'-DV(\\d+)','i');
+    var n=scanMax(DB.devis||[], re)+1;
+    // Mise à jour DB.nid en miroir (pas utilisé en lecture, juste cohérence)
+    DB.nid['dv_'+pfx]=n;
+    DB.nid.dv=Math.max(DB.nid.dv||0, n);
+    saveDB();
+    return pfx+'-DV'+pad(n);
+  }
+
+  if(t==='fa'){
+    var escPfxF=pfx.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    var reF=new RegExp('^'+escPfxF+'-F(\\d+)','i');
+    var maxFactures=scanMax(DB.factures||[], reF);
+    var maxInvoices=scanMax(DB.invoices||[], reF);
+    var n=Math.max(maxFactures, maxInvoices)+1;
+    DB.nid['fa_'+pfx]=n;
+    DB.nid.fa=Math.max(DB.nid.fa||0, n);
+    saveDB();
+    return pfx+'-F'+pad(n);
+  }
+
+  if(t==='bc'){
+    // Format BC Emerson : DDMMYYYY/NNN — on extrait le NNN final pour le max
+    var reBC=/\/(\d+)$/;
+    var n=scanMax(DB.bcs||[], reBC)+1;
+    DB.nid.bc=Math.max(DB.nid.bc||0, n);
+    saveDB();
+    return dd+mm+yy+'/'+pad(n);
+  }
+
+  if(t==='bl'){
+    // Format BL : BL{DDMMYYYY}/{NNN}
+    var reBL=/BL\d{8}\/(\d+)/i;
+    var n=scanMax(DB.bls||[], reBL)+1;
+    DB.nid.bl=Math.max(DB.nid.bl||0, n);
+    saveDB();
+    return 'BL'+dd+mm+yy+'/'+pad(n);
+  }
+
+  return 0;
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 // Variante de esc() qui convertit aussi les \n en <br> pour rendu PDF
@@ -3376,6 +3457,28 @@ function buildClientOptions(selectId, currentVal){
   sel.innerHTML=opts;
 }
 
+// =============================================================================
+// getClientPrefix(clientName) — Helper global pour extraire le préfixe société
+// =============================================================================
+// Convention : nom client au format "PFX - Contact Nom" → on extrait "PFX"
+// Exemples :
+//   "SLN - Norbert PATCHE"             → "SLN"
+//   "PRNC - Comptabilité Facturation"  → "PRNC"
+//   "Emerson"                          → "Emerson"
+//   ""                                 → "SLN" (défaut)
+// Utilisé par nxt() pour générer N° devis/facture avec le bon préfixe.
+// =============================================================================
+function getClientPrefix(clientName){
+  var raw=String(clientName||'').trim();
+  if(!raw) return 'SLN';
+  var sep=raw.indexOf(' - ');
+  var pfx=sep>0?raw.substring(0,sep).trim():raw.trim();
+  // Si le préfixe contient des espaces (ex: "Sté X"), garder tel quel ; sinon
+  // l'utilisateur devra créer un client avec un nom sans espace en préfixe pour
+  // que la numérotation fonctionne (cohérent avec l'existant).
+  return pfx||'SLN';
+}
+
 function fillCCFromSelect(pfx){
   var sel=document.getElementById(pfx+'-client');
   var v=sel?sel.value:'';
@@ -3391,6 +3494,24 @@ function fillCCFromSelect(pfx){
   if(tgcSel&&v){
     if(isClientExo(v)) tgcSel.value='506-2';
     else tgcSel.value='tgc';
+  }
+  // === Mise à jour du N° devis quand l'utilisateur change le client ===
+  // Uniquement pour un NOUVEAU devis (eDVid null), pour ne pas écraser un N°
+  // déjà figé sur un devis existant. Le préfixe est déduit du nom client.
+  if(pfx==='dv' && v && typeof eDVid!=='undefined' && !eDVid){
+    var clientPrefix=getClientPrefix(v);
+    var numField=document.getElementById('dv-num');
+    if(numField){
+      numField.value=nxt('dv',clientPrefix);
+    }
+  }
+  // === Idem pour facture créée manuellement (pas via "depuis devis") ===
+  if(pfx==='fa' && v && typeof eFAid!=='undefined' && !eFAid){
+    var clientPrefixFA=getClientPrefix(v);
+    var numFieldFA=document.getElementById('fa-num');
+    if(numFieldFA){
+      numFieldFA.value=nxt('fa',clientPrefixFA);
+    }
   }
 }
 
@@ -6310,7 +6431,7 @@ function confirmBCSLNImport(){
     return;
   }
   // Créer la facture dans DB.factures
-  var faNum=nxt('fa');
+  var faNum=nxt('fa','SLN');
   var totalHT=validArticles.reduce(function(s,a){return s+(a.qte*a.pu);},0);
   var fa={
     id:Date.now(),
@@ -8571,23 +8692,26 @@ function _togglePhaseHistory(event,devisId){
   var hist=Array.isArray(d.phaseHistory)?d.phaseHistory:[];
   if(hist.length===0 && !d.phase) return;
 
-  // Liste complète des 8 phases pour montrer celles à venir
-  var allPhaseKeys=Object.keys(PHASES_META);
+  // Liste FILTRÉE des phases pertinentes pour le type du devis
+  // (les phases non applicables sont masquées du popover, pour un rendu plus propre)
+  var allPhaseKeysFull=Object.keys(PHASES_META);
+  var allPhaseKeys=allPhaseKeysFull.filter(function(k){return _isPhaseApplicable(k,d.type);});
   var traversedMap={};
   hist.forEach(function(e){traversedMap[e.phase]=e;});
   var lastPhase=hist.length>0?hist[hist.length-1].phase:(d.phase||null);
   var lastIdx=lastPhase&&PHASES_META[lastPhase]?PHASES_META[lastPhase].idx:0;
-  var nbApplicable=allPhaseKeys.filter(function(k){return _isPhaseApplicable(k,d.type);}).length;
+  var nbApplicable=allPhaseKeys.length;
   var nbDone=hist.filter(function(e){return _isPhaseApplicable(e.phase,d.type);}).length;
   var pctProgress=nbApplicable>0?Math.round((nbDone/nbApplicable)*100):0;
 
   // === Build HTML rows : timeline verticale ===
+  // Note : toutes les phases listées ici sont applicables au type du devis.
+  // Les phases non pertinentes ont été filtrées en amont (allPhaseKeys).
   var rows='';
   allPhaseKeys.forEach(function(k,i){
     var meta=PHASES_META[k];
     var idx=meta.idx;
     var entry=traversedMap[k];
-    var applicable=_isPhaseApplicable(k,d.type);
     var isCurrent=(k===lastPhase);
     var isPast=entry && !isCurrent;
     var isFuture=!entry;
@@ -8595,13 +8719,11 @@ function _togglePhaseHistory(event,devisId){
 
     // ========= Style line/dot =========
     // Couleur du dot : pill color si traversée/actuelle, gris sinon
-    var dotColor=(entry && applicable)?meta.color:'rgba(255,255,255,0.18)';
     var dotInner=isCurrent?meta.color:(entry?meta.color:'transparent');
     var dotBdr=isCurrent?meta.color:(entry?meta.color:'rgba(255,255,255,0.22)');
     var dotIcon='';
     if(isCurrent) dotIcon='<i class="ti ti-player-play-filled" style="font-size:10px;color:#fff"></i>';
-    else if(isPast && applicable) dotIcon='<i class="ti ti-check" style="font-size:11px;color:#fff;font-weight:bold"></i>';
-    else if(!applicable && entry) dotIcon='<span style="font-size:10px;color:#fff">−</span>';
+    else if(isPast) dotIcon='<i class="ti ti-check" style="font-size:11px;color:#fff;font-weight:bold"></i>';
 
     // Ligne verticale qui relie les dots (sauf dernière ligne)
     var connectorColor=(entry && isPast)?meta.color+'88':'rgba(255,255,255,0.12)';
@@ -8614,8 +8736,6 @@ function _togglePhaseHistory(event,devisId){
     if(isCurrent){
       rowBg='linear-gradient(90deg,'+meta.color+'18 0%,'+meta.color+'05 100%)';
       rowBdr='1px solid '+meta.color+'66';
-    } else if(!applicable){
-      rowOpacity=0.4;
     } else if(isFuture){
       rowOpacity=0.5;
     }
@@ -8623,7 +8743,6 @@ function _togglePhaseHistory(event,devisId){
     // ========= Texte de la ligne =========
     var labelStyle='color:#fff;font-weight:'+(isCurrent?'600':'500')+';font-size:12px';
     if(isFuture) labelStyle='color:rgba(255,255,255,0.65);font-weight:500;font-size:12px';
-    if(!applicable) labelStyle='color:rgba(255,255,255,0.4);font-weight:500;font-size:12px;text-decoration:line-through';
 
     var dateDisp=entry?_fmtDateShort(entry.date):'';
     var dateFull=entry?entry.date:'';
@@ -8640,7 +8759,6 @@ function _togglePhaseHistory(event,devisId){
         'style="display:inline-block;margin-left:6px;padding:1px 5px;background:rgba(167,139,250,0.18);'+
         'color:#c4b5fd;font-size:9px;border-radius:3px;font-weight:600;letter-spacing:0.05em">EST.</span>';
     }
-    var typeWarn=!applicable?'<span style="margin-left:6px;font-size:11px;opacity:0.6" title="Phase non pertinente pour type '+esc(d.type||'')+'">🚫</span>':'';
 
     rows+='<div class="phase-row" style="position:relative;display:grid;grid-template-columns:30px 1fr auto;'+
       'gap:10px;padding:8px 14px 8px 6px;align-items:center;background:'+rowBg+';border-radius:6px;'+
@@ -8656,10 +8774,10 @@ function _togglePhaseHistory(event,devisId){
       '</div>'+
       // Label avec icone + numéro + label
       '<div style="display:flex;align-items:center;gap:6px;min-width:0">'+
-        '<i class="ti ti-'+meta.icon+'" style="font-size:14px;color:'+meta.color+';opacity:'+(applicable?1:0.3)+';flex-shrink:0"></i>'+
+        '<i class="ti ti-'+meta.icon+'" style="font-size:14px;color:'+meta.color+';flex-shrink:0"></i>'+
         '<span style="'+labelStyle+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
           '<span style="color:rgba(255,255,255,0.4);font-size:10px;margin-right:4px">'+idx+'</span>'+
-          esc(meta.label)+typeWarn+reconBadge+
+          esc(meta.label)+reconBadge+
         '</span>'+
       '</div>'+
       // Date pill
@@ -8722,7 +8840,6 @@ function _togglePhaseHistory(event,devisId){
       '<span><span style="color:#10b981">✓</span> traversée</span>'+
       '<span><span style="opacity:0.5">○</span> à venir</span>'+
       '<span><span style="background:rgba(167,139,250,0.18);color:#c4b5fd;padding:0 3px;border-radius:2px;font-weight:600">EST.</span> estimée</span>'+
-      '<span>🚫 non pertinente</span>'+
     '</div>';
 
   // === Position ===
@@ -12079,7 +12196,8 @@ function generateFactureFromDV(){
   if(idx>=0)DB.devis[idx]=dvCurrent;
   d=DB.devis[idx];
   // Construction de la facture
-  var faNum=nxt('fa');
+  // Le préfixe de la facture suit celui du devis source (SLN, PRNC, etc.)
+  var faNum=nxt('fa', getClientPrefix(d.client));
   var totals=cDVtot();
   // === COPIE STRUCTURELLE DES LIGNES DEVIS → FACTURE ===
   // On préserve EXACTEMENT la structure du devis : headers, KIT (1 prix global +
@@ -17543,7 +17661,7 @@ function openFA(id,fromDV){
       setTimeout(function(){if(typeof renderFADelaiHistory==='function')renderFADelaiHistory();},50);
     }
   } else if(fromDV){
-    gv('fa-num',nxt('fa'));gv('fa-date',td());
+    gv('fa-num',nxt('fa', getClientPrefix(fromDV.client||'')));gv('fa-date',td());
     buildClientOptions('fa-client',fromDV.client||'');
     gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');
     // Email facture : on NE reprend PAS fromDV.email (qui est le contact technique du devis).
@@ -17568,7 +17686,7 @@ function openFA(id,fromDV){
           .map(function(l){return JSON.parse(JSON.stringify(l));});
     sv('mFAtitle','Facture depuis '+fromDV.num);
   } else {
-    gv('fa-num',nxt('fa'));gv('fa-date',td());gv('fa-contact','');
+    gv('fa-num',nxt('fa','SLN'));gv('fa-date',td());gv('fa-contact','');
     gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');
     // Email vide → dropdown initialisé avec valeur courante = ''
     rebuildFaEmailOptions('');
