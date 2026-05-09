@@ -1423,7 +1423,9 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
                 <option value="production">5. En production</option>
                 <option value="expedie">6. Expédié</option>
                 <option value="receptionne">7. Réceptionné</option>
-                <option value="facture">8. Facturé client</option>
+                <option value="debut_chantier">8. Début chantier</option>
+                <option value="fin_chantier_pv">9. Fin chantier + PV</option>
+                <option value="facture">10. Facturé client</option>
               </select>
             </div>
             <div class="form-group" style="margin:0">
@@ -8256,21 +8258,31 @@ var DV_STATUS_META={
 };
 
 // =============================================================================
-// PHASES_META — 8 phases du cycle de vie devis → livraison → facturation
+// PHASES_META — 10 phases du cycle de vie devis → livraison → facturation
 // =============================================================================
 // Ordonnées chronologiquement (idx). Chaque phase a un libellé, une couleur,
 // une icône Tabler, et un champ applicableTo qui définit pour quels types
 // de devis cette phase est pertinente.
+//
+// Logique métier :
+//   - Fourniture (8 phases) : matériel Emerson, du devis à la facture
+//   - Prestation (5 phases) : intervention pure sur site (chantier)
+//   - Mixte      (5 phases) : chantier avec matériel local (hors Emerson),
+//                             ex: coffrets, disjoncteurs. Si du matériel
+//                             Emerson est impliqué, c'est un devis Fourniture
+//                             séparé.
 // =============================================================================
 var PHASES_META={
-  'envoye':           {idx:1,label:'Devis envoyé',         color:'#88aae0',icon:'send',         pill:'p-info',         applicableTo:['Fourniture','Prestation','Mixte']},
-  'bc_recu':          {idx:2,label:'BC client reçu',       color:'#5dcaa5',icon:'mail-check',   pill:'p-success',      applicableTo:['Fourniture','Prestation','Mixte']},
-  'po_emerson':       {idx:3,label:'PO Emerson envoyé',    color:'#818cf8',icon:'arrow-up-right',pill:'p-indigo',      applicableTo:['Fourniture','Mixte']},
-  'confirm_emerson':  {idx:4,label:'Confirmation Emerson', color:'#22d3ee',icon:'check',        pill:'p-cyan',         applicableTo:['Fourniture','Mixte']},
-  'production':       {idx:5,label:'En production',        color:'#ef9f27',icon:'tools',        pill:'p-warning',      applicableTo:['Fourniture','Prestation','Mixte']},
-  'expedie':          {idx:6,label:'Expédié',              color:'#a78bfa',icon:'truck-delivery',pill:'p-purple',      applicableTo:['Fourniture','Mixte']},
-  'receptionne':      {idx:7,label:'Réceptionné',          color:'#86efac',icon:'package-import',pill:'p-success-soft',applicableTo:['Fourniture','Mixte']},
-  'facture':          {idx:8,label:'Facturé client',       color:'#7c3aed',icon:'receipt',      pill:'p-purple-deep',  applicableTo:['Fourniture','Prestation','Mixte']}
+  'envoye':           {idx:1, label:'Devis envoyé',         color:'#88aae0', icon:'send',          pill:'p-info',          applicableTo:['Fourniture','Prestation','Mixte']},
+  'bc_recu':          {idx:2, label:'BC client reçu',       color:'#5dcaa5', icon:'mail-check',    pill:'p-success',       applicableTo:['Fourniture','Prestation','Mixte']},
+  'po_emerson':       {idx:3, label:'PO Emerson envoyé',    color:'#818cf8', icon:'arrow-up-right',pill:'p-indigo',        applicableTo:['Fourniture']},
+  'confirm_emerson':  {idx:4, label:'Confirmation Emerson', color:'#22d3ee', icon:'check',         pill:'p-cyan',          applicableTo:['Fourniture']},
+  'production':       {idx:5, label:'En production',        color:'#ef9f27', icon:'tools',         pill:'p-warning',       applicableTo:['Fourniture']},
+  'expedie':          {idx:6, label:'Expédié',              color:'#a78bfa', icon:'truck-delivery',pill:'p-purple',        applicableTo:['Fourniture']},
+  'receptionne':      {idx:7, label:'Réceptionné',          color:'#86efac', icon:'package-import',pill:'p-success-soft',  applicableTo:['Fourniture']},
+  'debut_chantier':   {idx:8, label:'Début chantier',       color:'#f59e0b', icon:'pick',          pill:'p-warning',       applicableTo:['Prestation','Mixte']},
+  'fin_chantier_pv':  {idx:9, label:'Fin chantier + PV',    color:'#10b981', icon:'file-check',    pill:'p-success',       applicableTo:['Prestation','Mixte']},
+  'facture':          {idx:10,label:'Facturé client',       color:'#7c3aed', icon:'receipt',       pill:'p-purple-deep',   applicableTo:['Fourniture','Prestation','Mixte']}
 };
 
 // Helpers Phases - getCurrentPhase, isApplicable, getNextApplicable
@@ -11947,7 +11959,7 @@ function openAddPhaseDialog(){
   var today=(typeof td==='function')?td():new Date().toISOString().substring(0,10);
   // Mini-modale prompt simple via prompt natif (cas rare, simple à utiliser)
   // Variante : on peut créer une vraie sous-modale, mais prompt suffit pour cet usage exceptionnel
-  var phaseKey=prompt('Ajouter une phase à l\'historique\n\nClé phase (envoye / bc_recu / po_emerson / confirm_emerson / production / expedie / receptionne / facture) :','envoye');
+  var phaseKey=prompt('Ajouter une phase à l\'historique\n\nClé phase :\n  • envoye\n  • bc_recu\n  • po_emerson (Fourniture)\n  • confirm_emerson (Fourniture)\n  • production (Fourniture)\n  • expedie (Fourniture)\n  • receptionne (Fourniture)\n  • debut_chantier (Prestation/Mixte)\n  • fin_chantier_pv (Prestation/Mixte)\n  • facture','envoye');
   if(!phaseKey || !PHASES_META[phaseKey]) return;
   var date=prompt('Date de cette phase (YYYY-MM-DD) :',today);
   if(!date) return;
