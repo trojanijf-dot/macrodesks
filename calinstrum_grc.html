@@ -1402,41 +1402,57 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         </div>
       </div>
       <!-- ====================================================================
-           BLOC TRAÇABILITÉ — visible pour tous les devis (sauf Brouillon vide)
-           Permet de saisir : Phase, Réf Emerson, Réf ACT, PO Calinstrum + dates.
-           Chaque champ peut être laissé vide ; les pills correspondantes
-           apparaîtront grisées dans la colonne Traçabilité de la liste Devis.
+           BLOC TRAÇABILITÉ — phase actuelle + historique éditable + 4 jalons
            ==================================================================== -->
       <div id="dv-traca-block" style="margin-top:12px;padding:12px;background:rgba(124,58,237,0.05);border:1px solid rgba(124,58,237,0.22);border-radius:8px">
         <div style="font-size:11px;font-weight:700;color:#a78bfa;margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:6px">
           <i class="ti ti-route" style="font-size:14px"></i>Traçabilité — Cycle de vie
         </div>
-        <div style="font-size:10.5px;color:var(--muted);line-height:1.5;margin-bottom:10px">
-          Ces 4 jalons s'affichent dans la liste Devis sous forme de pills compactes.<br>
-          La date "Phase" est saisie automatiquement quand vous changez la valeur du dropdown.<br>
-          Le PO Calinstrum est rempli automatiquement quand un BC est lié au devis.
-        </div>
-        <!-- Phase + date -->
-        <div class="form-row">
-          <div class="form-group" style="margin:0"><label><i class="ti ti-flag" style="font-size:12px;color:#a78bfa"></i> Phase actuelle</label>
-            <select class="form-select" id="dv-phase" onchange="onDVPhaseChange()">
-              <option value="">— Aucune —</option>
-              <option value="envoye">1. Devis envoyé</option>
-              <option value="bc_recu">2. BC client reçu</option>
-              <option value="po_emerson">3. PO Emerson envoyé</option>
-              <option value="confirm_emerson">4. Confirmation Emerson</option>
-              <option value="production">5. En production</option>
-              <option value="expedie">6. Expédié</option>
-              <option value="receptionne">7. Réceptionné</option>
-              <option value="facture">8. Facturé client</option>
-            </select>
+        <!-- ============== Phase actuelle + boutons d'action ============== -->
+        <div style="background:rgba(124,58,237,0.07);padding:10px;border-radius:6px;margin-bottom:10px">
+          <div style="font-size:10px;font-weight:600;color:#a78bfa;margin-bottom:6px;text-transform:uppercase">📍 Phase actuelle</div>
+          <div class="form-row" style="margin:0">
+            <div class="form-group" style="margin:0">
+              <label>Phase</label>
+              <select class="form-select" id="dv-phase" onchange="onDVPhaseChange()">
+                <option value="">— Aucune —</option>
+                <option value="envoye">1. Devis envoyé</option>
+                <option value="bc_recu">2. BC client reçu</option>
+                <option value="po_emerson">3. PO Emerson envoyé</option>
+                <option value="confirm_emerson">4. Confirmation Emerson</option>
+                <option value="production">5. En production</option>
+                <option value="expedie">6. Expédié</option>
+                <option value="receptionne">7. Réceptionné</option>
+                <option value="facture">8. Facturé client</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin:0">
+              <label>Date</label>
+              <input type="date" class="form-input" id="dv-phase-date">
+            </div>
           </div>
-          <div class="form-group" style="margin:0"><label>Date de la phase <span style="color:var(--muted);font-weight:400;font-size:10px">(auto)</span></label>
-            <input type="date" class="form-input" id="dv-phase-date">
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+            <button type="button" class="btn btn-teal btn-sm" id="dv-phase-next-btn" style="font-size:11px;padding:5px 10px" onclick="advanceToNextPhase()" title="Ajoute la phase suivante (selon type devis) à l'historique avec date du jour">→ Avancer à phase suivante</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:5px 10px" onclick="undoLastPhase()" title="Retire la dernière entrée de l'historique">↶ Annuler dernière phase</button>
           </div>
         </div>
+        <!-- ============== Tableau historique éditable ============== -->
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-size:10px;font-weight:600;color:#a78bfa;text-transform:uppercase">🕒 Historique <span id="dv-phase-history-count" style="color:var(--muted);font-weight:400">(0)</span></span>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px" onclick="openAddPhaseDialog()" title="Ajouter une entrée à l'historique">+ Ajouter</button>
+          </div>
+          <div id="dv-phase-history-table" style="background:rgba(0,0,0,.15);border-radius:5px;padding:6px;min-height:30px;max-height:240px;overflow-y:auto;font-size:11px"></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.5;margin:8px 0">
+          ✨ Les entrées avec bordure pointillée sont des dates <strong>estimées par reconstruction</strong> (à vérifier).<br>
+          🚫 Les phases non pertinentes selon le type de devis sont indiquées dans le popover de la liste.
+        </div>
+        <hr style="border:none;border-top:1px solid rgba(124,58,237,0.2);margin:12px 0">
+        <!-- ============== 4 jalons traçabilité ============== -->
+        <div style="font-size:10px;font-weight:600;color:#a78bfa;margin-bottom:6px;text-transform:uppercase">🔖 Références externes</div>
         <!-- Réf Emerson + date -->
-        <div class="form-row" style="margin-top:8px">
+        <div class="form-row">
           <div class="form-group" style="margin:0"><label><i class="ti ti-circuit-bulb" style="font-size:12px;color:#22d3ee"></i> Réf Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(N° proposition complet)</span></label>
             <input class="form-input" id="dv-ref-emerson" placeholder="ex: 23306657 Ver 5">
           </div>
@@ -8242,20 +8258,168 @@ var DV_STATUS_META={
 // =============================================================================
 // PHASES_META — 8 phases du cycle de vie devis → livraison → facturation
 // =============================================================================
-// Ordonnées chronologiquement (idx). Chaque phase a un libellé, une couleur
-// (pour la pill), et une icône Tabler. Stockage : d.phase = clé (ex: 'envoye'),
-// d.phaseDate = ISO date (auto-saisie quand on change le dropdown).
+// Ordonnées chronologiquement (idx). Chaque phase a un libellé, une couleur,
+// une icône Tabler, et un champ applicableTo qui définit pour quels types
+// de devis cette phase est pertinente.
 // =============================================================================
 var PHASES_META={
-  'envoye':           {idx:1,label:'Devis envoyé',         color:'#88aae0',icon:'send',         pill:'p-info'},
-  'bc_recu':          {idx:2,label:'BC client reçu',       color:'#5dcaa5',icon:'mail-check',   pill:'p-success'},
-  'po_emerson':       {idx:3,label:'PO Emerson envoyé',    color:'#818cf8',icon:'arrow-up-right',pill:'p-indigo'},
-  'confirm_emerson':  {idx:4,label:'Confirmation Emerson', color:'#22d3ee',icon:'check',        pill:'p-cyan'},
-  'production':       {idx:5,label:'En production',        color:'#ef9f27',icon:'tools',        pill:'p-warning'},
-  'expedie':          {idx:6,label:'Expédié',              color:'#a78bfa',icon:'truck-delivery',pill:'p-purple'},
-  'receptionne':      {idx:7,label:'Réceptionné',          color:'#86efac',icon:'package-import',pill:'p-success-soft'},
-  'facture':          {idx:8,label:'Facturé client',       color:'#7c3aed',icon:'receipt',      pill:'p-purple-deep'}
+  'envoye':           {idx:1,label:'Devis envoyé',         color:'#88aae0',icon:'send',         pill:'p-info',         applicableTo:['Fourniture','Prestation','Mixte']},
+  'bc_recu':          {idx:2,label:'BC client reçu',       color:'#5dcaa5',icon:'mail-check',   pill:'p-success',      applicableTo:['Fourniture','Prestation','Mixte']},
+  'po_emerson':       {idx:3,label:'PO Emerson envoyé',    color:'#818cf8',icon:'arrow-up-right',pill:'p-indigo',      applicableTo:['Fourniture','Mixte']},
+  'confirm_emerson':  {idx:4,label:'Confirmation Emerson', color:'#22d3ee',icon:'check',        pill:'p-cyan',         applicableTo:['Fourniture','Mixte']},
+  'production':       {idx:5,label:'En production',        color:'#ef9f27',icon:'tools',        pill:'p-warning',      applicableTo:['Fourniture','Prestation','Mixte']},
+  'expedie':          {idx:6,label:'Expédié',              color:'#a78bfa',icon:'truck-delivery',pill:'p-purple',      applicableTo:['Fourniture','Mixte']},
+  'receptionne':      {idx:7,label:'Réceptionné',          color:'#86efac',icon:'package-import',pill:'p-success-soft',applicableTo:['Fourniture','Mixte']},
+  'facture':          {idx:8,label:'Facturé client',       color:'#7c3aed',icon:'receipt',      pill:'p-purple-deep',  applicableTo:['Fourniture','Prestation','Mixte']}
 };
+
+// Helpers Phases - getCurrentPhase, isApplicable, getNextApplicable
+function _getCurrentPhase(d){
+  // Retourne la dernière entrée du phaseHistory, ou fallback sur d.phase legacy
+  if(!d) return null;
+  if(Array.isArray(d.phaseHistory) && d.phaseHistory.length>0){
+    return d.phaseHistory[d.phaseHistory.length-1];
+  }
+  if(d.phase) return {phase:d.phase,date:d.phaseDate||''};
+  return null;
+}
+function _isPhaseApplicable(phaseKey,devisType){
+  var meta=PHASES_META[phaseKey];
+  if(!meta) return false;
+  var t=devisType||'Fourniture';
+  // Normaliser type
+  if(t.indexOf('Prestation')>=0 && t.indexOf('Fourniture')>=0) t='Mixte';
+  else if(t.indexOf('Prestation')>=0) t='Prestation';
+  else if(t.indexOf('Fourniture')>=0) t='Fourniture';
+  return (meta.applicableTo||[]).indexOf(t)>=0;
+}
+function _getNextApplicablePhase(d){
+  // Retourne la clé de la prochaine phase applicable au type du devis
+  var current=_getCurrentPhase(d);
+  var startIdx=current?(PHASES_META[current.phase]?PHASES_META[current.phase].idx:0):0;
+  var keys=Object.keys(PHASES_META);
+  for(var i=0;i<keys.length;i++){
+    var k=keys[i];
+    if(PHASES_META[k].idx>startIdx && _isPhaseApplicable(k,d.type)){
+      return k;
+    }
+  }
+  return null; // Dernière phase atteinte
+}
+
+// =============================================================================
+// _buildPhaseHistory(d) — Reconstruction intelligente de l'historique de phases
+// =============================================================================
+// Pour les devis legacy sans phaseHistory, on essaie de deviner les dates des
+// phases déjà traversées à partir des données existantes :
+//   - envoye          → d.date (date du devis)
+//   - bc_recu         → d.bcClientSLNDate
+//   - po_emerson      → d.poCalinstrumDate (= date du BC Cali lié)
+//   - confirm_emerson → date d'envoi de la facture liée (invoice.dateEnvoi)
+//                       SI la phase de l'invoice est >= 'emerson'
+//   - production      → invoice.dateEnvoi si invoice.phase ∈ ['emerson','chantier_cours','chantier_attente']
+//   - expedie         → invoice.dateEnvoi+offset si invoice.phase === 'transit'
+//   - receptionne     → invoice.dateEnvoi+offset si invoice.phase ∈ ['recu','livre']
+//   - facture         → date de la facture GRC liée (DB.factures)
+// Les entrées reconstruites sont marquées _reconstructed:true pour affichage
+// avec bordure pointillée et tooltip.
+// =============================================================================
+function _buildPhaseHistory(d){
+  if(!d) return [];
+  var hist=[];
+  var t=d.type||'Fourniture';
+
+  function add(phase,date,reconstructed){
+    if(!date) return;
+    if(!_isPhaseApplicable(phase,t)) return;
+    hist.push({phase:phase,date:date,_reconstructed:reconstructed===true});
+  }
+
+  // 1. Devis envoyé → date du devis (toujours)
+  if(d.date) add('envoye',d.date,true);
+
+  // 2. BC client reçu → bcClientSLNDate
+  if(d.bcClientSLNDate) add('bc_recu',d.bcClientSLNDate,true);
+
+  // 3. PO Emerson envoyé → poCalinstrumDate
+  if(d.poCalinstrumDate) add('po_emerson',d.poCalinstrumDate,true);
+
+  // Recherche de la facture/invoice liée pour reconstruire les phases logistiques
+  var invLinked=null;
+  if(typeof DB!=='undefined' && Array.isArray(DB.invoices)){
+    invLinked=DB.invoices.find(function(inv){
+      return inv.linkedDevisId===d.id ||
+             (inv.intitule && d.num && inv.intitule.toUpperCase().indexOf(d.num.toUpperCase())>=0);
+    });
+  }
+  if(invLinked){
+    var ip=invLinked.phase||'';
+    var dEnv=invLinked.dateEnvoi||'';
+    // 4. Confirmation Emerson : si phase invoice >= emerson, on suppose la date d'envoi
+    //    Note : c'est une approximation, la confirmation Emerson arrive après le PO Cali
+    if(['emerson','chantier_attente','chantier_cours','transit','recu','livre'].indexOf(ip)>=0 && dEnv){
+      add('confirm_emerson',dEnv,true);
+    }
+    // 5. En production : phase invoice 'emerson' ou 'chantier_cours' ou 'chantier_attente'
+    if(['emerson','chantier_attente','chantier_cours'].indexOf(ip)>=0 && dEnv){
+      add('production',dEnv,true);
+    }
+    // 6. Expédié : phase invoice 'transit'
+    if(['transit','recu','livre'].indexOf(ip)>=0 && dEnv){
+      add('expedie',dEnv,true);
+    }
+    // 7. Réceptionné : phase invoice 'recu' ou 'livre'
+    if(['recu','livre'].indexOf(ip)>=0 && dEnv){
+      add('receptionne',dEnv,true);
+    }
+  }
+
+  // 8. Facturé client : si la facture GRC liée existe → date de la facture
+  if(typeof DB!=='undefined' && Array.isArray(DB.factures)){
+    var faLinked=DB.factures.find(function(f){
+      return f._sourceDevisId===d.id ||
+             (f._sourceDevisNum && d.num && f._sourceDevisNum===d.num) ||
+             (d.linkFactureId && f.id===d.linkFactureId);
+    });
+    if(faLinked && faLinked.date) add('facture',faLinked.date,true);
+  }
+
+  // Phase legacy d.phase : si elle existe et ne figure pas déjà comme dernière entrée
+  if(d.phase && hist.length>0 && hist[hist.length-1].phase!==d.phase){
+    add(d.phase,d.phaseDate||d.date,true);
+  } else if(d.phase && hist.length===0){
+    add(d.phase,d.phaseDate||d.date||'',true);
+  }
+
+  // Tri par idx PHASES_META puis par date pour avoir l'ordre chronologique
+  hist.sort(function(a,b){
+    var ia=PHASES_META[a.phase]?PHASES_META[a.phase].idx:99;
+    var ib=PHASES_META[b.phase]?PHASES_META[b.phase].idx:99;
+    if(ia!==ib) return ia-ib;
+    return (a.date||'').localeCompare(b.date||'');
+  });
+
+  // Dédupliquer (même phase plusieurs fois → garder la première)
+  var seen={};
+  hist=hist.filter(function(e){
+    if(seen[e.phase]) return false;
+    seen[e.phase]=true;
+    return true;
+  });
+
+  return hist;
+}
+
+// Ensure phaseHistory exists (lazy migration au chargement du devis)
+function _ensurePhaseHistory(d){
+  if(!d) return;
+  if(!Array.isArray(d.phaseHistory) || d.phaseHistory.length===0){
+    var rebuilt=_buildPhaseHistory(d);
+    if(rebuilt.length>0){
+      d.phaseHistory=rebuilt;
+    }
+  }
+}
 
 // =============================================================================
 // Helpers d'extraction des références "courtes" (zone rouge des spécifications)
@@ -8302,11 +8466,10 @@ function _fmtDateShort(iso){
 }
 
 // =============================================================================
-// _renderTraca(d) — rend la cellule "Traçabilité" pour la liste Devis (Option C)
+// _renderTraca(d) — rend la cellule "Traçabilité" pour la liste Devis
 // =============================================================================
-// 4 mini-pills inline horizontales : 📋 phase · 🔧 emerson · 📦 act · 🛒 po-cali
-// Chaque pill : icône + valeur courte + date courte (DD/MM). Tooltip = valeur longue.
-// Si une donnée manque, la pill s'affiche grisée avec "—".
+// 1ère pill = compteur d'étapes traversées, cliquable → popover avec historique
+// Suivies des 3 réfs externes (Emerson / ACT / PO Cali).
 // =============================================================================
 function _renderTraca(d){
   if(!d) return '';
@@ -8314,7 +8477,7 @@ function _renderTraca(d){
     // opts: {icon, label, value, date, color, fullValue}
     var hasVal=!!opts.value;
     var clr=hasVal?opts.color:'rgba(120,120,120,0.4)';
-    var bg=hasVal?(opts.color+'1a'):'rgba(80,80,80,0.08)'; // 1a = ~10% alpha en hex
+    var bg=hasVal?(opts.color+'1a'):'rgba(80,80,80,0.08)';
     var bdr=hasVal?(opts.color+'40'):'rgba(120,120,120,0.18)';
     var txtClr=hasVal?'var(--text)':'var(--muted-soft)';
     var dt=opts.date?(' · '+_fmtDateShort(opts.date)):'';
@@ -8327,21 +8490,154 @@ function _renderTraca(d){
       '<i class="ti ti-'+opts.icon+'" style="font-size:11px;color:'+clr+'"></i>'+
       '<span>'+esc(val)+esc(dt)+'</span></span>';
   }
-  // Phase : on utilise PHASES_META pour la couleur
-  var phaseMeta=d.phase&&PHASES_META[d.phase]?PHASES_META[d.phase]:null;
-  var phaseLabel=phaseMeta?phaseMeta.label:'';
-  // Truncation phase pour ne pas exploser la largeur
-  var phaseLabelShort=phaseLabel.length>16?(phaseLabel.substring(0,15)+'…'):phaseLabel;
-  var phaseColor=phaseMeta?phaseMeta.color:'#a3a39a';
-  var phaseIcon=phaseMeta?phaseMeta.icon:'flag';
+
+  // === Phase actuelle + historique (pill cliquable) ===
+  // Lazy migration : si pas de phaseHistory, on tente de la reconstruire
+  if(!Array.isArray(d.phaseHistory) || d.phaseHistory.length===0){
+    var rebuilt=_buildPhaseHistory(d);
+    if(rebuilt.length>0) d.phaseHistory=rebuilt;
+  }
+  var hist=Array.isArray(d.phaseHistory)?d.phaseHistory:[];
+  var currentEntry=hist.length>0?hist[hist.length-1]:(d.phase?{phase:d.phase,date:d.phaseDate}:null);
 
   var html='<div class="traca-cell" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">';
-  html+=pill({icon:phaseIcon,label:'Phase',value:phaseLabelShort,fullValue:phaseLabel,date:d.phaseDate||'',color:phaseColor});
+
+  // Pill principale Phase historique
+  if(currentEntry && PHASES_META[currentEntry.phase]){
+    var meta=PHASES_META[currentEntry.phase];
+    var nbSteps=hist.length;
+    var labelShort=meta.label.length>14?(meta.label.substring(0,13)+'…'):meta.label;
+    var dateShort=_fmtDateShort(currentEntry.date);
+    var titleHist='Phase actuelle : '+meta.label+(currentEntry.date?(' ('+currentEntry.date+')'):'')+' — '+nbSteps+' étape(s) traversée(s). Cliquer pour voir l\'historique.';
+    html+='<span class="traca-pill traca-phase-pill" '+
+      'data-devis-id="'+d.id+'" '+
+      'onclick="event.stopPropagation();_togglePhaseHistory(event,'+d.id+');" '+
+      'title="'+esc(titleHist)+'" '+
+      'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;cursor:pointer;'+
+      'background:'+meta.color+'1a;border:0.5px solid '+meta.color+'66;'+
+      'font-size:10px;line-height:1.3;color:var(--text);font-family:JetBrains Mono,monospace;white-space:nowrap">'+
+      '<i class="ti ti-'+meta.icon+'" style="font-size:11px;color:'+meta.color+'"></i>'+
+      '<span>'+esc(labelShort)+(dateShort?' · '+esc(dateShort):'')+'</span>'+
+      (nbSteps>1?'<span style="font-size:9px;color:var(--muted);margin-left:3px;background:rgba(255,255,255,.08);padding:0 4px;border-radius:6px">'+nbSteps+' ▾</span>':'<span style="font-size:9px;color:var(--muted);margin-left:2px">▾</span>')+
+      '</span>';
+  } else {
+    // Pas de phase
+    html+=pill({icon:'flag',label:'Phase',value:'',color:'#a3a39a'});
+  }
+
+  // 3 pills réfs externes
   html+=pill({icon:'circuit-bulb',label:'Réf Emerson',value:_shortEmerson(d.refEmerson),fullValue:d.refEmerson,date:d.refEmersonDate||'',color:'#22d3ee'});
   html+=pill({icon:'building-warehouse',label:'Réf ACT',value:_shortACT(d.refACT),fullValue:d.refACT,date:d.refACTDate||'',color:'#fbbf24'});
   html+=pill({icon:'shopping-cart',label:'PO Calinstrum',value:_shortPO(d.poCalinstrum),fullValue:d.poCalinstrum,date:d.poCalinstrumDate||'',color:'#a78bfa'});
   html+='</div>';
   return html;
+}
+
+// =============================================================================
+// _togglePhaseHistory(event, devisId) — Affiche / masque le popover historique
+// =============================================================================
+// Construit dynamiquement un panneau positionné sous la pill cliquée, avec
+// la liste des phases traversées (opacity 1 pour la dernière, dégradée pour
+// les plus anciennes) + les phases à venir grisées.
+// Click extérieur → ferme le popover.
+// =============================================================================
+function _togglePhaseHistory(event,devisId){
+  // Ferme tout popover existant
+  var existing=document.getElementById('phase-history-popover');
+  if(existing){
+    existing.remove();
+    if(existing.dataset.devisId===String(devisId)){
+      // Re-click sur la même pill = juste fermer
+      return;
+    }
+  }
+  var d=(DB.devis||[]).find(function(x){return x.id===devisId;});
+  if(!d) return;
+  var hist=Array.isArray(d.phaseHistory)?d.phaseHistory:[];
+  if(hist.length===0 && !d.phase) return;
+
+  // Liste complète des 8 phases pour montrer celles à venir
+  var allPhaseKeys=Object.keys(PHASES_META);
+  var traversedMap={};
+  hist.forEach(function(e){traversedMap[e.phase]=e;});
+  var lastPhase=hist.length>0?hist[hist.length-1].phase:(d.phase||null);
+  var lastIdx=lastPhase&&PHASES_META[lastPhase]?PHASES_META[lastPhase].idx:0;
+
+  // Build HTML
+  var rows='';
+  allPhaseKeys.forEach(function(k,i){
+    var meta=PHASES_META[k];
+    var idx=meta.idx;
+    var entry=traversedMap[k];
+    var applicable=_isPhaseApplicable(k,d.type);
+    var isCurrent=(k===lastPhase);
+    var isPast=entry && !isCurrent;
+    var isFuture=!entry;
+    var opacity=1;
+    var marker='';
+    if(!applicable) opacity=0.25;
+    else if(isFuture) opacity=0.35;
+    else if(isPast) opacity=0.65;
+    var bg='transparent';
+    var bdrStyle='solid';
+    if(isCurrent) bg='rgba(124,58,237,0.12)';
+    if(entry && entry._reconstructed) bdrStyle='dashed';
+    if(isCurrent) marker='<span style="color:'+meta.color+';font-weight:700;font-size:11px">▶</span>';
+    else if(isPast) marker='<span style="color:'+meta.color+';font-size:11px">✓</span>';
+    else marker='<span style="color:var(--muted-soft);font-size:11px">○</span>';
+    var dateDisp=entry?_fmtDateShort(entry.date):'—';
+    var dateFull=entry?entry.date:'';
+    var typeWarn=!applicable?'<span style="color:var(--muted-soft);font-size:9px;margin-left:5px" title="Phase non pertinente pour type '+esc(d.type||'')+'">🚫</span>':'';
+    var reconWarn=(entry&&entry._reconstructed)?'<span style="font-size:9px;margin-left:4px;color:#a78bfa" title="Date estimée par reconstruction (à vérifier)">~</span>':'';
+
+    rows+='<div style="display:grid;grid-template-columns:18px 18px 1fr 70px;gap:6px;padding:5px 8px;align-items:center;background:'+bg+';border-radius:4px;opacity:'+opacity+';border:1px '+bdrStyle+' '+(isCurrent?meta.color+'66':'transparent')+'">'+
+      '<span style="text-align:center">'+marker+'</span>'+
+      '<i class="ti ti-'+meta.icon+'" style="font-size:13px;color:'+meta.color+'"></i>'+
+      '<span style="font-size:11px;color:var(--text)">'+idx+'. '+esc(meta.label)+typeWarn+'</span>'+
+      '<span style="font-size:10px;color:var(--muted);font-family:JetBrains Mono,monospace;text-align:right" title="'+esc(dateFull)+'">'+esc(dateDisp)+reconWarn+'</span>'+
+      '</div>';
+  });
+
+  var popover=document.createElement('div');
+  popover.id='phase-history-popover';
+  popover.dataset.devisId=String(devisId);
+  popover.style.cssText='position:fixed;z-index:99999;background:var(--card);border:1px solid var(--border);border-radius:8px;'+
+    'box-shadow:0 8px 24px rgba(0,0,0,0.45);padding:10px 12px;min-width:280px;max-width:340px';
+
+  // Position à côté de la pill cliquée
+  var rect=event.target.closest('.traca-phase-pill').getBoundingClientRect();
+  var top=rect.bottom+6;
+  var left=rect.left;
+  // Ajustement si déborde à droite
+  if(left+340 > window.innerWidth){left=window.innerWidth-350;}
+  // Ajustement si déborde en bas
+  if(top+(60+30*allPhaseKeys.length) > window.innerHeight){
+    top=Math.max(10,rect.top-(60+30*allPhaseKeys.length)-6);
+  }
+  popover.style.top=top+'px';
+  popover.style.left=left+'px';
+
+  popover.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid var(--border);padding-bottom:6px">'+
+    '<div style="font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.05em"><i class="ti ti-route" style="font-size:13px"></i> Historique '+esc(d.num||'')+' ('+hist.length+'/'+allPhaseKeys.length+')</div>'+
+    '<button onclick="document.getElementById(\'phase-history-popover\').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 4px">✕</button>'+
+    '</div>'+
+    rows+
+    '<div style="font-size:9px;color:var(--muted-soft);margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-style:italic">'+
+    '▶ phase actuelle · ✓ traversée · ○ à venir · ~ date estimée · 🚫 non pertinente'+
+    '</div>';
+
+  document.body.appendChild(popover);
+
+  // Fermeture au click extérieur
+  setTimeout(function(){
+    var closeOnOutside=function(ev){
+      if(!popover.contains(ev.target)){
+        popover.remove();
+        document.removeEventListener('click',closeOnOutside);
+      }
+    };
+    document.addEventListener('click',closeOnOutside);
+  },10);
 }
 
 // =============================================================================
@@ -10280,6 +10576,20 @@ function openDV(id){
       gv('dv-ref-emerson',d.refEmerson||'');gv('dv-ref-emerson-date',d.refEmersonDate||'');
       gv('dv-ref-act',d.refACT||'');gv('dv-ref-act-date',d.refACTDate||'');
       gv('dv-po-calinstrum',d.poCalinstrum||'');gv('dv-po-calinstrum-date',d.poCalinstrumDate||'');
+      // Initialise l'historique éditable de phases — lazy migration si manquant
+      if(Array.isArray(d.phaseHistory) && d.phaseHistory.length>0){
+        _dvPhaseHistoryEdit=JSON.parse(JSON.stringify(d.phaseHistory));
+      } else {
+        // Migration intelligente : reconstruction depuis bcClientSLNDate, dates BC liés, factures
+        _dvPhaseHistoryEdit=_buildPhaseHistory(d);
+      }
+      // Sync phase courante avec dernière entrée si historique présent
+      if(_dvPhaseHistoryEdit.length>0){
+        var lastE=_dvPhaseHistoryEdit[_dvPhaseHistoryEdit.length-1];
+        gv('dv-phase',lastE.phase||'');
+        gv('dv-phase-date',lastE.date||'');
+      }
+      setTimeout(function(){renderPhaseHistoryTable();_refreshPhaseNextBtn();},0);
       var elDvCond=document.getElementById('dv-conditionsCommerciales');
       if(elDvCond)elDvCond.value=d.conditionsCommerciales||'';
       var elDvRem=document.getElementById('dv-remarques');
@@ -10332,6 +10642,8 @@ function openDV(id){
     gv('dv-ref-emerson','');gv('dv-ref-emerson-date','');
     gv('dv-ref-act','');gv('dv-ref-act-date','');
     gv('dv-po-calinstrum','');gv('dv-po-calinstrum-date','');
+    _dvPhaseHistoryEdit=[];
+    setTimeout(function(){renderPhaseHistoryTable();_refreshPhaseNextBtn();},0);
     var elDvCondNew=document.getElementById('dv-conditionsCommerciales');
     if(elDvCondNew)elDvCondNew.value='';
     var elDvRemNew=document.getElementById('dv-remarques');
@@ -11152,8 +11464,9 @@ function getDV(){
     remarques:(document.getElementById('dv-remarques')?document.getElementById('dv-remarques').value:''),
     bcClientSLN:gvg('dv-bc-client-sln'),bcClientSLNDate:gvg('dv-bc-client-sln-date'),
     cadreRef:gvg('dv-cadre-ref'),cadreStart:gvg('dv-cadre-start'),
-    // Traçabilité (8 champs)
+    // Traçabilité (8 champs + historique)
     phase:gvg('dv-phase'),phaseDate:gvg('dv-phase-date'),
+    phaseHistory:JSON.parse(JSON.stringify(_dvPhaseHistoryEdit||[])),
     refEmerson:gvg('dv-ref-emerson'),refEmersonDate:gvg('dv-ref-emerson-date'),
     refACT:gvg('dv-ref-act'),refACTDate:gvg('dv-ref-act-date'),
     poCalinstrum:gvg('dv-po-calinstrum'),poCalinstrumDate:gvg('dv-po-calinstrum-date'),
@@ -11438,12 +11751,172 @@ function onDVPhaseChange(){
   if(!phase){
     // Phase vidée → vider la date associée
     dateInput.value='';
+    _refreshPhaseNextBtn();
     return;
   }
   // Phase sélectionnée et date vide → mettre la date du jour
   if(!dateInput.value){
     dateInput.value=(typeof td==='function')?td():new Date().toISOString().substring(0,10);
   }
+  _refreshPhaseNextBtn();
+}
+
+// =============================================================================
+// État éditable de l'historique de phases (pour la modale Devis courante)
+// =============================================================================
+// Stocke la copie locale de phaseHistory pendant l'édition. Synchronisée avec
+// d.phaseHistory au moment du save (via getDV).
+// =============================================================================
+var _dvPhaseHistoryEdit=[];
+
+function _refreshPhaseNextBtn(){
+  var btn=document.getElementById('dv-phase-next-btn');
+  if(!btn) return;
+  var devisType=gvg('dv-type')||'Fourniture';
+  // Construit un devis virtuel à partir de _dvPhaseHistoryEdit pour calculer la prochaine
+  var virtualD={type:devisType,phaseHistory:_dvPhaseHistoryEdit.slice()};
+  var nextKey=_getNextApplicablePhase(virtualD);
+  if(nextKey && PHASES_META[nextKey]){
+    btn.disabled=false;
+    btn.innerHTML='→ Avancer à : '+esc(PHASES_META[nextKey].label);
+    btn.title='Ajoute "'+PHASES_META[nextKey].label+'" à l\'historique avec la date du jour';
+  } else {
+    btn.disabled=true;
+    btn.innerHTML='✓ Phase finale atteinte';
+    btn.title='Toutes les phases applicables ont été traversées';
+  }
+}
+
+// Avancer à la phase suivante applicable au type
+function advanceToNextPhase(){
+  var devisType=gvg('dv-type')||'Fourniture';
+  var virtualD={type:devisType,phaseHistory:_dvPhaseHistoryEdit.slice()};
+  var nextKey=_getNextApplicablePhase(virtualD);
+  if(!nextKey){alert('Toutes les phases applicables ont été traversées.');return;}
+  var today=(typeof td==='function')?td():new Date().toISOString().substring(0,10);
+  _dvPhaseHistoryEdit.push({phase:nextKey,date:today,_reconstructed:false});
+  // Sync avec les inputs phase courante
+  gv('dv-phase',nextKey);
+  gv('dv-phase-date',today);
+  renderPhaseHistoryTable();
+  _refreshPhaseNextBtn();
+}
+
+// Annuler la dernière entrée de l'historique
+function undoLastPhase(){
+  if(_dvPhaseHistoryEdit.length===0){alert('Historique vide.');return;}
+  if(!confirm('Retirer la dernière entrée "'+(PHASES_META[_dvPhaseHistoryEdit[_dvPhaseHistoryEdit.length-1].phase]?PHASES_META[_dvPhaseHistoryEdit[_dvPhaseHistoryEdit.length-1].phase].label:'?')+'" ?')) return;
+  _dvPhaseHistoryEdit.pop();
+  // Sync avec les inputs phase courante
+  if(_dvPhaseHistoryEdit.length>0){
+    var last=_dvPhaseHistoryEdit[_dvPhaseHistoryEdit.length-1];
+    gv('dv-phase',last.phase||'');
+    gv('dv-phase-date',last.date||'');
+  } else {
+    gv('dv-phase','');gv('dv-phase-date','');
+  }
+  renderPhaseHistoryTable();
+  _refreshPhaseNextBtn();
+}
+
+// Ajouter une entrée libre via dropdown + date
+function openAddPhaseDialog(){
+  var keys=Object.keys(PHASES_META);
+  var devisType=gvg('dv-type')||'Fourniture';
+  var optsHtml='';
+  keys.forEach(function(k){
+    var m=PHASES_META[k];
+    var applicable=_isPhaseApplicable(k,devisType);
+    optsHtml+='<option value="'+k+'"'+(applicable?'':' style="color:var(--muted-soft)"')+'>'+m.idx+'. '+esc(m.label)+(applicable?'':' (non pertinent)')+'</option>';
+  });
+  var today=(typeof td==='function')?td():new Date().toISOString().substring(0,10);
+  // Mini-modale prompt simple via prompt natif (cas rare, simple à utiliser)
+  // Variante : on peut créer une vraie sous-modale, mais prompt suffit pour cet usage exceptionnel
+  var phaseKey=prompt('Ajouter une phase à l\'historique\n\nClé phase (envoye / bc_recu / po_emerson / confirm_emerson / production / expedie / receptionne / facture) :','envoye');
+  if(!phaseKey || !PHASES_META[phaseKey]) return;
+  var date=prompt('Date de cette phase (YYYY-MM-DD) :',today);
+  if(!date) return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){alert('Format invalide. Utilisez YYYY-MM-DD.');return;}
+  _dvPhaseHistoryEdit.push({phase:phaseKey,date:date,_reconstructed:false});
+  // Re-trier par idx PHASES_META puis date
+  _dvPhaseHistoryEdit.sort(function(a,b){
+    var ia=PHASES_META[a.phase]?PHASES_META[a.phase].idx:99;
+    var ib=PHASES_META[b.phase]?PHASES_META[b.phase].idx:99;
+    if(ia!==ib) return ia-ib;
+    return (a.date||'').localeCompare(b.date||'');
+  });
+  // Sync inputs
+  if(_dvPhaseHistoryEdit.length>0){
+    var last=_dvPhaseHistoryEdit[_dvPhaseHistoryEdit.length-1];
+    gv('dv-phase',last.phase);
+    gv('dv-phase-date',last.date||'');
+  }
+  renderPhaseHistoryTable();
+  _refreshPhaseNextBtn();
+}
+
+// Supprimer une entrée à l'index donné
+function _removePhaseAt(idx){
+  if(idx<0 || idx>=_dvPhaseHistoryEdit.length) return;
+  if(!confirm('Supprimer cette entrée ?')) return;
+  _dvPhaseHistoryEdit.splice(idx,1);
+  // Sync inputs courante
+  if(_dvPhaseHistoryEdit.length>0){
+    var last=_dvPhaseHistoryEdit[_dvPhaseHistoryEdit.length-1];
+    gv('dv-phase',last.phase);
+    gv('dv-phase-date',last.date||'');
+  } else {
+    gv('dv-phase','');gv('dv-phase-date','');
+  }
+  renderPhaseHistoryTable();
+  _refreshPhaseNextBtn();
+}
+
+// Modifier la date d'une entrée à l'index donné (datepicker inline)
+function _onPhaseDateChange(idx,newDate){
+  if(idx<0 || idx>=_dvPhaseHistoryEdit.length) return;
+  _dvPhaseHistoryEdit[idx].date=newDate;
+  _dvPhaseHistoryEdit[idx]._reconstructed=false; // user-corrected
+  // Si c'est la dernière, sync avec phase actuelle
+  if(idx===_dvPhaseHistoryEdit.length-1){
+    gv('dv-phase-date',newDate);
+  }
+  // Pas de re-render complet (datepicker en cours), juste la marque
+}
+
+// Render du tableau historique dans la modale
+function renderPhaseHistoryTable(){
+  var container=document.getElementById('dv-phase-history-table');
+  var counter=document.getElementById('dv-phase-history-count');
+  if(!container) return;
+  var hist=_dvPhaseHistoryEdit||[];
+  if(counter) counter.textContent='('+hist.length+')';
+  if(hist.length===0){
+    container.innerHTML='<div style="text-align:center;color:var(--muted-soft);padding:8px;font-style:italic;font-size:11px">Aucune phase enregistrée. Utilisez "→ Avancer" pour commencer.</div>';
+    return;
+  }
+  var devisType=gvg('dv-type')||'Fourniture';
+  var html='';
+  hist.forEach(function(e,i){
+    var meta=PHASES_META[e.phase];
+    if(!meta) return;
+    var isLast=(i===hist.length-1);
+    var applicable=_isPhaseApplicable(e.phase,devisType);
+    var bg=isLast?'rgba(124,58,237,0.10)':'transparent';
+    var bdrStyle=e._reconstructed?'dashed':'solid';
+    var bdrColor=isLast?meta.color+'66':'rgba(255,255,255,0.06)';
+    var marker=isLast?'<span style="color:'+meta.color+';font-weight:700">▶</span>':'<span style="color:'+meta.color+'">✓</span>';
+    var typeWarn=!applicable?'<span style="margin-left:4px;font-size:9px" title="Phase non pertinente pour type '+esc(devisType)+'">🚫</span>':'';
+    var reconWarn=e._reconstructed?'<span title="Date estimée par reconstruction" style="color:#a78bfa;font-size:9px;margin-left:4px">~est~</span>':'';
+    html+='<div style="display:grid;grid-template-columns:18px 18px 1fr 130px 24px;gap:6px;padding:5px 8px;align-items:center;background:'+bg+';border-radius:4px;border:1px '+bdrStyle+' '+bdrColor+';margin-bottom:3px">'+
+      '<span style="text-align:center">'+marker+'</span>'+
+      '<i class="ti ti-'+meta.icon+'" style="font-size:13px;color:'+meta.color+'"></i>'+
+      '<span style="font-size:11px;color:var(--text)">'+meta.idx+'. '+esc(meta.label)+typeWarn+reconWarn+'</span>'+
+      '<input type="date" value="'+esc(e.date||'')+'" onchange="_onPhaseDateChange('+i+',this.value)" style="font-size:10px;padding:2px 4px;background:rgba(0,0,0,0.2);border:0.5px solid var(--border);border-radius:3px;color:var(--text);font-family:JetBrains Mono,monospace;width:120px">'+
+      '<button type="button" onclick="_removePhaseAt('+i+')" title="Supprimer cette entrée" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:0">🗑</button>'+
+      '</div>';
+  });
+  container.innerHTML=html;
 }
 
 // === GÉNÉRATION AUTOMATIQUE DE LA FACTURE DEPUIS UN DEVIS ACCEPTÉ ===
@@ -20503,17 +20976,23 @@ function saveBC(){
       // Toujours rafraîchir : si l'utilisateur a modifié le BC (date ou num), on propage.
       dvLink.poCalinstrum=b.num||dvLink.poCalinstrum||'';
       dvLink.poCalinstrumDate=b.date||dvLink.poCalinstrumDate||'';
-      // Auto-avancer la phase si elle est en amont du PO Emerson
-      if(typeof PHASES_META!=='undefined' && PHASES_META[dvLink.phase]){
-        var currentIdx=PHASES_META[dvLink.phase].idx;
-        if(currentIdx<3){ // < "PO Emerson envoyé"
-          dvLink.phase='po_emerson';
-          dvLink.phaseDate=b.date||((typeof td==='function')?td():new Date().toISOString().substring(0,10));
-        }
-      } else if(!dvLink.phase){
-        // Aucune phase → on initialise à "PO Emerson envoyé"
-        dvLink.phase='po_emerson';
-        dvLink.phaseDate=b.date||((typeof td==='function')?td():new Date().toISOString().substring(0,10));
+      // Ajouter une entrée au phaseHistory si la phase 'po_emerson' n'y figure pas déjà
+      if(!Array.isArray(dvLink.phaseHistory)) dvLink.phaseHistory=[];
+      var hasPoEmerson=dvLink.phaseHistory.some(function(e){return e.phase==='po_emerson';});
+      if(!hasPoEmerson){
+        var dt=b.date||((typeof td==='function')?td():new Date().toISOString().substring(0,10));
+        dvLink.phaseHistory.push({phase:'po_emerson',date:dt,_reconstructed:false});
+        // Re-trier par idx
+        dvLink.phaseHistory.sort(function(a,c){
+          var ia=PHASES_META[a.phase]?PHASES_META[a.phase].idx:99;
+          var ic=PHASES_META[c.phase]?PHASES_META[c.phase].idx:99;
+          if(ia!==ic) return ia-ic;
+          return (a.date||'').localeCompare(c.date||'');
+        });
+        // Sync legacy
+        var lastEntry=dvLink.phaseHistory[dvLink.phaseHistory.length-1];
+        dvLink.phase=lastEntry.phase;
+        dvLink.phaseDate=lastEntry.date;
       }
     }
   }
