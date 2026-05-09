@@ -8545,8 +8545,11 @@ function _togglePhaseHistory(event,devisId){
   // Ferme tout popover existant
   var existing=document.getElementById('phase-history-popover');
   if(existing){
+    var sameDevis=existing.dataset.devisId===String(devisId);
     existing.remove();
-    if(existing.dataset.devisId===String(devisId)){
+    var bd=document.getElementById('phase-history-backdrop');
+    if(bd)bd.remove();
+    if(sameDevis){
       // Re-click sur la même pill = juste fermer
       return;
     }
@@ -8562,8 +8565,11 @@ function _togglePhaseHistory(event,devisId){
   hist.forEach(function(e){traversedMap[e.phase]=e;});
   var lastPhase=hist.length>0?hist[hist.length-1].phase:(d.phase||null);
   var lastIdx=lastPhase&&PHASES_META[lastPhase]?PHASES_META[lastPhase].idx:0;
+  var nbApplicable=allPhaseKeys.filter(function(k){return _isPhaseApplicable(k,d.type);}).length;
+  var nbDone=hist.filter(function(e){return _isPhaseApplicable(e.phase,d.type);}).length;
+  var pctProgress=nbApplicable>0?Math.round((nbDone/nbApplicable)*100):0;
 
-  // Build HTML
+  // === Build HTML rows : timeline verticale ===
   var rows='';
   allPhaseKeys.forEach(function(k,i){
     var meta=PHASES_META[k];
@@ -8573,71 +8579,180 @@ function _togglePhaseHistory(event,devisId){
     var isCurrent=(k===lastPhase);
     var isPast=entry && !isCurrent;
     var isFuture=!entry;
-    var opacity=1;
-    var marker='';
-    if(!applicable) opacity=0.25;
-    else if(isFuture) opacity=0.35;
-    else if(isPast) opacity=0.65;
-    var bg='transparent';
-    var bdrStyle='solid';
-    if(isCurrent) bg='rgba(124,58,237,0.12)';
-    if(entry && entry._reconstructed) bdrStyle='dashed';
-    if(isCurrent) marker='<span style="color:'+meta.color+';font-weight:700;font-size:11px">▶</span>';
-    else if(isPast) marker='<span style="color:'+meta.color+';font-size:11px">✓</span>';
-    else marker='<span style="color:var(--muted-soft);font-size:11px">○</span>';
-    var dateDisp=entry?_fmtDateShort(entry.date):'—';
-    var dateFull=entry?entry.date:'';
-    var typeWarn=!applicable?'<span style="color:var(--muted-soft);font-size:9px;margin-left:5px" title="Phase non pertinente pour type '+esc(d.type||'')+'">🚫</span>':'';
-    var reconWarn=(entry&&entry._reconstructed)?'<span style="font-size:9px;margin-left:4px;color:#a78bfa" title="Date estimée par reconstruction (à vérifier)">~</span>':'';
+    var isLast=(i===allPhaseKeys.length-1);
 
-    rows+='<div style="display:grid;grid-template-columns:18px 18px 1fr 70px;gap:6px;padding:5px 8px;align-items:center;background:'+bg+';border-radius:4px;opacity:'+opacity+';border:1px '+bdrStyle+' '+(isCurrent?meta.color+'66':'transparent')+'">'+
-      '<span style="text-align:center">'+marker+'</span>'+
-      '<i class="ti ti-'+meta.icon+'" style="font-size:13px;color:'+meta.color+'"></i>'+
-      '<span style="font-size:11px;color:var(--text)">'+idx+'. '+esc(meta.label)+typeWarn+'</span>'+
-      '<span style="font-size:10px;color:var(--muted);font-family:JetBrains Mono,monospace;text-align:right" title="'+esc(dateFull)+'">'+esc(dateDisp)+reconWarn+'</span>'+
-      '</div>';
+    // ========= Style line/dot =========
+    // Couleur du dot : pill color si traversée/actuelle, gris sinon
+    var dotColor=(entry && applicable)?meta.color:'rgba(255,255,255,0.18)';
+    var dotInner=isCurrent?meta.color:(entry?meta.color:'transparent');
+    var dotBdr=isCurrent?meta.color:(entry?meta.color:'rgba(255,255,255,0.22)');
+    var dotIcon='';
+    if(isCurrent) dotIcon='<i class="ti ti-player-play-filled" style="font-size:10px;color:#fff"></i>';
+    else if(isPast && applicable) dotIcon='<i class="ti ti-check" style="font-size:11px;color:#fff;font-weight:bold"></i>';
+    else if(!applicable && entry) dotIcon='<span style="font-size:10px;color:#fff">−</span>';
+
+    // Ligne verticale qui relie les dots (sauf dernière ligne)
+    var connectorColor=(entry && isPast)?meta.color+'88':'rgba(255,255,255,0.12)';
+    var connector=isLast?'':'<div style="position:absolute;left:13px;top:28px;bottom:-12px;width:2px;background:'+connectorColor+'"></div>';
+
+    // ========= Style row =========
+    var rowOpacity=1;
+    var rowBg='transparent';
+    var rowBdr='1px solid transparent';
+    if(isCurrent){
+      rowBg='linear-gradient(90deg,'+meta.color+'18 0%,'+meta.color+'05 100%)';
+      rowBdr='1px solid '+meta.color+'66';
+    } else if(!applicable){
+      rowOpacity=0.4;
+    } else if(isFuture){
+      rowOpacity=0.5;
+    }
+
+    // ========= Texte de la ligne =========
+    var labelStyle='color:#fff;font-weight:'+(isCurrent?'600':'500')+';font-size:12px';
+    if(isFuture) labelStyle='color:rgba(255,255,255,0.65);font-weight:500;font-size:12px';
+    if(!applicable) labelStyle='color:rgba(255,255,255,0.4);font-weight:500;font-size:12px;text-decoration:line-through';
+
+    var dateDisp=entry?_fmtDateShort(entry.date):'';
+    var dateFull=entry?entry.date:'';
+    var dateColor=isCurrent?meta.color:(entry?'rgba(255,255,255,0.7)':'rgba(255,255,255,0.3)');
+    var dateBg=isCurrent?meta.color+'22':(entry?'rgba(255,255,255,0.05)':'transparent');
+    var dateBdr=isCurrent?meta.color+'55':'transparent';
+    var dateStyleStr='font-size:10.5px;color:'+dateColor+';font-family:JetBrains Mono,monospace;text-align:right;'+
+      'padding:2px 8px;background:'+dateBg+';border:1px solid '+dateBdr+';border-radius:4px;min-width:60px';
+
+    // Estimation indicator
+    var reconBadge='';
+    if(entry && entry._reconstructed){
+      reconBadge='<span title="Date estimée par reconstruction depuis les données existantes — à vérifier" '+
+        'style="display:inline-block;margin-left:6px;padding:1px 5px;background:rgba(167,139,250,0.18);'+
+        'color:#c4b5fd;font-size:9px;border-radius:3px;font-weight:600;letter-spacing:0.05em">EST.</span>';
+    }
+    var typeWarn=!applicable?'<span style="margin-left:6px;font-size:11px;opacity:0.6" title="Phase non pertinente pour type '+esc(d.type||'')+'">🚫</span>':'';
+
+    rows+='<div class="phase-row" style="position:relative;display:grid;grid-template-columns:30px 1fr auto;'+
+      'gap:10px;padding:8px 14px 8px 6px;align-items:center;background:'+rowBg+';border-radius:6px;'+
+      'border:'+rowBdr+';opacity:'+rowOpacity+';margin-bottom:2px">'+
+      // Dot + connector
+      '<div style="position:relative;width:30px;height:28px;display:flex;align-items:center;justify-content:center">'+
+        connector+
+        '<div style="position:relative;z-index:2;width:22px;height:22px;border-radius:50%;background:'+dotInner+';'+
+        'border:2px solid '+dotBdr+';display:flex;align-items:center;justify-content:center;'+
+        'box-shadow:'+(isCurrent?'0 0 0 4px '+meta.color+'33':'none')+'">'+
+        dotIcon+
+        '</div>'+
+      '</div>'+
+      // Label avec icone + numéro + label
+      '<div style="display:flex;align-items:center;gap:6px;min-width:0">'+
+        '<i class="ti ti-'+meta.icon+'" style="font-size:14px;color:'+meta.color+';opacity:'+(applicable?1:0.3)+';flex-shrink:0"></i>'+
+        '<span style="'+labelStyle+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
+          '<span style="color:rgba(255,255,255,0.4);font-size:10px;margin-right:4px">'+idx+'</span>'+
+          esc(meta.label)+typeWarn+reconBadge+
+        '</span>'+
+      '</div>'+
+      // Date pill
+      '<span title="'+esc(dateFull||'Non renseigné')+'" style="'+dateStyleStr+'">'+
+        (dateDisp||'<span style="opacity:0.4">—</span>')+
+      '</span>'+
+    '</div>';
   });
 
+  // === Build popover ===
   var popover=document.createElement('div');
   popover.id='phase-history-popover';
   popover.dataset.devisId=String(devisId);
-  popover.style.cssText='position:fixed;z-index:99999;background:var(--card);border:1px solid var(--border);border-radius:8px;'+
-    'box-shadow:0 8px 24px rgba(0,0,0,0.45);padding:10px 12px;min-width:280px;max-width:340px';
+  // FOND OPAQUE FORT pour lisibilité, indépendant des CSS variables
+  popover.style.cssText='position:fixed;z-index:100000;'+
+    'background:#161922;'+ // Fond opaque sombre constant
+    'border:1px solid rgba(124,58,237,0.4);'+
+    'border-radius:10px;'+
+    'box-shadow:0 12px 40px rgba(0,0,0,0.7),0 0 0 1px rgba(255,255,255,0.04);'+
+    'padding:0;width:380px;max-width:calc(100vw - 24px);'+
+    'font-family:Inter,system-ui,sans-serif';
 
-  // Position à côté de la pill cliquée
+  var typeBadge=d.type?'<span style="margin-left:8px;padding:2px 6px;background:rgba(124,58,237,0.15);color:#c4b5fd;font-size:9px;border-radius:3px;font-weight:600;letter-spacing:0.05em">'+esc((d.type||'').toUpperCase())+'</span>':'';
+
+  popover.innerHTML=
+    // === HEADER ===
+    '<div style="padding:12px 16px;background:linear-gradient(135deg,rgba(124,58,237,0.18) 0%,rgba(124,58,237,0.06) 100%);border-bottom:1px solid rgba(124,58,237,0.25);border-radius:10px 10px 0 0">'+
+      '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px;margin-bottom:8px">'+
+        '<div>'+
+          '<div style="font-size:9.5px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;display:flex;align-items:center;gap:5px">'+
+            '<i class="ti ti-route" style="font-size:11px"></i> Cycle de vie'+
+          '</div>'+
+          '<div style="font-size:13px;font-weight:600;color:#fff;font-family:JetBrains Mono,monospace">'+esc(d.num||'?')+typeBadge+'</div>'+
+        '</div>'+
+        '<button onclick="(function(){var p=document.getElementById(\'phase-history-popover\');if(p)p.remove();var b=document.getElementById(\'phase-history-backdrop\');if(b)b.remove();})()" '+
+          'style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.6);'+
+          'cursor:pointer;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;'+
+          'font-size:13px;flex-shrink:0;line-height:1" title="Fermer (Échap)">✕</button>'+
+      '</div>'+
+      // Progress bar
+      '<div style="display:flex;align-items:center;gap:10px;margin-top:6px">'+
+        '<div style="flex:1;height:5px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden">'+
+          '<div style="width:'+pctProgress+'%;height:100%;background:linear-gradient(90deg,#a78bfa 0%,#7c3aed 100%);transition:width .3s"></div>'+
+        '</div>'+
+        '<span style="font-size:10.5px;color:rgba(255,255,255,0.7);font-family:JetBrains Mono,monospace;font-weight:600;white-space:nowrap">'+
+          nbDone+'<span style="opacity:0.4">/</span>'+nbApplicable+
+          '<span style="margin-left:4px;color:#a78bfa">·</span> '+pctProgress+'%'+
+        '</span>'+
+      '</div>'+
+    '</div>'+
+    // === BODY (timeline) ===
+    '<div style="padding:10px 8px;max-height:60vh;overflow-y:auto">'+
+      rows+
+    '</div>'+
+    // === FOOTER LÉGENDE ===
+    '<div style="padding:8px 14px;border-top:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.15);'+
+      'border-radius:0 0 10px 10px;font-size:9.5px;color:rgba(255,255,255,0.45);'+
+      'display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-family:Inter,system-ui">'+
+      '<span><span style="color:#a78bfa">▶</span> actuelle</span>'+
+      '<span><span style="color:#10b981">✓</span> traversée</span>'+
+      '<span><span style="opacity:0.5">○</span> à venir</span>'+
+      '<span><span style="background:rgba(167,139,250,0.18);color:#c4b5fd;padding:0 3px;border-radius:2px;font-weight:600">EST.</span> estimée</span>'+
+      '<span>🚫 non pertinente</span>'+
+    '</div>';
+
+  // === Position ===
   var rect=event.target.closest('.traca-phase-pill').getBoundingClientRect();
-  var top=rect.bottom+6;
+  var popoverHeight=Math.min(window.innerHeight*0.6+150,560);
+  var popoverWidth=380;
+  var top=rect.bottom+8;
   var left=rect.left;
-  // Ajustement si déborde à droite
-  if(left+340 > window.innerWidth){left=window.innerWidth-350;}
-  // Ajustement si déborde en bas
-  if(top+(60+30*allPhaseKeys.length) > window.innerHeight){
-    top=Math.max(10,rect.top-(60+30*allPhaseKeys.length)-6);
+  // Ajustement débordement
+  if(left+popoverWidth>window.innerWidth-12) left=window.innerWidth-popoverWidth-12;
+  if(left<12) left=12;
+  if(top+popoverHeight>window.innerHeight-12){
+    top=Math.max(12,rect.top-popoverHeight-8);
   }
   popover.style.top=top+'px';
   popover.style.left=left+'px';
 
-  popover.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid var(--border);padding-bottom:6px">'+
-    '<div style="font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.05em"><i class="ti ti-route" style="font-size:13px"></i> Historique '+esc(d.num||'')+' ('+hist.length+'/'+allPhaseKeys.length+')</div>'+
-    '<button onclick="document.getElementById(\'phase-history-popover\').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 4px">✕</button>'+
-    '</div>'+
-    rows+
-    '<div style="font-size:9px;color:var(--muted-soft);margin-top:8px;padding-top:6px;border-top:1px solid var(--border);font-style:italic">'+
-    '▶ phase actuelle · ✓ traversée · ○ à venir · ~ date estimée · 🚫 non pertinente'+
-    '</div>';
+  // === Backdrop semi-transparent pour éviter confusion visuelle ===
+  var backdrop=document.createElement('div');
+  backdrop.id='phase-history-backdrop';
+  backdrop.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;'+
+    'background:rgba(0,0,0,0.35);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)';
+  backdrop.onclick=function(){
+    backdrop.remove();
+    var p=document.getElementById('phase-history-popover');
+    if(p)p.remove();
+  };
 
+  document.body.appendChild(backdrop);
   document.body.appendChild(popover);
 
-  // Fermeture au click extérieur
-  setTimeout(function(){
-    var closeOnOutside=function(ev){
-      if(!popover.contains(ev.target)){
-        popover.remove();
-        document.removeEventListener('click',closeOnOutside);
-      }
-    };
-    document.addEventListener('click',closeOnOutside);
-  },10);
+  // Échap pour fermer
+  var escHandler=function(ev){
+    if(ev.key==='Escape'){
+      var p=document.getElementById('phase-history-popover');
+      if(p)p.remove();
+      var b=document.getElementById('phase-history-backdrop');
+      if(b)b.remove();
+      document.removeEventListener('keydown',escHandler);
+    }
+  };
+  document.addEventListener('keydown',escHandler);
 }
 
 // =============================================================================
