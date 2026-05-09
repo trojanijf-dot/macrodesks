@@ -935,7 +935,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <span id="topSubtitle" class="no-pm-blur" style="font-size:11px;color:var(--muted-soft);font-weight:400;display:none"></span>
   </div>
   <div class="no-print" style="display:flex;gap:8px;align-items:center">
-    <div id="alert-pill" class="pill pill-red" style="display:none"><div class="dot"></div><span id="alert-count">0 alertes</span></div>
+    <div id="alert-pill" class="pill pill-red" style="display:none;cursor:pointer;user-select:none" onclick="goToAlerts()" title="Cliquer pour voir les factures en retard ou à échéance proche"><div class="dot"></div><span id="alert-count">0 alertes</span></div>
     <button class="btn btn-ghost btn-sm" id="globalUndoBtn" onclick="doUndo()" disabled style="opacity:0.4;color:#fcd34d;border-color:rgba(252,211,77,0.3)" title="Aucune action à annuler"><span class="ico-classic">↶</span><i class="ti ti-arrow-back-up ico-pro" style="font-size:13px"></i> Annuler <span id="globalUndoCount" style="font-size:9px;color:var(--muted)"></span></button>
     <div id="autoSaveIndicator" style="display:flex;align-items:center;gap:5px;padding:3px 9px;background:rgba(45,212,191,0.1);border:1px solid rgba(45,212,191,0.3);border-radius:12px;font-size:10px;color:var(--muted)" title="Indicateur de sauvegarde automatique">
       <span id="autoSaveDot" style="width:7px;height:7px;border-radius:50%;background:var(--teal);display:inline-block"></span>
@@ -3835,6 +3835,40 @@ function navigateToFA(faId){
 }
 
 // =============================================================================
+// goToAlerts — déclenché au clic sur le pill "X alertes" de la topbar.
+// Bascule sur le Dashboard et scrolle jusqu'à la card "Alertes facturation"
+// avec un highlight bref pour attirer l'œil.
+// =============================================================================
+function goToAlerts(){
+  if(typeof nav==='function') nav('dashboard');
+  setTimeout(function(){
+    // Cherche la card Alertes (mode pro = #dashAlertsCardPro, mode classique = .ctitle)
+    var target=document.getElementById('dashAlertsCardPro');
+    if(!target){
+      var titles=document.querySelectorAll('.ctitle');
+      for(var i=0;i<titles.length;i++){
+        if((titles[i].textContent||'').toLowerCase().indexOf('alertes')>=0){
+          target=titles[i].closest('.card')||titles[i].parentElement;
+          break;
+        }
+      }
+    }
+    if(!target) return;
+    target.scrollIntoView({behavior:'smooth',block:'center'});
+    // Highlight bref (1.8s) avec outline rouge subtil
+    target.style.transition='box-shadow .4s ease,outline .4s ease';
+    target.style.outline='2px solid rgba(240,149,149,0.65)';
+    target.style.outlineOffset='2px';
+    target.style.boxShadow='0 0 24px rgba(240,149,149,0.25)';
+    setTimeout(function(){
+      target.style.outline='';
+      target.style.outlineOffset='';
+      target.style.boxShadow='';
+    },1800);
+  },80);
+}
+
+// =============================================================================
 // AUTO-DÉTECTION DATE DE RÉCEPTION BC CLIENT
 // =============================================================================
 // Tente d'extraire automatiquement la date à laquelle CALINSTRUM a reçu le BC
@@ -4815,9 +4849,12 @@ function renderSuviKPIs(){
     }
   }
 
-  var lateCount=emises.filter(function(i){return getStatus(i)==='late';}).length;
-  var soonCount=emises.filter(function(i){var d=getDaysLeft(i);return getStatus(i)!=='paid'&&d!==null&&d>=0&&d<=7;}).length;
-  var tot=lateCount+soonCount;
+  // Pill "X alertes" du topbar : on aligne sur getAlertData() qui inclut à la
+  // fois les factures Suivi (invoices) ET les factures GRC (DB.factures).
+  // Avant : seules les invoices (Suivi) étaient comptées → écart possible avec
+  // la card "Alertes facturation" du Dashboard. Désormais source unique.
+  var allAlertsForPill=(typeof getAlertData==='function')?getAlertData():[];
+  var tot=allAlertsForPill.length;
   var ap=document.getElementById('alert-pill');
   if(ap){if(tot>0){ap.style.display='inline-flex';sv('alert-count',tot+' alerte'+(tot>1?'s':''));}else{ap.style.display='none';}}
 
@@ -7768,20 +7805,8 @@ function rDashPro(){
   // Devis récents (5 derniers)
   var recentDv=dv.slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,5);
 
-  // Alertes (factures en retard)
-  var alerts=[];
-  var today=new Date();
-  faFy.forEach(function(f){
-    var st=(f.status||f.statut||'').toLowerCase();
-    if(st.indexOf('payée')>=0||st==='paid')return;
-    if(!f.dateEcheance)return;
-    var ech=new Date(f.dateEcheance);
-    var diff=Math.floor((today-ech)/(1000*60*60*24));
-    if(diff>0) alerts.push({f:f, days:diff, status:'late'});
-    else if(diff>=-7) alerts.push({f:f, days:-diff, status:'soon'});
-  });
-  alerts.sort(function(a,b){return b.days-a.days;});
-  alerts=alerts.slice(0,5);
+  // Note : les alertes facturation sont calculées plus bas via getAlertData()
+  // pour assurer la cohérence avec le pill "X alertes" du topbar.
 
   // --- HTML ---
   function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
@@ -7848,7 +7873,10 @@ function rDashPro(){
     '</div>';
   // KPI À recouvrer (sparkline interactive)
   var restCum=faCum.map(function(v,i){return Math.max(0,v-encCum[i]);});
-  var nbLate=alerts.filter(function(a){return a.status==='late';}).length;
+  // nbLate : on s'aligne sur getAlertData (= source de vérité partagée avec
+  // le pill du topbar et la card "Alertes facturation").
+  var allAlertsForKpi=(typeof getAlertData==='function')?getAlertData():[];
+  var nbLate=allAlertsForKpi.filter(function(a){return a.type==='late';}).length;
   var sparkRest=(typeof _interactiveSparkline==='function')?
     _interactiveSparkline(restCum,'#f09595',restMonthly,function(idx,monthlyV,cumV,months){
       return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
@@ -7912,26 +7940,67 @@ function rDashPro(){
   }
   html+='</div>';
 
-  // Alertes
-  html+='<div class="card-pro">';
-  html+='<div class="card-pro-title"><i class="ti ti-bell"></i>Alertes facturation</div>';
-  if(alerts.length===0){
+  // Alertes — utilise getAlertData() pour être cohérent avec le pill "X alertes" du topbar.
+  // Inclut les factures Suivi (invoices) ET les factures GRC (DB.factures), toutes années.
+  // Chaque ligne est cliquable et ouvre la facture concernée si possible.
+  html+='<div class="card-pro" id="dashAlertsCardPro">';
+  html+='<div class="card-pro-title"><i class="ti ti-bell"></i>Alertes facturation';
+  // Le compteur dans le titre = même logique que le pill du topbar
+  var allAlerts=(typeof getAlertData==='function')?getAlertData():[];
+  var lateA=allAlerts.filter(function(a){return a.type==='late';});
+  var soonA=allAlerts.filter(function(a){return a.type==='soon'||a.type==='today';});
+  var totA=lateA.length+soonA.length;
+  if(totA>0){
+    html+=' <span style="color:var(--red);font-size:11px;font-weight:500;letter-spacing:0.04em;background:rgba(240,149,149,0.1);padding:2px 7px;border-radius:10px;margin-left:6px">'+totA+'</span>';
+  }
+  html+='</div>';
+  if(totA===0){
     html+='<div style="text-align:center;padding:20px;color:var(--muted-soft);font-size:12px">Aucune alerte</div>';
   } else {
+    // Trier : retards en haut (par nb de jours décroissant), puis échéances proches
+    var sortedAlerts=lateA.slice().sort(function(a,b){
+      var da=parseDate(a.dateButoir),db=parseDate(b.dateButoir);
+      return (da?da.getTime():0)-(db?db.getTime():0); // les plus anciens en retard en premier
+    }).concat(soonA.slice().sort(function(a,b){
+      var da=parseDate(a.dateButoir),db=parseDate(b.dateButoir);
+      return (da?da.getTime():0)-(db?db.getTime():0);
+    }));
+    sortedAlerts=sortedAlerts.slice(0,8);
+
     html+='<div style="display:flex;flex-direction:column;gap:8px">';
-    alerts.forEach(function(a){
-      var bg=a.status==='late'?'rgba(240,149,149,0.06)':'rgba(239,159,39,0.06)';
-      var border=a.status==='late'?'rgba(240,149,149,0.25)':'rgba(239,159,39,0.25)';
-      var color=a.status==='late'?'var(--red)':'var(--amber)';
-      var label=a.status==='late'?'En retard de '+a.days+' jours':'Échéance dans '+a.days+' jours';
-      html+='<div style="padding:10px 12px;background:'+bg+';border:0.5px solid '+border+';border-radius:8px">'+
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">'+
-          '<span class="ref">'+esc(a.f.num||'?')+'</span>'+
-          '<span class="num" style="color:'+color+'">'+fNloc(factureMt(a.f))+' XPF</span>'+
+    sortedAlerts.forEach(function(a){
+      var isLate=a.type==='late',isToday=a.type==='today';
+      var bg=isLate?'rgba(240,149,149,0.06)':(isToday?'rgba(244,114,182,0.07)':'rgba(239,159,39,0.06)');
+      var border=isLate?'rgba(240,149,149,0.25)':(isToday?'rgba(244,114,182,0.3)':'rgba(239,159,39,0.25)');
+      var color=isLate?'var(--red)':(isToday?'#f472b6':'var(--amber)');
+      // Calcul d'un label court
+      var bd=parseDate(a.dateButoir);
+      var diff=bd?diffDays(today(),bd):null;
+      var label;
+      if(isLate) label='En retard de '+Math.abs(diff||0)+' j';
+      else if(isToday) label='Échéance aujourd\'hui';
+      else label='Échéance dans '+(diff||0)+' j';
+      var dateStr=bd?bd.toLocaleDateString('fr-FR'):'?';
+      var faGrcId=a._factureId||a.id;
+      // Ligne cliquable si une facture GRC liée existe
+      var clickAttr='';
+      if(faGrcId&&typeof navigateToFA==='function'){
+        clickAttr=' onclick="navigateToFA('+faGrcId+')" style="cursor:pointer;transition:background .12s" onmouseover="this.style.background=\''+bg.replace('0.06','0.12').replace('0.07','0.14')+'\'" onmouseout="this.style.background=\''+bg+'\'"';
+      }
+      html+='<div'+clickAttr+' style="padding:10px 12px;background:'+bg+';border:0.5px solid '+border+';border-radius:8px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;gap:10px">'+
+          '<span class="ref" style="color:var(--blue);font-family:JetBrains Mono,monospace;font-size:11.5px">'+esc(a.num||'?')+'</span>'+
+          '<span class="num" data-money style="color:'+color+';font-family:JetBrains Mono,monospace;font-size:12px;font-weight:500">'+fNloc(a.montant||0)+' XPF</span>'+
         '</div>'+
-        '<div style="font-size:11px;color:var(--muted-soft)">'+label+' · échéance '+esc(a.f.dateEcheance||'?')+'</div>'+
+        '<div style="font-size:11px;color:var(--muted-soft);display:flex;justify-content:space-between;gap:10px">'+
+          '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">'+esc(a.client||'')+'</span>'+
+          '<span style="color:'+color+'">'+label+' · '+dateStr+'</span>'+
+        '</div>'+
         '</div>';
     });
+    if(allAlerts.length>8){
+      html+='<div style="text-align:center;padding:6px;color:var(--muted-soft);font-size:10.5px;font-style:italic">+ '+(allAlerts.length-8)+' autres alertes</div>';
+    }
     html+='</div>';
   }
   html+='</div>';
