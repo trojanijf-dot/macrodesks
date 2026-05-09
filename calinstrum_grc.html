@@ -3454,6 +3454,9 @@ function renderBCLinker(){
   // === SUMMARY EN HAUT ===
   // KPI principal : MARGE NETTE (= facture - coût Emerson - frais annexes), c'est la vraie
   // marge dans la poche. La marge brute (sans frais) est affichée en sous-info pour info.
+  // Le label "Facture XXX" est dynamique : on extrait le préfixe client du numéro de facture
+  // (ex "PRNC-F040" → "PRNC", "SLN-F073" → "SLN"). Fallback sur le champ inv.client si
+  // le format de num n'est pas standard, sinon "Facture" générique.
   var coutTot=getCoutEmerson(inv);
   var coutPaye=getCoutEmersonPaye(inv);
   var coutRestant=getCoutEmersonRestant(inv);
@@ -3465,6 +3468,17 @@ function renderBCLinker(){
   // Détecter si au moins un BC lié a des frais réels saisis (sinon = forfait 20%)
   var hasFraisReels=linked.some(function(b){return bcHasFraisReels(b);});
   var fraisLabel=hasFraisReels?'frais réels':'forfait 20%';
+  // Détection du préfixe client à partir du n° de facture (format "PRÉFIXE-Fxxx")
+  var clientPrefix='';
+  var mPref=(inv.num||'').match(/^([A-Z][A-Z0-9]*)-F\d/i);
+  if(mPref){
+    clientPrefix=mPref[1].toUpperCase();
+  } else if(inv.client){
+    // Fallback : extraire le préfixe court depuis inv.client (ex "PRNC - Xavier CANEL" → "PRNC")
+    var mCli=String(inv.client).match(/^([A-Z][A-Z0-9]*)\b/i);
+    if(mCli) clientPrefix=mCli[1].toUpperCase();
+  }
+  var factureLabel = clientPrefix ? ('Facture '+clientPrefix) : 'Facture';
   var sm=document.getElementById('bclink-summary');
   if(sm){
     if(linked.length===0){
@@ -3472,7 +3486,7 @@ function renderBCLinker(){
     } else {
       sm.innerHTML=
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'+
-          '<div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Facture SLN</div><div style="font-size:14px;font-weight:700;color:var(--teal);margin-top:2px">'+fN(inv.montant||0)+' XPF</div></div>'+
+          '<div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">'+esc(factureLabel)+'</div><div style="font-size:14px;font-weight:700;color:var(--teal);margin-top:2px">'+fN(inv.montant||0)+' XPF</div></div>'+
           '<div style="background:rgba(244,63,94,0.06);border:1px solid rgba(244,63,94,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Coût Emerson + Frais</div><div style="font-size:14px;font-weight:700;color:var(--red);margin-top:2px">'+fN(coutTot+fraisLies)+' XPF</div><div style="font-size:9px;color:var(--muted);margin-top:2px">Emerson: '+fN(coutTot)+' · Frais: '+fN(fraisLies)+' ('+fraisLabel+')</div></div>'+
           '<div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Marge nette</div><div style="font-size:14px;font-weight:700;color:'+(margeNette>=0?'var(--green)':'var(--red)')+';margin-top:2px">'+fN(margeNette)+' XPF</div><div style="font-size:9px;color:var(--muted);margin-top:2px">'+pctMarge.toFixed(1)+'% net · Brut (s/frais): '+fN(margeBrut)+'</div></div>'+
           '<div style="background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.2);border-radius:6px;padding:8px"><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.05em">Restant Emerson</div><div style="font-size:14px;font-weight:700;color:var(--amber);margin-top:2px">'+fN(coutRestant)+' XPF</div><div style="font-size:9px;color:var(--muted);margin-top:2px">'+(coutTot>0?Math.round(coutPaye/coutTot*100):0)+'% déjà payé</div></div>'+
