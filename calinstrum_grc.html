@@ -3127,6 +3127,7 @@ document.addEventListener('DOMContentLoaded',function(){
 
 // Migration legacy : factures phase='' → 'livre' ou 'recu' selon type.
 // + Migration dateReceptionBC : auto-remplit pour les pré-facturées.
+// + Migration normalizeAllBCs : normalise le format des N° BC au format propre.
 // Les fonctions sont définies plus bas (avec PHASES). Appel différé via setTimeout
 // pour que toutes les fonctions soient déjà parsées.
 setTimeout(function(){
@@ -3137,6 +3138,10 @@ setTimeout(function(){
   if(typeof migrateDateReceptionBC==='function'){
     try{ migrateDateReceptionBC(); }
     catch(e){ console.warn('[CALINSTRUM] Migration dateReceptionBC échouée :', e); }
+  }
+  if(typeof normalizeAllBCs==='function'){
+    try{ normalizeAllBCs(); }
+    catch(e){ console.warn('[CALINSTRUM] Normalisation BCs échouée :', e); }
   }
 },0);
 
@@ -3415,7 +3420,9 @@ function nxt(t, prefix){
 
   if(t==='bc'){
     // Format BC Emerson : DDMMYYYY/NNN — on extrait le NNN final pour le max
-    var reBC=/\/(\d+)$/;
+    // Regex tolérante : matche aussi les anciens formats avec espace, suffixe -NNN, rev1, etc.
+    // Ex matchés : "28042026/97", "20102025 061rev1", "12112025/063-001", "20102025 060"
+    var reBC=/^\d{8}[\s\/](\d+)/;
     var n=scanMax(DB.bcs||[], reBC)+1;
     DB.nid.bc=Math.max(DB.nid.bc||0, n);
     saveDB();
@@ -3432,6 +3439,66 @@ function nxt(t, prefix){
   }
 
   return 0;
+}
+
+// =============================================================================
+// normalizeAllBCs() — Migration one-shot pour normaliser le format des N° BC
+// =============================================================================
+// Convertit tous les BCs au format propre {DDMMYYYY}/{NNN} avec NNN à 3 chiffres.
+// Préserve les suffixes éventuels (rev1, -001, etc.) après le slash.
+//
+// Exemples de transformations :
+//   "28042026/97"      → "28042026/097"
+//   "02012026/079"     → "02012026/079"  (déjà OK)
+//   "12112025/063-001" → "12112025/063-001"  (déjà OK, suffixe préservé)
+//   "20102025 061rev1" → "20102025/061-rev1"  (espace→/, suffixe préservé)
+//   "20102025 060"     → "20102025/060"  (espace→/)
+//
+// Protégé par flag DB._bcsNormalizedV1 pour ne s'exécuter qu'une seule fois.
+// =============================================================================
+function normalizeAllBCs(){
+  if(!DB || DB._bcsNormalizedV1) return 0;
+  if(!Array.isArray(DB.bcs)) return 0;
+
+  var changed=0;
+  // Pattern : 8 chiffres (date) + séparateur (/, espace, ou rien si format colle)
+  //           + NNN chiffres + optionnel suffixe (-XXX, revX, etc.)
+  var rx=/^(\d{8})[\s\/]?(\d+)(.*)$/;
+
+  DB.bcs.forEach(function(b){
+    if(!b || !b.num) return;
+    var orig=String(b.num).trim();
+    var m=orig.match(rx);
+    if(!m) return; // format inconnu, on laisse tel quel
+
+    var datepart=m[1];
+    var nnn=parseInt(m[2],10);
+    var suffix=(m[3]||'').trim();
+
+    // Normaliser : NNN sur 3 chiffres
+    var nnnPadded=String(nnn).padStart(3,'0');
+
+    // Reconstruire : DDMMYYYY/NNN[-suffix]
+    var newNum=datepart+'/'+nnnPadded;
+    if(suffix){
+      // Suffixe : si commence par "-" ou "rev", on l'attache avec "-"
+      var cleanSuffix=suffix.replace(/^[\s\-]+/,'');
+      if(cleanSuffix) newNum+='-'+cleanSuffix;
+    }
+
+    if(newNum!==orig){
+      console.log('[CALINSTRUM] Normalisation BC : "'+orig+'" → "'+newNum+'"');
+      b.num=newNum;
+      changed++;
+    }
+  });
+
+  DB._bcsNormalizedV1=true;
+  if(changed>0){
+    console.log('[CALINSTRUM] Normalisation BC terminée : '+changed+' BC(s) renommé(s)');
+    if(typeof saveDB==='function') saveDB();
+  }
+  return changed;
 }
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 // Variante de esc() qui convertit aussi les \n en <br> pour rendu PDF
@@ -23930,7 +23997,12 @@ function printPreviewBC(){
   // remplace nous-mêmes par des espaces pour avoir un titre propre, sauf le "/" qu'on
   // gère explicitement (transformé en espace dans BC, retiré dans facture).
   function _cleanTitle(s){
-    return (s||'').toString().replace(/[\\:*?"<>|]/g,'').replace(/\s+/g,' ').trim();
+    // Supprime tous les caractères interdits dans les noms de fichiers selon les OS :
+    //   Windows : \ / : * ? " < > |
+    //   macOS   : /
+    //   Linux   : / et caractère NUL
+    // → On retire l'union pour produire un nom de fichier compatible toutes plateformes.
+    return (s||'').toString().replace(/[\\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim();
   }
 
   if(isDevisPrint){
@@ -25018,6 +25090,15 @@ function doPrint(){
   // Détection d'un BC (Purchase Order) pour appliquer la police Arial globale
   var isBCDoc=docTitle && /^BC\s|Purchase\s*Order|^PO\s/i.test(docTitle);
 
+  // === Nom de fichier PDF safe pour tous les OS ===
+  // Le <title> de la fenêtre d'impression devient le nom suggéré du PDF lors
+  // du "Enregistrer en PDF". On nettoie les caractères interdits :
+  //   Windows : \ / : * ? " < > |
+  //   macOS / Linux : /
+  // Sans cela, "28042026/097" cause des problèmes de sauvegarde sur Mac/Linux
+  // (le / est interprété comme séparateur de dossier).
+  var safeDocTitle=docTitle.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
+
   // Pour les devis paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
   // Pour les autres docs, on garde des marges A4 standard
   var pageRule=isDevisDoc
@@ -25374,7 +25455,7 @@ function doPrint(){
   var fontPreload=isBCDoc
     ? '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">'
     : '';
-  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+docTitle+'</title>'+fontPreload+'<style>'+PRINT_CSS+extraCSS+'</style></head><body>'+content+'</body></html>');
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+safeDocTitle+'</title>'+fontPreload+'<style>'+PRINT_CSS+extraCSS+'</style></head><body>'+content+'</body></html>');
   w.document.close();
   w.focus();
   // Délai plus long pour les BC (chargement de la police Inter nécessaire avant impression)
