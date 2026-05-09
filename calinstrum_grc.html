@@ -3515,6 +3515,10 @@ function nav(p){
   document.querySelectorAll('.sb-item').forEach(function(b){
     if((b.getAttribute('onclick')||'').indexOf("'"+p+"'")>=0) b.classList.add('active');
   });
+  // Toujours rafraîchir le pill "X alertes" du topbar lors d'une navigation —
+  // sinon il restait caché si l'utilisateur n'allait jamais sur Suivi (qui était
+  // le seul endroit où il était mis à jour).
+  if(typeof _refreshAlertPill==='function') _refreshAlertPill();
   var T={dashboard:'Dashboard',devis:'Devis',factures:'Factures',suivi:'Suivi Factures',
     bc:'Bons de commande',bl:'Bons de livraison',clients:'Clients',historique:'Historique',catalogue:'Catalogue'};
   sv('topTitle',T[p]||p);
@@ -3832,6 +3836,59 @@ function navigateToFA(faId){
   setTimeout(function(){
     if(typeof openFA==='function') openFA(faId);
   },50);
+}
+
+// =============================================================================
+// _openAlert — ouvre la facture associée à une alerte facturation.
+// Stratégie en cascade :
+//   1. ID GRC fourni et valide → navigateToFA(id) (ouvre la modale facture)
+//   2. Numéro de facture connu → cherche dans DB.factures par num, ouvre si trouvé
+//   3. Sinon → bascule sur la page Suivi Factures et pré-remplit la recherche
+//      avec le numéro pour que l'utilisateur retrouve la ligne facilement.
+// =============================================================================
+function _openAlert(num, faId){
+  // 1. ID GRC direct
+  if(faId&&typeof navigateToFA==='function'){
+    var found=(DB.factures||[]).find(function(f){return f.id===faId;});
+    if(found){ navigateToFA(faId); return; }
+  }
+  // 2. Recherche par numéro dans DB.factures
+  if(num){
+    var byNum=(DB.factures||[]).find(function(f){return (f.num||'')===num;});
+    if(byNum&&typeof navigateToFA==='function'){
+      navigateToFA(byNum.id);
+      return;
+    }
+  }
+  // 3. Fallback : page Suivi Factures + recherche pré-remplie
+  if(typeof nav==='function') nav('suivi');
+  setTimeout(function(){
+    // Le champ de recherche du Suivi s'appelle généralement #sFA ou similaire ;
+    // on le cherche par convention.
+    var searchInput=document.querySelector('#page-suivi input[type="text"], #page-suivi input[placeholder*="echerch" i]');
+    if(searchInput && num){
+      searchInput.value=num;
+      searchInput.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+  },80);
+}
+
+// =============================================================================
+// _refreshAlertPill — rafraîchit le pill "X alertes" du topbar
+// Source de vérité : getAlertData() (qui agrège invoices Suivi + DB.factures GRC).
+// Appelé à chaque navigation pour garantir un compteur toujours à jour.
+// =============================================================================
+function _refreshAlertPill(){
+  var ap=document.getElementById('alert-pill');
+  if(!ap)return;
+  var alerts=(typeof getAlertData==='function')?getAlertData():[];
+  var tot=alerts.length;
+  if(tot>0){
+    ap.style.display='inline-flex';
+    sv('alert-count',tot+' alerte'+(tot>1?'s':''));
+  } else {
+    ap.style.display='none';
+  }
 }
 
 // =============================================================================
@@ -7913,7 +7970,8 @@ function rDashPro(){
 
   // Row : devis récents + alertes
   html+='<div class="row-2-pro">';
-  // Devis récents
+  // Devis récents — utilise DV_STATUS_META (cohérent avec page Devis et pipeline)
+  // pour les couleurs des pills (notamment Facturé en mauve, pas vert).
   html+='<div class="card-pro">';
   html+='<div class="card-pro-title"><i class="ti ti-file-text"></i>Devis récents</div>';
   if(recentDv.length===0){
@@ -7921,19 +7979,25 @@ function rDashPro(){
   } else {
     html+='<table class="tbl-pro">';
     recentDv.forEach(function(d){
-      var st=(d.status||'').toLowerCase();
-      var pillClass='p-info', pillText=d.status||'—';
-      if(st.indexOf('accept')>=0){pillClass='p-success';pillText='Accepté';}
-      else if(st.indexOf('factur')>=0){pillClass='p-success';pillText='Facturé';}
-      else if(st.indexOf('refus')>=0){pillClass='p-danger';pillText='Refusé';}
-      else if(st.indexOf('envoy')>=0){pillClass='p-info';pillText='Envoyé';}
+      var meta=(typeof DV_STATUS_META!=='undefined' && DV_STATUS_META[d.status])
+        ? DV_STATUS_META[d.status]
+        : {label:(d.status||'—'),pill:'p-muted'};
       var clientShort=(d.client||'').substring(0,32);
       var objet=(d.objet||d.intitule||'').replace(/\n/g,' ').substring(0,40);
-      html+='<tr>'+
+      // Date selon statut (Accepté → date BC, Facturé → date facture, Cadre → MAJ, etc.)
+      var statusDate=(typeof _getStatusDate==='function')?_getStatusDate(d):null;
+      var statusDateHtml='';
+      if(statusDate){
+        var sdLbl=(typeof fD==='function')?fD(statusDate.date):statusDate.date;
+        statusDateHtml='<div style="font-size:9.5px;color:var(--muted-soft);margin-top:3px;font-family:JetBrains Mono,monospace">'+esc(sdLbl)+'</div>';
+      } else if(d.status==='Envoyé'){
+        statusDateHtml='<div style="font-size:9.5px;color:var(--muted-soft);margin-top:3px;font-style:italic">en cours</div>';
+      }
+      html+='<tr style="cursor:pointer" onclick="openDV('+d.id+')">'+
         '<td><span class="ref">'+esc(d.num||'?')+(d.rev?' '+esc(d.rev):'')+'</span></td>'+
         '<td><div style="font-weight:500">'+esc(clientShort)+'</div><div style="font-size:11px;color:var(--muted-soft)">'+esc(objet)+'</div></td>'+
         '<td class="num">'+fNloc(devisTtc(d))+' XPF</td>'+
-        '<td><span class="pill-pro '+pillClass+'">'+esc(pillText)+'</span></td>'+
+        '<td><span class="pill-pro '+meta.pill+'">'+esc(meta.label)+'</span>'+statusDateHtml+'</td>'+
         '</tr>';
     });
     html+='</table>';
@@ -7981,15 +8045,19 @@ function rDashPro(){
       else if(isToday) label='Échéance aujourd\'hui';
       else label='Échéance dans '+(diff||0)+' j';
       var dateStr=bd?bd.toLocaleDateString('fr-FR'):'?';
-      var faGrcId=a._factureId||a.id;
-      // Ligne cliquable si une facture GRC liée existe
-      var clickAttr='';
-      if(faGrcId&&typeof navigateToFA==='function'){
-        clickAttr=' onclick="navigateToFA('+faGrcId+')" style="cursor:pointer;transition:background .12s" onmouseover="this.style.background=\''+bg.replace('0.06','0.12').replace('0.07','0.14')+'\'" onmouseout="this.style.background=\''+bg+'\'"';
-      }
+      // === Toujours rendre la ligne cliquable ===
+      // Stratégie d'ouverture (par ordre de priorité) :
+      //   1. Si on a un _factureId direct → navigateToFA (ouvre la modale facture GRC)
+      //   2. Sinon, on cherche dans DB.factures par numéro (ex: SLN-F063 → trouve la facture)
+      //   3. Sinon, on bascule sur Suivi avec le numéro dans la recherche
+      var num=esc(a.num||'?');
+      var clickFn="_openAlert('"+(a.num||'')+"',"+(a._factureId||a.id||'null')+")";
+      var clickAttr=' onclick="'+clickFn+'" style="cursor:pointer;transition:background .12s" '+
+        'onmouseover="this.style.background=\''+bg.replace('0.06','0.12').replace('0.07','0.14')+'\'" '+
+        'onmouseout="this.style.background=\''+bg+'\'"';
       html+='<div'+clickAttr+' style="padding:10px 12px;background:'+bg+';border:0.5px solid '+border+';border-radius:8px">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;gap:10px">'+
-          '<span class="ref" style="color:var(--blue);font-family:JetBrains Mono,monospace;font-size:11.5px">'+esc(a.num||'?')+'</span>'+
+          '<span class="ref" style="color:var(--blue);font-family:JetBrains Mono,monospace;font-size:11.5px">'+num+'</span>'+
           '<span class="num" data-money style="color:'+color+';font-family:JetBrains Mono,monospace;font-size:12px;font-weight:500">'+fNloc(a.montant||0)+' XPF</span>'+
         '</div>'+
         '<div style="font-size:11px;color:var(--muted-soft);display:flex;justify-content:space-between;gap:10px">'+
@@ -8061,6 +8129,69 @@ var DV_STATUS_META={
   'Cadre':    {color:'#fbbf24',label:'Cadre',pill:'p-warning'},
   'Obsolète': {color:'#6e6e66',label:'Obsolète',pill:'p-muted'}
 };
+
+// =============================================================================
+// _getStatusDate — date à afficher pour un devis selon son statut
+// Logique métier "smart finance" :
+//   - Accepté  → date de réception du BC (champ d.dateReceptionBC ou d.dateAcceptation)
+//                fallback : date du devis lui-même
+//   - Facturé  → date de la facture liée (recherchée dans DB.factures par numéro
+//                de devis ou champ d._invoiceDate si renseigné)
+//                fallback : date du devis
+//   - En attente client (Envoyé) → AUCUNE date (retour '')
+//   - Cadre    → date de dernière mise à jour (d.updatedAt / d.lastUpdate)
+//                fallback : date du devis
+//   - Brouillon / Refusé / Obsolète → date du devis
+// Retourne {date:'YYYY-MM-DD', label:'Accepté le 28/04/2026'} ou null.
+// =============================================================================
+function _getStatusDate(d){
+  if(!d) return null;
+  var st=d.status||'Brouillon';
+  function fmt(s){return (typeof fD==='function')?fD(s):(s||'');}
+  // En attente client → pas de date
+  if(st==='Envoyé') return null;
+  // Accepté → date réception BC ou date d'acceptation
+  if(st==='Accepté'){
+    var ds=d.dateReceptionBC||d.dateAcceptation||d.dateAccept||d.date;
+    return ds?{date:ds,label:'Accepté · '+fmt(ds)}:null;
+  }
+  // Facturé → date de la facture liée
+  if(st==='Facturé'){
+    // Tentative 1 : champ direct sur le devis
+    var ds=d.dateFacturation||d.dateFacture;
+    // Tentative 2 : recherche dans DB.factures (lien implicite par numéro ou client+objet)
+    if(!ds && typeof DB!=='undefined' && Array.isArray(DB.factures)){
+      var found=DB.factures.find(function(f){
+        // Match exact par numéro de devis si stocké
+        if(f._sourceDevisNum && f._sourceDevisNum===d.num) return true;
+        if(f._sourceDevisId && f._sourceDevisId===d.id) return true;
+        return false;
+      });
+      if(!found){
+        // Heuristique : même client + objet partiellement identique
+        var dvObj=(d.objet||'').toLowerCase().substring(0,30);
+        if(dvObj.length>5){
+          found=DB.factures.find(function(f){
+            return f.client===d.client &&
+              ((f.objet||'').toLowerCase().indexOf(dvObj)>=0 ||
+               dvObj.indexOf((f.objet||'').toLowerCase().substring(0,30))>=0);
+          });
+        }
+      }
+      if(found) ds=found.date;
+    }
+    if(!ds) ds=d.date;
+    return ds?{date:ds,label:'Facturé · '+fmt(ds)}:null;
+  }
+  // Cadre → dernière mise à jour
+  if(st==='Cadre'){
+    var ds=d.updatedAt||d.lastUpdate||d.dateModif||d.date;
+    return ds?{date:ds,label:'MAJ · '+fmt(ds)}:null;
+  }
+  // Autres statuts → date du devis
+  if(d.date) return {date:d.date,label:'Émis · '+fmt(d.date)};
+  return null;
+}
 
 // KPI : calcule toutes les métriques smart finance pour la page Devis
 function _calcKpiDV(devis){
@@ -8841,6 +8972,8 @@ function renderDVPro(){
       var dateF=(typeof fD==='function')?fD(d.date):(d.date||'');
       // Indicateur révision si présent
       var revBadge=d._revisionNumber?' <span style="background:rgba(251,191,36,0.15);color:#fbbf24;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:500;margin-left:4px;letter-spacing:0.04em">REV'+d._revisionNumber+'</span>':'';
+      // Date selon statut (Accepté → date BC, Facturé → date facture, etc.)
+      var statusDate=(typeof _getStatusDate==='function')?_getStatusDate(d):null;
 
       html+='<tr class="dvpro-row" style="border-bottom:0.5px solid rgba(255,255,250,0.06);transition:background .12s;cursor:pointer" onclick="openDV('+d.id+')" onmouseover="this.style.background=\'rgba(255,255,250,0.025)\'" onmouseout="this.style.background=\'\'">';
       // N° / Date
@@ -8865,9 +8998,18 @@ function renderDVPro(){
         '<div class="num" data-money style="font-family:JetBrains Mono,monospace;font-size:13px;color:var(--text);font-weight:500">'+fNloc(ttc)+'</div>'+
         '<div style="font-size:10px;color:var(--muted-soft);margin-top:2px">XPF</div>'+
         '</td>';
-      // Statut
+      // Statut + date (la date est en dessous du badge, ton sur ton)
+      var statusDateHtml='';
+      if(statusDate){
+        var sdLbl=(typeof fD==='function')?fD(statusDate.date):statusDate.date;
+        statusDateHtml='<div style="font-size:10px;color:var(--muted-soft);margin-top:4px;font-family:JetBrains Mono,monospace">'+esc(sdLbl)+'</div>';
+      } else if(d.status==='Envoyé'){
+        // En attente client → pas de date affichée volontairement
+        statusDateHtml='<div style="font-size:10px;color:var(--muted-soft);margin-top:4px;font-style:italic">en cours</div>';
+      }
       html+='<td style="padding:12px 14px;vertical-align:top">'+
         '<span class="pill-pro '+meta.pill+'">'+meta.label+'</span>'+
+        statusDateHtml+
         '</td>';
       // Actions
       html+='<td style="padding:12px 14px;vertical-align:top;text-align:right" onclick="event.stopPropagation()">'+
