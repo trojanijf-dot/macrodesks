@@ -4289,30 +4289,101 @@ function setDossierFilter(f,btn){
   if(btn)btn.classList.add('active');
   renderDossiers();
 }
-// Construit la liste des dossiers : BC ayant au moins 1 facture liée
+// Construit la liste des "affaires" : composantes connexes du graphe BC ↔ Facture.
+// Une affaire regroupe TOUS les BC qui partagent au moins une facture commune,
+// et toutes les factures liées à ces BC. Cela évite le double-comptage de la marge
+// quand une facture est partagée entre plusieurs BC (ex: 2 PO Calinstrum, 1 livraison
+// client unique → 1 facture pour 2 BC) ou quand un BC est facturé en plusieurs fois
+// (ex: acompte 30% + solde 70% = 1 BC, 2 factures).
+//
+// Algo : Union-Find (DSU) sur les BC. On parcourt chaque facture et on fusionne
+// tous ses BC liés dans la même composante. À la fin, chaque composante = 1 affaire.
 function buildDossiers(){
-  var bcsLies={}; // bcId -> {bc, factures:[]}
+  // 1) Indexer tous les BC qui ont au moins 1 facture liée
+  var bcMap={}; // bcId -> bc
+  var bcFactures={}; // bcId -> [factures]
   (invoices||[]).forEach(function(inv){
     var bcs=getLinkedBCs(inv);
     bcs.forEach(function(bc){
       if(!bc||!bc.id)return;
-      if(!bcsLies[bc.id])bcsLies[bc.id]={bc:bc,factures:[]};
-      bcsLies[bc.id].factures.push(inv);
+      bcMap[bc.id]=bc;
+      if(!bcFactures[bc.id])bcFactures[bc.id]=[];
+      bcFactures[bc.id].push(inv);
     });
   });
-  return Object.values(bcsLies);
+  var allBcIds=Object.keys(bcMap);
+  if(allBcIds.length===0)return [];
+
+  // 2) Union-Find : chaque BC commence dans sa propre composante
+  var parent={};
+  allBcIds.forEach(function(bcId){parent[bcId]=bcId;});
+  function find(x){
+    while(parent[x]!==x){
+      parent[x]=parent[parent[x]]; // path compression
+      x=parent[x];
+    }
+    return x;
+  }
+  function union(a,b){
+    var ra=find(a),rb=find(b);
+    if(ra!==rb)parent[ra]=rb;
+  }
+
+  // 3) Parcourir chaque facture : tous ses BC liés rejoignent la même composante
+  var factureBcs={}; // factureKey -> [bcIds] (pour dédoublonner les factures dans les composantes)
+  (invoices||[]).forEach(function(inv){
+    var bcs=getLinkedBCs(inv).filter(function(bc){return bc&&bc.id;});
+    if(bcs.length<=1)return; // pas de fusion si <2 BC
+    var first=bcs[0].id;
+    for(var i=1;i<bcs.length;i++){
+      union(first, bcs[i].id);
+    }
+  });
+
+  // 4) Regrouper les BC par composante racine
+  var dossiers={}; // rootId -> {bcs:[], factures:[], factureIds:Set}
+  allBcIds.forEach(function(bcId){
+    var root=find(bcId);
+    if(!dossiers[root]){
+      dossiers[root]={bcs:[], factures:[], factureIds:{}};
+    }
+    dossiers[root].bcs.push(bcMap[bcId]);
+    // Ajouter les factures de ce BC en dédoublonnant
+    (bcFactures[bcId]||[]).forEach(function(f){
+      var fkey=String(f.id||f.num||'');
+      if(!fkey)return;
+      if(dossiers[root].factureIds[fkey])return;
+      dossiers[root].factureIds[fkey]=true;
+      dossiers[root].factures.push(f);
+    });
+  });
+
+  // 5) Format de sortie compatible avec l'ancien (champ `bc` = 1er BC, mais on ajoute `bcs`)
+  return Object.keys(dossiers).map(function(rootId){
+    var d=dossiers[rootId];
+    return {
+      bcs: d.bcs,                      // tous les BC de l'affaire
+      bc: d.bcs[0],                    // alias pour rétro-compat (affichage simple)
+      factures: d.factures,
+      _rootId: rootId,
+      _isMulti: d.bcs.length>1 || d.factures.length>1
+    };
+  });
 }
 function renderDossiers(){
   var dossiers=buildDossiers();
-  // Filtrage
+  // Filtrage : un dossier est "payé" si TOUS ses BC sont payés ; "ouvert" si au moins un ne l'est pas
   var filtered=dossiers.filter(function(d){
-    if(dossierFilter==='paid')return !!d.bc.paidEmerson;
-    if(dossierFilter==='open')return !d.bc.paidEmerson;
+    var allPaid=d.bcs.every(function(bc){return !!bc.paidEmerson;});
+    if(dossierFilter==='paid')return allPaid;
+    if(dossierFilter==='open')return !allPaid;
     return true;
   });
-  // Tri : à payer en premier, puis par marge décroissante
+  // Tri : à payer en premier, puis par recette décroissante
   filtered.sort(function(a,b){
-    if(!!a.bc.paidEmerson!==!!b.bc.paidEmerson)return a.bc.paidEmerson?1:-1;
+    var aPaid=a.bcs.every(function(bc){return !!bc.paidEmerson;});
+    var bPaid=b.bcs.every(function(bc){return !!bc.paidEmerson;});
+    if(aPaid!==bPaid)return aPaid?1:-1;
     var ra=a.factures.reduce(function(s,f){return s+(f.montant||0);},0);
     var rb=b.factures.reduce(function(s,f){return s+(f.montant||0);},0);
     return rb-ra;
@@ -4322,10 +4393,13 @@ function renderDossiers(){
   if(cntEl)cntEl.textContent=filtered.length+' dossier'+(filtered.length>1?'s':'')+' affiché'+(filtered.length>1?'s':'');
   // KPIs agrégés (sur les dossiers filtrés)
   var totalRecette=0,totalCout=0,totalFrais=0,totalMarge=0,totalEnc=0,totalPaye=0;
+  var totalBcs=0;
   filtered.forEach(function(d){
+    // Recette : somme des factures (UNIQUE par dossier, plus de double-comptage)
     var rec=d.factures.reduce(function(s,f){return s+(f.montant||0);},0);
-    var cout=getBCCoutXPF(d.bc);
-    var frais=getBCFraisXPF(d.bc);
+    // Coût/frais : somme sur TOUS les BC du dossier
+    var cout=d.bcs.reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
+    var frais=d.bcs.reduce(function(s,bc){return s+getBCFraisXPF(bc);},0);
     var enc=d.factures.reduce(function(s,f){
       // Suit la même logique que renderSuviKPIs : paid = 100%, partial = pct, sinon 0
       var st=getStatus(f);
@@ -4333,10 +4407,12 @@ function renderDossiers(){
       if(st==='partial')return s+(f.montant||0)*((f.pct||0)/100);
       return s;
     },0);
-    var paye=d.bc.paidEmerson?cout:0;
+    // Payé Emerson : somme des coûts des BC marqués payés
+    var paye=d.bcs.filter(function(bc){return bc.paidEmerson;}).reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
     totalRecette+=rec;totalCout+=cout;totalFrais+=frais;
     totalMarge+=(rec-cout-frais);
     totalEnc+=enc;totalPaye+=paye;
+    totalBcs+=d.bcs.length;
   });
   var totalTreso=totalEnc-totalPaye;
   var pctMarge=totalRecette>0?(totalMarge/totalRecette*100):0;
@@ -4345,13 +4421,16 @@ function renderDossiers(){
     if(filtered.length===0){
       kpisEl.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:14px;background:rgba(167,139,250,0.05);border:1px dashed rgba(167,139,250,0.3);border-radius:8px;color:var(--muted);font-size:11px">💡 <b>Aucun dossier</b> — un dossier apparaît dès qu\'un BC Emerson est lié à au moins 1 facture (bouton 🔗 dans Suivi → Liste).</div>';
     } else {
-      // Indicateur visuel : combien de dossiers ont des frais réels saisis vs forfait
-      var nbReels=filtered.filter(function(d){return bcHasFraisReels(d.bc);}).length;
-      var fraisLabel=nbReels===filtered.length?'📦 Frais réels':(nbReels===0?'📦 Frais '+DEFAULT_FRAIS_PCT+'%':'📦 Frais (mixte)');
-      var fraisSub=nbReels===filtered.length?('XPF · '+filtered.length+' dossiers, frais saisis'):(nbReels===0?'XPF · forfait '+DEFAULT_FRAIS_PCT+'% (fret + locaux)':'XPF · '+nbReels+' réels / '+(filtered.length-nbReels)+' forfait');
+      // Indicateur visuel : combien de BC ont des frais réels saisis vs forfait
+      var allBcsInFiltered=[];
+      filtered.forEach(function(d){d.bcs.forEach(function(bc){allBcsInFiltered.push(bc);});});
+      var nbReels=allBcsInFiltered.filter(function(bc){return bcHasFraisReels(bc);}).length;
+      var nbBcs=allBcsInFiltered.length;
+      var fraisLabel=nbReels===nbBcs?'📦 Frais réels':(nbReels===0?'📦 Frais '+DEFAULT_FRAIS_PCT+'%':'📦 Frais (mixte)');
+      var fraisSub=nbReels===nbBcs?('XPF · '+nbBcs+' BC, frais saisis'):(nbReels===0?'XPF · forfait '+DEFAULT_FRAIS_PCT+'% (fret + locaux)':'XPF · '+nbReels+' réels / '+(nbBcs-nbReels)+' forfait');
       kpisEl.innerHTML=
         '<div class="metric m-teal"><div class="mlbl">💰 Recette client</div><div class="mval">'+fN(totalRecette)+'</div><div class="msub">XPF · '+filtered.reduce(function(s,d){return s+d.factures.length;},0)+' factures</div></div>'+
-        '<div class="metric m-red"><div class="mlbl">🏭 Coût Emerson</div><div class="mval red">'+fN(totalCout)+'</div><div class="msub">XPF · '+filtered.length+' BC · '+fN(totalPaye)+' déjà payés</div></div>'+
+        '<div class="metric m-red"><div class="mlbl">🏭 Coût Emerson</div><div class="mval red">'+fN(totalCout)+'</div><div class="msub">XPF · '+totalBcs+' BC · '+fN(totalPaye)+' déjà payés</div></div>'+
         '<div class="metric m-amber"><div class="mlbl">'+fraisLabel+'</div><div class="mval amber">'+fN(totalFrais)+'</div><div class="msub">'+fraisSub+'</div></div>'+
         '<div class="metric m-green"><div class="mlbl">📊 Marge nette</div><div class="mval" style="color:'+(totalMarge>=0?'var(--green)':'var(--red)')+'">'+fN(totalMarge)+'</div><div class="msub">XPF · '+pctMarge.toFixed(1)+'% · Tréso. nette : '+fN(totalTreso)+'</div></div>';
     }
@@ -4364,11 +4443,12 @@ function renderDossiers(){
     return;
   }
   listEl.innerHTML=filtered.map(function(d){
-    var bc=d.bc;
+    // === CALCUL AGRÉGÉ AU NIVEAU DE L'AFFAIRE ===
+    // Plus de double-comptage : recette = somme des factures uniques, coût/frais =
+    // somme sur tous les BC. Pas de quote-part car la card regroupe TOUT (BC + factures).
     var rec=d.factures.reduce(function(s,f){return s+(f.montant||0);},0);
-    var cout=getBCCoutXPF(bc);
-    var frais=getBCFraisXPF(bc);
-    var fraisReels=bcHasFraisReels(bc);
+    var cout=d.bcs.reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
+    var frais=d.bcs.reduce(function(s,bc){return s+getBCFraisXPF(bc);},0);
     var marge=rec-cout-frais;
     var pct=rec>0?(marge/rec*100):0;
     var enc=d.factures.reduce(function(s,f){
@@ -4377,14 +4457,48 @@ function renderDossiers(){
       if(st==='partial')return s+(f.montant||0)*((f.pct||0)/100);
       return s;
     },0);
-    var paye=bc.paidEmerson?cout:0;
+    var paye=d.bcs.filter(function(bc){return bc.paidEmerson;}).reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
     var treso=enc-paye;
-    var taux=getTauxAUD(bc);
-    var deviseTxt=bc.devise==='AUD'?(' ('+fN(bc.total||0)+' AUD × '+taux.toFixed(2)+')'):'';
-    var statutBadge=bc.paidEmerson
-      ? '<span style="background:rgba(16,185,129,.15);color:#10b981;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700">✓ Emerson payé '+(bc.paidEmersonDate?'le '+fD(bc.paidEmersonDate):'')+'</span>'
-      : '<span style="background:rgba(251,191,36,.15);color:#fbbf24;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700">⏳ Emerson à payer</span>';
-    var clientFinal=bc.clientFinal||'—';
+    // Indicateurs frais : si tous les BC ont des frais réels, on affiche RÉEL ; mixte sinon
+    var nbReels=d.bcs.filter(function(bc){return bcHasFraisReels(bc);}).length;
+    var allReels=nbReels===d.bcs.length;
+    var noneReels=nbReels===0;
+    var fraisReels=allReels;
+    var fraisLabel=allReels?'Frais réels':(noneReels?'Frais '+DEFAULT_FRAIS_PCT+'%':'Frais (mixte)');
+    var fraisColor=allReels?'#10b981':(noneReels?'#fbbf24':'#a78bfa');
+    var fraisBadge=allReels
+      ?'<span style="background:rgba(16,185,129,.12);color:#10b981;font-size:8.5px;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px" title="Tous les BC ont des frais réels saisis">RÉEL</span>'
+      :noneReels
+        ?'<span style="background:rgba(251,191,36,.12);color:#fbbf24;font-size:8.5px;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px" title="Forfait par défaut '+DEFAULT_FRAIS_PCT+'%, modifiable">FORFAIT</span>'
+        :'<span style="background:rgba(167,139,250,.12);color:#a78bfa;font-size:8.5px;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px" title="'+nbReels+' BC avec frais réels, '+(d.bcs.length-nbReels)+' avec forfait">MIXTE</span>';
+    // Statut paiement Emerson au niveau dossier : tous payés / partiellement / aucun payé
+    var nbPaid=d.bcs.filter(function(bc){return bc.paidEmerson;}).length;
+    var allBcsPaid=nbPaid===d.bcs.length;
+    var someBcsPaid=nbPaid>0 && nbPaid<d.bcs.length;
+    var statutBadge;
+    if(allBcsPaid){
+      statutBadge='<span style="background:rgba(16,185,129,.15);color:#10b981;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700">✓ Emerson payé ('+nbPaid+'/'+d.bcs.length+' BC)</span>';
+    } else if(someBcsPaid){
+      statutBadge='<span style="background:rgba(167,139,250,.15);color:#a78bfa;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700">◐ Emerson partiel ('+nbPaid+'/'+d.bcs.length+' BC)</span>';
+    } else {
+      statutBadge='<span style="background:rgba(251,191,36,.15);color:#fbbf24;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700">⏳ Emerson à payer</span>';
+    }
+    // Client final (= prendre celui du 1er BC qui en a un)
+    var clientFinal='—';
+    for(var ci=0;ci<d.bcs.length;ci++){
+      if(d.bcs[ci].clientFinal){clientFinal=d.bcs[ci].clientFinal;break;}
+    }
+    // === BADGE D'AFFAIRE COMPLEXE ===
+    // Indicateur visuel pour distinguer les affaires "simples" (1 BC + 1 facture) des
+    // affaires "complexes" qui regroupent plusieurs BC ou plusieurs factures.
+    var multiBadge='';
+    if(d.bcs.length>1 && d.factures.length>1){
+      multiBadge='<span style="background:rgba(167,139,250,.18);color:#a78bfa;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700;margin-left:6px" title="Affaire complexe : '+d.bcs.length+' BC liés à '+d.factures.length+' factures">🔗 Affaire '+d.bcs.length+'BC × '+d.factures.length+'F</span>';
+    } else if(d.bcs.length>1){
+      multiBadge='<span style="background:rgba(56,189,248,.18);color:#38bdf8;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700;margin-left:6px" title="'+d.bcs.length+' BC Emerson partagent la/les même(s) facture(s) — typique d\'une livraison groupée chez le client">📦 '+d.bcs.length+' BC groupés</span>';
+    } else if(d.factures.length>1){
+      multiBadge='<span style="background:rgba(251,191,36,.18);color:#fbbf24;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:700;margin-left:6px" title="'+d.factures.length+' factures liées au même BC — typique d\'un paiement en plusieurs fois (acompte/solde)">💰 '+d.factures.length+' factures</span>';
+    }
     // Lignes de factures
     var rowsFa=d.factures.map(function(f){
       var st=getStatus(f);
@@ -4400,27 +4514,57 @@ function renderDossiers(){
         '<td style="padding:5px 6px;text-align:right">'+stBadge+'</td>'+
       '</tr>';
     }).join('');
-    // Sous-label frais (réel ou forfait)
-    var fraisLabel=fraisReels?'Frais réels':'Frais '+DEFAULT_FRAIS_PCT+'%';
-    var fraisSub=fraisReels?'XPF · saisis manuellement':'XPF · forfait estimé';
-    var fraisColor=fraisReels?'#10b981':'#fbbf24';
-    var fraisBadge=fraisReels
-      ?'<span style="background:rgba(16,185,129,.12);color:#10b981;font-size:8.5px;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px" title="Frais réels saisis manuellement">RÉEL</span>'
-      :'<span style="background:rgba(251,191,36,.12);color:#fbbf24;font-size:8.5px;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:4px" title="Forfait par défaut '+DEFAULT_FRAIS_PCT+'%, modifiable">FORFAIT</span>';
+    // === LIGNES BC (NOUVEAU) ===
+    // Liste détaillée des BC de l'affaire avec leur coût + frais individuels.
+    // Permet de voir la décomposition d'une affaire multi-BC (1 ligne par BC).
+    var rowsBc=d.bcs.map(function(bc){
+      var bcCout=getBCCoutXPF(bc);
+      var bcFrais=getBCFraisXPF(bc);
+      var bcFraisReels=bcHasFraisReels(bc);
+      var bcTaux=getTauxAUD(bc);
+      var bcDeviseTxt=bc.devise==='AUD'?(' ('+fN(bc.total||0)+' AUD × '+bcTaux.toFixed(2)+')'):'';
+      var bcStBadge=bc.paidEmerson
+        ?'<span style="background:rgba(16,185,129,.12);color:#10b981;font-size:9px;padding:1px 6px;border-radius:5px">✓ Payé</span>'
+        :'<span style="background:rgba(251,191,36,.12);color:#fbbf24;font-size:9px;padding:1px 6px;border-radius:5px">⏳ À payer</span>';
+      var actionBtn=bc.paidEmerson
+        ?'<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;color:#fbbf24;border-color:rgba(251,191,36,.3)" onclick="setBCPaidEmerson('+bc.id+',false)" title="Marquer non payé">↩</button>'
+        :'<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;color:#10b981;border-color:rgba(16,185,129,.3)" onclick="setBCPaidEmerson('+bc.id+',true)" title="Marquer payé Emerson">✓ Payé</button>';
+      return '<tr style="border-top:1px solid var(--border)">'+
+        '<td style="padding:5px 6px;font-family:var(--mono);color:var(--text);font-size:10.5px;font-weight:700">'+esc(bc.num||'(sans n°)')+'</td>'+
+        '<td style="padding:5px 6px;color:var(--muted);font-size:10px">'+(bc.lines?bc.lines.length:0)+' ligne'+(bc.lines&&bc.lines.length>1?'s':'')+esc(bcDeviseTxt)+'</td>'+
+        '<td style="padding:5px 6px;text-align:right;font-size:10.5px">'+fN(bcCout)+' XPF</td>'+
+        '<td style="padding:5px 6px;text-align:right;font-size:10.5px;color:'+(bcFraisReels?'#10b981':'#fbbf24')+'">'+fN(bcFrais)+' XPF</td>'+
+        '<td style="padding:5px 6px;text-align:right">'+bcStBadge+'</td>'+
+        '<td style="padding:5px 6px;text-align:right;white-space:nowrap">'+
+          '<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px" onclick="nav(\'bc\');setTimeout(function(){openBC('+bc.id+');},80);" title="Ouvrir le BC en édition">✎</button> '+
+          '<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;color:#a78bfa;border-color:rgba(167,139,250,.3)" onclick="nav(\'bc\');setTimeout(function(){openBC('+bc.id+');setTimeout(function(){var el=document.getElementById(\'bc-cout-reel-section\');if(el)el.scrollIntoView({behavior:\'smooth\',block:\'center\'});},120);},80);" title="Modifier le taux AUD et les frais réels">💰</button> '+
+          actionBtn+
+        '</td>'+
+      '</tr>';
+    }).join('');
+
+    // === EN-TÊTE DE LA CARD ===
+    // Pour les affaires multi-BC, on affiche un titre dynamique "BC1 + BC2 + ..." plutôt
+    // que le N° d'un seul BC. Pour les affaires simples (1 BC), on garde le format compact.
+    var titreAffaire;
+    if(d.bcs.length===1){
+      titreAffaire='<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">'+esc(d.bcs[0].num||'(sans n°)')+'</span>';
+    } else {
+      // Liste compacte des N° BC séparés par +
+      var nums=d.bcs.map(function(bc){return esc(bc.num||'?');}).join(' + ');
+      titreAffaire='<span style="font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--text)" title="'+d.bcs.length+' BC dans cette affaire">'+nums+'</span>';
+    }
+
     return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:10px">'+
       // En-tête : N°BC + statut + marge
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:10px">'+
         '<div style="flex:1;min-width:240px">'+
           '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap">'+
-            '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)">'+esc(bc.num||'(sans n°)')+'</span>'+
+            titreAffaire+
+            multiBadge+
             statutBadge+
-            '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px" onclick="nav(\'bc\');setTimeout(function(){openBC('+bc.id+');},80);" title="Ouvrir le BC en édition">✎ Ouvrir BC</button>'+
-            '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#a78bfa;border-color:rgba(167,139,250,.3)" onclick="nav(\'bc\');setTimeout(function(){openBC('+bc.id+');setTimeout(function(){var el=document.getElementById(\'bc-cout-reel-section\');if(el)el.scrollIntoView({behavior:\'smooth\',block:\'center\'});},120);},80);" title="Modifier le taux AUD et les frais réels (fret, douane, locaux)">💰 Taux & frais</button>'+
-            (bc.paidEmerson
-              ?'<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#fbbf24;border-color:rgba(251,191,36,.3)" onclick="setBCPaidEmerson('+bc.id+',false)" title="Marquer non payé">↩ Marquer non payé</button>'
-              :'<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#10b981;border-color:rgba(16,185,129,.3)" onclick="setBCPaidEmerson('+bc.id+',true)" title="Marquer comme payé chez Emerson">✓ Marquer payé Emerson</button>')+
           '</div>'+
-          '<div style="font-size:10.5px;color:var(--muted)">'+esc(clientFinal)+' · '+d.factures.length+' facture'+(d.factures.length>1?'s':'')+' liée'+(d.factures.length>1?'s':'')+(bc.linkBCclient?' · BC client : '+esc(bc.linkBCclient):'')+'</div>'+
+          '<div style="font-size:10.5px;color:var(--muted)">'+esc(clientFinal)+' · '+d.factures.length+' facture'+(d.factures.length>1?'s':'')+' liée'+(d.factures.length>1?'s':'')+' · '+d.bcs.length+' BC</div>'+
         '</div>'+
         '<div style="text-align:right">'+
           '<div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Marge nette</div>'+
@@ -4431,12 +4575,29 @@ function renderDossiers(){
       // Bandeau 4 chiffres clés
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;padding:10px 12px;background:var(--bg3);border-radius:6px;margin-bottom:10px">'+
         '<div><div style="font-size:9.5px;color:var(--muted)">Recette client</div><div style="font-size:12.5px;font-weight:700">'+fN(rec)+' XPF</div></div>'+
-        '<div><div style="font-size:9.5px;color:var(--muted)">Coût Emerson</div><div style="font-size:12.5px;font-weight:700">'+fN(cout)+' XPF</div><div style="font-size:9px;color:var(--muted)">'+esc(deviseTxt.trim())+'</div></div>'+
-        '<div><div style="font-size:9.5px;color:var(--muted)">'+fraisLabel+fraisBadge+'</div><div style="font-size:12.5px;font-weight:700;color:'+fraisColor+'">'+fN(frais)+' XPF</div>'+
-          (bc.fraisNote?'<div style="font-size:9px;color:var(--muted)" title="'+esc(bc.fraisNote)+'">📝 '+esc(bc.fraisNote.substring(0,28))+(bc.fraisNote.length>28?'…':'')+'</div>':'')+
-        '</div>'+
+        '<div><div style="font-size:9.5px;color:var(--muted)">Coût Emerson</div><div style="font-size:12.5px;font-weight:700">'+fN(cout)+' XPF</div><div style="font-size:9px;color:var(--muted)">'+d.bcs.length+' BC · '+fN(paye)+' payé</div></div>'+
+        '<div><div style="font-size:9.5px;color:var(--muted)">'+fraisLabel+fraisBadge+'</div><div style="font-size:12.5px;font-weight:700;color:'+fraisColor+'">'+fN(frais)+' XPF</div></div>'+
         '<div><div style="font-size:9.5px;color:var(--muted)">Trésorerie nette</div><div style="font-size:12.5px;font-weight:700;color:'+(treso>=0?'var(--green)':'var(--red)')+'">'+(treso>=0?'+':'')+fN(treso)+' XPF</div><div style="font-size:9px;color:var(--muted)">encaissé − payé</div></div>'+
       '</div>'+
+      // Tableau des BC (uniquement si l'affaire a plus d'1 BC, sinon redondant)
+      (d.bcs.length>1
+        ?'<div style="font-size:10px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em;font-weight:700">📦 BC Emerson de l\'affaire</div>'+
+         '<table style="width:100%;border-collapse:collapse;margin-bottom:10px"><thead><tr style="font-size:9.5px;color:var(--muted);text-transform:uppercase">'+
+           '<th style="text-align:left;padding:3px 6px">N° BC</th>'+
+           '<th style="text-align:left;padding:3px 6px">Détail</th>'+
+           '<th style="text-align:right;padding:3px 6px">Coût XPF</th>'+
+           '<th style="text-align:right;padding:3px 6px">Frais XPF</th>'+
+           '<th style="text-align:right;padding:3px 6px">Statut</th>'+
+           '<th style="text-align:right;padding:3px 6px">Actions</th>'+
+         '</tr></thead><tbody>'+rowsBc+'</tbody></table>'
+        :'<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'+
+           '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px" onclick="nav(\'bc\');setTimeout(function(){openBC('+d.bcs[0].id+');},80);" title="Ouvrir le BC en édition">✎ Ouvrir BC</button>'+
+           '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#a78bfa;border-color:rgba(167,139,250,.3)" onclick="nav(\'bc\');setTimeout(function(){openBC('+d.bcs[0].id+');setTimeout(function(){var el=document.getElementById(\'bc-cout-reel-section\');if(el)el.scrollIntoView({behavior:\'smooth\',block:\'center\'});},120);},80);" title="Modifier le taux AUD et les frais réels">💰 Taux & frais</button>'+
+           (d.bcs[0].paidEmerson
+             ?'<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#fbbf24;border-color:rgba(251,191,36,.3)" onclick="setBCPaidEmerson('+d.bcs[0].id+',false)" title="Marquer non payé">↩ Marquer non payé</button>'
+             :'<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#10b981;border-color:rgba(16,185,129,.3)" onclick="setBCPaidEmerson('+d.bcs[0].id+',true)" title="Marquer comme payé chez Emerson">✓ Marquer payé Emerson</button>')+
+         '</div>'
+      )+
       // Tableau des factures
       '<div style="font-size:10px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em;font-weight:700">Factures liées</div>'+
       '<table style="width:100%;border-collapse:collapse">'+rowsFa+'</table>'+
