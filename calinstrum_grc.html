@@ -8133,16 +8133,22 @@ var DV_STATUS_META={
 // =============================================================================
 // _getStatusDate — date à afficher pour un devis selon son statut
 // Logique métier "smart finance" :
-//   - Accepté  → date de réception du BC (champ d.dateReceptionBC ou d.dateAcceptation)
-//                fallback : date du devis lui-même
-//   - Facturé  → date de la facture liée (recherchée dans DB.factures par numéro
-//                de devis ou champ d._invoiceDate si renseigné)
-//                fallback : date du devis
-//   - En attente client (Envoyé) → AUCUNE date (retour '')
+//   - Accepté  → date de réception du BC Client SLN (champ d.bcClientSLNDate
+//                renseigné dans la modale Devis quand le statut passe à Accepté)
+//                fallback : d.dateAcceptation puis d.date
+//   - Facturé  → date d'émission de la facture liée (recherchée dans DB.factures
+//                via _sourceDevisId/Num puis heuristique client+objet)
+//                fallback : d.date
+//   - En attente client (Envoyé) → AUCUNE date (retour null)
 //   - Cadre    → date de dernière mise à jour (d.updatedAt / d.lastUpdate)
-//                fallback : date du devis
+//                fallback : d.date
 //   - Brouillon / Refusé / Obsolète → date du devis
-// Retourne {date:'YYYY-MM-DD', label:'Accepté le 28/04/2026'} ou null.
+// Retourne {date:'YYYY-MM-DD', label:'Accepté · 06/05/2026'} ou null.
+//
+// IMPORTANT : ne pas confondre `d.bcClientSLNDate` (champ devis, date à laquelle
+// le BC client a été REÇU côté CALINSTRUM en réponse au devis) avec
+// `f.dateReceptionBC` (champ facture, date de réception du BC pour le classement
+// fiscal des factures pré-facturées). Ce sont deux choses différentes.
 // =============================================================================
 function _getStatusDate(d){
   if(!d) return null;
@@ -8150,19 +8156,18 @@ function _getStatusDate(d){
   function fmt(s){return (typeof fD==='function')?fD(s):(s||'');}
   // En attente client → pas de date
   if(st==='Envoyé') return null;
-  // Accepté → date réception BC ou date d'acceptation
+  // Accepté → date réception BC Client (saisie dans la modale Devis)
   if(st==='Accepté'){
-    var ds=d.dateReceptionBC||d.dateAcceptation||d.dateAccept||d.date;
+    var ds=d.bcClientSLNDate||d.dateAcceptation||d.dateAccept||d.date;
     return ds?{date:ds,label:'Accepté · '+fmt(ds)}:null;
   }
-  // Facturé → date de la facture liée
+  // Facturé → date d'émission de la facture liée
   if(st==='Facturé'){
-    // Tentative 1 : champ direct sur le devis
+    // Tentative 1 : champ direct sur le devis (si stocké)
     var ds=d.dateFacturation||d.dateFacture;
-    // Tentative 2 : recherche dans DB.factures (lien implicite par numéro ou client+objet)
+    // Tentative 2 : recherche dans DB.factures (lien implicite par numéro/id)
     if(!ds && typeof DB!=='undefined' && Array.isArray(DB.factures)){
       var found=DB.factures.find(function(f){
-        // Match exact par numéro de devis si stocké
         if(f._sourceDevisNum && f._sourceDevisNum===d.num) return true;
         if(f._sourceDevisId && f._sourceDevisId===d.id) return true;
         return false;
