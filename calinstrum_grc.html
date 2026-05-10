@@ -1456,8 +1456,10 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         <!-- Réf Emerson + date -->
         <div class="form-row">
           <div class="form-group" style="margin:0"><label><i class="ti ti-circuit-bulb" style="font-size:12px;color:#22d3ee"></i> Réf Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(N° proposition complet)</span>
-            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(34,211,238,.4);color:#22d3ee" onclick="triggerDevisPdfUpload('emerson')" title="Stocker une copie locale du PDF Emerson (visible via 👁 dans la liste)">📎 Joindre PDF</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(34,211,238,.4);color:#22d3ee" onclick="triggerEmersonPdfImport()" title="Importer une proposition Emerson depuis un PDF : extraction auto du N°, version, date">📤 Import PDF</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:4px;border-color:rgba(34,211,238,.4);color:#22d3ee" onclick="triggerDevisPdfUpload('emerson')" title="Stocker une copie locale du PDF Emerson sans extraction (visible via 👁 dans la liste)">📎 Joindre</button>
             <input type="file" id="dv-emerson-pdf-input" accept=".pdf,application/pdf" style="display:none" onchange="handleDevisPdfSelected(event,'emerson')">
+            <input type="file" id="dv-emerson-pdf-import-input" accept=".pdf,application/pdf" style="display:none" onchange="handleEmersonPdfSelected(event)">
           </label>
             <input class="form-input" id="dv-ref-emerson" placeholder="ex: 23306657 Ver 5">
           </div>
@@ -2443,6 +2445,53 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mAIMP')">Annuler</button>
     <button class="btn btn-teal" id="aimp-confirm-btn" onclick="confirmACTImport()" disabled style="border-color:rgba(251,191,36,.5);color:#fbbf24;background:rgba(251,191,36,.1)">✓ Importer dans le devis</button>
+  </div>
+</div></div>
+
+<!-- IMPORT EMERSON PDF (proposition Emerson AU) -->
+<div class="modal-overlay" id="mEMP">
+<div class="modal modal-lg" style="max-width:780px">
+  <div class="modal-header"><h3>📤 Import proposition Emerson (PDF) — Preview</h3><button class="modal-close" onclick="cm('mEMP')">✕</button></div>
+  <div class="modal-body">
+    <div id="emp-status" style="margin-bottom:12px;color:var(--muted);font-size:12px"></div>
+    <div id="emp-header-preview" style="display:none;background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.3);border-radius:6px;padding:12px;margin-bottom:14px">
+      <div style="font-weight:700;color:#22d3ee;font-size:12px;margin-bottom:8px">📋 Infos extraites de la proposition Emerson</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:12px">
+        <div>N° proposition : <strong id="emp-num"></strong></div>
+        <div>Version : <strong id="emp-ver"></strong></div>
+        <div>Date proposition : <strong id="emp-date"></strong></div>
+        <div>Date expiration : <strong id="emp-expiration"></strong></div>
+        <div style="grid-column:span 2">Project : <strong id="emp-project" style="font-weight:500;color:var(--text)"></strong></div>
+        <div>Customer Ref : <strong id="emp-custref" style="font-family:var(--mono);font-size:11px"></strong></div>
+        <div>Devise : <strong id="emp-currency"></strong></div>
+        <div>Shipping Terms : <strong id="emp-shipping"></strong></div>
+        <div>Lead Time : <strong id="emp-leadtime"></strong></div>
+        <div>Contact : <strong id="emp-contact"></strong></div>
+        <div>Payment Terms : <strong id="emp-payment"></strong></div>
+        <div style="grid-column:span 2;border-top:1px solid rgba(34,211,238,.2);padding-top:6px;margin-top:4px">TOTAL PRICE : <strong id="emp-total" style="color:#22d3ee;font-size:14px"></strong></div>
+      </div>
+    </div>
+    <div id="emp-options-wrap" style="display:none;margin-bottom:14px;padding:12px;background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.25);border-radius:6px">
+      <div style="font-weight:700;color:#a78bfa;font-size:12px;margin-bottom:8px">⚙ Options d'import</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;margin-bottom:6px">
+        <input type="checkbox" id="emp-update-ref" checked style="width:14px;height:14px;cursor:pointer">
+        <span>Mettre à jour <strong>Réf Emerson</strong> + <strong>Date</strong> dans le devis</span>
+      </label>
+      <div style="font-size:10.5px;color:var(--muted);margin-top:2px;padding-left:22px">
+        💡 Le PDF sera aussi <strong>stocké localement</strong> (IndexedDB) et consultable via l'icône 👁 dans la liste Devis.<br>
+        Le montant en AUD est <strong>affiché à titre indicatif</strong> ; le total du devis (XPF) n'est pas modifié.
+      </div>
+    </div>
+    <div id="emp-raw-wrap" style="display:none;margin-top:12px">
+      <details style="font-size:11px;color:var(--muted)">
+        <summary style="cursor:pointer">🔍 Voir le texte brut extrait du PDF (debug)</summary>
+        <pre id="emp-raw-text" style="background:rgba(0,0,0,.2);padding:10px;border-radius:4px;max-height:200px;overflow:auto;font-family:var(--mono);font-size:10.5px;white-space:pre-wrap;margin-top:6px"></pre>
+      </details>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mEMP')">Annuler</button>
+    <button class="btn btn-teal" id="emp-confirm-btn" onclick="confirmEmersonImport()" disabled style="border-color:rgba(34,211,238,.5);color:#22d3ee;background:rgba(34,211,238,.1)">✓ Importer dans le devis</button>
   </div>
 </div></div>
 
@@ -22016,6 +22065,262 @@ function confirmACTImport(){
   if(h.num) msg+=' ('+h.num+')';
   if(lignesAjoutees) msg+=' · '+lignesAjoutees+' ligne fret ajoutée';
   // Toast léger via alert pour visibilité immédiate
+  if(typeof showBCSaveToast==='function') showBCSaveToast(msg);
+  else alert(msg);
+}
+
+// =============================================================================
+// IMPORT PROPOSITION EMERSON (PDF) — Parser pour devis Emerson Process Mgmt AU
+// =============================================================================
+// Formats observés (sur 2 PDFs réels, mai 2026) :
+//   - "Emerson Proposal: 29429380 Ver:2"           (purement numérique)
+//   - "Emerson Proposal: AUNZ2620346 Ver:1"        (alphanumérique)
+//   - Date: "17-Nov-25" / "20-Apr-26"              (DD-MMM-YY, anglais)
+//   - Expiration Date: idem
+//   - Reference: 3276945832769458                  (numéro client SLN/PRNC)
+//   - Project: <texte multi-ligne>
+//   - Shipping Terms: "Inco2020: DDP" / "Inco2020: FCA (SINGAPORE)"
+//   - TOTAL PRICE / Total Price : montant AUD
+//   - Toujours en AUD pour Emerson AU (Bayswater Victoria)
+// =============================================================================
+var empState={header:null,pdfFile:null,pdfBytes:null,rawText:''};
+
+// Helpers (locaux au parser Emerson)
+var EMERSON_MONTHS_EN={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+function _parseEmersonDate(s){
+  if(!s) return '';
+  var m=String(s).trim().match(/^(\d{1,2})[-\s]+([A-Za-z]{3,9})[-\s]+(\d{2,4})$/);
+  if(!m) return '';
+  var day=parseInt(m[1],10);
+  var mon=EMERSON_MONTHS_EN[m[2].slice(0,3).toLowerCase()];
+  if(!mon) return '';
+  var year=parseInt(m[3],10);
+  if(year<100) year+=(year<=49?2000:1900);
+  var pad=function(n){return n<10?'0'+n:String(n);};
+  return year+'-'+pad(mon)+'-'+pad(day);
+}
+function _parseEmersonAmount(s){
+  if(!s) return null;
+  var clean=String(s).replace(/,/g,'').replace(/\s+/g,'');
+  var n=parseFloat(clean);
+  return isNaN(n)?null:n;
+}
+
+function triggerEmersonPdfImport(){
+  var inp=document.getElementById('dv-emerson-pdf-import-input');
+  if(inp){inp.value='';inp.click();}
+}
+
+function handleEmersonPdfSelected(event){
+  var f=event.target.files&&event.target.files[0];
+  if(!f) return;
+  if(typeof pdfjsLib==='undefined'){
+    alert('La bibliothèque pdf.js n\'est pas chargée. Vérifie ta connexion internet.');
+    return;
+  }
+  empState={header:null,pdfFile:f,pdfBytes:null,rawText:''};
+  om('mEMP');
+  setEmpStatus('⏳ Lecture du PDF Emerson en cours...');
+  document.getElementById('emp-header-preview').style.display='none';
+  document.getElementById('emp-options-wrap').style.display='none';
+  document.getElementById('emp-raw-wrap').style.display='none';
+  document.getElementById('emp-confirm-btn').disabled=true;
+
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var arr=new Uint8Array(e.target.result);
+      empState.pdfBytes=arr.slice(0);
+      extractEmersonPdf(arr).then(function(result){
+        empState.header=result.header;
+        empState.rawText=result.rawText;
+        renderEmpPreview();
+      }).catch(function(err){
+        console.error('Parse Emerson error:',err);
+        setEmpStatus('❌ Erreur lors de l\'analyse : '+(err.message||err));
+      });
+    }catch(ex){
+      setEmpStatus('❌ Erreur lors de la lecture du fichier : '+(ex.message||ex));
+    }
+  };
+  reader.onerror=function(){setEmpStatus('❌ Impossible de lire le fichier.');};
+  reader.readAsArrayBuffer(f);
+}
+
+function setEmpStatus(msg){
+  var el=document.getElementById('emp-status');
+  if(el) el.innerHTML=msg;
+}
+
+function extractEmersonPdf(uint8arr){
+  // Extraction du texte brut via pdf.js (toutes pages)
+  return pdfjsLib.getDocument({data:uint8arr}).promise.then(function(pdf){
+    var pageNums=[];
+    for(var i=1;i<=pdf.numPages;i++) pageNums.push(i);
+    return Promise.all(pageNums.map(function(n){
+      return pdf.getPage(n).then(function(p){
+        return p.getTextContent().then(function(tc){
+          return tc.items.map(function(it){return it.str;}).join(' ');
+        });
+      });
+    })).then(function(pages){
+      var rawText=pages.join('\n');
+      var header=parseEmersonQuoteText(rawText);
+      return{header:header,rawText:rawText};
+    });
+  });
+}
+
+// Parser principal (logique testée sur 2 PDFs réels, taux de réussite 11/11)
+function parseEmersonQuoteText(text){
+  var t=text||'';
+  var h={
+    num:'',ver:'',refFull:'',
+    date:'',expirationDate:'',
+    customerRef:'',project:'',
+    shipping:'',leadTime:'',paymentTerms:'',
+    total:null,currency:'AUD',
+    contactTo:'',contactEmail:''
+  };
+
+  // 1. Emerson Proposal: NUM Ver:N (accepte alphanumérique et numérique)
+  var m=t.match(/Emerson\s+Proposal\s*:\s*([A-Z0-9]+)\s+Ver\s*[:\s]?\s*(\d+)/i);
+  if(m){h.num=m[1];h.ver=m[2];h.refFull=m[1]+' Ver '+m[2];}
+  // Fallback : FAX_INFO en début de PDF
+  if(!h.num){
+    m=t.match(/FAX_INFO\s*:\s*(\d+)\s*:/i);
+    if(m) h.num=m[1];
+  }
+
+  // 2. Date: DD-MMM-YY
+  m=t.match(/(?:^|\s|\n)Date\s*:\s*(\d{1,2}[-\s][A-Za-z]{3,9}[-\s]\d{2,4})/);
+  if(m) h.date=_parseEmersonDate(m[1]);
+  if(!h.date){
+    m=t.match(/(\d{1,2}[-\s][A-Za-z]{3,9}[-\s]20\d{2})/);
+    if(m) h.date=_parseEmersonDate(m[1]);
+  }
+
+  // 3. Expiration Date
+  m=t.match(/Expiration\s+Date\s*:\s*(\d{1,2}[-\s][A-Za-z]{3,9}[-\s]\d{2,4})/i);
+  if(m) h.expirationDate=_parseEmersonDate(m[1]);
+
+  // 4. Reference (Customer Ref)
+  m=t.match(/Reference\s*:\s*(\S+)/i);
+  if(m) h.customerRef=m[1];
+  if(!h.customerRef){
+    m=t.match(/Customer\s+Ref\s*#?\s*:\s*(\S+)/i);
+    if(m) h.customerRef=m[1];
+  }
+
+  // 5. Project (multi-ligne tronqué à Expiration/To/Reference suivant)
+  m=t.match(/Project\s*:\s*([\s\S]*?)(?=\s*(?:Expiration\s+Date|To\s*:|Reference\s*:))/i);
+  if(m) h.project=m[1].replace(/\s+/g,' ').trim();
+
+  // 6. Shipping Terms
+  m=t.match(/Shipping\s+Terms\s*:\s*(.+?)(?=\s{2,}|\n|Payment\s+Terms|Freight\s+Terms|$)/i);
+  if(m) h.shipping=m[1].trim();
+
+  // 7. Lead Time
+  m=t.match(/Lead\s+Time\s*:\s*(.+?)(?:\n|$)/i);
+  if(m) h.leadTime=m[1].trim();
+
+  // 8. Payment Terms
+  m=t.match(/Payment\s+Terms\s*:\s*(.+?)(?=\s{2,}|\n|Freight\s+Terms|$)/i);
+  if(m) h.paymentTerms=m[1].trim();
+
+  // 9. TOTAL PRICE / Total Price (montant AUD)
+  m=t.match(/Total\s+Price\s*[\s\S]{0,40}?([\d,]+\.\d{2})/i);
+  if(m) h.total=_parseEmersonAmount(m[1]);
+
+  // 10. Devise (généralement AUD)
+  m=t.match(/All\s+Prices\s+quoted\s+are\s+in\s+([A-Z]{3})/i);
+  if(m) h.currency=m[1];
+  if(/Australian\s+Dollars/i.test(t) && !m) h.currency='AUD';
+
+  // 11. Contact "To:" + email
+  m=t.match(/To\s*:\s+([^\n]+?)\s+Phone\s*:/);
+  if(m) h.contactTo=m[1].trim();
+  m=t.match(/To\s*:[\s\S]*?Email\s*:\s*(\S+@\S+)/);
+  if(m) h.contactEmail=m[1].trim();
+
+  return h;
+}
+
+function renderEmpPreview(){
+  var h=empState.header;
+  if(!h){setEmpStatus('❌ Aucune donnée extraite.');return;}
+
+  function fmtDate(iso){
+    if(!iso) return '<em style="color:var(--muted);font-style:normal">—</em>';
+    var m=iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m?(m[3]+'/'+m[2]+'/'+m[1]):iso;
+  }
+  function fmtVal(v){return v?esc(String(v)):'<em style="color:var(--muted);font-style:normal">—</em>';}
+  function fmtMoney(n,cur){
+    if(n==null) return '<em style="color:var(--muted);font-style:normal">—</em>';
+    return n.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(cur||'AUD');
+  }
+
+  document.getElementById('emp-num').innerHTML=fmtVal(h.num);
+  document.getElementById('emp-ver').innerHTML=fmtVal(h.ver);
+  document.getElementById('emp-date').innerHTML=fmtDate(h.date);
+  document.getElementById('emp-expiration').innerHTML=fmtDate(h.expirationDate);
+  document.getElementById('emp-custref').innerHTML=fmtVal(h.customerRef);
+  document.getElementById('emp-project').innerHTML=fmtVal(h.project);
+  document.getElementById('emp-currency').innerHTML=fmtVal(h.currency);
+  document.getElementById('emp-shipping').innerHTML=fmtVal(h.shipping);
+  document.getElementById('emp-leadtime').innerHTML=fmtVal(h.leadTime);
+  document.getElementById('emp-payment').innerHTML=fmtVal(h.paymentTerms);
+  document.getElementById('emp-contact').innerHTML=fmtVal(h.contactTo);
+  document.getElementById('emp-total').innerHTML=fmtMoney(h.total,h.currency);
+
+  document.getElementById('emp-header-preview').style.display='block';
+  document.getElementById('emp-options-wrap').style.display='block';
+  document.getElementById('emp-raw-wrap').style.display='block';
+  document.getElementById('emp-raw-text').textContent=empState.rawText||'';
+  document.getElementById('emp-confirm-btn').disabled=false;
+
+  var msgParts=[];
+  if(h.refFull) msgParts.push('N° '+h.refFull);
+  if(h.date) msgParts.push('Date '+fmtDate(h.date));
+  if(h.total!=null) msgParts.push('Total '+fmtMoney(h.total,h.currency));
+  setEmpStatus('✅ Proposition Emerson extraite ('+msgParts.join(' · ')+'). Vérifiez les valeurs avant import.');
+}
+
+function confirmEmersonImport(){
+  var h=empState.header;
+  if(!h){alert('Aucune donnée à importer.');return;}
+  if(!h.num){
+    if(!confirm('⚠ Aucun N° de proposition Emerson n\'a été détecté.\n\nImporter quand même ?')) return;
+  }
+
+  // 1. Mettre à jour les champs Réf Emerson + Date si l'option est cochée
+  var updateRef=document.getElementById('emp-update-ref').checked;
+  if(updateRef){
+    var refField=document.getElementById('dv-ref-emerson');
+    var dateField=document.getElementById('dv-ref-emerson-date');
+    if(refField){refField.value=h.refFull||h.num||'';}
+    if(dateField){dateField.value=h.date||'';}
+  }
+
+  // 2. Stocker le PDF en IndexedDB si on a un devis ouvert + storeDevisPdf dispo
+  //    (réutilise l'infra P1 — comme pour ACT)
+  if(eDVid && empState.pdfBytes && empState.pdfFile && typeof storeDevisPdf==='function'){
+    storeDevisPdf({
+      devisId:eDVid,kind:'emerson',filename:empState.pdfFile.name,
+      refValue:h.refFull||h.num||'',refDate:h.date||'',bytes:empState.pdfBytes
+    }).then(function(){
+      if(typeof refreshDevisPdfCache==='function') return refreshDevisPdfCache();
+    }).then(function(){
+      if(typeof renderDevisPdfCard==='function') renderDevisPdfCard(eDVid,'emerson');
+      if(typeof rDV==='function'){try{rDV();}catch(e){}}
+    }).catch(function(err){console.warn('Stockage PDF Emerson échoué (non bloquant):',err);});
+  }
+
+  // 3. Fermer la modale et confirmer
+  cm('mEMP');
+  var msg='✅ Proposition Emerson importée';
+  if(h.num) msg+=' ('+h.refFull+')';
   if(typeof showBCSaveToast==='function') showBCSaveToast(msg);
   else alert(msg);
 }
