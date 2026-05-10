@@ -16858,6 +16858,10 @@ function confirmEmersonDevisImport(){
       });
       // Pousser le KIT : ligne principale porte qte=1 + puXpf (prix global du LOT)
       // Le total est calculé directement comme puXpf × 1 = puXpf ✅
+      // FIX : on stocke aussi audPrice/audRate/audMargin sur la ligne KIT pour permettre
+      //       le recalcul du PU XPF si l'utilisateur ajuste Taux/Marge dans la modale Devis.
+      //       Pour un KIT, audPrice représente le prix AUD GLOBAL du lot (= puAud × qte initiale).
+      //       Cohérent avec puXpf = audPrice × rate × margin.
       lines.fourniture.push({
         ref:ref,                  // ref du PN principal (utile pour les PO Emerson)
         designation:kitTitle,
@@ -16865,17 +16869,25 @@ function confirmEmersonDevisImport(){
         unite:'Lot',
         qte:1,
         pu:puXpf,                 // PRIX GLOBAL du KIT (Extended × rate × margin)
+        audPrice:puAud,           // prix AUD source (déjà global pour un KIT)
+        audRate:rate,             // taux AUD→XPF utilisé lors de l'import
+        audMargin:margin,         // marge appliquée
         subLines:kitSubLines
       });
     } else {
       // Ligne classique (non-KIT) : comportement préservé
+      // FIX : on stocke audPrice/audRate/audMargin sur la ligne pour permettre
+      //       le recalcul du PU XPF via les champs Taux/Marge de la modale Devis.
       lines.fourniture.push({
         ref:ref,
         designation:desc,
         unite:'U',
         qte:qte,
         pu:puXpf,
-        tgc:tgcPct
+        tgc:tgcPct,
+        audPrice:puAud,           // prix unitaire AUD source
+        audRate:rate,             // taux AUD→XPF utilisé lors de l'import
+        audMargin:margin          // marge appliquée
       });
     }
   });
@@ -17785,6 +17797,9 @@ function applyEmersonReimportToDV(d,emersonData,fileName,snapshotBefore){
         tgc:tgcForLines, // ← respect du TGC client (0% si SLN exonéré)
         unite:'Lot',
         qte:1,pu:puXpf,
+        audPrice:puAud,    // ← FIX : prix AUD source pour recalcul Taux/Marge dans modale Devis
+        audRate:rate,
+        audMargin:margin,
         subLines:kitSubLines
       });
     } else {
@@ -17793,7 +17808,10 @@ function applyEmersonReimportToDV(d,emersonData,fileName,snapshotBefore){
         designation:item.desc||'',
         unite:'U',
         qte:qte,pu:puXpf,
-        tgc:tgcForLines // ← respect du TGC client (0% si SLN exonéré)
+        tgc:tgcForLines, // ← respect du TGC client (0% si SLN exonéré)
+        audPrice:puAud,  // ← FIX : prix AUD source pour recalcul Taux/Marge dans modale Devis
+        audRate:rate,
+        audMargin:margin
       });
     }
   });
