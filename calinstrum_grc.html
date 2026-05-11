@@ -611,6 +611,44 @@ body::before{content:"";position:fixed;inset:0;background-image:linear-gradient(
 .btn-red{background:transparent;border:1px solid rgba(244,63,94,.3);color:var(--red)}.btn-red:hover{background:rgba(244,63,94,.1)}
 .btn-amber{background:transparent;border:1px solid rgba(251,191,36,.3);color:var(--amber)}
 .btn-sm{padding:3px 8px;font-size:9.5px}
+/* === Drop zone pour drag & drop PDF dans Traçabilité === */
+.pdf-drop-zone{
+  border:1px dashed transparent;
+}
+.pdf-drop-zone.drag-active{
+  border:1px dashed var(--teal);
+  background:rgba(45,212,191,0.05);
+  box-shadow:0 0 0 1px rgba(45,212,191,0.15) inset;
+}
+.pdf-drop-zone.drag-active[data-drop-kind="act"]{
+  border-color:#fbbf24;
+  background:rgba(251,191,36,0.05);
+  box-shadow:0 0 0 1px rgba(251,191,36,0.15) inset;
+}
+.pdf-drop-zone .drop-overlay{
+  position:absolute;
+  inset:0;
+  border-radius:8px;
+  background:rgba(45,212,191,0.08);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  pointer-events:none;
+  opacity:0;
+  transition:opacity .15s;
+  z-index:10;
+  color:var(--teal);
+  font-size:13px;
+  font-weight:500;
+  letter-spacing:0.02em;
+}
+.pdf-drop-zone[data-drop-kind="act"] .drop-overlay{
+  background:rgba(251,191,36,0.08);
+  color:#fbbf24;
+}
+.pdf-drop-zone.drag-active .drop-overlay{
+  opacity:1;
+}
 .tbl-wrap{overflow-x:auto;border-radius:6px;border:1px solid var(--border)}
 table{width:100%;border-collapse:collapse;font-size:11px}
 th{padding:7px 10px;text-align:left;font-weight:700;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;border-bottom:1px solid var(--border);background:var(--bg3);cursor:pointer;user-select:none}
@@ -1145,6 +1183,10 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     Vue facturation · Toutes phases · Classées par <strong style="color:var(--muted);font-weight:500">date d'émission</strong> (les pré-facturées par <strong style="color:var(--muted);font-weight:500">date de réception BC</strong>)
   </div>
 
+  <!-- Chip filtre invisible "Mois d'encaissement" actif (drill-down depuis donut).
+       Rempli dynamiquement par renderFA(). Vide par défaut. -->
+  <div id="fa-enc-month-chip" style="margin:0 0 8px 0"></div>
+
   <!-- TABLEAU hiérarchique : Année > Mois > Client > Factures (style page Devis)
        Les colonnes reprennent le design Suivi + 1 colonne 📅 Date encaissement supplémentaire.
        Pas de tri par clic sur en-tête (incompatible avec hiérarchie) — utiliser la page Suivi
@@ -1537,11 +1579,12 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         <hr style="border:none;border-top:1px solid rgba(124,58,237,0.2);margin:12px 0">
         <!-- ============== 4 jalons traçabilité ============== -->
         <div style="font-size:10px;font-weight:600;color:#a78bfa;margin-bottom:6px;text-transform:uppercase">🔖 Références externes</div>
-        <!-- Réf Emerson + date -->
+        <!-- Réf Emerson + date — wrapper drop zone -->
+        <div class="pdf-drop-zone" data-drop-kind="emerson" style="position:relative;border-radius:8px;padding:6px;margin:-6px;transition:all .15s">
         <div class="form-row">
           <div class="form-group" style="margin:0"><label><i class="ti ti-circuit-bulb" style="font-size:12px;color:#22d3ee"></i> Réf Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(N° proposition complet)</span>
             <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(34,211,238,.4);color:#22d3ee" onclick="document.getElementById('dv-import-emerson-file').click()" title="Importer un devis Emerson PDF (en AUD) → conversion en devis CALINSTRUM (en XPF) avec marge + taux + fret">📤 Import PDF</button>
-            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:4px;border-color:rgba(34,211,238,.4);color:#22d3ee" onclick="triggerDevisPdfUpload('emerson')" title="Stocker une copie locale du PDF Emerson sans extraction (visible via 👁 dans la liste)">📎 Joindre</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:4px;border-color:rgba(34,211,238,.4);color:#22d3ee" onclick="triggerDevisPdfUpload('emerson')" title="Stocker une copie locale du PDF Emerson sans extraction (visible via 👁 dans la liste). Tu peux aussi glisser un PDF sur cette zone.">📎 Joindre</button>
             <input type="file" id="dv-emerson-pdf-input" accept=".pdf,application/pdf" style="display:none" onchange="handleDevisPdfSelected(event,'emerson')">
           </label>
             <input class="form-input" id="dv-ref-emerson" placeholder="ex: 23306657 Ver 5">
@@ -1552,11 +1595,13 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         </div>
         <!-- Carte fichier PDF Emerson (si attaché) -->
         <div id="dv-emerson-pdf-card" style="display:none;margin-top:6px"></div>
-        <!-- Réf ACT + date -->
-        <div class="form-row" style="margin-top:8px">
+        </div>
+        <!-- Réf ACT + date — wrapper drop zone -->
+        <div class="pdf-drop-zone" data-drop-kind="act" style="position:relative;border-radius:8px;padding:6px;margin:8px -6px -6px -6px;transition:all .15s">
+        <div class="form-row">
           <div class="form-group" style="margin:0"><label><i class="ti ti-building-warehouse" style="font-size:12px;color:#fbbf24"></i> Réf ACT <span style="color:var(--muted);font-weight:400;font-size:10px">(cotation transitaire)</span>
             <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(251,191,36,.4);color:#fbbf24" onclick="triggerACTPdfImport()" title="Importer une cotation ACT depuis un PDF : extraction auto du N°, date, montant fret">📤 Import PDF</button>
-            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:4px;border-color:rgba(251,191,36,.4);color:#fbbf24" onclick="triggerDevisPdfUpload('act')" title="Stocker une copie locale du PDF ACT sans extraction (visible via 👁 dans la liste)">📎 Joindre</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:4px;border-color:rgba(251,191,36,.4);color:#fbbf24" onclick="triggerDevisPdfUpload('act')" title="Stocker une copie locale du PDF ACT sans extraction (visible via 👁 dans la liste). Tu peux aussi glisser un PDF sur cette zone.">📎 Joindre</button>
             <input type="file" id="dv-act-pdf-input" accept=".pdf,application/pdf" style="display:none" onchange="handleACTPdfSelected(event)">
             <input type="file" id="dv-act-pdf-attach-input" accept=".pdf,application/pdf" style="display:none" onchange="handleDevisPdfSelected(event,'act')">
           </label>
@@ -1568,6 +1613,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         </div>
         <!-- Carte fichier PDF ACT (si attaché) -->
         <div id="dv-act-pdf-card" style="display:none;margin-top:6px"></div>
+        </div>
         <!-- PO Calinstrum + date -->
         <div class="form-row" style="margin-top:8px">
           <div class="form-group" style="margin:0"><label><i class="ti ti-shopping-cart" style="font-size:12px;color:#a78bfa"></i> PO Calinstrum <span style="color:var(--muted);font-weight:400;font-size:10px">(rempli auto à la création du BC)</span></label>
@@ -13143,24 +13189,89 @@ function undoLastPhase(){
   _refreshPhaseNextBtn();
 }
 
-// Ajouter une entrée libre via dropdown + date
+// Ouvre la mini-modale pour ajouter une entrée libre à l'historique de phases.
+// Remplace l'ancien prompt() natif. Le select est rempli dynamiquement avec
+// toutes les PHASES_META, en marquant celles non pertinentes pour le type de
+// devis actuel (sans pour autant les désactiver — l'utilisateur peut quand
+// même les sélectionner si nécessaire).
 function openAddPhaseDialog(){
   var keys=Object.keys(PHASES_META);
   var devisType=gvg('dv-type')||'Fourniture';
+  var sel=document.getElementById('addphase-key');
+  if(!sel) return; // sécurité
+
+  // Tri par idx PHASES_META (ordre logique du workflow)
+  keys.sort(function(a,b){
+    return (PHASES_META[a].idx||99)-(PHASES_META[b].idx||99);
+  });
+
+  // Construction des options : préfixe icône selon applicabilité
   var optsHtml='';
   keys.forEach(function(k){
     var m=PHASES_META[k];
     var applicable=_isPhaseApplicable(k,devisType);
-    optsHtml+='<option value="'+k+'"'+(applicable?'':' style="color:var(--muted-soft)"')+'>'+m.idx+'. '+esc(m.label)+(applicable?'':' (non pertinent)')+'</option>';
+    var prefix=applicable?'':'⚠ ';
+    var suffix=applicable?'':' (non pertinent pour '+devisType+')';
+    optsHtml+='<option value="'+k+'" data-applicable="'+(applicable?'1':'0')+'">'+
+      prefix+m.idx+'. '+esc(m.label)+suffix+'</option>';
   });
+  sel.innerHTML=optsHtml;
+
+  // Pré-sélectionner la phase suivante logique (= nextKey) si dispo
+  // sinon "envoye" par défaut. Le code _refreshPhaseNextBtn calcule déjà ça.
+  var virtualD={type:devisType,phaseHistory:_dvPhaseHistoryEdit.slice()};
+  var nextKey=(typeof getNextPhaseKey==='function')?getNextPhaseKey(virtualD):'envoye';
+  if(nextKey && PHASES_META[nextKey]) sel.value=nextKey;
+  else sel.value='envoye';
+
+  // Date : aujourd'hui par défaut
   var today=(typeof td==='function')?td():new Date().toISOString().substring(0,10);
-  // Mini-modale prompt simple via prompt natif (cas rare, simple à utiliser)
-  // Variante : on peut créer une vraie sous-modale, mais prompt suffit pour cet usage exceptionnel
-  var phaseKey=prompt('Ajouter une phase à l\'historique\n\nClé phase :\n  • envoye\n  • bc_recu\n  • po_emerson (Fourniture)\n  • confirm_emerson (Fourniture)\n  • production (Fourniture)\n  • expedie (Fourniture)\n  • receptionne (Fourniture)\n  • debut_chantier (Prestation/Mixte)\n  • fin_chantier_pv (Prestation/Mixte)\n  • facture','envoye');
-  if(!phaseKey || !PHASES_META[phaseKey]) return;
-  var date=prompt('Date de cette phase (YYYY-MM-DD) :',today);
-  if(!date) return;
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){alert('Format invalide. Utilisez YYYY-MM-DD.');return;}
+  var dateInput=document.getElementById('addphase-date');
+  if(dateInput) dateInput.value=today;
+
+  // Mettre à jour le warning au changement de phase
+  sel.onchange=_updateAddPhaseWarning;
+  _updateAddPhaseWarning();
+
+  // Ouvrir la modale
+  if(typeof om==='function') om('mADDPHASE');
+  // Focus sur le select pour clavier-friendly
+  setTimeout(function(){ try{sel.focus();}catch(e){} },50);
+}
+
+// Affiche un warning visuel si la phase sélectionnée n'est pas pertinente
+function _updateAddPhaseWarning(){
+  var sel=document.getElementById('addphase-key');
+  var warn=document.getElementById('addphase-warning');
+  var warnTxt=document.getElementById('addphase-warning-text');
+  if(!sel||!warn||!warnTxt) return;
+  var opt=sel.options[sel.selectedIndex];
+  if(opt && opt.dataset.applicable==='0'){
+    var devisType=gvg('dv-type')||'Fourniture';
+    warnTxt.textContent='Cette phase n\'est habituellement pas utilisée pour un devis de type "'+devisType+'". Tu peux quand même la sélectionner si nécessaire.';
+    warn.style.display='block';
+  } else {
+    warn.style.display='none';
+  }
+}
+
+// Confirmer l'ajout depuis la modale : valide les inputs, push dans
+// _dvPhaseHistoryEdit, retrie, met à jour l'UI, ferme la modale.
+function confirmAddPhase(){
+  var phaseKey=gvg('addphase-key')||'';
+  var date=gvg('addphase-date')||'';
+  if(!phaseKey || !PHASES_META[phaseKey]){
+    alert('Phase invalide.');
+    return;
+  }
+  if(!date){
+    alert('Date obligatoire.');
+    return;
+  }
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){
+    alert('Format de date invalide. Utilise YYYY-MM-DD.');
+    return;
+  }
   _dvPhaseHistoryEdit.push({phase:phaseKey,date:date,_reconstructed:false});
   // Re-trier par idx PHASES_META puis date
   _dvPhaseHistoryEdit.sort(function(a,b){
@@ -13169,7 +13280,7 @@ function openAddPhaseDialog(){
     if(ia!==ib) return ia-ib;
     return (a.date||'').localeCompare(b.date||'');
   });
-  // Sync inputs
+  // Sync inputs principaux phase/date
   if(_dvPhaseHistoryEdit.length>0){
     var last=_dvPhaseHistoryEdit[_dvPhaseHistoryEdit.length-1];
     gv('dv-phase',last.phase);
@@ -13177,6 +13288,12 @@ function openAddPhaseDialog(){
   }
   renderPhaseHistoryTable();
   _refreshPhaseNextBtn();
+  cm('mADDPHASE');
+  // Toast de confirmation
+  if(typeof showBCSaveToast==='function'){
+    var m=PHASES_META[phaseKey];
+    showBCSaveToast('✓ Phase "'+m.label+'" ajoutée au '+date);
+  }
 }
 
 // Supprimer une entrée à l'index donné
@@ -20163,6 +20280,12 @@ function renderFA(){
   var fType=gvg('fFAtype')||'';
   var fYear=gvg('fFAyear')||'';
   var fSort=gvg('fFAsort')||'date_desc';
+  // Filtre INVISIBLE par mois d'encaissement (drill-down depuis donut).
+  // Format : "YYYY-MM" (ex: "2026-04") ou "" si inactif.
+  // Quand actif, on garde UNIQUEMENT les factures dont la dateEncaissement
+  // (ou dateEnvoi en fallback si pas de dateEnc) tombe ce mois-là.
+  // Cf. _drillDownToMonth() qui set ce filtre + affiche le chip.
+  var fEncMonth=(typeof window._faFilterByEncMonth==='string')?window._faFilterByEncMonth:'';
 
   // ===== Filtres combinés (ET logique) =====
   var data=sourceWithClient.filter(function(i){
@@ -20184,10 +20307,20 @@ function renderFA(){
       if(t!==fType) return false;
     }
     // Année (sur dateEnvoi ou dateReceptionBC pour les pré-facturées)
-    if(fYear){
+    // EXCEPTION : si le filtre invisible par mois d'encaissement est actif,
+    // on ignore le filtre année. Car une facture peut être encaissée en
+    // février 2026 mais émise en décembre 2025 — on veut quand même la voir.
+    if(fYear && !fEncMonth){
       var dateForYear=i.dateEnvoi||i.dateReceptionBC||'';
       var m=String(dateForYear).match(/^(\d{4})/);
       if(!m || m[1]!==fYear) return false;
+    }
+    // Filtre invisible : mois d'encaissement (drill-down depuis donut)
+    if(fEncMonth){
+      // On regarde dateEncaissement (priorité 1), sinon dateEnvoi (fallback "payé sans date")
+      var dEnc=(typeof _faGetEncaissement==='function')?_faGetEncaissement(i):(i.dateEncaissement||'');
+      var dateForEnc=dEnc||i.dateEnvoi||'';
+      if(!dateForEnc.startsWith(fEncMonth)) return false;
     }
     return true;
   });
@@ -20212,11 +20345,50 @@ function renderFA(){
     return 0;
   });
 
-  // ===== Mise à jour du compteur de résultats + KPIs + pipeline + donut =====
+  // ===== Reconstruire un dataset SANS le filtre invisible pour le donut =====
+  // Sinon, cliquer sur un mois "réduit" le donut à ce seul mois et l'utilisateur
+  // ne peut plus naviguer vers un autre mois. Le donut doit toujours montrer la
+  // vue d'ensemble (tous les mois encaissés selon les autres filtres actifs).
+  // Note : le donut continue d'utiliser fYear comme contexte (car il représente
+  // une année entière), contrairement au tableau qui ignore fYear si fEncMonth.
+  var dataForDonut=data;
+  if(fEncMonth){
+    // Re-filtrer la source sans appliquer fEncMonth, mais en respectant fYear
+    dataForDonut=sourceWithClient.filter(function(i){
+      if(s && JSON.stringify(i).toLowerCase().indexOf(s)<0) return false;
+      if(fStatut){
+        if(fStatut==='prebilled'){
+          if(!(typeof isPrebilled==='function' && isPrebilled(i))) return false;
+        } else {
+          if(typeof isPrebilled==='function' && isPrebilled(i)) return false;
+          var st_=getStatus(i);
+          if(st_!==fStatut) return false;
+        }
+      }
+      if(fType){
+        var t_=i.type||'Fourniture';
+        if(t_!==fType) return false;
+      }
+      // Pour le donut on regarde la dateEncaissement (= la logique du donut)
+      // pour filtrer par année. Sinon une facture émise en décembre 2025
+      // mais encaissée en février 2026 disparaîtrait du donut "2026".
+      if(fYear){
+        var dEnc_=(typeof _faGetEncaissement==='function')?_faGetEncaissement(i):(i.dateEncaissement||'');
+        var dateForY_=dEnc_||i.dateEnvoi||i.dateReceptionBC||'';
+        var m_=String(dateForY_).match(/^(\d{4})/);
+        if(!m_ || m_[1]!==fYear) return false;
+      }
+      return true;
+    });
+    dataForDonut=filterByActiveClient(dataForDonut,'fa');
+  }
+
+  // ===== Mise à jour du compteur de résultats + KPIs + pipeline + donut + chip =====
   _renderFAKpis(data);
   _renderFAPipeline(data);
-  _renderFADonut(data);
+  _renderFADonut(dataForDonut);
   _renderFAResultCount(data,sourceWithClient.length);
+  _renderFAEncMonthChip();
 
   var tb=document.getElementById('tbFA');
   if(!tb)return;
@@ -20860,9 +21032,12 @@ function _renderFADonut(data){
 // Click sur un segment (ou ligne légende) du donut "Encaissé par mois" :
 //  1. Applique le filtre Statut = "Payées" (puisque le donut montre les encaissées)
 //  2. Applique le filtre Année = année du donut (préserve le contexte temporel)
-//  3. Auto-expand l'année + le mois cliqué dans le tableau hiérarchique
-//     (en RÉINITIALISANT les autres mois pour focus visuel clair)
-//  4. Re-render pour appliquer + scroll fluide vers le mois ouvert
+//  3. SET le filtre invisible _faFilterByEncMonth = "YYYY-MM" → ne garde que
+//     les factures dont la dateEncaissement (ou dateEnvoi fallback) tombe ce mois-là.
+//     Ce filtre est INDÉPENDANT de la hiérarchie tableau (qui classe par dateEnvoi) :
+//     les factures encaissées en avril mais émises en mars apparaîtront sous "Mars 2026"
+//     dans le tableau, mais SEULES ces factures-là seront affichées.
+//  4. Re-render pour appliquer
 //  5. Toast confirmant l'action (ou informant si vide)
 // monthIdx : 0..11 (Jan=0, Mai=4...)
 // =============================================================================
@@ -20870,13 +21045,11 @@ function _drillDownToMonth(monthIdx, year){
   if(monthIdx===undefined || monthIdx===null || isNaN(monthIdx)) return;
 
   var monthsFR=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
-  var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
   var monthLabel=monthsFR[monthIdx]||('mois '+monthIdx);
   var yyyy=String(year);
   var mm=String(monthIdx+1).padStart(2,'0');
 
   // === Vérifier si le mois a des encaissements (sinon : feedback dédié) ===
-  // On lit data-value sur les paths du donut pour ce mois
   var maiPaths=document.querySelectorAll('#fa-donut path[data-month="'+monthIdx+'"]');
   var totalForMonth=0;
   maiPaths.forEach(function(p){totalForMonth+=parseFloat(p.dataset.value)||0;});
@@ -20895,21 +21068,66 @@ function _drillDownToMonth(monthIdx, year){
     }
   }
 
-  // 3. Auto-expand année + mois — REMPLACE les expansions précédentes
-  //    (les autres mois sont fermés pour focus visuel net sur celui cliqué)
-  if(!window._hgrState) window._hgrState={};
-  if(!window._hgrState.fa) window._hgrState.fa={activeClient:'',expanded:{}};
-  // On garde activeClient mais on RESET expanded pour ne garder que ce qu'on veut ouvrir
-  window._hgrState.fa.expanded={};
-  window._hgrState.fa.expanded['year:'+yyyy]=true;
+  // 3. SET le filtre invisible par mois d'encaissement
   if(hasData){
-    window._hgrState.fa.expanded['month:'+yyyy+'-'+mm]=true;
+    window._faFilterByEncMonth=yyyy+'-'+mm;
+  } else {
+    window._faFilterByEncMonth=''; // pas de filtre si rien à montrer
   }
 
-  // 4. Re-render
+  // 4. Pré-calcul des mois d'émission à déplier : on regarde dans la source
+  //    quelles factures vont passer le filtre, et on note leurs dateEnvoi.
+  //    Comme ça, on peut déplier directement TOUS les mois pertinents avant
+  //    le renderFA (un seul rendu nécessaire).
+  if(!window._hgrState) window._hgrState={};
+  if(!window._hgrState.fa) window._hgrState.fa={activeClient:'',expanded:{}};
+  window._hgrState.fa.expanded={};
+  window._hgrState.fa.expanded['year:'+yyyy]=true;
+
+  if(hasData && typeof getSuiviSource==='function'){
+    var source=getSuiviSource();
+    source.forEach(function(it){
+      if(typeof isPrebilled==='function' && isPrebilled(it)) return;
+      if(typeof getStatus==='function' && getStatus(it)!=='paid') return;
+      // Test filtre mois encaissement
+      var dEnc=(typeof _faGetEncaissement==='function')?_faGetEncaissement(it):(it.dateEncaissement||'');
+      var dateEnc=dEnc||it.dateEnvoi||'';
+      if(!dateEnc.startsWith(yyyy+'-'+mm)) return;
+      // OK c'est une facture qui sera affichée. Note son mois d'émission.
+      var dEmi=it.dateEnvoi||it.dateReceptionBC||'';
+      var matchEmi=dEmi.match(/^(\d{4})-(\d{2})/);
+      if(matchEmi){
+        var emiYear=matchEmi[1];
+        var emiMonth=matchEmi[2];
+        // Déplier année + mois d'émission (peut différer de yyyy) + client
+        window._hgrState.fa.expanded['year:'+emiYear]=true;
+        window._hgrState.fa.expanded['month:'+emiYear+'-'+emiMonth]=true;
+        // Client : la clé est "client:YYYY-MM|<clientName>"
+        // On détecte le client comme renderFA le fait (cf. detectClientFromInvoice
+        // ou champ .client). Cas simple : it.client si dispo, sinon "SLN" par défaut.
+        var clientName=it.client||'';
+        if(!clientName && typeof detectClientFromInvoice==='function'){
+          clientName=detectClientFromInvoice(it)||'SLN';
+        }
+        if(clientName){
+          // IMPORTANT : la clé client dans _hgrState utilise le groupe court
+          // (ex: "PRNC", pas "PRNC - Comptabilité Facturation"), car
+          // renderHierarchicalRows utilise extractClientGroup pour grouper.
+          var clientGroup=clientName;
+          if(typeof extractClientGroup==='function'){
+            // extractClientGroup attend un item avec .client → on fake un objet
+            clientGroup=extractClientGroup({client:clientName},'fa')||clientName;
+          }
+          window._hgrState.fa.expanded['client:'+emiYear+'-'+emiMonth+'|'+clientGroup]=true;
+        }
+      }
+    });
+  }
+
+  // 5. Re-render avec les mois déjà dépliés
   if(typeof renderFA==='function') renderFA();
 
-  // 5. Si le mois est vide : toast informatif et stop
+  // 6. Si le mois est vide : toast informatif
   if(!hasData){
     if(typeof showBCSaveToast==='function'){
       showBCSaveToast('ℹ️ Aucun encaissement en '+monthLabel+' '+yyyy);
@@ -20917,31 +21135,24 @@ function _drillDownToMonth(monthIdx, year){
     return;
   }
 
-  // 6. Scroll fluide vers la ligne mois après le render
+  // 7. Scroll fluide vers le 1er mois affiché
   setTimeout(function(){
-    var tb=document.getElementById('tbFA');
-    if(!tb) return;
-    var monthRows=tb.querySelectorAll('.hgr-month-row');
-    var targetLabel=monthsFRcap[monthIdx]+' '+yyyy;
-    for(var j=0;j<monthRows.length;j++){
-      if(monthRows[j].textContent.indexOf(targetLabel)>=0){
-        var rect=monthRows[j].getBoundingClientRect();
-        var scrollY=window.pageYOffset||document.documentElement.scrollTop;
-        var targetY=rect.top+scrollY-80;
-        window.scrollTo({top:targetY,behavior:'smooth'});
-        // Flash highlight bref
-        monthRows[j].style.transition='background-color .8s';
-        var origBg=monthRows[j].style.backgroundColor;
-        monthRows[j].style.backgroundColor='rgba(45,212,191,0.12)';
-        setTimeout(function(){monthRows[j].style.backgroundColor=origBg;},800);
-        break;
-      }
+    var firstMonthRow=document.querySelector('#tbFA .hgr-month-row');
+    if(firstMonthRow){
+      var rect=firstMonthRow.getBoundingClientRect();
+      var scrollY=window.pageYOffset||document.documentElement.scrollTop;
+      var targetY=rect.top+scrollY-80;
+      window.scrollTo({top:targetY,behavior:'smooth'});
+      firstMonthRow.style.transition='background-color .8s';
+      var origBg=firstMonthRow.style.backgroundColor;
+      firstMonthRow.style.backgroundColor='rgba(45,212,191,0.12)';
+      setTimeout(function(){firstMonthRow.style.backgroundColor=origBg;},800);
     }
   },80);
 
-  // 7. Toast confirmation
+  // 8. Toast confirmation
   if(typeof showBCSaveToast==='function'){
-    showBCSaveToast('🔍 Filtre '+monthLabel+' '+yyyy+' · Payées appliqué');
+    showBCSaveToast('🔍 Encaissements de '+monthLabel+' '+yyyy);
   }
 }
 
@@ -20967,7 +21178,45 @@ function resetFAFilters(){
   });
   var sort=document.getElementById('fFAsort');
   if(sort) sort.value='date_desc';
+  // Effacer aussi le filtre invisible par mois d'encaissement (drill-down donut)
+  window._faFilterByEncMonth='';
   if(typeof renderFA==='function') renderFA();
+}
+
+// Efface uniquement le filtre invisible mois d'encaissement (clic sur ✕ du chip)
+function clearFAEncMonthFilter(){
+  window._faFilterByEncMonth='';
+  if(typeof renderFA==='function') renderFA();
+  if(typeof showBCSaveToast==='function'){
+    showBCSaveToast('✓ Filtre mois d\'encaissement retiré');
+  }
+}
+
+// Rend le chip "Encaissements de [mois] [année]" quand le filtre invisible est actif.
+// Affiché entre le sous-titre tableau et le tableau lui-même.
+// Cliquable sur ✕ pour retirer le filtre.
+function _renderFAEncMonthChip(){
+  var el=document.getElementById('fa-enc-month-chip');
+  if(!el) return;
+  var v=window._faFilterByEncMonth||'';
+  if(!v){
+    el.innerHTML='';
+    return;
+  }
+  // Parse "YYYY-MM"
+  var m=v.match(/^(\d{4})-(\d{2})$/);
+  if(!m){el.innerHTML='';return;}
+  var year=m[1];
+  var monthIdx=parseInt(m[2],10)-1;
+  var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  var monthLabel=monthsFRcap[monthIdx]||('mois '+(monthIdx+1));
+  el.innerHTML='<div style="display:inline-flex;align-items:center;gap:8px;background:rgba(45,212,191,0.10);border:1px solid rgba(45,212,191,0.30);border-radius:14px;padding:5px 12px;font-size:11px;color:var(--teal)">'+
+    '<i class="ti ti-filter-check" style="font-size:13px"></i>'+
+    '<span>Encaissements de <strong>'+monthLabel+' '+year+'</strong></span>'+
+    '<button class="btn-ghost" onclick="clearFAEncMonthFilter()" title="Retirer ce filtre" '+
+            'style="background:none;border:none;color:var(--teal);font-size:14px;line-height:1;padding:0 2px;cursor:pointer;opacity:.7;transition:opacity .15s" '+
+            'onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">✕</button>'+
+    '</div>';
 }
 
 // Helper : retrouver la date d'encaissement
@@ -22781,6 +23030,15 @@ function triggerDevisPdfUpload(kind){
 function handleDevisPdfSelected(event,kind){
   var f=event.target.files&&event.target.files[0];
   if(!f) return;
+  _processDevisPdfFile(f,kind);
+}
+
+// =============================================================================
+// _processDevisPdfFile(file, kind) — Logique commune file input + drag&drop
+// =============================================================================
+// Validation, lecture, stockage IndexedDB, auto-fill Réf/Date. Réutilisable.
+function _processDevisPdfFile(f, kind){
+  if(!f) return;
   if(!eDVid){
     alert('⚠️ Le devis doit être enregistré au moins une fois avant d\'attacher un PDF.\n\n👉 Cliquez sur Enregistrer, puis ré-ouvrez le devis pour joindre un PDF.');
     return;
@@ -22789,7 +23047,7 @@ function handleDevisPdfSelected(event,kind){
     alert('⚠️ Seuls les fichiers PDF sont acceptés.');
     return;
   }
-  var maxBytes=20*1024*1024; // 20 Mo (généreux : un devis Emerson fait 200-500 Ko en général)
+  var maxBytes=20*1024*1024;
   if(f.size>maxBytes){
     alert('⚠️ Fichier trop volumineux ('+_fmtFileSize(f.size)+'). Max : '+_fmtFileSize(maxBytes)+'.');
     return;
@@ -22803,17 +23061,12 @@ function handleDevisPdfSelected(event,kind){
       devisId:eDVid,kind:kind,filename:f.name,
       refValue:refValue,refDate:refDate,bytes:bytes
     }).then(function(res){
-      // Rafraîchit le cache, la carte fichier dans la modale, et la liste devis
       return refreshDevisPdfCache().then(function(){
         renderDevisPdfCard(eDVid,kind);
         if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
         if(typeof showBCSaveToast==='function'){
           showBCSaveToast('✓ PDF '+(kind==='emerson'?'Emerson':'ACT')+' attaché ('+(res.replaced?'remplacé':'ajouté')+')');
         }
-        // === Mode B (non destructif) — Auto-remplissage des champs Réf / Date si VIDES ===
-        // On parse le PDF en arrière-plan (non bloquant) et on remplit uniquement
-        // les champs encore vides. Si l'utilisateur avait déjà saisi quelque chose
-        // à la main, on ne touche pas.
         return _autoFillFromAttachedPdf(bytes,kind);
       });
     }).catch(function(err){
@@ -22823,6 +23076,71 @@ function handleDevisPdfSelected(event,kind){
   };
   reader.onerror=function(){alert('❌ Échec de la lecture du fichier.');};
   reader.readAsArrayBuffer(f);
+}
+
+// =============================================================================
+// _initDevisPdfDropZones — Attache les handlers drag&drop sur les zones Emerson/ACT
+// =============================================================================
+// Recherche les éléments .pdf-drop-zone[data-drop-kind="emerson"|"act"] présents
+// dans la modale Devis (Traçabilité). Pour chacun, ajoute :
+//   - dragenter/dragover : highlight visuel + indique zone valide
+//   - dragleave         : retire le highlight (avec compteur pour éviter flicker
+//                          sur les enfants)
+//   - drop              : valide le fichier et appelle _processDevisPdfFile
+// Idempotent : check data-dnd-bound pour ne pas re-bind si déjà fait.
+function _initDevisPdfDropZones(){
+  var zones=document.querySelectorAll('.pdf-drop-zone[data-drop-kind]');
+  zones.forEach(function(zone){
+    if(zone.dataset.dndBound==='1') return; // déjà bindé
+    zone.dataset.dndBound='1';
+    var kind=zone.dataset.dropKind;
+    var kindLabel=kind==='emerson'?'Devis Emerson':'Cotation ACT';
+
+    // Ajouter l'overlay visuel (créé une seule fois)
+    var overlay=document.createElement('div');
+    overlay.className='drop-overlay';
+    overlay.innerHTML='<i class="ti ti-file-type-pdf" style="font-size:24px;margin-right:8px;vertical-align:-4px"></i>Déposer le PDF '+kindLabel;
+    zone.appendChild(overlay);
+
+    // Compteur pour gérer dragenter/leave sur les enfants
+    // (sans ça, hover sur un enfant déclenche dragleave sur le parent → flicker)
+    var dragCounter=0;
+
+    zone.addEventListener('dragenter',function(e){
+      // Ne pas accepter si pas de fichier dans le drag
+      if(!e.dataTransfer || !e.dataTransfer.types || e.dataTransfer.types.indexOf('Files')<0) return;
+      e.preventDefault();
+      dragCounter++;
+      zone.classList.add('drag-active');
+    });
+    zone.addEventListener('dragover',function(e){
+      // Indispensable pour autoriser le drop
+      if(!e.dataTransfer || !e.dataTransfer.types || e.dataTransfer.types.indexOf('Files')<0) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect='copy';
+    });
+    zone.addEventListener('dragleave',function(e){
+      dragCounter--;
+      if(dragCounter<=0){
+        dragCounter=0;
+        zone.classList.remove('drag-active');
+      }
+    });
+    zone.addEventListener('drop',function(e){
+      e.preventDefault();
+      dragCounter=0;
+      zone.classList.remove('drag-active');
+      var dt=e.dataTransfer;
+      if(!dt || !dt.files || !dt.files.length) return;
+      // On ne prend QUE le 1er fichier (un seul PDF par zone)
+      if(dt.files.length>1){
+        if(typeof showBCSaveToast==='function'){
+          showBCSaveToast('ℹ️ Plusieurs fichiers détectés, seul le 1er est utilisé');
+        }
+      }
+      _processDevisPdfFile(dt.files[0], kind);
+    });
+  });
 }
 
 // =============================================================================
@@ -27628,6 +27946,10 @@ document.addEventListener('DOMContentLoaded',function(){
       }
     });
   }
+  // Init drag&drop PDF dans la Traçabilité (zones Emerson + ACT)
+  if(typeof _initDevisPdfDropZones==='function'){
+    try{ _initDevisPdfDropZones(); }catch(e){ console.warn('Init drop zones failed:',e); }
+  }
   // Close modal on backdrop click
   document.querySelectorAll('.modal-overlay').forEach(function(o){
     o.addEventListener('click',function(e){if(e.target===o)o.classList.remove('open');});
@@ -28113,6 +28435,48 @@ function critProceed(){
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mSTAMP')">Annuler</button>
     <button class="btn btn-teal" onclick="applyStamp()" title="Appose la signature sélectionnée sur l'aperçu (utilise ensuite « Export PDF HD » pour télécharger)">✓ Appliquer la signature</button>
+  </div>
+</div>
+</div>
+
+<!-- ============================================================== -->
+<!-- MODALE AJOUTER UNE PHASE À L'HISTORIQUE (Traçabilité Devis) -->
+<!-- ============================================================== -->
+<!-- Remplace l'ancien prompt() natif. Le select est rempli dynamiquement par
+     openAddPhaseDialog() selon le type de devis (Fourniture / Prestation / Mixte)
+     pour marquer les phases non pertinentes mais les laisser sélectionnables. -->
+<div class="modal-overlay" id="mADDPHASE">
+<div class="modal" style="max-width:480px">
+  <div class="modal-header">
+    <h3 style="display:flex;align-items:center;gap:8px">
+      <i class="ti ti-plus" style="font-size:15px;color:var(--teal);vertical-align:-2px"></i>
+      Ajouter une phase
+    </h3>
+    <button class="modal-close" onclick="cm('mADDPHASE')">✕</button>
+  </div>
+  <div class="modal-body">
+    <p style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">
+      Ajoute une entrée à l'historique de traçabilité. Les phases non pertinentes pour le type de devis actuel sont signalées mais restent sélectionnables.
+    </p>
+    <div class="form-group">
+      <label>Phase</label>
+      <select class="form-select" id="addphase-key"></select>
+    </div>
+    <div class="form-group">
+      <label>Date <span style="color:var(--muted);font-weight:400;font-size:10px">(format YYYY-MM-DD)</span></label>
+      <input type="date" class="form-input" id="addphase-date">
+    </div>
+    <div id="addphase-warning" style="display:none;font-size:11px;color:#fbbf24;background:rgba(251,191,36,0.08);padding:8px 10px;border-radius:6px;border-left:2px solid #fbbf24;margin-top:10px">
+      <i class="ti ti-alert-triangle" style="font-size:12px;vertical-align:-1px;margin-right:3px"></i>
+      <span id="addphase-warning-text"></span>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mADDPHASE')">Annuler</button>
+    <button class="btn btn-teal" onclick="confirmAddPhase()">
+      <i class="ti ti-plus" style="font-size:12px;vertical-align:-1px;margin-right:2px"></i>
+      Ajouter
+    </button>
   </div>
 </div>
 </div>
