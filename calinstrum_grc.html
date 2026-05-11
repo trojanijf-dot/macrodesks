@@ -9330,7 +9330,10 @@ function _findLinkedFactures(d){
   // Pass 5: variants de numéro pour les cas particuliers
   // - "SLN-DV-147"  → essayer aussi "SLN-DV147" (sans tiret avant N°)
   // - "SLN-DV144-145" → essayer "SLN-DV144" et "SLN-DV145"
-  // - "SLN-DV-BCGMAO-00722464" → essayer "00722464" seul (N° GMAO standalone)
+  // - "SLN-DV-0088" → essayer "SLN-DV88" / "SLN-DV088" / "SLN-DV088REV1" (strip
+  //                   leading zeros + suffixes REV)
+  // - Pour les cas où le devis est "SLN-DV-0088" et la facture pointe vers
+  //   "SLN-DV088REV1" → on génère plusieurs formes du numéro à tester.
   var numVariants=[];
   // Variant 1 : normaliser "PFX-DV-NNN" → "PFX-DVNNN"
   var v1=dvNumUp.replace(/^([A-Z]+)-DV-(\d+)/i,'$1-DV$2');
@@ -9341,15 +9344,51 @@ function _findLinkedFactures(d){
     numVariants.push(multiMatch[1]+'-DV'+multiMatch[2]);
     numVariants.push(multiMatch[1]+'-DV'+multiMatch[3]);
   }
-  // Variant 3 : pour BCGMAO, le N° GMAO seul (mais dangereux car peut matcher trop)
-  // → désactivé pour l'instant car les factures GMAO n'ont pas de lien explicite
+  // Variant 3 : strip leading zeros sur le N° devis (toutes profondeurs)
+  // "SLN-DV-0088" → on génère "SLN-DV88", "SLN-DV088", "SLN-DV0088" (toutes
+  //                 profondeurs de leading zeros), avec/sans tiret, avec/sans
+  //                 suffixe REV/R.
+  // Permet de matcher "SLN-DV-0088" ↔ "SLN-DV088REV1" (live data).
+  var leadingMatch=dvNumUp.match(/^([A-Z]+)-?DV-?(\d+)(.*)$/i);
+  if(leadingMatch){
+    var prefix=leadingMatch[1];     // "SLN"
+    var digits=leadingMatch[2];     // "0088"
+    // Génère toutes les profondeurs de zeros (de "88" à "0088")
+    var stripped=digits.replace(/^0+/,'') || '0';
+    var numForms=[stripped];
+    for(var z=1; z<=digits.length-stripped.length; z++){
+      numForms.push(new Array(z+1).join('0')+stripped);
+    }
+    // Pour chaque forme du nombre, génère prefix+DV+num avec/sans tiret,
+    // avec/sans suffixe REV/R
+    numForms.forEach(function(num){
+      [prefix+'-DV'+num, prefix+'-DV-'+num].forEach(function(base){
+        if(base!==dvNumUp && numVariants.indexOf(base)<0) numVariants.push(base);
+        ['REV1','REV2','REV3','R1','R2'].forEach(function(suf){
+          var withSuf=base+suf;
+          if(withSuf!==dvNumUp && numVariants.indexOf(withSuf)<0) numVariants.push(withSuf);
+        });
+      });
+    });
+  }
+  // Helper de match avec word-boundary partiel : on évite que "SLN-DV88"
+  // match "SLN-DV880" en exigeant que le caractère suivant ne soit pas un chiffre.
+  function _matchVariantInText(text, variant){
+    if(!text || !variant) return false;
+    var idx=text.indexOf(variant);
+    if(idx<0) return false;
+    var nextChar=text.charAt(idx+variant.length);
+    // Si suivi d'un chiffre, c'est un faux match (SLN-DV88 dans SLN-DV880)
+    if(nextChar && /\d/.test(nextChar)) return false;
+    return true;
+  }
   numVariants.forEach(function(vn){
     if(!vn) return;
     fac.forEach(function(f){
       if(seenF[f.id]) return;
       var dvlie=String(f.dvlie||'').toUpperCase();
       var objet=String(f.objet||'').toUpperCase();
-      if((dvlie && dvlie.indexOf(vn)>=0) || (objet && objet.indexOf(vn)>=0)){
+      if(_matchVariantInText(dvlie,vn) || _matchVariantInText(objet,vn)){
         foundF.push(f);seenF[f.id]=1;
       }
     });
@@ -9357,11 +9396,64 @@ function _findLinkedFactures(d){
       if(seenI[i.id]) return;
       var po=String(i.po||'').toUpperCase();
       var intitule=String(i.intitule||'').toUpperCase();
-      if((po && po.indexOf(vn)>=0) || (intitule && intitule.indexOf(vn)>=0)){
+      if(_matchVariantInText(po,vn) || _matchVariantInText(intitule,vn)){
         foundI.push(i);seenI[i.id]=1;
       }
     });
   });
+
+  // Pass 6 : devis BCGMAO → match via le N° GMAO (8 chiffres) dans
+  // l'intitulé/po/objet/dvlie, ou via d.bcClientSLN ↔ i.po normalisé.
+  //
+  // Cas réels rencontrés :
+  //   - Devis "SLN-DV-BCGMAO-00722464" → bcClientSLN="00722464-01"
+  //   - Invoice avec po="00722464-01" et intitule mentionnant un autre devis
+  //   - Le linkFactureId historique peut être orphelin → on retombe ici
+  var bcgmaoMatch=dvNumUp.match(/BCGMAO[-_]?(\d{6,10})/i);
+  var bcGmaoNum=bcgmaoMatch?bcgmaoMatch[1]:'';
+  // bcClientSLN normalisé : on retire les suffixes "-01", "-NN", "_NN" pour
+  // ne garder que le numéro brut (ex: "00722464-01" → "00722464")
+  var bcClientRaw=String(d.bcClientSLN||'').toUpperCase();
+  var bcClientCore=bcClientRaw.replace(/[-_]\d+$/,''); // strip trailing "-NN"
+  // Liste de tokens BC à chercher
+  var bcTokens=[];
+  if(bcGmaoNum) bcTokens.push(bcGmaoNum);
+  if(bcClientCore && bcClientCore!==bcGmaoNum) bcTokens.push(bcClientCore);
+  if(bcClientRaw && bcClientRaw!==bcClientCore && bcClientRaw!==bcGmaoNum) bcTokens.push(bcClientRaw);
+  bcTokens.forEach(function(tok){
+    if(!tok || tok.length<5) return; // safety : éviter de matcher 2-3 chiffres trop courts
+    fac.forEach(function(f){
+      if(seenF[f.id]) return;
+      var dvlie=String(f.dvlie||'').toUpperCase();
+      var objet=String(f.objet||'').toUpperCase();
+      var bcRef=String(f.bcRef||f.po||'').toUpperCase();
+      if(_matchVariantInText(dvlie,tok) || _matchVariantInText(objet,tok) || _matchVariantInText(bcRef,tok)){
+        foundF.push(f);seenF[f.id]=1;
+      }
+    });
+    inv.forEach(function(i){
+      if(seenI[i.id]) return;
+      var po=String(i.po||'').toUpperCase();
+      var intitule=String(i.intitule||'').toUpperCase();
+      if(_matchVariantInText(po,tok) || _matchVariantInText(intitule,tok)){
+        foundI.push(i);seenI[i.id]=1;
+      }
+    });
+  });
+
+  // Pass 7 : liens manuels persistés (d.manualFactureLinks)
+  // Tableau d'IDs de factures (DB.factures ou DB.invoices) liés explicitement
+  // par l'utilisateur via l'outil de relinking de la modale Traçabilité.
+  // Ces liens ont priorité absolue : ils overwritent toute logique automatique.
+  if(Array.isArray(d.manualFactureLinks) && d.manualFactureLinks.length>0){
+    d.manualFactureLinks.forEach(function(lid){
+      if(!lid) return;
+      var fL=fac.find(function(x){return x.id===lid;});
+      if(fL && !seenF[fL.id]){foundF.push(fL);seenF[fL.id]=1;}
+      var iL=inv.find(function(x){return x.id===lid;});
+      if(iL && !seenI[iL.id]){foundI.push(iL);seenI[iL.id]=1;}
+    });
+  }
 
   // === DÉDUPLICATION par numéro de facture ===
   // Un même num peut apparaître à la fois dans DB.factures (GRC) et DB.invoices
@@ -9420,11 +9512,17 @@ function _renderFactureCell(d){
   var linked=_findLinkedFactures(d);
   // Cas 1 : aucune facture liée
   if(!linked.hasMatch){
-    return '<span class="traca-pill" title="Aucune facture liée à ce devis" '+
-      'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;'+
+    return '<span class="traca-pill" '+
+      'data-devis-id="'+d.id+'" '+
+      'onclick="event.stopPropagation();_openManualFactureLinker('+d.id+');" '+
+      'title="Aucune facture liée — cliquer pour lier manuellement" '+
+      'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:10px;cursor:pointer;'+
       'background:rgba(80,80,80,0.08);border:0.5px solid rgba(120,120,120,0.18);'+
-      'font-size:10px;line-height:1.3;color:var(--muted-soft);font-family:JetBrains Mono,monospace;white-space:nowrap">'+
-      '<i class="ti ti-file-off" style="font-size:11px;color:rgba(120,120,120,0.4)"></i>'+
+      'font-size:10px;line-height:1.3;color:var(--muted-soft);font-family:JetBrains Mono,monospace;white-space:nowrap;'+
+      'transition:background .15s,border-color .15s" '+
+      'onmouseover="this.style.background=\'rgba(124,58,237,0.12)\';this.style.borderColor=\'rgba(124,58,237,0.4)\';this.style.color=\'#c4b5fd\'" '+
+      'onmouseout="this.style.background=\'rgba(80,80,80,0.08)\';this.style.borderColor=\'rgba(120,120,120,0.18)\';this.style.color=\'var(--muted-soft)\'">'+
+      '<i class="ti ti-link" style="font-size:11px"></i>'+
       '<span>Pas de facture</span></span>';
   }
 
@@ -9665,8 +9763,13 @@ function _toggleFacturePopover(event,devisId){
     // Footer
     '<div style="padding:8px 14px;border-top:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.15);'+
       'border-radius:0 0 10px 10px;font-size:9.5px;color:rgba(255,255,255,0.45);'+
-      'font-family:Inter,system-ui">'+
-      'Cliquer sur "Ouvrir →" pour éditer une facture · GRC = facture complète · Suivi = pré-facturation'+
+      'font-family:Inter,system-ui;display:flex;justify-content:space-between;align-items:center;gap:8px">'+
+      '<span>Cliquer "Ouvrir →" pour éditer · GRC = facture complète · Suivi = pré-facturation</span>'+
+      '<button onclick="event.stopPropagation();_openManualFactureLinker('+d.id+')" '+
+        'style="font-size:10px;padding:3px 9px;background:rgba(124,58,237,0.18);color:#c4b5fd;border:0.5px solid rgba(124,58,237,0.4);border-radius:4px;cursor:pointer;font-weight:500;white-space:nowrap" '+
+        'title="Lier manuellement une autre facture à ce devis">'+
+        '<i class="ti ti-link" style="font-size:10px;vertical-align:-1px;margin-right:2px"></i>Lier autre'+
+      '</button>'+
     '</div>';
 
   // Position
@@ -9708,6 +9811,229 @@ function _toggleFacturePopover(event,devisId){
     }
   };
   document.addEventListener('keydown',escHandler);
+}
+
+// =============================================================================
+// _openManualFactureLinker(devisId) — Picker de liaison manuelle facture↔devis
+// =============================================================================
+// Ouvre une modale flottante avec recherche live + liste des factures/invoices
+// disponibles. Click sur une ligne → ajoute son id à d.manualFactureLinks et
+// déclenche un re-render. Permet aussi de RETIRER un lien manuel déjà fait.
+//
+// Cible le bug "facture liée invisible" quand le matching automatique échoue :
+// - linkFactureId orphelin (BCGMAO devis miroir)
+// - factures GRC avec dvlie vide et objet sans mention du num devis
+// =============================================================================
+function _openManualFactureLinker(devisId){
+  // Fermer les popovers existants
+  ['facture-popover','facture-popover-backdrop','phase-history-popover','phase-history-backdrop','manual-link-modal','manual-link-backdrop'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el) el.remove();
+  });
+  var d=(DB.devis||[]).find(function(x){return x.id===devisId;});
+  if(!d) return;
+
+  // Construire la liste de toutes les factures + invoices candidates
+  var autoLinked=_findLinkedFactures(d);
+  var autoIds={};
+  autoLinked.factures.forEach(function(f){autoIds[f.id]=1;});
+  autoLinked.invoices.forEach(function(i){autoIds[i.id]=1;});
+
+  var manualIds=Array.isArray(d.manualFactureLinks)?d.manualFactureLinks.slice():[];
+  var manualSet={};
+  manualIds.forEach(function(id){manualSet[id]=1;});
+
+  // IMPORTANT : autoIds inclut les liens manuels (Pass 7). Pour distinguer ce
+  // qui est "manuellement lié" vs "auto matché", on retire les manualSet de autoIds.
+  manualIds.forEach(function(id){delete autoIds[id];});
+
+  var allCandidates=[];
+  (DB.factures||[]).forEach(function(f){
+    allCandidates.push({
+      type:'F', obj:f, id:f.id, num:f.num||'?',
+      date:f.date||'', ttc:Number(f.ttc||f.ht||0),
+      client:f.client||'', objet:f.objet||'', dvlie:f.dvlie||'',
+      autoLinked:!!autoIds[f.id], manualLinked:!!manualSet[f.id]
+    });
+  });
+  (DB.invoices||[]).forEach(function(i){
+    allCandidates.push({
+      type:'I', obj:i, id:i.id, num:i.num||'?',
+      date:i.dateEnvoi||'', ttc:Number(i.montant||0),
+      client:i.client||'', objet:i.intitule||'', dvlie:i.po||'',
+      autoLinked:!!autoIds[i.id], manualLinked:!!manualSet[i.id]
+    });
+  });
+  allCandidates.sort(function(a,b){
+    if(a.manualLinked!==b.manualLinked) return a.manualLinked?-1:1;
+    if(a.autoLinked!==b.autoLinked) return a.autoLinked?-1:1;
+    return (b.date||'').localeCompare(a.date||'');
+  });
+
+  function _fNloc(n){return (typeof fNloc==='function')?fNloc(n):String(n);}
+  function _fmtD(s){return (typeof _fmtDateShort==='function')?_fmtDateShort(s):(s||'—');}
+
+  function renderRows(filter){
+    var fLow=(filter||'').toLowerCase().trim();
+    var filtered=allCandidates.filter(function(c){
+      if(!fLow) return true;
+      var hay=(c.num+'|'+c.client+'|'+c.objet+'|'+c.dvlie+'|'+_fNloc(c.ttc)).toLowerCase();
+      return hay.indexOf(fLow)>=0;
+    });
+    if(filtered.length===0){
+      return '<div style="padding:30px;text-align:center;color:rgba(255,255,255,0.4);font-size:12px;font-style:italic">Aucun résultat</div>';
+    }
+    var rows='';
+    filtered.forEach(function(c){
+      var bgColor='rgba(255,255,255,0.02)';
+      var borderColor='rgba(255,255,255,0.05)';
+      var pillHTML='';
+      if(c.manualLinked){
+        bgColor='rgba(167,139,250,0.10)'; borderColor='rgba(167,139,250,0.35)';
+        pillHTML='<span style="font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(167,139,250,0.18);color:#c4b5fd;font-weight:600;letter-spacing:0.05em">LIÉ MANUEL</span>';
+      } else if(c.autoLinked){
+        bgColor='rgba(45,212,191,0.06)'; borderColor='rgba(45,212,191,0.25)';
+        pillHTML='<span style="font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(45,212,191,0.18);color:#5dcaa5;font-weight:600;letter-spacing:0.05em">LIÉ AUTO</span>';
+      }
+      var typePill='<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.4);font-weight:500">'+(c.type==='F'?'GRC':'Suivi')+'</span>';
+      var actionBtn;
+      if(c.manualLinked){
+        actionBtn='<button onclick="event.stopPropagation();_removeManualFactureLink('+devisId+','+c.id+')" '+
+          'style="font-size:10px;padding:3px 10px;background:rgba(239,68,68,0.15);color:#fca5a5;border:0.5px solid rgba(239,68,68,0.4);border-radius:4px;cursor:pointer;font-weight:500;white-space:nowrap">Retirer ×</button>';
+      } else if(c.autoLinked){
+        actionBtn='<span style="font-size:9.5px;color:rgba(255,255,255,0.35);font-style:italic;white-space:nowrap">déjà lié</span>';
+      } else {
+        actionBtn='<button onclick="event.stopPropagation();_addManualFactureLink('+devisId+','+c.id+')" '+
+          'style="font-size:10px;padding:3px 10px;background:rgba(45,212,191,0.15);color:#5dcaa5;border:0.5px solid rgba(45,212,191,0.4);border-radius:4px;cursor:pointer;font-weight:500;white-space:nowrap">+ Lier</button>';
+      }
+      var objShort=(c.objet||'').substring(0,60);
+      if((c.objet||'').length>60) objShort+='…';
+      rows+='<div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:9px 12px;background:'+bgColor+';border:1px solid '+borderColor+';border-radius:6px;margin-bottom:5px">'+
+        '<div style="min-width:0">'+
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">'+
+            '<span style="font-family:JetBrains Mono,monospace;font-size:12px;color:#fff;font-weight:600">'+esc(c.num)+'</span>'+
+            typePill+pillHTML+
+          '</div>'+
+          '<div style="font-size:10px;color:rgba(255,255,255,0.55);line-height:1.3;margin-bottom:2px">'+esc(objShort||'(sans objet)')+'</div>'+
+          '<div style="font-size:9.5px;color:rgba(255,255,255,0.4);font-family:JetBrains Mono,monospace">'+
+            (c.date?'📅 '+esc(_fmtD(c.date)):'')+
+            (c.dvlie?'  ·  ref: '+esc(c.dvlie):'')+
+          '</div>'+
+        '</div>'+
+        '<div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:5px">'+
+          '<div style="font-family:JetBrains Mono,monospace;font-size:11.5px;color:#fff;font-weight:600">'+esc(_fNloc(c.ttc))+' <span style="font-size:9px;color:rgba(255,255,255,0.4)">XPF</span></div>'+
+          actionBtn+
+        '</div>'+
+        '</div>';
+    });
+    return rows;
+  }
+
+  function rebuild(filter){
+    var body=document.getElementById('manual-link-body');
+    if(body) body.innerHTML=renderRows(filter);
+  }
+
+  var modal=document.createElement('div');
+  modal.id='manual-link-modal';
+  modal.style.cssText='position:fixed;z-index:100001;top:50%;left:50%;transform:translate(-50%,-50%);'+
+    'background:#161922;border:1px solid rgba(124,58,237,0.4);border-radius:10px;'+
+    'box-shadow:0 12px 40px rgba(0,0,0,0.7);padding:0;width:580px;max-width:calc(100vw - 24px);'+
+    'max-height:80vh;display:flex;flex-direction:column;font-family:Inter,system-ui,sans-serif';
+
+  modal.innerHTML=
+    '<div style="padding:12px 16px;background:linear-gradient(135deg,rgba(124,58,237,0.18) 0%,rgba(124,58,237,0.06) 100%);border-bottom:1px solid rgba(124,58,237,0.25);border-radius:10px 10px 0 0;flex-shrink:0">'+
+      '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px">'+
+        '<div>'+
+          '<div style="font-size:9.5px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;display:flex;align-items:center;gap:5px">'+
+            '<i class="ti ti-link" style="font-size:11px"></i> Lier une facture au devis'+
+          '</div>'+
+          '<div style="font-size:13px;font-weight:600;color:#fff;font-family:JetBrains Mono,monospace">'+esc(d.num||'?')+'</div>'+
+          '<div style="font-size:10.5px;color:rgba(255,255,255,0.55);margin-top:3px">'+esc((d.objet||'').substring(0,80))+(d.objet&&d.objet.length>80?'…':'')+'</div>'+
+        '</div>'+
+        '<button onclick="(function(){var p=document.getElementById(\'manual-link-modal\');if(p)p.remove();var b=document.getElementById(\'manual-link-backdrop\');if(b)b.remove();})()" '+
+          'style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.6);'+
+          'cursor:pointer;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;'+
+          'font-size:14px;flex-shrink:0;line-height:1" title="Fermer (Échap)">✕</button>'+
+      '</div>'+
+    '</div>'+
+    '<div style="padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.05);flex-shrink:0">'+
+      '<input type="text" id="manual-link-search" placeholder="Filtrer par n°, client, objet, montant..." '+
+        'style="width:100%;padding:8px 12px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.10);border-radius:6px;color:#fff;font-size:12px;font-family:inherit;outline:none;box-sizing:border-box">'+
+      '<div style="font-size:9.5px;color:rgba(255,255,255,0.4);margin-top:6px">'+
+        '<i class="ti ti-info-circle" style="font-size:10px;vertical-align:-1px"></i> '+
+        'Cliquer "+ Lier" pour rattacher une facture. Les liens manuels sont persistés sur le devis et restaurables via Annuler.'+
+      '</div>'+
+    '</div>'+
+    '<div id="manual-link-body" style="padding:10px;overflow-y:auto;flex:1;min-height:200px">'+
+      renderRows('')+
+    '</div>';
+
+  var backdrop=document.createElement('div');
+  backdrop.id='manual-link-backdrop';
+  backdrop.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:100000;'+
+    'background:rgba(0,0,0,0.45);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)';
+  backdrop.onclick=function(){backdrop.remove();var m=document.getElementById('manual-link-modal');if(m)m.remove();};
+
+  document.body.appendChild(backdrop);
+  document.body.appendChild(modal);
+
+  var searchInp=document.getElementById('manual-link-search');
+  if(searchInp){
+    setTimeout(function(){searchInp.focus();},50);
+    searchInp.addEventListener('input',function(){rebuild(this.value);});
+  }
+
+  var escH=function(ev){
+    if(ev.key==='Escape'){
+      var m=document.getElementById('manual-link-modal');if(m)m.remove();
+      var b=document.getElementById('manual-link-backdrop');if(b)b.remove();
+      document.removeEventListener('keydown',escH);
+    }
+  };
+  document.addEventListener('keydown',escH);
+}
+
+// Ajouter un lien manuel facture↔devis
+function _addManualFactureLink(devisId, factureId){
+  var d=(DB.devis||[]).find(function(x){return x.id===devisId;});
+  if(!d || !factureId) return;
+  if(!Array.isArray(d.manualFactureLinks)) d.manualFactureLinks=[];
+  if(d.manualFactureLinks.indexOf(factureId)<0){
+    d.manualFactureLinks.push(factureId);
+    if(typeof pushUndo==='function'){
+      pushUndo('Lien manuel facture ajouté', function(){
+        var idx=d.manualFactureLinks.indexOf(factureId);
+        if(idx>=0) d.manualFactureLinks.splice(idx,1);
+        if(typeof save==='function') save();
+        if(typeof renderDV==='function') renderDV();
+      });
+    }
+    if(typeof save==='function') save();
+    if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Facture liée au devis '+(d.num||''));
+  }
+  _openManualFactureLinker(devisId);
+  if(typeof renderDV==='function') renderDV();
+}
+
+// Retirer un lien manuel
+function _removeManualFactureLink(devisId, factureId){
+  var d=(DB.devis||[]).find(function(x){return x.id===devisId;});
+  if(!d || !factureId || !Array.isArray(d.manualFactureLinks)) return;
+  var idx=d.manualFactureLinks.indexOf(factureId);
+  if(idx<0) return;
+  d.manualFactureLinks.splice(idx,1);
+  if(typeof pushUndo==='function'){
+    pushUndo('Lien manuel facture retiré', function(){
+      d.manualFactureLinks.push(factureId);
+      if(typeof save==='function') save();
+      if(typeof renderDV==='function') renderDV();
+    });
+  }
+  if(typeof save==='function') save();
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Lien manuel retiré');
+  _openManualFactureLinker(devisId);
+  if(typeof renderDV==='function') renderDV();
 }
 
 function _getStatusDate(d){
@@ -10592,21 +10918,43 @@ function clearDVMonthFilter(){
 function _renderDVMonthChip(){
   var el=document.getElementById('dv-donut-chip');
   if(!el) return;
+  var chips=[];
+
+  // === Chip mois émission (si actif) ===
   var v=window._dvFilterByMonth||'';
-  if(!v){el.innerHTML='';return;}
-  var m=v.match(/^(\d{4})-(\d{2})$/);
-  if(!m){el.innerHTML='';return;}
-  var year=m[1];
-  var monthIdx=parseInt(m[2],10)-1;
-  var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-  var monthLabel=monthsFRcap[monthIdx]||('mois '+(monthIdx+1));
-  el.innerHTML='<div style="display:inline-flex;align-items:center;gap:8px;background:rgba(136,170,224,0.10);border:1px solid rgba(136,170,224,0.30);border-radius:14px;padding:5px 12px;font-size:11px;color:#88aae0">'+
-    '<i class="ti ti-filter-check" style="font-size:13px"></i>'+
-    '<span>Devis émis en <strong>'+monthLabel+' '+year+'</strong></span>'+
-    '<button class="btn-ghost" onclick="clearDVMonthFilter()" title="Retirer ce filtre" '+
-            'style="background:none;border:none;color:#88aae0;font-size:14px;line-height:1;padding:0 2px;cursor:pointer;opacity:.7;transition:opacity .15s" '+
-            'onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">✕</button>'+
-    '</div>';
+  if(v){
+    var m=v.match(/^(\d{4})-(\d{2})$/);
+    if(m){
+      var year=m[1];
+      var monthIdx=parseInt(m[2],10)-1;
+      var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+      var monthLabel=monthsFRcap[monthIdx]||('mois '+(monthIdx+1));
+      chips.push('<div style="display:inline-flex;align-items:center;gap:8px;background:rgba(136,170,224,0.10);border:1px solid rgba(136,170,224,0.30);border-radius:14px;padding:5px 12px;font-size:11px;color:#88aae0">'+
+        '<i class="ti ti-filter-check" style="font-size:13px"></i>'+
+        '<span>Devis émis en <strong>'+monthLabel+' '+year+'</strong></span>'+
+        '<button class="btn-ghost" onclick="clearDVMonthFilter()" title="Retirer ce filtre" '+
+                'style="background:none;border:none;color:#88aae0;font-size:14px;line-height:1;padding:0 2px;cursor:pointer;opacity:.7;transition:opacity .15s" '+
+                'onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">✕</button>'+
+        '</div>');
+    }
+  }
+
+  // === Chip client actif (si onglet client ≠ "Tous") ===
+  if(typeof getHgrState==='function'){
+    var st=getHgrState('dv');
+    if(st && st.activeClient){
+      chips.push('<div style="display:inline-flex;align-items:center;gap:8px;background:rgba(167,139,250,0.10);border:1px solid rgba(167,139,250,0.30);border-radius:14px;padding:5px 12px;font-size:11px;color:#a78bfa">'+
+        '<i class="ti ti-users" style="font-size:13px"></i>'+
+        '<span>Client : <strong>'+esc(st.activeClient)+'</strong></span>'+
+        '<button class="btn-ghost" onclick="setHgrClient(\'dv\',\'\')" title="Voir tous les clients" '+
+                'style="background:none;border:none;color:#a78bfa;font-size:14px;line-height:1;padding:0 2px;cursor:pointer;opacity:.7;transition:opacity .15s" '+
+                'onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">✕</button>'+
+        '</div>');
+    }
+  }
+
+  if(chips.length===0){el.innerHTML='';return;}
+  el.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:6px">'+chips.join('')+'</div>';
 }
 
 // Mini sparkline (réutilise makeSparkline du dashboard)
@@ -11966,25 +12314,116 @@ function _renderCycleMoyenFourniture(){
   html+='</div>';
   html+='</div>';
 
-  // === Résumé en bas : Total cycle moyen ===
+  // === Résumé en bas : Total cycle moyen + sparkline 12 mois ===
   if(totalAvgDays>0){
     var totalColor='#5dcaa5';
     if(totalAvgDays>120) totalColor='#f09595';
     else if(totalAvgDays>90) totalColor='#fbbf24';
-    html+='<div style="margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.02);border:0.5px solid rgba(255,255,255,0.06);border-radius:6px;display:flex;justify-content:space-between;align-items:center">'+
-      '<div style="font-size:11px;color:var(--muted)">'+
-        '<i class="ti ti-clock" style="font-size:12px;vertical-align:-1px;margin-right:5px;color:var(--teal)"></i>'+
-        'Cycle moyen total (BC reçu → encaissé)'+
+
+    // === Sparkline : évolution du cycle moyen par mois (12 derniers mois) ===
+    // Pour chaque mois "M" : on prend les devis Fourniture dont l'étape "BC reçu"
+    // (= début de cycle, step 0) tombe ce mois-là, et on calcule leur cycle moyen
+    // total (somme des deltas complétés). Cela donne une vue temporelle :
+    // "À combien tournait le cycle pour les devis lancés en X ?"
+    //
+    // Note : on regarde sur les 12 derniers mois calendaires (pas l'année fiscale)
+    // pour avoir une vue glissante toujours pertinente même en début d'année.
+    var monthlyCycle=new Array(12).fill(null); // null = pas de données ce mois
+    var monthlyCount=new Array(12).fill(0);
+    var monthlyLabels=[];
+    var now=new Date();
+    var nowYear=now.getFullYear();
+    var nowMonth=now.getMonth();
+    // Construire les 12 buckets (du plus ancien au plus récent)
+    for(var bi=11;bi>=0;bi--){
+      var dt=new Date(nowYear, nowMonth-bi, 1);
+      monthlyLabels.push({y:dt.getFullYear(), m:dt.getMonth(), key:dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')});
+    }
+    var monthlyDeltaSums=monthlyLabels.map(function(){return new Array(7).fill(0);});
+    var monthlyDeltaCounts=monthlyLabels.map(function(){return new Array(7).fill(0);});
+
+    fourn.forEach(function(d){
+      var steps=getStepDates(d);
+      var startDate=steps[0]; // BC reçu = ancrage temporel du devis
+      if(!startDate) return;
+      var ms=String(startDate).match(/^(\d{4})-(\d{2})/);
+      if(!ms) return;
+      var dvKey=ms[1]+'-'+ms[2];
+      var bucketIdx=monthlyLabels.findIndex(function(l){return l.key===dvKey;});
+      if(bucketIdx<0) return; // devis hors fenêtre 12 mois
+      // Accumuler les deltas de ce devis dans le bucket
+      for(var di=0;di<7;di++){
+        var dj=deltaDays(steps[di], steps[di+1]);
+        if(dj===null) continue;
+        monthlyDeltaSums[bucketIdx][di]+=dj;
+        monthlyDeltaCounts[bucketIdx][di]++;
+      }
+      monthlyCount[bucketIdx]++;
+    });
+
+    // Pour chaque mois, calculer le cycle moyen (somme des deltas moyens)
+    var sparkValues=new Array(12).fill(0);
+    monthlyLabels.forEach(function(_,bi){
+      var cyc=0, hasAny=false;
+      for(var di=0;di<7;di++){
+        var cnt=monthlyDeltaCounts[bi][di];
+        if(cnt>0){cyc+=Math.round(monthlyDeltaSums[bi][di]/cnt); hasAny=true;}
+      }
+      monthlyCycle[bi]=hasAny?cyc:null;
+      sparkValues[bi]=hasAny?cyc:0;
+    });
+
+    // Générer la sparkline interactive si possible (crosshair + tooltip)
+    var sparkHTML='';
+    if(typeof _interactiveSparkline==='function'){
+      var monthsFR=['Jan','Fév','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc'];
+      // Adapter monthlyData pour le crosshair (le formatter reçoit monthly[idx])
+      // On passe sparkValues comme monthly aussi (chaque point = cycle de ce mois)
+      sparkHTML=_interactiveSparkline(
+        sparkValues, totalColor, sparkValues,
+        function(idx, monthlyV, cumulV, months){
+          var lbl=monthlyLabels[idx];
+          var monthLabel=monthsFR[lbl.m]+' '+lbl.y;
+          var cnt=monthlyCount[idx]||0;
+          var cyc=monthlyCycle[idx];
+          if(cyc===null || cnt===0){
+            return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+monthLabel+'</div>'+
+              '<div style="color:var(--muted-soft);font-style:italic">Aucun devis lancé ce mois-là</div>';
+          }
+          return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+monthLabel+'</div>'+
+            '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Cycle moyen</span><span class="num" style="color:'+totalColor+'" data-money>'+cyc+' j</span></div>'+
+            '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Devis lancés</span><span class="num" data-money>'+cnt+'</span></div>';
+        },
+        'cycle_moyen'
+      );
+    }
+
+    html+='<div style="margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.02);border:0.5px solid rgba(255,255,255,0.06);border-radius:6px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center">'+
+        '<div style="font-size:11px;color:var(--muted)">'+
+          '<i class="ti ti-clock" style="font-size:12px;vertical-align:-1px;margin-right:5px;color:var(--teal)"></i>'+
+          'Cycle moyen total (BC reçu → encaissé)'+
+        '</div>'+
+        '<div style="text-align:right">'+
+          '<span style="font-size:22px;font-weight:500;color:'+totalColor+';font-family:var(--mono)">'+totalAvgDays+'</span>'+
+          '<span style="font-size:11px;color:var(--muted);margin-left:4px">jours</span>'+
+          '<span style="font-size:10px;color:var(--muted-soft);margin-left:8px">≈ '+(totalAvgDays/30).toFixed(1)+' mois</span>'+
+        '</div>'+
       '</div>'+
-      '<div style="text-align:right">'+
-        '<span style="font-size:22px;font-weight:500;color:'+totalColor+';font-family:var(--mono)">'+totalAvgDays+'</span>'+
-        '<span style="font-size:11px;color:var(--muted);margin-left:4px">jours</span>'+
-        '<span style="font-size:10px;color:var(--muted-soft);margin-left:8px">≈ '+(totalAvgDays/30).toFixed(1)+' mois</span>'+
-      '</div>'+
+      // Sparkline en dessous du résumé (12 mois glissants)
+      (sparkHTML?'<div style="margin-top:8px;padding-top:8px;border-top:0.5px solid rgba(255,255,255,0.05)">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'+
+          '<span style="font-size:9.5px;color:var(--muted-soft);letter-spacing:0.05em;text-transform:uppercase">Évolution sur 12 mois</span>'+
+          '<span style="font-size:9.5px;color:var(--muted-soft)">Devis lancés / mois</span>'+
+        '</div>'+
+        sparkHTML+
+        '</div>':'')+
       '</div>';
   }
 
   el.innerHTML=html;
+  // Mount sparkline interactive (crosshair + tooltip)
+  if(typeof _mountInteractiveSparklines==='function') _mountInteractiveSparklines(el);
 }
 
 function rDash(){
@@ -21144,14 +21583,38 @@ function _renderFAKpis(data){
     makeSpark(serPaid.cumul, 'var(--green)', serPaid.monthly, 'fa_paid', 'Payé ce mois')+
     '</div>';
 
-  // 3. En attente (amber) — clic = toggle filtre 'pending'
-  var pendingStyle=_faKpiActiveStyle('pending','#fbbf24');
-  var pendingTitle=fFAstActive==='pending'?'Cliquer pour retirer le filtre En attente':'Cliquer pour filtrer sur les factures en attente';
-  html+='<div class="kpi-pro" data-fa-kpi-click="pending" title="'+pendingTitle+'" style="border-top:2px solid #fbbf24;'+pendingStyle.extra+'transition:box-shadow .15s,background .15s">'+
-    '<div class="kpi-label" style="display:flex;align-items:center;gap:6px"><i class="ti ti-clock"></i>En attente'+pendingStyle.label+'</div>'+
-    '<div class="kpi-value" data-money style="color:#fbbf24">'+fNloc(pendingSum)+'</div>'+
-    '<div class="kpi-sub">XPF · '+nPending+' en attente</div>'+
-    makeSpark(serPending.cumul, '#fbbf24', serPending.monthly, 'fa_pending', 'Émis ce mois')+
+  // 3. Reste à recouvrer (amber/rouge selon ratio late) — clic = toggle filtre 'pending'
+  //
+  // "Reste à recouvrer" = montant des factures émises mais pas encore encaissées
+  //   = pendingSum (en attente, dans les délais) + lateSum (en retard, hors délais)
+  // C'est le KPI "trésorerie à venir" : combien il reste à rentrer.
+  //
+  // Couleur dynamique :
+  //   - Si lateSum dépasse 50% du reste → rouge (signal d'alerte fort, trop d'impayés)
+  //   - Sinon → amber (normal pour des en-attente dans les délais)
+  //
+  // Sparkline = cumul mensuel du reste (pending+late combinés par mois)
+  // Clic sur la card → filtre 'pending' (le plus fréquent). Pour 'late' isolé,
+  // l'utilisateur a la card "En retard" juste à côté.
+  var totalRecouvrer=pendingSum+lateSum;
+  var nRecouvrer=nPending+nLate;
+  var ratioLate=totalRecouvrer>0?(lateSum/totalRecouvrer):0;
+  var recouvrerColor=ratioLate>=0.5?'#f09595':'#fbbf24';
+  // Sparkline combinée : monthly_pending + monthly_late puis cumul
+  var recouvrerMonthly=serPending.monthly.map(function(v,i){return v+(serLate.monthly[i]||0);});
+  var recouvrerCumul=[];
+  var accR=0;
+  for(var k=0;k<12;k++){accR+=recouvrerMonthly[k];recouvrerCumul.push(accR);}
+  var recouvrerStyle=_faKpiActiveStyle('pending',recouvrerColor);
+  var recouvrerTitle=fFAstActive==='pending'?'Cliquer pour retirer le filtre En attente':'Cliquer pour filtrer sur les factures en attente';
+  // Sub-info détaillée : breakdown pending + late
+  var subRecouvrer='<span style="color:#fbbf24">'+nPending+' en attente</span>';
+  subRecouvrer+=' · <span style="color:'+(nLate>0?'#f09595':'var(--muted-soft)')+'">'+nLate+' en retard</span>';
+  html+='<div class="kpi-pro" data-fa-kpi-click="pending" title="'+recouvrerTitle+'" style="border-top:2px solid '+recouvrerColor+';'+recouvrerStyle.extra+'transition:box-shadow .15s,background .15s">'+
+    '<div class="kpi-label" style="display:flex;align-items:center;gap:6px"><i class="ti ti-cash"></i>Reste à recouvrer'+recouvrerStyle.label+'</div>'+
+    '<div class="kpi-value" data-money style="color:'+recouvrerColor+'">'+fNloc(totalRecouvrer)+'</div>'+
+    '<div class="kpi-sub" style="font-size:10.5px">XPF · '+subRecouvrer+'</div>'+
+    makeSpark(recouvrerCumul, recouvrerColor, recouvrerMonthly, 'fa_recouvrer', 'À recouvrer ce mois')+
     '</div>';
 
   // 4. En retard (rouge) — clic = toggle filtre 'late'
@@ -21896,25 +22359,46 @@ function clearFAEncMonthFilter(){
 function _renderFAEncMonthChip(){
   var el=document.getElementById('fa-enc-month-chip');
   if(!el) return;
+  var chips=[];
+
+  // === Chip mois encaissement (si actif) ===
   var v=window._faFilterByEncMonth||'';
-  if(!v){
-    el.innerHTML='';
-    return;
+  if(v){
+    var m=v.match(/^(\d{4})-(\d{2})$/);
+    if(m){
+      var year=m[1];
+      var monthIdx=parseInt(m[2],10)-1;
+      var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+      var monthLabel=monthsFRcap[monthIdx]||('mois '+(monthIdx+1));
+      chips.push('<div style="display:inline-flex;align-items:center;gap:8px;background:rgba(45,212,191,0.10);border:1px solid rgba(45,212,191,0.30);border-radius:14px;padding:5px 12px;font-size:11px;color:var(--teal)">'+
+        '<i class="ti ti-filter-check" style="font-size:13px"></i>'+
+        '<span>Encaissements de <strong>'+monthLabel+' '+year+'</strong></span>'+
+        '<button class="btn-ghost" onclick="clearFAEncMonthFilter()" title="Retirer ce filtre" '+
+                'style="background:none;border:none;color:var(--teal);font-size:14px;line-height:1;padding:0 2px;cursor:pointer;opacity:.7;transition:opacity .15s" '+
+                'onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">✕</button>'+
+        '</div>');
+    }
   }
-  // Parse "YYYY-MM"
-  var m=v.match(/^(\d{4})-(\d{2})$/);
-  if(!m){el.innerHTML='';return;}
-  var year=m[1];
-  var monthIdx=parseInt(m[2],10)-1;
-  var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-  var monthLabel=monthsFRcap[monthIdx]||('mois '+(monthIdx+1));
-  el.innerHTML='<div style="display:inline-flex;align-items:center;gap:8px;background:rgba(45,212,191,0.10);border:1px solid rgba(45,212,191,0.30);border-radius:14px;padding:5px 12px;font-size:11px;color:var(--teal)">'+
-    '<i class="ti ti-filter-check" style="font-size:13px"></i>'+
-    '<span>Encaissements de <strong>'+monthLabel+' '+year+'</strong></span>'+
-    '<button class="btn-ghost" onclick="clearFAEncMonthFilter()" title="Retirer ce filtre" '+
-            'style="background:none;border:none;color:var(--teal);font-size:14px;line-height:1;padding:0 2px;cursor:pointer;opacity:.7;transition:opacity .15s" '+
-            'onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">✕</button>'+
-    '</div>';
+
+  // === Chip client actif (si onglet client ≠ "Tous") ===
+  // Reflète l'onglet client actif des Factures (getHgrState('fa').activeClient)
+  // → permet de voir immédiatement que le donut est filtré sur un client,
+  //   et de retirer le filtre d'un clic (équivaut à cliquer sur "Tous").
+  if(typeof getHgrState==='function'){
+    var st=getHgrState('fa');
+    if(st && st.activeClient){
+      chips.push('<div style="display:inline-flex;align-items:center;gap:8px;background:rgba(167,139,250,0.10);border:1px solid rgba(167,139,250,0.30);border-radius:14px;padding:5px 12px;font-size:11px;color:#a78bfa">'+
+        '<i class="ti ti-users" style="font-size:13px"></i>'+
+        '<span>Client : <strong>'+esc(st.activeClient)+'</strong></span>'+
+        '<button class="btn-ghost" onclick="setHgrClient(\'fa\',\'\')" title="Voir tous les clients" '+
+                'style="background:none;border:none;color:#a78bfa;font-size:14px;line-height:1;padding:0 2px;cursor:pointer;opacity:.7;transition:opacity .15s" '+
+                'onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">✕</button>'+
+        '</div>');
+    }
+  }
+
+  if(chips.length===0){el.innerHTML='';return;}
+  el.innerHTML='<div style="display:flex;flex-wrap:wrap;gap:6px">'+chips.join('')+'</div>';
 }
 
 // Helper : retrouver la date d'encaissement
