@@ -20833,11 +20833,94 @@ function _renderFADonut(data){
   el.querySelectorAll('path[data-month]').forEach(function(p){
     p.addEventListener('mouseenter',function(){highlight(parseInt(p.dataset.month,10));});
     p.addEventListener('mouseleave',unhighlight);
+    p.addEventListener('click',function(){_drillDownToMonth(parseInt(p.dataset.month,10),fy);});
   });
   el.querySelectorAll('[data-leg-month]').forEach(function(d){
     d.addEventListener('mouseenter',function(){highlight(parseInt(d.dataset.legMonth,10));});
     d.addEventListener('mouseleave',unhighlight);
+    d.style.cursor='pointer';
+    d.addEventListener('click',function(){_drillDownToMonth(parseInt(d.dataset.legMonth,10),fy);});
   });
+}
+
+// =============================================================================
+// _drillDownToMonth(monthIdx, year) — Drill-down depuis le donut vers le tableau
+// =============================================================================
+// Click sur un segment (ou ligne légende) du donut "Encaissé par mois" :
+//  1. Applique le filtre Statut = "Payées" (puisque le donut montre les encaissées)
+//  2. Applique le filtre Année = année du donut (préserve le contexte temporel)
+//  3. Auto-expand l'année + le mois cliqué dans le tableau hiérarchique
+//  4. Re-render pour appliquer + scroll fluide vers le mois ouvert
+//  5. Toast confirmant l'action
+// monthIdx : 0..11 (Jan=0, Mai=4...)
+// =============================================================================
+function _drillDownToMonth(monthIdx, year){
+  if(monthIdx===undefined || monthIdx===null || isNaN(monthIdx)) return;
+  // Si le segment est vide (gris), on ne fait rien (rien à explorer)
+  // → on regarde dans la donnée DOM si data-value === '0' ou null
+  // Mais comme la fonction est appelée depuis path ET légende, plus simple :
+  // si pas d'encaissement pour ce mois, le filtre ne donnera rien mais c'est OK.
+  // (l'empty state s'affichera dans le tableau)
+
+  var monthsFR=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+  var monthLabel=monthsFR[monthIdx]||('mois '+monthIdx);
+  var yyyy=String(year);
+  var mm=String(monthIdx+1).padStart(2,'0');
+
+  // 1. Appliquer le filtre Statut = paid
+  var fSt=document.getElementById('fFAst');
+  if(fSt){fSt.value='paid';}
+
+  // 2. Appliquer le filtre Année
+  // Le select fFAyear contient les années trouvées dans la source.
+  // Si l'année n'est pas dans le select (ex : on cliquerait sur 2024 alors qu'on est sur
+  // un donut filtré 2026), on saute l'application.
+  var fYr=document.getElementById('fFAyear');
+  if(fYr){
+    var opts=fYr.querySelectorAll('option');
+    for(var i=0;i<opts.length;i++){
+      if(opts[i].value===yyyy){fYr.value=yyyy;break;}
+    }
+  }
+
+  // 3. Auto-expand année + mois dans la hiérarchie tableau
+  if(!window._hgrState) window._hgrState={};
+  if(!window._hgrState.fa) window._hgrState.fa={activeClient:'',expanded:{}};
+  window._hgrState.fa.expanded['year:'+yyyy]=true;
+  window._hgrState.fa.expanded['month:'+yyyy+'-'+mm]=true;
+
+  // 4. Re-render
+  if(typeof renderFA==='function') renderFA();
+
+  // 5. Scroll fluide vers la ligne mois après le render
+  setTimeout(function(){
+    var tb=document.getElementById('tbFA');
+    if(!tb) return;
+    // Chercher la ligne mois (contient l'icône ti-calendar-event + le label mois)
+    var monthRows=tb.querySelectorAll('.hgr-month-row');
+    var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+    var targetLabel=monthsFRcap[monthIdx]+' '+yyyy;
+    for(var j=0;j<monthRows.length;j++){
+      if(monthRows[j].textContent.indexOf(targetLabel)>=0){
+        // Scroll en évitant que le sticky header masque la ligne (offset ~80px)
+        var rect=monthRows[j].getBoundingClientRect();
+        var scrollY=window.pageYOffset||document.documentElement.scrollTop;
+        var targetY=rect.top+scrollY-80;
+        window.scrollTo({top:targetY,behavior:'smooth'});
+        // Flash highlight bref
+        monthRows[j].style.transition='background-color .8s';
+        var origBg=monthRows[j].style.backgroundColor;
+        monthRows[j].style.backgroundColor='rgba(45,212,191,0.12)';
+        setTimeout(function(){monthRows[j].style.backgroundColor=origBg;},800);
+        break;
+      }
+    }
+  },80);
+
+  // 6. Toast confirmation
+  if(typeof showBCSaveToast==='function'){
+    showBCSaveToast('🔍 Filtre '+monthLabel+' '+yyyy+' · Payées appliqué');
+  }
 }
 
 // Compteur de résultats à droite de la barre de filtres
