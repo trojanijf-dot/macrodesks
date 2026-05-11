@@ -1072,6 +1072,18 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <!-- ===== BANDEAU KPIs (réactif aux filtres actifs) ===== -->
   <div class="g4 no-print" id="fa-kpis" style="margin-bottom:12px"></div>
 
+  <!-- ===== PIPELINE ENCAISSEMENT (barre empilée par statut) ===== -->
+  <!-- Affiche d'un coup d'œil le ratio Payées / En attente / En retard / Pré-facturées.
+       Réactif aux filtres actifs. -->
+  <div class="card no-print" id="fa-pipeline-card" style="margin-bottom:12px;padding:14px 16px">
+    <div class="card-pro-title" style="display:flex;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:10px">
+      <i class="ti ti-arrows-split-2"></i>
+      <span>Pipeline encaissement</span>
+      <span id="fa-pipeline-year" style="color:var(--muted-soft);font-weight:400;font-size:11px;letter-spacing:0"></span>
+    </div>
+    <div id="fa-pipeline"></div>
+  </div>
+
   <!-- Onglets horizontaux clients (dynamiques) : Tous + 1 par client trouvé. Drag-and-drop pour réorganiser. -->
   <div class="client-tabs no-print" id="faClientTabs"></div>
 
@@ -17335,7 +17347,7 @@ function renderHierarchicalRows(opts){
     var nbItemsYear=yearData.items.length;
     // Ligne Année
     html+='<tr class="hgr-year-row" onclick="toggleHgr(\''+type+'\',\''+yearKey+'\')">';
-    html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(yearExpanded?'▼':'▶')+'</span>📅 '+year+' <span style="color:var(--muted);font-weight:400">('+nbItemsYear+' éléments · '+fN(yearTotal)+' '+currencyLabel+')</span></td>';
+    html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(yearExpanded?'▼':'▶')+'</span><i class="ti ti-calendar" style="font-size:13px;color:var(--teal);margin-right:6px;vertical-align:-1px"></i>'+year+' <span style="color:var(--muted);font-weight:400">('+nbItemsYear+' éléments · '+fN(yearTotal)+' '+currencyLabel+')</span></td>';
     html+='</tr>';
     if(!yearExpanded)return;
     // Tri mois (descendant : mois récent en haut)
@@ -17346,10 +17358,11 @@ function renderHierarchicalRows(opts){
       // Mois replié par défaut sauf si l'utilisateur l'a déplié
       var monthExpanded=st.expanded[mKey]===true;
       var nbItemsMonth=monthData.items.length;
+      var monthTotal=monthData.items.reduce(function(s,it){return s+getValueXpf(it);},0);
       var badges=renderStatusBadges(monthData.items,type);
       // Ligne Mois
       html+='<tr class="hgr-month-row" onclick="toggleHgr(\''+type+'\',\''+mKey+'\')">';
-      html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(monthExpanded?'▼':'▶')+'</span>📆 '+esc(monthData.label)+' <span style="color:var(--muted);font-weight:400">('+nbItemsMonth+')</span> '+badges+'</td>';
+      html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(monthExpanded?'▼':'▶')+'</span><i class="ti ti-calendar-event" style="font-size:13px;color:var(--muted);margin-right:6px;vertical-align:-1px"></i>'+esc(monthData.label)+' <span style="color:var(--muted);font-weight:400">('+nbItemsMonth+' · '+fN(monthTotal)+' '+currencyLabel+')</span> '+badges+'</td>';
       html+='</tr>';
       if(!monthExpanded)return;
       // Tri clients (alphabétique)
@@ -17363,7 +17376,7 @@ function renderHierarchicalRows(opts){
         var clientTotal=clientData.items.reduce(function(s,it){return s+getValueXpf(it);},0);
         // Ligne Client
         html+='<tr class="hgr-client-row" onclick="toggleHgr(\''+type+'\',\''+cKey+'\')">';
-        html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(clientExpanded?'▼':'▶')+'</span>👤 '+esc(clientName)+' <span style="color:var(--muted);font-weight:400">('+nbItemsClient+' · '+fN(clientTotal)+' '+currencyLabel+')</span></td>';
+        html+='<td colspan="'+colspan+'"><span class="hgr-toggle">'+(clientExpanded?'▼':'▶')+'</span><i class="ti ti-user" style="font-size:12px;color:var(--muted-soft);margin-right:6px;vertical-align:-1px"></i>'+esc(clientName)+' <span style="color:var(--muted);font-weight:400">('+nbItemsClient+' · '+fN(clientTotal)+' '+currencyLabel+')</span></td>';
         html+='</tr>';
         if(!clientExpanded)return;
         // === TRI DES LIGNES DANS UNE SECTION CLIENT ===
@@ -19865,8 +19878,9 @@ function renderFA(){
     return 0;
   });
 
-  // ===== Mise à jour du compteur de résultats + KPIs =====
+  // ===== Mise à jour du compteur de résultats + KPIs + pipeline encaissement =====
   _renderFAKpis(data);
+  _renderFAPipeline(data);
   _renderFAResultCount(data,sourceWithClient.length);
 
   var tb=document.getElementById('tbFA');
@@ -20003,7 +20017,11 @@ function _populateFAYearFilter(source){
 }
 
 // KPIs réactifs : se calculent sur les données FILTRÉES (data)
-// 4 cartes : 💰 Total filtré · ✓ Encaissé · 📤 En attente · ⚠ En retard
+// Style smart pro (kpi-pro) avec :
+//  - Icônes Tabler au lieu d'emojis
+//  - Sparkline année-à-jour (cumul mensuel)
+//  - Couleurs par card (vert/amber/red)
+// 4 cartes : Total filtré · Encaissé · En attente · En retard
 function _renderFAKpis(data){
   var el=document.getElementById('fa-kpis');
   if(!el) return;
@@ -20023,18 +20041,160 @@ function _renderFAKpis(data){
   });
   var nTotal=data.length;
 
-  function kpi(emoji,label,val,sub,colorClass){
-    return '<div class="metric '+(colorClass||'')+'">'+
-      '<div class="mlbl">'+emoji+' '+label+'</div>'+
-      '<div class="mval">'+fN(val)+' <span style="font-size:10px;color:var(--muted);font-weight:400">XPF</span></div>'+
-      '<div class="msub">'+esc(sub)+'</div>'+
-      '</div>';
+  // === Sparklines : cumul mensuel sur l'année courante ===
+  // Pour chaque statut, on calcule le cumul de la valeur mensuelle (acquis sur 12 mois).
+  // Si pas de données → sparkline vide (sera ignoré par makeSparkline).
+  function _monthlyCumulFilter(filterFn){
+    var months=new Array(12).fill(0);
+    data.forEach(function(i){
+      if(!filterFn(i)) return;
+      var d=i.dateEnvoi||i.dateReceptionBC||'';
+      var m=String(d).match(/^(\d{4})-(\d{2})/);
+      if(!m) return;
+      var year=parseInt(m[1],10);
+      var fy=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
+      if(year!==fy) return;
+      var month=parseInt(m[2],10);
+      if(isNaN(month)||month<1||month>12) return;
+      months[month-1]+=Number(i.montant)||0;
+    });
+    // Cumul (acquis)
+    var cumul=new Array(12).fill(0);
+    var acc=0;
+    for(var k=0;k<12;k++){acc+=months[k];cumul[k]=acc;}
+    return cumul;
   }
-  el.innerHTML=
-    kpi('💼','Total filtré',totalAll,nTotal+' facture'+(nTotal>1?'s':''),'') +
-    kpi('✅','Encaissé',paidSum,nPaid+' payée'+(nPaid>1?'s':'')+(nPrebilled>0?' · '+nPrebilled+' pré-facturée'+(nPrebilled>1?'s':''):''),'m-green') +
-    kpi('📤','En attente',pendingSum,nPending+' en attente','m-amber') +
-    kpi('⚠️','En retard',lateSum,nLate+' en retard','m-red');
+  var sparkTotal=_monthlyCumulFilter(function(){return true;});
+  var sparkPaid=_monthlyCumulFilter(function(i){
+    if(typeof isPrebilled==='function' && isPrebilled(i)) return false;
+    return getStatus(i)==='paid';
+  });
+  var sparkPending=_monthlyCumulFilter(function(i){
+    if(typeof isPrebilled==='function' && isPrebilled(i)) return false;
+    return getStatus(i)==='pending';
+  });
+  var sparkLate=_monthlyCumulFilter(function(i){
+    if(typeof isPrebilled==='function' && isPrebilled(i)) return false;
+    return getStatus(i)==='late';
+  });
+
+  function makeSpark(values, color){
+    if(typeof makeSparkline==='function') return makeSparkline(values, color, true);
+    return '';
+  }
+
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+
+  // === Cartes (style kpi-pro cohérent avec page Devis) ===
+  var html='';
+
+  // 1. Total filtré (couleur neutre / teal)
+  html+='<div class="kpi-pro kpi-blue">'+
+    '<div class="kpi-label"><i class="ti ti-coin"></i>Total filtré</div>'+
+    '<div class="kpi-value" data-money>'+fNloc(totalAll)+'</div>'+
+    '<div class="kpi-sub">XPF · '+nTotal+' facture'+(nTotal>1?'s':'')+'</div>'+
+    makeSpark(sparkTotal, 'var(--teal)')+
+    '</div>';
+
+  // 2. Encaissé (vert)
+  var subPaid=nPaid+' payée'+(nPaid>1?'s':'');
+  if(nPrebilled>0) subPaid+=' · '+nPrebilled+' pré-fact.';
+  html+='<div class="kpi-pro kpi-green">'+
+    '<div class="kpi-label"><i class="ti ti-circle-check"></i>Encaissé</div>'+
+    '<div class="kpi-value" data-money>'+fNloc(paidSum)+'</div>'+
+    '<div class="kpi-sub">XPF · '+subPaid+'</div>'+
+    makeSpark(sparkPaid, 'var(--green)')+
+    '</div>';
+
+  // 3. En attente (amber)
+  html+='<div class="kpi-pro" style="border-top:2px solid #fbbf24">'+
+    '<div class="kpi-label"><i class="ti ti-clock"></i>En attente</div>'+
+    '<div class="kpi-value" data-money style="color:#fbbf24">'+fNloc(pendingSum)+'</div>'+
+    '<div class="kpi-sub">XPF · '+nPending+' en attente</div>'+
+    makeSpark(sparkPending, '#fbbf24')+
+    '</div>';
+
+  // 4. En retard (rouge)
+  html+='<div class="kpi-pro kpi-red">'+
+    '<div class="kpi-label"><i class="ti ti-alert-triangle"></i>En retard</div>'+
+    '<div class="kpi-value" data-money>'+fNloc(lateSum)+'</div>'+
+    '<div class="kpi-sub">XPF · '+nLate+' en retard</div>'+
+    makeSpark(sparkLate, 'var(--red)')+
+    '</div>';
+
+  el.innerHTML=html;
+}
+
+// =============================================================================
+// Pipeline encaissement — barre horizontale empilée par statut
+// =============================================================================
+// Réutilise le pattern de _renderDVPipeline (cf. page Devis).
+// Segments dans l'ordre : Payées (vert) → Pré-facturées (violet) → En attente (amber) → En retard (rouge)
+// Cohérent avec la logique métier : flow normal d'une facture (de "déjà encaissée" à "alerte rouge").
+function _renderFAPipeline(data){
+  var el=document.getElementById('fa-pipeline');
+  if(!el) return;
+  // Compte + montant par statut
+  var stats={
+    paid:      {label:'Payées',        color:'#5dcaa5', count:0, total:0},
+    prebilled: {label:'Pré-facturées', color:'#a78bfa', count:0, total:0},
+    pending:   {label:'En attente',    color:'#fbbf24', count:0, total:0},
+    late:      {label:'En retard',     color:'#f09595', count:0, total:0}
+  };
+  data.forEach(function(i){
+    var m=Number(i.montant)||0;
+    if(typeof isPrebilled==='function' && isPrebilled(i)){
+      stats.prebilled.count++; stats.prebilled.total+=m;
+      return;
+    }
+    var st=getStatus(i);
+    if(st==='paid'){stats.paid.count++; stats.paid.total+=m;}
+    else if(st==='late'){stats.late.count++; stats.late.total+=m;}
+    else {stats.pending.count++; stats.pending.total+=m;}
+  });
+  var totalCount=stats.paid.count+stats.prebilled.count+stats.pending.count+stats.late.count;
+  // Mettre à jour le label année (utile si filtre année actif)
+  var yearLabel=document.getElementById('fa-pipeline-year');
+  if(yearLabel){
+    var fy=gvg('fFAyear')||((typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear());
+    yearLabel.textContent=String(fy);
+  }
+  if(totalCount===0){
+    el.innerHTML='<div style="text-align:center;padding:14px;color:var(--muted-soft);font-size:12px">Aucune facture sur la période</div>';
+    return;
+  }
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  // Ordre d'affichage de gauche à droite (du "positif" au "négatif")
+  var ordered=['paid','prebilled','pending','late'];
+  // === Barre empilée ===
+  var html='<div style="display:flex;height:32px;border-radius:8px;overflow:hidden;background:rgba(255,255,250,0.04);border:0.5px solid rgba(255,255,250,0.10)">';
+  ordered.forEach(function(key){
+    var s=stats[key];
+    if(s.count===0) return;
+    var pct=(s.count/totalCount*100).toFixed(1);
+    var tooltip=s.label+' · '+s.count+' facture'+(s.count>1?'s':'')+' · '+fNloc(s.total)+' XPF';
+    html+='<div title="'+esc(tooltip)+'" style="flex:'+s.count+';background:'+s.color+';display:flex;align-items:center;justify-content:center;color:rgba(20,20,15,0.85);font-size:11px;font-weight:500;letter-spacing:0.02em;cursor:default;transition:all .15s;min-width:0">';
+    if(parseFloat(pct)>=8){
+      html+='<span>'+s.label+' <span style="opacity:0.7">('+s.count+')</span></span>';
+    }
+    html+='</div>';
+  });
+  html+='</div>';
+  // === Légende détaillée ===
+  html+='<div style="display:flex;gap:18px;margin-top:10px;font-size:11px;color:var(--muted);flex-wrap:wrap">';
+  ordered.forEach(function(key){
+    var s=stats[key];
+    if(s.count===0) return;
+    html+='<span style="display:inline-flex;align-items:center;gap:6px">'+
+      '<span style="width:8px;height:8px;border-radius:2px;background:'+s.color+'"></span>'+
+      '<span>'+s.label+'</span>'+
+      '<span class="num" style="color:var(--text);font-size:11px" data-money>'+s.count+'</span>'+
+      '<span style="color:var(--muted-soft);font-size:10.5px">·</span>'+
+      '<span class="num" style="color:var(--muted-soft);font-size:10.5px" data-money>'+fNloc(s.total)+' XPF</span>'+
+      '</span>';
+  });
+  html+='</div>';
+  el.innerHTML=html;
 }
 
 // Compteur de résultats à droite de la barre de filtres
