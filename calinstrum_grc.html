@@ -21713,6 +21713,11 @@ function handleDevisPdfSelected(event,kind){
         if(typeof showBCSaveToast==='function'){
           showBCSaveToast('✓ PDF '+(kind==='emerson'?'Emerson':'ACT')+' attaché ('+(res.replaced?'remplacé':'ajouté')+')');
         }
+        // === Mode B (non destructif) — Auto-remplissage des champs Réf / Date si VIDES ===
+        // On parse le PDF en arrière-plan (non bloquant) et on remplit uniquement
+        // les champs encore vides. Si l'utilisateur avait déjà saisi quelque chose
+        // à la main, on ne touche pas.
+        return _autoFillFromAttachedPdf(bytes,kind);
       });
     }).catch(function(err){
       console.error('storeDevisPdf failed:',err);
@@ -21721,6 +21726,83 @@ function handleDevisPdfSelected(event,kind){
   };
   reader.onerror=function(){alert('❌ Échec de la lecture du fichier.');};
   reader.readAsArrayBuffer(f);
+}
+
+// =============================================================================
+// _autoFillFromAttachedPdf(bytes, kind) — Mode B : remplit les champs Réf / Date
+// uniquement s'ils sont VIDES (jamais d'écrasement). Async, non bloquant.
+// =============================================================================
+// - Emerson : extrait via parseEmersonQuoteText (existant). header.num + header.ver
+//             → "NUM Ver V" (format CALINSTRUM). header.date format "17-Nov-25"
+//             → convertit en ISO "YYYY-MM-DD" pour l'input type=date.
+// - ACT     : extrait via parseACTQuoteText. header.refFull + header.date (déjà ISO).
+// - Si le parser échoue (PDF illisible, format non reconnu) → silencieux, juste un
+//   console.warn. Le PDF reste joint, juste pas d'auto-fill.
+// =============================================================================
+function _autoFillFromAttachedPdf(bytes,kind){
+  if(typeof pdfjsLib==='undefined') return Promise.resolve();
+  var extractor=kind==='emerson'
+    ? (typeof extractEmersonPdf==='function'?extractEmersonPdf:null)
+    : (typeof extractACTPdf==='function'?extractACTPdf:null);
+  if(!extractor) return Promise.resolve();
+  return extractor(bytes).then(function(result){
+    if(!result) return;
+    // Les deux parsers renvoient soit {header, ...} (ACT, Emerson récent),
+    // soit directement le header (Emerson ancien : parseEmersonQuoteText
+    // renvoie le header avec .rawText ajouté). On normalise.
+    var h=result.header||result;
+    if(!h) return;
+    // Pré-calcul du refValue et de la date ISO selon le kind
+    var refValue='',refDate='';
+    if(kind==='emerson'){
+      // Format CALINSTRUM stocké : "NUM Ver V" (avec espace, pas deux-points)
+      if(h.num){
+        refValue=h.num+(h.ver?(' Ver '+h.ver):'');
+      }
+      // Date Emerson "17-Nov-25" → ISO "2025-11-17"
+      refDate=_isoFromEmersonDate(h.date||'');
+    } else if(kind==='act'){
+      refValue=h.refFull||h.num||'';
+      refDate=h.date||''; // déjà ISO depuis parseACTQuoteText
+    }
+
+    // Mode B : remplir uniquement si vide
+    var refInputId=kind==='emerson'?'dv-ref-emerson':'dv-ref-act';
+    var dateInputId=kind==='emerson'?'dv-ref-emerson-date':'dv-ref-act-date';
+    var refInput=document.getElementById(refInputId);
+    var dateInput=document.getElementById(dateInputId);
+    var filled=[];
+    if(refInput && !refInput.value.trim() && refValue){
+      refInput.value=refValue;
+      filled.push('Réf');
+    }
+    if(dateInput && !dateInput.value.trim() && refDate){
+      dateInput.value=refDate;
+      filled.push('Date');
+    }
+    if(filled.length && typeof showBCSaveToast==='function'){
+      showBCSaveToast('✨ Auto-rempli depuis le PDF : '+filled.join(' + '));
+    }
+  }).catch(function(err){
+    // Silencieux : l'utilisateur a quand même son PDF joint
+    console.warn('Auto-fill depuis PDF joint échoué (non bloquant):',err);
+  });
+}
+
+// Convertit une date Emerson "17-Nov-25" / "01-Jan-26" → ISO "YYYY-MM-DD"
+// Pivot année 2 chiffres : ≤49 → 20xx, ≥50 → 19xx (cohérent avec parser ACT)
+function _isoFromEmersonDate(s){
+  if(!s) return '';
+  var months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  var m=String(s).trim().match(/^(\d{1,2})[-\s]+([A-Za-z]{3,9})[-\s]+(\d{2,4})$/);
+  if(!m) return '';
+  var day=parseInt(m[1],10);
+  var mon=months[m[2].slice(0,3).toLowerCase()];
+  if(!mon) return '';
+  var year=parseInt(m[3],10);
+  if(year<100) year+=(year<=49?2000:1900);
+  var pad=function(n){return n<10?'0'+n:String(n);};
+  return year+'-'+pad(mon)+'-'+pad(day);
 }
 
 // Rend la carte fichier sous le champ Réf Emerson ou Réf ACT
