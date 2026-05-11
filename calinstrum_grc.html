@@ -1614,14 +1614,22 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         <!-- Carte fichier PDF ACT (si attaché) -->
         <div id="dv-act-pdf-card" style="display:none;margin-top:6px"></div>
         </div>
-        <!-- PO Calinstrum + date -->
-        <div class="form-row" style="margin-top:8px">
-          <div class="form-group" style="margin:0"><label><i class="ti ti-shopping-cart" style="font-size:12px;color:#a78bfa"></i> PO Calinstrum <span style="color:var(--muted);font-weight:400;font-size:10px">(rempli auto à la création du BC)</span></label>
+        <!-- PO Calinstrum + date — wrapper drop zone -->
+        <div class="pdf-drop-zone" data-drop-kind="po_cali" style="position:relative;border-radius:8px;padding:6px;margin:8px -6px -6px -6px;transition:all .15s">
+        <div class="form-row">
+          <div class="form-group" style="margin:0"><label><i class="ti ti-shopping-cart" style="font-size:12px;color:#a78bfa"></i> PO Calinstrum <span style="color:var(--muted);font-weight:400;font-size:10px">(rempli auto à la création du BC)</span>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(167,139,250,.4);color:#a78bfa" onclick="uploadPOCalinstrumPdf()" title="Importer un ou plusieurs PDFs de PO Calinstrum vers la base de BC (création des BC manquants avec extraction auto N°/date/vendor/lignes)">📤 Import PDF</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:4px;border-color:rgba(167,139,250,.4);color:#a78bfa" onclick="triggerDevisPdfUpload('po_cali')" title="Stocker une copie locale du PDF PO Calinstrum sans extraction (visible via 👁 dans la liste). Tu peux aussi glisser un PDF sur cette zone.">📎 Joindre</button>
+            <input type="file" id="dv-po-cali-pdf-attach-input" accept=".pdf,application/pdf" style="display:none" onchange="handleDevisPdfSelected(event,'po_cali')">
+          </label>
             <input class="form-input" id="dv-po-calinstrum" placeholder="ex: PO18102024051">
           </div>
           <div class="form-group" style="margin:0"><label>Date envoi PO Calinstrum</label>
             <input type="date" class="form-input" id="dv-po-calinstrum-date">
           </div>
+        </div>
+        <!-- Carte fichier PDF PO Calinstrum (si attaché) -->
+        <div id="dv-po-cali-pdf-card" style="display:none;margin-top:6px"></div>
         </div>
       </div>
     </div>
@@ -8950,16 +8958,18 @@ function _renderTraca(d){
     var hasPdf=false;
     if(opts.pdfDevisId && opts.pdfKind){
       var setRef=opts.pdfKind==='emerson'?window.devisIdsWithEmersonPdf:
-                 opts.pdfKind==='act'?window.devisIdsWithACTPdf:null;
+                 opts.pdfKind==='act'?window.devisIdsWithACTPdf:
+                 opts.pdfKind==='po_cali'?window.devisIdsWithPoCaliPdf:null;
       if(setRef && setRef.has(String(opts.pdfDevisId))) hasPdf=true;
     }
     var titleBase=(opts.label||'')+(hasVal?(' : '+(opts.fullValue||opts.value)):' : non renseigné')+(opts.date?(' ('+opts.date+')'):'');
     var title=esc(titleBase+(hasPdf?' — 📎 PDF stocké, cliquer 👁 pour ouvrir':''));
     var pdfBtn='';
     if(hasPdf){
+      var pdfKindLabels={emerson:'Emerson',act:'ACT',po_cali:'PO Calinstrum'};
       pdfBtn=' <span class="traca-pill-pdf" '+
         'onclick="event.stopPropagation();openDevisPdf(\''+esc(String(opts.pdfDevisId))+'\',\''+opts.pdfKind+'\');" '+
-        'title="Ouvrir le PDF '+(opts.pdfKind==='emerson'?'Emerson':'ACT')+' stocké" '+
+        'title="Ouvrir le PDF '+(pdfKindLabels[opts.pdfKind]||opts.pdfKind)+' stocké" '+
         'style="cursor:pointer;margin-left:4px;padding:0 4px;border-radius:6px;background:rgba(255,255,255,.12);font-size:10px">👁</span>';
     }
     return '<span class="traca-pill" title="'+title+'" '+
@@ -9007,7 +9017,7 @@ function _renderTraca(d){
   // 3 pills réfs externes (Emerson + ACT supportent l'icône 👁 si PDF stocké)
   html+=pill({icon:'circuit-bulb',label:'Réf Emerson',value:_shortEmerson(d.refEmerson),fullValue:d.refEmerson,date:d.refEmersonDate||'',color:'#22d3ee',pdfDevisId:d.id,pdfKind:'emerson'});
   html+=pill({icon:'building-warehouse',label:'Réf ACT',value:_shortACT(d.refACT),fullValue:d.refACT,date:d.refACTDate||'',color:'#fbbf24',pdfDevisId:d.id,pdfKind:'act'});
-  html+=pill({icon:'shopping-cart',label:'PO Calinstrum',value:_shortPO(d.poCalinstrum),fullValue:d.poCalinstrum,date:d.poCalinstrumDate||'',color:'#a78bfa'});
+  html+=pill({icon:'shopping-cart',label:'PO Calinstrum',value:_shortPO(d.poCalinstrum),fullValue:d.poCalinstrum,date:d.poCalinstrumDate||'',color:'#a78bfa',pdfDevisId:d.id,pdfKind:'po_cali'});
   html+='</div>';
   return html;
 }
@@ -12823,10 +12833,11 @@ function openDV(id){
       gv('dv-ref-emerson',d.refEmerson||'');gv('dv-ref-emerson-date',d.refEmersonDate||'');
       gv('dv-ref-act',d.refACT||'');gv('dv-ref-act-date',d.refACTDate||'');
       gv('dv-po-calinstrum',d.poCalinstrum||'');gv('dv-po-calinstrum-date',d.poCalinstrumDate||'');
-      // Render des cartes PDF attachés (Emerson + ACT) si présents
+      // Render des cartes PDF attachés (Emerson + ACT + PO Calinstrum) si présents
       if(typeof renderDevisPdfCard==='function'){
         renderDevisPdfCard(d.id,'emerson');
         renderDevisPdfCard(d.id,'act');
+        renderDevisPdfCard(d.id,'po_cali');
       }
       // Initialise l'historique éditable de phases — lazy migration si manquant
       if(Array.isArray(d.phaseHistory) && d.phaseHistory.length>0){
@@ -24060,8 +24071,8 @@ function openAttachDB(){
 function storeDevisPdf(att){
   if(!att||!att.devisId||!att.kind||!att.bytes)
     return Promise.reject(new Error('storeDevisPdf: paramètres incomplets'));
-  if(att.kind!=='emerson' && att.kind!=='act')
-    return Promise.reject(new Error('storeDevisPdf: kind doit être emerson ou act'));
+  if(att.kind!=='emerson' && att.kind!=='act' && att.kind!=='po_cali')
+    return Promise.reject(new Error('storeDevisPdf: kind doit être emerson, act ou po_cali'));
   return openAttachDB().then(function(db){
     return new Promise(function(resolve,reject){
       var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
@@ -24162,20 +24173,23 @@ function deleteDevisPdf(devisId,kind){
 // disponibles instantanément lors du render.
 window.devisIdsWithEmersonPdf=new Set();
 window.devisIdsWithACTPdf=new Set();
+window.devisIdsWithPoCaliPdf=new Set();
 function refreshDevisPdfCache(){
   return listAllDevisPdfMeta().then(function(metas){
-    var setE=new Set(),setA=new Set();
+    var setE=new Set(),setA=new Set(),setP=new Set();
     for(var i=0;i<metas.length;i++){
       var m=metas[i];
       if(m.kind==='emerson') setE.add(m.devisId);
       else if(m.kind==='act') setA.add(m.devisId);
+      else if(m.kind==='po_cali') setP.add(m.devisId);
     }
     window.devisIdsWithEmersonPdf=setE;
     window.devisIdsWithACTPdf=setA;
-    return {emerson:setE.size,act:setA.size};
+    window.devisIdsWithPoCaliPdf=setP;
+    return {emerson:setE.size,act:setA.size,po_cali:setP.size};
   }).catch(function(err){
     console.warn('refreshDevisPdfCache failed:',err);
-    return {emerson:0,act:0};
+    return {emerson:0,act:0,po_cali:0};
   });
 }
 
@@ -24203,7 +24217,13 @@ function _fmtSavedAt(iso){
 
 // Déclenche le sélecteur de fichier (appelé par le bouton "📎 Joindre PDF")
 function triggerDevisPdfUpload(kind){
-  var inputId=kind==='emerson'?'dv-emerson-pdf-input':'dv-act-pdf-attach-input';
+  var inputMap={
+    'emerson':'dv-emerson-pdf-input',
+    'act':'dv-act-pdf-attach-input',
+    'po_cali':'dv-po-cali-pdf-attach-input'
+  };
+  var inputId=inputMap[kind];
+  if(!inputId) return;
   var inp=document.getElementById(inputId);
   if(inp){inp.value='';inp.click();}
 }
@@ -24237,8 +24257,15 @@ function _processDevisPdfFile(f, kind){
   var reader=new FileReader();
   reader.onload=function(e){
     var bytes=new Uint8Array(e.target.result);
-    var refValue=kind==='emerson'?(gvg('dv-ref-emerson')||''):(gvg('dv-ref-act')||'');
-    var refDate=kind==='emerson'?(gvg('dv-ref-emerson-date')||''):(gvg('dv-ref-act-date')||'');
+    // Mapping kind → (champ ref input id, champ date input id, label humain)
+    var refMap={
+      'emerson':{ref:'dv-ref-emerson',date:'dv-ref-emerson-date',label:'Emerson'},
+      'act':{ref:'dv-ref-act',date:'dv-ref-act-date',label:'ACT'},
+      'po_cali':{ref:'dv-po-calinstrum',date:'dv-po-calinstrum-date',label:'PO Calinstrum'}
+    };
+    var rmap=refMap[kind]||refMap.emerson;
+    var refValue=gvg(rmap.ref)||'';
+    var refDate=gvg(rmap.date)||'';
     storeDevisPdf({
       devisId:eDVid,kind:kind,filename:f.name,
       refValue:refValue,refDate:refDate,bytes:bytes
@@ -24247,9 +24274,13 @@ function _processDevisPdfFile(f, kind){
         renderDevisPdfCard(eDVid,kind);
         if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
         if(typeof showBCSaveToast==='function'){
-          showBCSaveToast('✓ PDF '+(kind==='emerson'?'Emerson':'ACT')+' attaché ('+(res.replaced?'remplacé':'ajouté')+')');
+          showBCSaveToast('✓ PDF '+rmap.label+' attaché ('+(res.replaced?'remplacé':'ajouté')+')');
         }
-        return _autoFillFromAttachedPdf(bytes,kind);
+        // Auto-fill seulement pour emerson/act (po_cali n'a pas de parser auto-fill ici)
+        if(kind==='emerson' || kind==='act'){
+          return _autoFillFromAttachedPdf(bytes,kind);
+        }
+        return null;
       });
     }).catch(function(err){
       console.error('storeDevisPdf failed:',err);
@@ -24276,7 +24307,8 @@ function _initDevisPdfDropZones(){
     if(zone.dataset.dndBound==='1') return; // déjà bindé
     zone.dataset.dndBound='1';
     var kind=zone.dataset.dropKind;
-    var kindLabel=kind==='emerson'?'Devis Emerson':'Cotation ACT';
+    var kindLabels={emerson:'Devis Emerson',act:'Cotation ACT',po_cali:'PO Calinstrum'};
+    var kindLabel=kindLabels[kind]||'PDF';
 
     // Ajouter l'overlay visuel (créé une seule fois)
     var overlay=document.createElement('div');
@@ -24406,15 +24438,20 @@ function _isoFromEmersonDate(s){
 // Si pas de PDF stocké : masque la carte. Sinon : affiche filename, taille,
 // 3 boutons (👁 Voir, ⬇ Télécharger, 🗑 Supprimer).
 function renderDevisPdfCard(devisId,kind){
-  var cardId=kind==='emerson'?'dv-emerson-pdf-card':'dv-act-pdf-card';
-  var card=document.getElementById(cardId);
+  var cardMap={
+    'emerson':{cardId:'dv-emerson-pdf-card',color:'#22d3ee',icon:'circuit-bulb',label:'Emerson'},
+    'act':{cardId:'dv-act-pdf-card',color:'#fbbf24',icon:'building-warehouse',label:'ACT'},
+    'po_cali':{cardId:'dv-po-cali-pdf-card',color:'#a78bfa',icon:'shopping-cart',label:'PO Calinstrum'}
+  };
+  var meta=cardMap[kind];
+  if(!meta) return;
+  var card=document.getElementById(meta.cardId);
   if(!card) return;
   if(!devisId){card.style.display='none';card.innerHTML='';return;}
   getDevisPdf(devisId,kind).then(function(rec){
     if(!rec){card.style.display='none';card.innerHTML='';return;}
-    var color=kind==='emerson'?'#22d3ee':'#fbbf24';
-    var icon=kind==='emerson'?'circuit-bulb':'building-warehouse';
-    var labelKind=kind==='emerson'?'Emerson':'ACT';
+    var color=meta.color;
+    var labelKind=meta.label;
     card.style.display='block';
     card.innerHTML=
       '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;'+
@@ -24469,14 +24506,16 @@ function downloadDevisPdf(devisId,kind){
 
 // Supprime le PDF stocké (avec confirmation)
 function confirmDeleteDevisPdf(devisId,kind){
-  if(!confirm('Supprimer le PDF '+(kind==='emerson'?'Emerson':'ACT')+' stocké pour ce devis ?\n\n(Le PDF source sur ton disque n\'est pas affecté.)')) return;
+  var labels={emerson:'Emerson',act:'ACT',po_cali:'PO Calinstrum'};
+  var label=labels[kind]||kind;
+  if(!confirm('Supprimer le PDF '+label+' stocké pour ce devis ?\n\n(Le PDF source sur ton disque n\'est pas affecté.)')) return;
   deleteDevisPdf(devisId,kind).then(function(deleted){
     if(deleted){
       refreshDevisPdfCache().then(function(){
         renderDevisPdfCard(devisId,kind);
         if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
         if(typeof showBCSaveToast==='function'){
-          showBCSaveToast('✓ PDF '+(kind==='emerson'?'Emerson':'ACT')+' supprimé');
+          showBCSaveToast('✓ PDF '+label+' supprimé');
         }
       });
     }
