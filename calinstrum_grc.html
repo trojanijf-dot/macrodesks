@@ -10287,6 +10287,77 @@ function _mountDVPipelineClick(root){
 }
 
 // =============================================================================
+// Toggle filtre TYPE devis (Fourniture/Prestation/Mixte)
+// =============================================================================
+// Le filtre type est persisté sur window._dvProFilters.type (vs fDVst qui est
+// un <select> DOM pour le statut). Utilisé par les segments du mini-donut
+// "Répartition par type" + sa légende.
+function _toggleDVTypeFilter(typeName){
+  if(!typeName) return;
+  if(!window._dvProFilters) window._dvProFilters={type:'',prefix:'',contact:''};
+  var labels={Fourniture:'Fourniture',Prestation:'Prestation',Mixte:'Mixte'};
+  if(window._dvProFilters.type===typeName){
+    window._dvProFilters.type='';
+    if(typeof showBCSaveToast==='function'){
+      showBCSaveToast('✓ Filtre type retiré');
+    }
+  } else {
+    window._dvProFilters.type=typeName;
+    if(typeof showBCSaveToast==='function'){
+      showBCSaveToast('🔍 Filtre type : '+(labels[typeName]||typeName));
+    }
+  }
+  // Synchroniser le select #fDVtype2 si présent (cohérence visuelle)
+  var sel=document.getElementById('fDVtype2');
+  if(sel) sel.value=window._dvProFilters.type;
+  if(typeof renderDV==='function') renderDV();
+}
+
+// =============================================================================
+// Mount des clics sur les KPI cards (page Devis)
+// =============================================================================
+// Câble :
+//   - Card "Taux acceptation" → toggle filtre statut 'Accepté'
+//   - Segments SVG du mini-donut "Répartition par type" → toggle filtre type
+//   - Rangées de légende du mini-donut → toggle filtre type
+// Les cards "Total devis" et "Montant moyen" restent inertes (pas de sens
+// métier à filtrer dessus — c'est déjà la vue globale).
+function _mountDVKpiClick(root){
+  if(!root) root=document;
+  // 1. Card Taux acceptation → filtre 'Accepté'
+  var acceptCard=root.querySelector('[data-dv-kpi-click="accept"]');
+  if(acceptCard && acceptCard.dataset.dvKpiBound!=='1'){
+    acceptCard.dataset.dvKpiBound='1';
+    acceptCard.style.cursor='pointer';
+    acceptCard.addEventListener('click',function(e){
+      // Skip si le clic est sur la zone sparkline (crosshair interactif)
+      var tgt=e.target;
+      if(tgt && tgt.closest && tgt.closest('.kpi-spark')) return;
+      _toggleDVStatusFilter('Accepté');
+    });
+  }
+  // 2. Mini-donut "Répartition par type" — segments SVG
+  var typeSegs=root.querySelectorAll('[data-dv-kpi-click="type-donut"] circle[data-key]');
+  typeSegs.forEach(function(seg){
+    if(seg.dataset.dvKpiBound==='1') return;
+    seg.dataset.dvKpiBound='1';
+    seg.addEventListener('click',function(){
+      _toggleDVTypeFilter(seg.dataset.key);
+    });
+  });
+  // 3. Mini-donut — rangées de légende
+  var typeRows=root.querySelectorAll('[data-dv-kpi-click="type-donut"] .dv-donut-legend-row[data-key]');
+  typeRows.forEach(function(row){
+    if(row.dataset.dvKpiBound==='1') return;
+    row.dataset.dvKpiBound='1';
+    row.style.cursor='pointer';
+    row.addEventListener('click',function(){
+      _toggleDVTypeFilter(row.dataset.key);
+    });
+  });
+}
+
+// =============================================================================
 // Donut "Devis émis par mois" — 12 sections (1 par mois)
 // =============================================================================
 // Reçoit une liste de devis (déjà filtrée par les autres filtres SAUF
@@ -10303,6 +10374,16 @@ function _renderDVDonut(devisList){
   if(yearLbl) yearLbl.textContent=String(fy);
 
   // Agrégation par mois (sur d.date)
+  // BUG FIX : on lisait d.montant || d.total qui sont UNDEFINED sur les
+  // devis modernes (le montant est calculé depuis d.lines via _getDevisTTC).
+  // Fallback sur d.ttc puis legacy d.montant/d.total pour compat anciens dumps.
+  function _dvTtc(d){
+    if(typeof _getDevisTTC==='function'){
+      var v=_getDevisTTC(d);
+      if(v) return Number(v)||0;
+    }
+    return Number(d.ttc||d.montant||d.total||0);
+  }
   var monthly=new Array(12).fill(0);
   var counts=new Array(12).fill(0);
   (devisList||[]).forEach(function(d){
@@ -10312,10 +10393,11 @@ function _renderDVDonut(devisList){
     if(parseInt(m[1],10)!==fy) return;
     var mi=parseInt(m[2],10)-1;
     if(isNaN(mi)||mi<0||mi>11) return;
-    monthly[mi]+=Number(d.montant||d.total||0);
+    monthly[mi]+=_dvTtc(d);
     counts[mi]++;
   });
   var totalCumul=monthly.reduce(function(s,v){return s+v;},0);
+  var totalCount=counts.reduce(function(s,v){return s+v;},0);
 
   var todayMonth=new Date().getMonth();
   if(fy<new Date().getFullYear()) todayMonth=11;
@@ -10425,7 +10507,7 @@ function _renderDVDonut(devisList){
   }
   legendHtml+='</div>';
 
-  if(totalCumul===0){
+  if(totalCount===0){
     el.innerHTML='<div style="display:flex;align-items:center;gap:18px;min-height:100px">'+
       svgHtml+
       '<div style="flex:1;color:var(--muted-soft);font-size:12px;font-style:italic">Aucun devis émis sur '+fy+' avec les filtres actifs.</div>'+
@@ -10696,8 +10778,16 @@ function renderDVPro(){
     },
     'kpi_accept'
   );
-  html+='<div class="kpi-pro" style="border-top:2px solid '+tauxColor+'">'+
-    '<div class="kpi-label"><i class="ti ti-target-arrow"></i>Taux acceptation</div>'+
+  // Card cliquable : toggle filtre Accepté. Indicateur visuel quand filtre actif.
+  var acceptFilterActive=(gvg('fDVst')==='Accepté');
+  var acceptCardExtra=acceptFilterActive
+    ? 'box-shadow:inset 0 0 0 1px '+tauxColor+',0 0 0 1px '+tauxColor+'40;background:linear-gradient(180deg,rgba(93,202,165,0.06),transparent 60%);'
+    : '';
+  var acceptCardTitle=acceptFilterActive?'Cliquer pour retirer le filtre Accepté':'Cliquer pour filtrer sur les devis acceptés';
+  html+='<div class="kpi-pro" data-dv-kpi-click="accept" title="'+acceptCardTitle+'" style="border-top:2px solid '+tauxColor+';'+acceptCardExtra+'transition:box-shadow .15s,background .15s">'+
+    '<div class="kpi-label" style="display:flex;align-items:center;gap:6px"><i class="ti ti-target-arrow"></i>Taux acceptation'+
+      (acceptFilterActive?'<span style="margin-left:auto;font-size:9.5px;color:'+tauxColor+';font-weight:500;letter-spacing:0.05em">FILTRE ACTIF</span>':'')+
+    '</div>'+
     '<div class="kpi-value" data-money style="color:'+tauxColor+'">'+kpi.tauxAccept.toFixed(0)+'%</div>'+
     '<div class="kpi-sub">'+(kpi.statusCount['Accepté']+kpi.statusCount['Facturé'])+' acceptés · '+kpi.statusCount['Refusé']+' refusés</div>'+
     sparkAccept+
@@ -10739,8 +10829,17 @@ function renderDVPro(){
 
   // === 4. Mini donut interactif : répartition par TYPE ===
   // Au survol d'un segment → tooltip avec count + montant + part %
-  html+='<div class="kpi-pro" style="border-top:2px solid #a78bfa">'+
-    '<div class="kpi-label"><i class="ti ti-chart-pie-2"></i>Répartition par type</div>'+
+  // Au clic → toggle filtre type (Fourniture/Prestation/Mixte)
+  var typeFilterActive=(window._dvProFilters && window._dvProFilters.type)||'';
+  var typeColors={Fourniture:'#88aae0',Prestation:'#5dcaa5',Mixte:'#a78bfa'};
+  var typeCol=typeFilterActive?(typeColors[typeFilterActive]||'#a78bfa'):'#a78bfa';
+  var typeCardExtra=typeFilterActive
+    ? 'box-shadow:inset 0 0 0 1px '+typeCol+',0 0 0 1px '+typeCol+'40;background:linear-gradient(180deg,'+typeCol+'10,transparent 60%);'
+    : '';
+  html+='<div class="kpi-pro" data-dv-kpi-click="type-donut" style="border-top:2px solid '+typeCol+';'+typeCardExtra+'transition:box-shadow .15s,background .15s">'+
+    '<div class="kpi-label" style="display:flex;align-items:center;gap:6px"><i class="ti ti-chart-pie-2"></i>Répartition par type'+
+      (typeFilterActive?'<span style="margin-left:auto;font-size:9.5px;color:'+typeCol+';font-weight:500;letter-spacing:0.05em">'+typeFilterActive.toUpperCase()+'</span>':'')+
+    '</div>'+
     _miniDonut(kpi.byType, kpi.total, 'kpi')+
     '</div>';
 
@@ -10982,6 +11081,9 @@ function renderDVPro(){
   if(typeof _mountMiniDonuts==='function') _mountMiniDonuts(page);
   // Click handlers pipeline commercial Devis (segments + légende → filtre statut)
   if(typeof _mountDVPipelineClick==='function') _mountDVPipelineClick(page);
+  // Click handlers KPI cards Devis (taux acceptation → filtre statut,
+  // mini-donut segments/légende → filtre type)
+  if(typeof _mountDVKpiClick==='function') _mountDVKpiClick(page);
   // Render donut "Devis émis par mois" + chip filtre invisible
   if(typeof _renderDVDonut==='function'){
     try{ _renderDVDonut(dataForDVDonut); }catch(e){ console.warn('Render DV donut failed:',e); }
@@ -21011,9 +21113,18 @@ function _renderFAKpis(data){
   }
 
   // === Cartes (style kpi-pro cohérent avec page Devis) ===
+  // Statut actif (lecture du select #fFAst) pour indicateur visuel filtre actif
+  var fFAstActive=gvg('fFAst')||'';
+  function _faKpiActiveStyle(statusKey, color){
+    if(fFAstActive!==statusKey) return {extra:'', label:''};
+    return {
+      extra:'box-shadow:inset 0 0 0 1px '+color+',0 0 0 1px '+color+'40;background:linear-gradient(180deg,'+color+'12,transparent 60%);',
+      label:'<span style="margin-left:auto;font-size:9.5px;color:'+color+';font-weight:500;letter-spacing:0.05em">FILTRE ACTIF</span>'
+    };
+  }
   var html='';
 
-  // 1. Total filtré (couleur teal)
+  // 1. Total filtré (couleur teal) — non cliquable (vue globale)
   html+='<div class="kpi-pro kpi-blue">'+
     '<div class="kpi-label"><i class="ti ti-coin"></i>Total filtré</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalAll)+'</div>'+
@@ -21021,27 +21132,33 @@ function _renderFAKpis(data){
     makeSpark(serTotal.cumul, 'var(--teal)', serTotal.monthly, 'fa_total', 'Émis ce mois')+
     '</div>';
 
-  // 2. Encaissé (vert)
+  // 2. Encaissé (vert) — clic = toggle filtre 'paid'
   var subPaid=nPaid+' payée'+(nPaid>1?'s':'');
   if(nPrebilled>0) subPaid+=' · '+nPrebilled+' pré-fact.';
-  html+='<div class="kpi-pro kpi-green">'+
-    '<div class="kpi-label"><i class="ti ti-circle-check"></i>Encaissé</div>'+
+  var paidStyle=_faKpiActiveStyle('paid','#5dcaa5');
+  var paidTitle=fFAstActive==='paid'?'Cliquer pour retirer le filtre Payées':'Cliquer pour filtrer sur les factures encaissées';
+  html+='<div class="kpi-pro kpi-green" data-fa-kpi-click="paid" title="'+paidTitle+'" style="'+paidStyle.extra+'transition:box-shadow .15s,background .15s">'+
+    '<div class="kpi-label" style="display:flex;align-items:center;gap:6px"><i class="ti ti-circle-check"></i>Encaissé'+paidStyle.label+'</div>'+
     '<div class="kpi-value" data-money>'+fNloc(paidSum)+'</div>'+
     '<div class="kpi-sub">XPF · '+subPaid+'</div>'+
     makeSpark(serPaid.cumul, 'var(--green)', serPaid.monthly, 'fa_paid', 'Payé ce mois')+
     '</div>';
 
-  // 3. En attente (amber)
-  html+='<div class="kpi-pro" style="border-top:2px solid #fbbf24">'+
-    '<div class="kpi-label"><i class="ti ti-clock"></i>En attente</div>'+
+  // 3. En attente (amber) — clic = toggle filtre 'pending'
+  var pendingStyle=_faKpiActiveStyle('pending','#fbbf24');
+  var pendingTitle=fFAstActive==='pending'?'Cliquer pour retirer le filtre En attente':'Cliquer pour filtrer sur les factures en attente';
+  html+='<div class="kpi-pro" data-fa-kpi-click="pending" title="'+pendingTitle+'" style="border-top:2px solid #fbbf24;'+pendingStyle.extra+'transition:box-shadow .15s,background .15s">'+
+    '<div class="kpi-label" style="display:flex;align-items:center;gap:6px"><i class="ti ti-clock"></i>En attente'+pendingStyle.label+'</div>'+
     '<div class="kpi-value" data-money style="color:#fbbf24">'+fNloc(pendingSum)+'</div>'+
     '<div class="kpi-sub">XPF · '+nPending+' en attente</div>'+
     makeSpark(serPending.cumul, '#fbbf24', serPending.monthly, 'fa_pending', 'Émis ce mois')+
     '</div>';
 
-  // 4. En retard (rouge)
-  html+='<div class="kpi-pro kpi-red">'+
-    '<div class="kpi-label"><i class="ti ti-alert-triangle"></i>En retard</div>'+
+  // 4. En retard (rouge) — clic = toggle filtre 'late'
+  var lateStyle=_faKpiActiveStyle('late','#f09595');
+  var lateTitle=fFAstActive==='late'?'Cliquer pour retirer le filtre En retard':'Cliquer pour filtrer sur les factures en retard';
+  html+='<div class="kpi-pro kpi-red" data-fa-kpi-click="late" title="'+lateTitle+'" style="'+lateStyle.extra+'transition:box-shadow .15s,background .15s">'+
+    '<div class="kpi-label" style="display:flex;align-items:center;gap:6px"><i class="ti ti-alert-triangle"></i>En retard'+lateStyle.label+'</div>'+
     '<div class="kpi-value" data-money>'+fNloc(lateSum)+'</div>'+
     '<div class="kpi-sub">XPF · '+nLate+' en retard</div>'+
     makeSpark(serLate.cumul, 'var(--red)', serLate.monthly, 'fa_late', 'Émis ce mois')+
@@ -21050,6 +21167,8 @@ function _renderFAKpis(data){
   el.innerHTML=html;
   // Mount des sparklines interactives (crosshair + tooltip + pointillés prévision)
   if(typeof _mountInteractiveSparklines==='function') _mountInteractiveSparklines(el);
+  // Mount des clics KPI cards (toggle filtre statut Factures)
+  if(typeof _mountFAKpiClick==='function') _mountFAKpiClick(el);
 }
 
 // =============================================================================
@@ -21231,6 +21350,28 @@ function _toggleFAStatusFilter(status){
     }
   }
   if(typeof renderFA==='function') renderFA();
+}
+
+// =============================================================================
+// Mount des clics sur les KPI cards (page Factures)
+// =============================================================================
+// Câble les cards Encaissé / En attente / En retard sur le toggle du filtre
+// statut. La card "Total filtré" reste inerte (c'est la vue globale).
+function _mountFAKpiClick(root){
+  if(!root) root=document;
+  var cards=root.querySelectorAll('[data-fa-kpi-click]');
+  cards.forEach(function(card){
+    if(card.dataset.faKpiBound==='1') return;
+    card.dataset.faKpiBound='1';
+    card.style.cursor='pointer';
+    card.addEventListener('click',function(e){
+      // Évite de déclencher quand l'utilisateur joue avec la sparkline
+      // (crosshair). On filtre les clics sur la zone svg de sparkline.
+      var tgt=e.target;
+      if(tgt && tgt.closest && tgt.closest('.kpi-spark')) return;
+      _toggleFAStatusFilter(card.dataset.faKpiClick);
+    });
+  });
 }
 
 // =============================================================================
