@@ -25105,14 +25105,31 @@ function parsePOCalinstrumText(text){
     _parseErrors: []
   };
 
-  // === N° PO + Date (format "30032026/095 30/03/2026") ===
-  var mNum = text.match(/(\d{8}\s*\/\s*\d+)\s+(\d{2}\/\d{2}\/\d{4})/);
+  // === N° PO + Date ===
+  // Cas gérés (pdf.js peut introduire des espaces parasites entre/dans les chiffres) :
+  //   - Ancien format : "30032026 /0 95   30/03/2026" (espaces dans le N°)
+  //   - Ancien format : "30032026/095 30/03/2026"     (sans espace, valeurs côte à côte)
+  //   - Nouveau format : "07052026/042  DATE  07/05/2026" (label DATE intercalé)
+  // Regex : capture les 8 chiffres + slash + chiffres pouvant contenir des espaces,
+  //         puis tolère jusqu'à 50 chars non-numériques avant la date.
+  var mNum = text.match(/(\d{8})\s*\/\s*(\d(?:[\s\d]*\d)?)[^\d\/]{0,50}(\d{2}\/\d{2}\/\d{4})/);
   if(mNum){
-    result.num = mNum[1].replace(/\s+/g,'');
-    var dParts = mNum[2].split('/');
+    // Strip espaces dans le suffixe N° : "0 95" → "095"
+    result.num = mNum[1] + '/' + mNum[2].replace(/\s+/g,'');
+    var dParts = mNum[3].split('/');
     if(dParts.length===3) result.date = dParts[2]+'-'+dParts[1]+'-'+dParts[0];
   } else {
-    result._parseErrors.push('N° PO et/ou date introuvables');
+    // Fallback : extraire séparément
+    // Pour le N°, on cherche aussi le pattern avec espaces parasites
+    var mNumOnly = text.match(/(\d{8})\s*\/\s*(\d(?:[\s\d]*\d)?)\b/);
+    var mDateOnly = text.match(/(\d{2}\/\d{2}\/\d{4})/);
+    if(mNumOnly && mDateOnly){
+      result.num = mNumOnly[1] + '/' + mNumOnly[2].replace(/\s+/g,'');
+      var dp = mDateOnly[1].split('/');
+      if(dp.length===3) result.date = dp[2]+'-'+dp[1]+'-'+dp[0];
+    } else {
+      result._parseErrors.push('N° PO et/ou date introuvables');
+    }
   }
 
   // === Vendor : contact name (1ère colonne avant "RIZZO FABRICE" qui est le customer) ===
@@ -25177,7 +25194,9 @@ function parsePOCalinstrumText(text){
   }
 
   // === Total Amount (AUD) ===
-  var mTotal = text.match(/Total Amount\s*\(AUD\)\s+(\d[\d\s.,]*)/i);
+  // pdf.js peut introduire des espaces parasites : "Total Amount ( AUD )   5330"
+  // → on tolère espaces optionnels autour de "(", "AUD" et ")".
+  var mTotal = text.match(/Total Amount\s*\(\s*AUD\s*\)\s+(\d[\d\s.,]*)/i);
   if(mTotal){
     result.total = Number(mTotal[1].replace(/[\s,]/g,''));
   }
