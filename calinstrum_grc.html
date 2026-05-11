@@ -20783,6 +20783,21 @@ function _renderFADonut(data){
 
   function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
 
+  // === MODE FOCUS : un mois est sélectionné via le filtre invisible ===
+  // Quand _faFilterByEncMonth est actif et correspond à l'année du donut,
+  // on passe en mode "focus" : seul le mois sélectionné garde sa couleur
+  // (teal + violet si mix), tous les autres passent en gris.
+  // Le centre du donut affiche alors le montant du mois sélectionné,
+  // et la légende met le mois sélectionné en avant.
+  var focusMonth=-1; // -1 = pas de focus, sinon 0..11
+  var fEncMonth=(typeof window._faFilterByEncMonth==='string')?window._faFilterByEncMonth:'';
+  if(fEncMonth){
+    var matchFocus=fEncMonth.match(/^(\d{4})-(\d{2})$/);
+    if(matchFocus && parseInt(matchFocus[1],10)===fy){
+      focusMonth=parseInt(matchFocus[2],10)-1;
+    }
+  }
+
   // === Palette ===
   // Teal pour les confirmés (5 niveaux selon l'intensité du total mensuel)
   var paletteTeal=['#0F6E56','#1D9E75','#5dcaa5','#9FE1CB','#E1F5EE'];
@@ -20793,8 +20808,15 @@ function _renderFADonut(data){
   var grayFuture='rgba(255,255,255,0.04)';
 
   var maxV=Math.max.apply(null, monthlyTotal);
+  // Gris focus : utilisé pour les mois NON-sélectionnés quand un mois est en focus.
+  // Plus marqué que grayUnused pour bien différencier visuellement.
+  var grayFocus='rgba(255,255,255,0.07)';
   function colorTealFor(idx){
     var v=monthlyTotal[idx];
+    // Mode focus : tout mois non-sélectionné passe en gris
+    if(focusMonth>=0 && idx!==focusMonth){
+      return grayFocus;
+    }
     if(v<=0) return (idx<=todayMonth)?grayUnused:grayFuture;
     if(maxV<=0) return paletteTeal[2];
     var ratio=v/maxV;
@@ -20806,6 +20828,10 @@ function _renderFADonut(data){
   }
   function colorVioletFor(idx){
     var v=monthlyTotal[idx];
+    // Mode focus : tout mois non-sélectionné passe en gris
+    if(focusMonth>=0 && idx!==focusMonth){
+      return grayFocus;
+    }
     if(maxV<=0) return paletteViolet[2];
     var ratio=v/maxV;
     if(ratio>=0.8) return paletteViolet[0];
@@ -20884,15 +20910,26 @@ function _renderFADonut(data){
       }
     }
   }
-  // Centre : total cumulé
-  if(totalCumul>=1000000){
-    svgHtml+='<text x="50" y="51" text-anchor="middle" font-size="9" font-weight="500" fill="var(--text)" style="font-family:var(--mono)">'+(totalCumul/1000000).toFixed(1)+'M</text>';
-  } else if(totalCumul>=1000){
-    svgHtml+='<text x="50" y="51" text-anchor="middle" font-size="9" font-weight="500" fill="var(--text)" style="font-family:var(--mono)">'+Math.round(totalCumul/1000)+'k</text>';
-  } else {
-    svgHtml+='<text x="50" y="51" text-anchor="middle" font-size="9" font-weight="500" fill="var(--text)" style="font-family:var(--mono)">'+fNloc(totalCumul)+'</text>';
+  // Centre du donut : selon le mode (focus ou vue d'ensemble)
+  // - Vue d'ensemble : cumul annuel + label "XPF encaissés"
+  // - Mode focus : montant du mois sélectionné + label "Mois Année"
+  var displayValue=totalCumul;
+  var displayLabel='XPF encaissés';
+  if(focusMonth>=0){
+    displayValue=monthlyTotal[focusMonth];
+    var monthsShortFR=['Jan','Fév','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc'];
+    displayLabel=monthsShortFR[focusMonth]+' '+fy;
   }
-  svgHtml+='<text x="50" y="60" text-anchor="middle" font-size="5.5" fill="var(--muted-soft)">XPF encaissés</text>';
+  // Couleur centre : teal en vue normale, plus claire en mode focus pour attirer l'œil
+  var centerColor=focusMonth>=0?'var(--teal)':'var(--text)';
+  if(displayValue>=1000000){
+    svgHtml+='<text x="50" y="51" text-anchor="middle" font-size="9" font-weight="500" fill="'+centerColor+'" style="font-family:var(--mono)">'+(displayValue/1000000).toFixed(1)+'M</text>';
+  } else if(displayValue>=1000){
+    svgHtml+='<text x="50" y="51" text-anchor="middle" font-size="9" font-weight="500" fill="'+centerColor+'" style="font-family:var(--mono)">'+Math.round(displayValue/1000)+'k</text>';
+  } else {
+    svgHtml+='<text x="50" y="51" text-anchor="middle" font-size="9" font-weight="500" fill="'+centerColor+'" style="font-family:var(--mono)">'+fNloc(displayValue)+'</text>';
+  }
+  svgHtml+='<text x="50" y="60" text-anchor="middle" font-size="5.5" fill="var(--muted-soft)">'+esc(displayLabel)+'</text>';
   svgHtml+='</svg>';
 
   // === Légende horizontale : 12 mois en grille 6×2 ===
@@ -20905,8 +20942,11 @@ function _renderFADonut(data){
     var ndK=monthlyNoDate[k];
     var hasData=totalK>0;
     var swatch=colorTealFor(k);
-    var labelColor=isPast?'var(--muted)':'var(--muted-soft)';
-    var valueColor=hasData?'var(--text)':'var(--muted-soft)';
+    // En mode focus, les mois non-sélectionnés sont atténués (label + value gris)
+    var isDimmed=(focusMonth>=0 && k!==focusMonth);
+    var labelColor=isDimmed?'rgba(255,255,255,0.18)':(isPast?'var(--muted)':'var(--muted-soft)');
+    var valueColor=isDimmed?'rgba(255,255,255,0.20)':(hasData?'var(--text)':'var(--muted-soft)');
+    var violetColor=isDimmed?'rgba(255,255,255,0.20)':'#a78bfa';
     // Format compact : 1.2M / 350k / 42 (XPF)
     function compact(v){
       if(v<=0) return '—';
@@ -20920,21 +20960,25 @@ function _renderFADonut(data){
     var valHtml;
     if(ndK>0 && confK>0){
       // Mix → afficher les 2 valeurs : "1.2M + 0.3M"
-      valHtml='<span style="color:var(--text);font-size:10px" class="num" data-money>'+compact(confK)+'</span>'+
-              '<span style="color:#a78bfa;font-size:9.5px;margin-left:2px" class="num" data-money>+'+compact(ndK)+'</span>';
+      valHtml='<span style="color:'+valueColor+';font-size:10px" class="num" data-money>'+compact(confK)+'</span>'+
+              '<span style="color:'+violetColor+';font-size:9.5px;margin-left:2px" class="num" data-money>+'+compact(ndK)+'</span>';
     } else if(ndK>0){
       // Que du sans-date
-      valHtml='<span style="color:#a78bfa;font-size:10px" class="num" data-money>'+compact(ndK)+'</span>';
+      valHtml='<span style="color:'+violetColor+';font-size:10px" class="num" data-money>'+compact(ndK)+'</span>';
     } else if(confK>0){
       // Que du confirmé
       valHtml='<span style="color:'+valueColor+';font-size:10px" class="num" data-money>'+compact(confK)+'</span>';
     } else {
-      valHtml='<span style="color:var(--muted-soft);font-size:10px">—</span>';
+      valHtml='<span style="color:'+(isDimmed?'rgba(255,255,255,0.20)':'var(--muted-soft)')+';font-size:10px">—</span>';
     }
 
     // Swatch : si mix, 2 demi-cercles côte à côte
+    // En mode focus, le swatch des mois non-sélectionnés est gris uni (cohérent avec donut)
     var swatchHtml;
-    if(ndK>0 && confK>0){
+    if(isDimmed){
+      // Swatch gris uni pour les mois atténués en mode focus
+      swatchHtml='<span style="width:8px;height:8px;background:rgba(255,255,255,0.10);border-radius:1.5px;flex-shrink:0"></span>';
+    } else if(ndK>0 && confK>0){
       // Mini barre split teal/violet
       var ratioConf=confK/totalK;
       swatchHtml='<span style="display:inline-flex;width:10px;height:8px;border-radius:1.5px;overflow:hidden;flex-shrink:0">'+
