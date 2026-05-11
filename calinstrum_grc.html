@@ -1089,11 +1089,16 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
        variable selon montant), mois futurs grisés. Légende horizontale 6 colonnes × 2 lignes.
        Réactif aux filtres actifs (statut, type, année, client). -->
   <div class="card no-print" id="fa-donut-card" style="margin-bottom:12px;padding:14px 16px">
-    <div class="card-pro-title" style="display:flex;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">
+    <div class="card-pro-title" style="display:flex;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:4px">
       <i class="ti ti-chart-donut"></i>
       <span>Encaissé par mois</span>
       <span id="fa-donut-year" style="color:var(--muted-soft);font-weight:400;font-size:11px;letter-spacing:0"></span>
       <span style="margin-left:auto;font-size:11px;color:var(--muted-soft);font-weight:400;letter-spacing:0">12 mois</span>
+    </div>
+    <!-- Sous-titre explicatif : la logique métier du donut -->
+    <div style="font-size:10.5px;color:var(--muted-soft);margin-bottom:12px;letter-spacing:0">
+      <i class="ti ti-info-circle" style="font-size:11px;vertical-align:-1px;margin-right:3px"></i>
+      Vue trésorerie · Factures classées par <strong style="color:var(--muted);font-weight:500">date d'encaissement réelle</strong> (date à laquelle le client a payé)
     </div>
     <div id="fa-donut"></div>
   </div>
@@ -1132,6 +1137,12 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <button class="btn btn-ghost btn-sm" onclick="resetFAFilters()" title="Réinitialiser tous les filtres" style="font-size:10.5px;padding:5px 10px;color:var(--muted)">↺ Réinitialiser</button>
     <!-- Compteur de résultats à droite -->
     <div id="fa-result-count" style="margin-left:auto;font-size:11px;color:var(--muted);white-space:nowrap"></div>
+  </div>
+
+  <!-- Sous-titre tableau : logique métier différente du donut (vue facturation, pas trésorerie) -->
+  <div style="font-size:10.5px;color:var(--muted-soft);margin:0 0 8px 2px;letter-spacing:0">
+    <i class="ti ti-info-circle" style="font-size:11px;vertical-align:-1px;margin-right:3px"></i>
+    Vue facturation · Toutes phases · Classées par <strong style="color:var(--muted);font-weight:500">date d'émission</strong> (les pré-facturées par <strong style="color:var(--muted);font-weight:500">date de réception BC</strong>)
   </div>
 
   <!-- TABLEAU hiérarchique : Année > Mois > Client > Factures (style page Devis)
@@ -20850,31 +20861,32 @@ function _renderFADonut(data){
 //  1. Applique le filtre Statut = "Payées" (puisque le donut montre les encaissées)
 //  2. Applique le filtre Année = année du donut (préserve le contexte temporel)
 //  3. Auto-expand l'année + le mois cliqué dans le tableau hiérarchique
+//     (en RÉINITIALISANT les autres mois pour focus visuel clair)
 //  4. Re-render pour appliquer + scroll fluide vers le mois ouvert
-//  5. Toast confirmant l'action
+//  5. Toast confirmant l'action (ou informant si vide)
 // monthIdx : 0..11 (Jan=0, Mai=4...)
 // =============================================================================
 function _drillDownToMonth(monthIdx, year){
   if(monthIdx===undefined || monthIdx===null || isNaN(monthIdx)) return;
-  // Si le segment est vide (gris), on ne fait rien (rien à explorer)
-  // → on regarde dans la donnée DOM si data-value === '0' ou null
-  // Mais comme la fonction est appelée depuis path ET légende, plus simple :
-  // si pas d'encaissement pour ce mois, le filtre ne donnera rien mais c'est OK.
-  // (l'empty state s'affichera dans le tableau)
 
   var monthsFR=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+  var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
   var monthLabel=monthsFR[monthIdx]||('mois '+monthIdx);
   var yyyy=String(year);
   var mm=String(monthIdx+1).padStart(2,'0');
+
+  // === Vérifier si le mois a des encaissements (sinon : feedback dédié) ===
+  // On lit data-value sur les paths du donut pour ce mois
+  var maiPaths=document.querySelectorAll('#fa-donut path[data-month="'+monthIdx+'"]');
+  var totalForMonth=0;
+  maiPaths.forEach(function(p){totalForMonth+=parseFloat(p.dataset.value)||0;});
+  var hasData=totalForMonth>0;
 
   // 1. Appliquer le filtre Statut = paid
   var fSt=document.getElementById('fFAst');
   if(fSt){fSt.value='paid';}
 
   // 2. Appliquer le filtre Année
-  // Le select fFAyear contient les années trouvées dans la source.
-  // Si l'année n'est pas dans le select (ex : on cliquerait sur 2024 alors qu'on est sur
-  // un donut filtré 2026), on saute l'application.
   var fYr=document.getElementById('fFAyear');
   if(fYr){
     var opts=fYr.querySelectorAll('option');
@@ -20883,26 +20895,36 @@ function _drillDownToMonth(monthIdx, year){
     }
   }
 
-  // 3. Auto-expand année + mois dans la hiérarchie tableau
+  // 3. Auto-expand année + mois — REMPLACE les expansions précédentes
+  //    (les autres mois sont fermés pour focus visuel net sur celui cliqué)
   if(!window._hgrState) window._hgrState={};
   if(!window._hgrState.fa) window._hgrState.fa={activeClient:'',expanded:{}};
+  // On garde activeClient mais on RESET expanded pour ne garder que ce qu'on veut ouvrir
+  window._hgrState.fa.expanded={};
   window._hgrState.fa.expanded['year:'+yyyy]=true;
-  window._hgrState.fa.expanded['month:'+yyyy+'-'+mm]=true;
+  if(hasData){
+    window._hgrState.fa.expanded['month:'+yyyy+'-'+mm]=true;
+  }
 
   // 4. Re-render
   if(typeof renderFA==='function') renderFA();
 
-  // 5. Scroll fluide vers la ligne mois après le render
+  // 5. Si le mois est vide : toast informatif et stop
+  if(!hasData){
+    if(typeof showBCSaveToast==='function'){
+      showBCSaveToast('ℹ️ Aucun encaissement en '+monthLabel+' '+yyyy);
+    }
+    return;
+  }
+
+  // 6. Scroll fluide vers la ligne mois après le render
   setTimeout(function(){
     var tb=document.getElementById('tbFA');
     if(!tb) return;
-    // Chercher la ligne mois (contient l'icône ti-calendar-event + le label mois)
     var monthRows=tb.querySelectorAll('.hgr-month-row');
-    var monthsFRcap=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
     var targetLabel=monthsFRcap[monthIdx]+' '+yyyy;
     for(var j=0;j<monthRows.length;j++){
       if(monthRows[j].textContent.indexOf(targetLabel)>=0){
-        // Scroll en évitant que le sticky header masque la ligne (offset ~80px)
         var rect=monthRows[j].getBoundingClientRect();
         var scrollY=window.pageYOffset||document.documentElement.scrollTop;
         var targetY=rect.top+scrollY-80;
@@ -20917,7 +20939,7 @@ function _drillDownToMonth(monthIdx, year){
     }
   },80);
 
-  // 6. Toast confirmation
+  // 7. Toast confirmation
   if(typeof showBCSaveToast==='function'){
     showBCSaveToast('🔍 Filtre '+monthLabel+' '+yyyy+' · Payées appliqué');
   }
