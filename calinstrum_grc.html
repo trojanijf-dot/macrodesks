@@ -1068,12 +1068,46 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <button class="btn btn-teal no-print" onclick="openFA()">+ Nouvelle facture</button>
     </div>
   </div>
+
+  <!-- ===== BANDEAU KPIs (réactif aux filtres actifs) ===== -->
+  <div class="g4 no-print" id="fa-kpis" style="margin-bottom:12px"></div>
+
   <!-- Onglets horizontaux clients (dynamiques) : Tous + 1 par client trouvé. Drag-and-drop pour réorganiser. -->
   <div class="client-tabs no-print" id="faClientTabs"></div>
-  <!-- Recherche simple (les filtres rapides statut/type/année restent dans Suivi Factures) -->
-  <div class="search-bar no-print" style="margin-bottom:10px">
-    <input class="search-input" placeholder="Rechercher..." id="sFA" oninput="renderFA()" style="max-width:300px">
+
+  <!-- ===== BARRE DE FILTRES AVANCÉS ===== -->
+  <!-- Recherche texte + Statut + Type + Année + Tri.
+       Tous les filtres réagissent via renderFA() et sont combinés (ET logique). -->
+  <div class="search-bar no-print" style="margin-bottom:10px;flex-wrap:wrap;gap:8px;align-items:center">
+    <input class="search-input" placeholder="Rechercher par n°, intitulé, PO..." id="sFA" oninput="renderFA()" style="max-width:280px">
+    <select class="filter-sel" id="fFAst" onchange="renderFA()" title="Filtrer par statut de paiement">
+      <option value="">Tous statuts</option>
+      <option value="paid">✓ Payées</option>
+      <option value="pending">📤 En attente</option>
+      <option value="late">⚠ En retard</option>
+      <option value="partial">⟳ Partielles</option>
+      <option value="prebilled">📦 Pré-facturées</option>
+    </select>
+    <select class="filter-sel" id="fFAtype" onchange="renderFA()" title="Filtrer par type de prestation">
+      <option value="">Tous types</option>
+      <option value="Fourniture">🔧 Fourniture</option>
+      <option value="Prestation de service">🛠 Prestation</option>
+      <option value="Fourniture + Prestation">🔗 Mixte</option>
+    </select>
+    <select class="filter-sel" id="fFAyear" onchange="renderFA()" title="Filtrer par année (date d'envoi ou de réception BC pour les pré-facturées)">
+      <option value="">Toutes années</option>
+    </select>
+    <select class="filter-sel" id="fFAsort" onchange="renderFA()" title="Tri à l'intérieur de la hiérarchie Année › Mois › Client">
+      <option value="date_desc">Date ↓ (récent → ancien)</option>
+      <option value="date_asc">Date ↑ (ancien → récent)</option>
+      <option value="montant_desc">Montant ↓ (gros → petit)</option>
+      <option value="montant_asc">Montant ↑ (petit → gros)</option>
+    </select>
+    <button class="btn btn-ghost btn-sm" onclick="resetFAFilters()" title="Réinitialiser tous les filtres" style="font-size:10.5px;padding:5px 10px;color:var(--muted)">↺ Réinitialiser</button>
+    <!-- Compteur de résultats à droite -->
+    <div id="fa-result-count" style="margin-left:auto;font-size:11px;color:var(--muted);white-space:nowrap"></div>
   </div>
+
   <!-- TABLEAU hiérarchique : Année > Mois > Client > Factures (style page Devis)
        Les colonnes reprennent le design Suivi + 1 colonne 📅 Date encaissement supplémentaire.
        Pas de tri par clic sur en-tête (incompatible avec hiérarchie) — utiliser la page Suivi
@@ -19775,16 +19809,87 @@ function renderFA(){
     return i;
   });
   renderClientTabs('fa',sourceWithClient,'faClientTabs');
-  // Filtre par recherche
+
+  // ===== Récupération de tous les filtres actifs =====
   var s=(gvg('sFA')||'').toLowerCase();
+  var fStatut=gvg('fFAst')||'';
+  var fType=gvg('fFAtype')||'';
+  var fYear=gvg('fFAyear')||'';
+  var fSort=gvg('fFAsort')||'date_desc';
+
+  // ===== Filtres combinés (ET logique) =====
   var data=sourceWithClient.filter(function(i){
-    if(!s)return true;
-    return JSON.stringify(i).toLowerCase().indexOf(s)>=0;
+    // Recherche texte (sur le JSON complet)
+    if(s && JSON.stringify(i).toLowerCase().indexOf(s)<0) return false;
+    // Statut paiement (prebilled est un cas particulier)
+    if(fStatut){
+      if(fStatut==='prebilled'){
+        if(!(typeof isPrebilled==='function' && isPrebilled(i))) return false;
+      } else {
+        if(typeof isPrebilled==='function' && isPrebilled(i)) return false; // exclure prebilled des autres statuts
+        var st=getStatus(i);
+        if(st!==fStatut) return false;
+      }
+    }
+    // Type
+    if(fType){
+      var t=i.type||'Fourniture';
+      if(t!==fType) return false;
+    }
+    // Année (sur dateEnvoi ou dateReceptionBC pour les pré-facturées)
+    if(fYear){
+      var dateForYear=i.dateEnvoi||i.dateReceptionBC||'';
+      var m=String(dateForYear).match(/^(\d{4})/);
+      if(!m || m[1]!==fYear) return false;
+    }
+    return true;
   });
-  // Filtre par onglet client actif
+  // Filtre par onglet client actif (en plus des filtres ci-dessus)
   data=filterByActiveClient(data,'fa');
-  var tb=document.getElementById('tbFA');if(!tb)return;
-  if(!data.length){tb.innerHTML='<tr><td colspan="11" class="empty">Aucune facture</td></tr>';return;}
+
+  // ===== Remplir le select Année avec les années trouvées dans la source =====
+  _populateFAYearFilter(sourceWithClient);
+
+  // ===== Tri (appliqué AVANT la hiérarchisation, mais renderHierarchicalRows
+  //       re-groupe par Année>Mois>Client puis trie les factures à l'intérieur
+  //       de chaque mois/client selon l'ordre du tableau qu'on lui passe) =====
+  data.sort(function(a,b){
+    if(fSort==='date_asc'||fSort==='date_desc'){
+      var da=a.dateEnvoi||a.dateReceptionBC||'';
+      var db=b.dateEnvoi||b.dateReceptionBC||'';
+      return fSort==='date_asc' ? (da<db?-1:da>db?1:0) : (da<db?1:da>db?-1:0);
+    } else if(fSort==='montant_asc'||fSort==='montant_desc'){
+      var ma=Number(a.montant)||0,mb=Number(b.montant)||0;
+      return fSort==='montant_asc' ? ma-mb : mb-ma;
+    }
+    return 0;
+  });
+
+  // ===== Mise à jour du compteur de résultats + KPIs =====
+  _renderFAKpis(data);
+  _renderFAResultCount(data,sourceWithClient.length);
+
+  var tb=document.getElementById('tbFA');
+  if(!tb)return;
+
+  // ===== Empty state intelligent =====
+  if(!data.length){
+    var totalAvantFiltres=sourceWithClient.length;
+    var hasFilters=s||fStatut||fType||fYear;
+    if(totalAvantFiltres===0){
+      tb.innerHTML='<tr><td colspan="11" class="empty">Aucune facture</td></tr>';
+    } else if(hasFilters){
+      tb.innerHTML='<tr><td colspan="11" class="empty" style="padding:30px 20px;text-align:center">'+
+        '<div style="font-size:32px;margin-bottom:8px;opacity:.5">🔍</div>'+
+        '<div style="font-size:13px;color:var(--text);margin-bottom:4px">Aucune facture ne correspond aux filtres</div>'+
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:12px">'+totalAvantFiltres+' facture(s) disponible(s) en levant les filtres</div>'+
+        '<button class="btn btn-ghost btn-sm" onclick="resetFAFilters()" style="font-size:11px">↺ Réinitialiser les filtres</button>'+
+        '</td></tr>';
+    } else {
+      tb.innerHTML='<tr><td colspan="11" class="empty">Aucune facture dans ce client</td></tr>';
+    }
+    return;
+  }
 
   // Fonction de rendu d'UNE ligne (utilisée par renderHierarchicalRows pour chaque facture
   // au plus profond de la hiérarchie Année > Mois > Client > Factures)
@@ -19871,6 +19976,90 @@ function renderFA(){
     renderDataRow:renderFARow,
     emptyMsg:'Aucune facture'
   });
+}
+
+// =============================================================================
+// HELPERS REFONTE PAGE FACTURES
+// =============================================================================
+
+// Remplit le select Année à partir des dates présentes dans la source.
+// Préserve la sélection courante. Idempotent : ne reconstruit que si le set d'années a changé.
+function _populateFAYearFilter(source){
+  var sel=document.getElementById('fFAyear');
+  if(!sel) return;
+  var years={};
+  source.forEach(function(i){
+    var d=i.dateEnvoi||i.dateReceptionBC||'';
+    var m=String(d).match(/^(\d{4})/);
+    if(m) years[m[1]]=true;
+  });
+  var sortedYears=Object.keys(years).sort(function(a,b){return b-a;}); // desc (récent d'abord)
+  var sig=sortedYears.join(',');
+  if(sel.dataset.sig===sig) return; // pas de changement, on ne touche pas (évite de perdre la sélection)
+  var current=sel.value;
+  sel.innerHTML='<option value="">Toutes années</option>'+
+    sortedYears.map(function(y){return '<option value="'+y+'"'+(current===y?' selected':'')+'>'+y+'</option>';}).join('');
+  sel.dataset.sig=sig;
+}
+
+// KPIs réactifs : se calculent sur les données FILTRÉES (data)
+// 4 cartes : 💰 Total filtré · ✓ Encaissé · 📤 En attente · ⚠ En retard
+function _renderFAKpis(data){
+  var el=document.getElementById('fa-kpis');
+  if(!el) return;
+  var totalAll=0,paidSum=0,pendingSum=0,lateSum=0,prebilledSum=0;
+  var nPaid=0,nPending=0,nLate=0,nPrebilled=0;
+  data.forEach(function(i){
+    var m=Number(i.montant)||0;
+    totalAll+=m;
+    if(typeof isPrebilled==='function' && isPrebilled(i)){
+      prebilledSum+=m; nPrebilled++;
+      return; // exclut les pré-facturées des stats paiement (elles ne sont pas encore émises)
+    }
+    var st=getStatus(i);
+    if(st==='paid'){paidSum+=m; nPaid++;}
+    else if(st==='late'){lateSum+=m; nLate++;}
+    else {pendingSum+=m; nPending++;}
+  });
+  var nTotal=data.length;
+
+  function kpi(emoji,label,val,sub,colorClass){
+    return '<div class="metric '+(colorClass||'')+'">'+
+      '<div class="mlbl">'+emoji+' '+label+'</div>'+
+      '<div class="mval">'+fN(val)+' <span style="font-size:10px;color:var(--muted);font-weight:400">XPF</span></div>'+
+      '<div class="msub">'+esc(sub)+'</div>'+
+      '</div>';
+  }
+  el.innerHTML=
+    kpi('💼','Total filtré',totalAll,nTotal+' facture'+(nTotal>1?'s':''),'') +
+    kpi('✅','Encaissé',paidSum,nPaid+' payée'+(nPaid>1?'s':'')+(nPrebilled>0?' · '+nPrebilled+' pré-facturée'+(nPrebilled>1?'s':''):''),'m-green') +
+    kpi('📤','En attente',pendingSum,nPending+' en attente','m-amber') +
+    kpi('⚠️','En retard',lateSum,nLate+' en retard','m-red');
+}
+
+// Compteur de résultats à droite de la barre de filtres
+function _renderFAResultCount(data,totalSource){
+  var el=document.getElementById('fa-result-count');
+  if(!el) return;
+  var total=data.reduce(function(s,i){return s+(Number(i.montant)||0);},0);
+  var n=data.length;
+  if(n===totalSource){
+    el.innerHTML='<strong style="color:var(--text)">'+n+'</strong> facture'+(n>1?'s':'')+' · <strong style="color:var(--teal)">'+fN(total)+' XPF</strong>';
+  } else {
+    el.innerHTML='<strong style="color:var(--text)">'+n+'</strong> / '+totalSource+' facture'+(totalSource>1?'s':'')+' · <strong style="color:var(--teal)">'+fN(total)+' XPF</strong>';
+  }
+}
+
+// Réinitialise tous les filtres avancés (statut/type/année/tri + recherche)
+function resetFAFilters(){
+  var ids=['sFA','fFAst','fFAtype','fFAyear'];
+  ids.forEach(function(id){
+    var el=document.getElementById(id);
+    if(el) el.value='';
+  });
+  var sort=document.getElementById('fFAsort');
+  if(sort) sort.value='date_desc';
+  if(typeof renderFA==='function') renderFA();
 }
 
 // Helper : retrouver la date d'encaissement
