@@ -16769,6 +16769,12 @@ function extractACTPdf(uint8arr){
 }
 
 // Parse les lignes d'un devis ACT pour extraire les totaux financiers
+//
+// 2 stratégies en cascade :
+//  1. Match ligne par ligne (rapide, fonctionne quand le PDF a un layout propre)
+//  2. Fallback : joindre toutes les lignes et matcher dans le texte fusionné
+//     (utile quand pdf.js scinde une ligne logique en plusieurs lignes physiques
+//     à cause de cellules de tableau ou de retours de ligne au sein d'une cellule)
 function parseACTLines(lines){
   var data={
     nRef:'',date:'',cours:0,
@@ -16780,12 +16786,14 @@ function parseACTLines(lines){
 
   // Helper : parse un nombre français (espaces comme séparateur de milliers, virgule décimale)
   // Ex: "1 682 351" → 1682351 ; "868,46" → 868.46 ; "23 872,00" → 23872.00
+  // Gère aussi les espaces insécables (\u00a0, \u202f) que pdf.js peut introduire.
   function parseFrNum(s){
     if(!s)return 0;
-    var cleaned=String(s).replace(/\s+/g,'').replace(/,/g,'.');
+    var cleaned=String(s).replace(/[\s\u00a0\u202f]/g,'').replace(/,/g,'.');
     return parseFloat(cleaned)||0;
   }
 
+  // === PASSE 1 : ligne par ligne ===
   lines.forEach(function(line,idx){
     // N/Ref : "N/Ref: 2025-865 LP"
     var mRef=line.match(/N\/?Ref\s*:?\s*([\w\d\-\s]+?)(?:\s+(?:Incoterm|Devise|Date|Société|Destinataire|Marchandise|Origine)|$)/i);
@@ -16815,6 +16823,44 @@ function parseACTLines(lines){
     var mTot=line.match(/TOTAL\s+FACTURE\s+ACT\s+([\d\s,\.]+)\s+XPF/i);
     if(mTot)data.totalFactureXpf=parseFrNum(mTot[1]);
   });
+
+  // === PASSE 2 (fallback) : si rien n'a matché côté Fret/Frais, tenter le texte fusionné ===
+  // Cas : pdf.js a scindé une ligne logique en plusieurs lignes physiques
+  // (typique des tableaux où chaque cellule devient une ligne séparée).
+  // On joint avec espace et on autorise \s+ entre tous les tokens — y compris
+  // les sauts de ligne, qui matchent \s en JS.
+  if(!data.fretAssXpf || !data.fraisLocauxXpf){
+    var fullText=lines.join(' \n ');
+    // Regex relâchés : tolère N'IMPORTE QUEL whitespace (saut ligne inclus) entre tokens
+    if(!data.fretAssXpf){
+      var mFret2=fullText.match(/TOTAL[\s\u00a0]+FRET[\s\u00a0]*\+?[\s\u00a0]*ASSURANCE[\s\u00a0]+([\d\s\u00a0\u202f,\.]+?)[\s\u00a0]+AUD[\s\u00a0]+([\d\s\u00a0\u202f,\.]+?)[\s\u00a0]+XPF/i);
+      if(mFret2){
+        data.fretAssAud=parseFrNum(mFret2[1]);
+        data.fretAssXpf=parseFrNum(mFret2[2]);
+      } else {
+        // Encore plus relâché : peut-être pas de "AUD" entre les 2 montants
+        var mFret3=fullText.match(/TOTAL[\s\u00a0]+FRET[\s\u00a0]*\+?[\s\u00a0]*ASSURANCE[^\d]*?([\d][\d\s\u00a0\u202f,\.]*?)[\s\u00a0]+XPF/i);
+        if(mFret3) data.fretAssXpf=parseFrNum(mFret3[1]);
+      }
+    }
+    if(!data.fraisLocauxXpf){
+      var mFL2=fullText.match(/TOTAL[\s\u00a0]+FRAIS[\s\u00a0]+LOCAUX[^\d]*?([\d][\d\s\u00a0\u202f,\.]*?)[\s\u00a0]+XPF/i);
+      if(mFL2) data.fraisLocauxXpf=parseFrNum(mFL2[1]);
+    }
+    if(!data.totalFactureXpf){
+      var mTot2=fullText.match(/TOTAL[\s\u00a0]+FACTURE[\s\u00a0]+ACT[^\d]*?([\d][\d\s\u00a0\u202f,\.]*?)[\s\u00a0]+XPF/i);
+      if(mTot2) data.totalFactureXpf=parseFrNum(mTot2[1]);
+    }
+  }
+
+  // Log diagnostic (visible en console navigateur) — utile pour debug futur
+  // si un PDF ACT échoue malgré ces 2 passes.
+  if(!data.fretAssXpf && !data.fraisLocauxXpf){
+    console.warn('[parseACTLines] Aucun montant extrait. Lignes brutes :');
+    lines.forEach(function(l,i){console.warn('  '+i+': '+l);});
+  } else {
+    console.log('[parseACTLines] OK — Fret:'+data.fretAssXpf+' XPF · Frais:'+data.fraisLocauxXpf+' XPF · Total:'+data.totalFactureXpf+' XPF');
+  }
 
   return data;
 }
@@ -24276,11 +24322,8 @@ function _processDevisPdfFile(f, kind){
         if(typeof showBCSaveToast==='function'){
           showBCSaveToast('✓ PDF '+rmap.label+' attaché ('+(res.replaced?'remplacé':'ajouté')+')');
         }
-        // Auto-fill seulement pour emerson/act (po_cali n'a pas de parser auto-fill ici)
-        if(kind==='emerson' || kind==='act'){
-          return _autoFillFromAttachedPdf(bytes,kind);
-        }
-        return null;
+        // Auto-fill activé pour les 3 kinds : emerson, act et po_cali
+        return _autoFillFromAttachedPdf(bytes,kind);
       });
     }).catch(function(err){
       console.error('storeDevisPdf failed:',err);
@@ -24370,16 +24413,16 @@ function _initDevisPdfDropZones(){
 // =============================================================================
 function _autoFillFromAttachedPdf(bytes,kind){
   if(typeof pdfjsLib==='undefined') return Promise.resolve();
-  var extractor=kind==='emerson'
-    ? (typeof extractEmersonPdf==='function'?extractEmersonPdf:null)
-    : (typeof extractACTPdf==='function'?extractACTPdf:null);
+  var extractor=null;
+  if(kind==='emerson') extractor=(typeof extractEmersonPdf==='function')?extractEmersonPdf:null;
+  else if(kind==='act') extractor=(typeof extractACTPdf==='function')?extractACTPdf:null;
+  else if(kind==='po_cali') extractor=(typeof extractPOCalinstrumPdf==='function')?extractPOCalinstrumPdf:null;
   if(!extractor) return Promise.resolve();
   return extractor(bytes).then(function(result){
     if(!result) return;
-    // Les deux parsers renvoient soit {header, ...} (ACT, Emerson récent),
-    // soit directement le header (Emerson ancien : parseEmersonQuoteText
-    // renvoie le header avec .rawText ajouté). On normalise.
-    var h=result.header||result;
+    // Les parsers renvoient soit {header, ...} (ACT, Emerson récent),
+    // soit {parsed, ...} (PO Calinstrum), soit directement le header (Emerson ancien).
+    var h=result.header||result.parsed||result;
     if(!h) return;
     // Pré-calcul du refValue et de la date ISO selon le kind
     var refValue='',refDate='';
@@ -24393,13 +24436,22 @@ function _autoFillFromAttachedPdf(bytes,kind){
     } else if(kind==='act'){
       refValue=h.refFull||h.num||'';
       refDate=h.date||''; // déjà ISO depuis parseACTQuoteText
+    } else if(kind==='po_cali'){
+      // parsePOCalinstrumText renvoie : {num:"07052026/042", date:"2026-05-07", ...}
+      refValue=h.num||'';
+      refDate=h.date||''; // déjà ISO depuis parsePOCalinstrumText
     }
 
     // Mode B : remplir uniquement si vide
-    var refInputId=kind==='emerson'?'dv-ref-emerson':'dv-ref-act';
-    var dateInputId=kind==='emerson'?'dv-ref-emerson-date':'dv-ref-act-date';
-    var refInput=document.getElementById(refInputId);
-    var dateInput=document.getElementById(dateInputId);
+    var refInputMap={
+      'emerson':{ref:'dv-ref-emerson',date:'dv-ref-emerson-date'},
+      'act':{ref:'dv-ref-act',date:'dv-ref-act-date'},
+      'po_cali':{ref:'dv-po-calinstrum',date:'dv-po-calinstrum-date'}
+    };
+    var ids=refInputMap[kind];
+    if(!ids) return;
+    var refInput=document.getElementById(ids.ref);
+    var dateInput=document.getElementById(ids.date);
     var filled=[];
     if(refInput && !refInput.value.trim() && refValue){
       refInput.value=refValue;
@@ -24613,6 +24665,32 @@ function extractACTPdf(uint8arr){
       var rawText=pageTexts.join('\n\n---PAGE BREAK---\n\n');
       var header=parseACTQuoteText(rawText);
       return {header:header,rawText:rawText};
+    });
+  });
+}
+
+// =============================================================================
+// extractPOCalinstrumPdf — Extrait le texte d'un PDF PO Calinstrum et le parse
+// =============================================================================
+// Utilisé par l'auto-fill du bouton "Joindre" sur la zone PO Calinstrum.
+// Retourne {parsed:{num,date,...}, rawText} pour cohérence avec extractACTPdf.
+// Extraction texte simple (concat str) car parsePOCalinstrumText n'a pas besoin
+// de la géométrie XY (contrairement à ACT qui utilise les colonnes).
+function extractPOCalinstrumPdf(uint8arr){
+  if(typeof pdfjsLib==='undefined') return Promise.reject(new Error('pdf.js non chargé'));
+  return pdfjsLib.getDocument({data:uint8arr}).promise.then(function(pdf){
+    var tasks=[];
+    for(var i=1;i<=pdf.numPages;i++){
+      tasks.push(pdf.getPage(i).then(function(page){
+        return page.getTextContent().then(function(tc){
+          return tc.items.map(function(it){return it.str;}).join(' ');
+        });
+      }));
+    }
+    return Promise.all(tasks).then(function(pageTexts){
+      var rawText=pageTexts.join('\n');
+      var parsed=(typeof parsePOCalinstrumText==='function')?parsePOCalinstrumText(rawText):null;
+      return {parsed:parsed,rawText:rawText};
     });
   });
 }
