@@ -20558,27 +20558,41 @@ function _renderFADonut(data){
   var fy=parseInt(gvg('fFAyear'),10) || ((typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear());
   if(yearLbl) yearLbl.textContent=String(fy);
 
-  // Calcul des montants encaissés par mois (factures payées)
-  // Date utilisée pour le mois : dateEncaissement (si dispo) sinon dateEnvoi
-  var monthly=new Array(12).fill(0);
+  // === 2 CATÉGORIES (Option 4 - segment subdivisé) ===
+  // confirmed : facture payée AVEC dateEncaissement renseignée → mois = dateEncaissement
+  // noDate    : facture payée SANS dateEncaissement (saisie incomplète) → mois = dateEnvoi (fallback)
+  //
+  // Logique métier :
+  // - "confirmed" représente l'argent réellement entré sur le compte ce mois-là
+  // - "noDate" signale les factures marquées payées mais où on n'a pas la date précise
+  //   d'encaissement (saisie en attente). Affiché pour ne pas perdre l'info.
+  var monthlyConfirmed=new Array(12).fill(0);
+  var monthlyNoDate=new Array(12).fill(0);
+
   data.forEach(function(i){
     if(typeof isPrebilled==='function' && isPrebilled(i)) return; // pas pré-facturée
     if(getStatus(i)!=='paid') return; // uniquement encaissées
-    // Date d'encaissement = priorité 1, sinon dateEnvoi
     var dEnc=(typeof _faGetEncaissement==='function')?_faGetEncaissement(i):(i.dateEncaissement||'');
-    var d=dEnc||i.dateEnvoi||'';
-    var m=String(d).match(/^(\d{4})-(\d{2})/);
-    if(!m) return;
-    var year=parseInt(m[1],10);
+    var isConfirmed=!!dEnc;
+    var d=isConfirmed ? dEnc : (i.dateEnvoi||'');
+    var match=String(d).match(/^(\d{4})-(\d{2})/);
+    if(!match) return;
+    var year=parseInt(match[1],10);
     if(year!==fy) return;
-    var month=parseInt(m[2],10);
+    var month=parseInt(match[2],10);
     if(isNaN(month)||month<1||month>12) return;
-    monthly[month-1]+=Number(i.montant)||0;
+    var mt=Number(i.montant)||0;
+    if(isConfirmed) monthlyConfirmed[month-1]+=mt;
+    else            monthlyNoDate[month-1]+=mt;
   });
 
-  var totalCumul=monthly.reduce(function(s,v){return s+v;},0);
-  var nbMonthsWithData=monthly.filter(function(v){return v>0;}).length;
-  var todayMonth=new Date().getMonth(); // 0..11 (utilisé pour différencier passé/futur)
+  // Total par mois (confirmé + sans date)
+  var monthlyTotal=monthlyConfirmed.map(function(c,i){return c+monthlyNoDate[i];});
+  var totalConfirmed=monthlyConfirmed.reduce(function(s,v){return s+v;},0);
+  var totalNoDate=monthlyNoDate.reduce(function(s,v){return s+v;},0);
+  var totalCumul=totalConfirmed+totalNoDate;
+
+  var todayMonth=new Date().getMonth(); // 0..11
   // Si on regarde une année passée → tous les mois sont "passés"
   var thisYear=(typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear());
   if(fy<thisYear) todayMonth=11;
@@ -20586,67 +20600,108 @@ function _renderFADonut(data){
 
   function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
 
-  // === Couleurs : intensité teal selon le montant ===
-  // Palette de 5 niveaux (du plus clair au plus foncé), pour les mois avec data.
-  var palette=['#0F6E56','#1D9E75','#5dcaa5','#9FE1CB','#E1F5EE'];
-  // Pour les mois sans encaissement (passés inclus) : gris discret
+  // === Palette ===
+  // Teal pour les confirmés (5 niveaux selon l'intensité du total mensuel)
+  var paletteTeal=['#0F6E56','#1D9E75','#5dcaa5','#9FE1CB','#E1F5EE'];
+  // Violet pour les "sans date" (palette plus claire, plus suggestive)
+  var paletteViolet=['#6d28d9','#a78bfa','#c4b5fd','#ddd6fe','#ede9fe'];
+  // Pour les mois sans encaissement
   var grayUnused='rgba(255,255,255,0.06)';
   var grayFuture='rgba(255,255,255,0.04)';
-  // Mappe une valeur sur la palette teal (5 niveaux)
-  var maxV=Math.max.apply(null, monthly);
-  function colorFor(idx){
-    var v=monthly[idx];
-    if(v<=0){
-      return (idx<=todayMonth)?grayUnused:grayFuture;
-    }
-    if(maxV<=0) return palette[2];
-    // 5 niveaux : palette[0] = plus foncé (gros montant) → palette[4] = plus clair
+
+  var maxV=Math.max.apply(null, monthlyTotal);
+  function colorTealFor(idx){
+    var v=monthlyTotal[idx];
+    if(v<=0) return (idx<=todayMonth)?grayUnused:grayFuture;
+    if(maxV<=0) return paletteTeal[2];
     var ratio=v/maxV;
-    if(ratio>=0.8) return palette[0];
-    if(ratio>=0.6) return palette[1];
-    if(ratio>=0.4) return palette[2];
-    if(ratio>=0.2) return palette[3];
-    return palette[4];
+    if(ratio>=0.8) return paletteTeal[0];
+    if(ratio>=0.6) return paletteTeal[1];
+    if(ratio>=0.4) return paletteTeal[2];
+    if(ratio>=0.2) return paletteTeal[3];
+    return paletteTeal[4];
+  }
+  function colorVioletFor(idx){
+    var v=monthlyTotal[idx];
+    if(maxV<=0) return paletteViolet[2];
+    var ratio=v/maxV;
+    if(ratio>=0.8) return paletteViolet[0];
+    if(ratio>=0.6) return paletteViolet[1];
+    if(ratio>=0.4) return paletteViolet[2];
+    if(ratio>=0.2) return paletteViolet[3];
+    return paletteViolet[4];
   }
 
-  // === Construction du SVG du donut ===
-  // 12 segments de 30° chacun, commençant à 12h (top), tournant horaire.
-  // Rayon extérieur 42, intérieur 28 (= "donut" avec trou de 56%).
+  // === Géométrie SVG ===
   var cx=50, cy=50, rOuter=42, rInner=28;
   function polar(angDeg, r){
     var rad=(angDeg-90)*Math.PI/180; // -90 pour démarrer à 12h
     return {x:cx+r*Math.cos(rad), y:cy+r*Math.sin(rad)};
   }
-  function arcPath(idx){
-    var startAng=idx*30;
-    var endAng=(idx+1)*30;
+  // arcPathRange : arc entre 2 angles donnés (en degrés)
+  // Plus flexible que l'ancien arcPath(idx) — permet de tracer des sous-segments
+  function arcPathRange(startAng, endAng){
+    var sweep=endAng-startAng;
+    var largeArc=sweep>180?1:0;
     var p1=polar(startAng, rOuter);
     var p2=polar(endAng, rOuter);
     var p3=polar(endAng, rInner);
     var p4=polar(startAng, rInner);
-    // Pour un secteur < 180°, large-arc-flag = 0
     return 'M '+p1.x.toFixed(2)+','+p1.y.toFixed(2)+
-           ' A '+rOuter+','+rOuter+' 0 0 1 '+p2.x.toFixed(2)+','+p2.y.toFixed(2)+
+           ' A '+rOuter+','+rOuter+' 0 '+largeArc+' 1 '+p2.x.toFixed(2)+','+p2.y.toFixed(2)+
            ' L '+p3.x.toFixed(2)+','+p3.y.toFixed(2)+
-           ' A '+rInner+','+rInner+' 0 0 0 '+p4.x.toFixed(2)+','+p4.y.toFixed(2)+' Z';
+           ' A '+rInner+','+rInner+' 0 '+largeArc+' 0 '+p4.x.toFixed(2)+','+p4.y.toFixed(2)+' Z';
   }
 
   var monthsFR=['Jan','Fév','Mars','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc'];
   var monthsFull=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 
-  // SVG donut
+  // === Construction du SVG donut avec sub-arcs si mix ===
   var svgHtml='<svg viewBox="0 0 100 100" width="100" height="100" style="flex-shrink:0">';
   for(var m=0;m<12;m++){
-    var col=colorFor(m);
-    svgHtml+='<path d="'+arcPath(m)+'" fill="'+col+'" stroke="var(--bg)" stroke-width="0.6" '+
-      'data-month="'+m+'" data-value="'+monthly[m]+'" '+
-      'style="cursor:pointer;transition:opacity .15s">'+
-      '<title>'+monthsFull[m]+' '+fy+' · '+fNloc(monthly[m])+' XPF</title>'+
-      '</path>';
+    var startAng=m*30;
+    var endAng=(m+1)*30;
+    var totalMt=monthlyTotal[m];
+    var confirmedMt=monthlyConfirmed[m];
+    var noDateMt=monthlyNoDate[m];
+    var tooltip=monthsFull[m]+' '+fy+' · ';
+    if(totalMt<=0){
+      // Pas de data → segment gris uni
+      var grayCol=(m<=todayMonth)?grayUnused:grayFuture;
+      tooltip+='Aucun encaissement';
+      svgHtml+='<path d="'+arcPathRange(startAng,endAng)+'" fill="'+grayCol+'" stroke="var(--bg)" stroke-width="0.6" '+
+        'data-month="'+m+'" data-value="0" '+
+        'style="cursor:pointer;transition:opacity .15s">'+
+        '<title>'+esc(tooltip)+'</title>'+
+        '</path>';
+    } else {
+      // Au moins une catégorie a une valeur. On subdivise proportionnellement.
+      var sweep=endAng-startAng;
+      // Tracer le sous-segment "confirmé" si > 0
+      if(confirmedMt>0){
+        var confEndAng=startAng+sweep*(confirmedMt/totalMt);
+        tooltip+='Encaissé '+fNloc(confirmedMt)+' XPF';
+        if(noDateMt>0) tooltip+=' + Payé sans date '+fNloc(noDateMt)+' XPF';
+        svgHtml+='<path d="'+arcPathRange(startAng,confEndAng)+'" fill="'+colorTealFor(m)+'" stroke="var(--bg)" stroke-width="0.6" '+
+          'data-month="'+m+'" data-cat="confirmed" data-value="'+confirmedMt+'" '+
+          'style="cursor:pointer;transition:opacity .15s">'+
+          '<title>'+esc(tooltip)+'</title>'+
+          '</path>';
+      }
+      // Tracer le sous-segment "sans date" si > 0
+      if(noDateMt>0){
+        var ndStartAng=confirmedMt>0?(startAng+sweep*(confirmedMt/totalMt)):startAng;
+        var tooltipNd=monthsFull[m]+' '+fy+' · Payé sans date d\'encaissement '+fNloc(noDateMt)+' XPF';
+        if(confirmedMt>0) tooltipNd=monthsFull[m]+' '+fy+' · Encaissé '+fNloc(confirmedMt)+' + Sans date '+fNloc(noDateMt)+' XPF';
+        svgHtml+='<path d="'+arcPathRange(ndStartAng,endAng)+'" fill="'+colorVioletFor(m)+'" stroke="var(--bg)" stroke-width="0.6" '+
+          'data-month="'+m+'" data-cat="nodate" data-value="'+noDateMt+'" '+
+          'style="cursor:pointer;transition:opacity .15s">'+
+          '<title>'+esc(tooltipNd)+'</title>'+
+          '</path>';
+      }
+    }
   }
   // Centre : total cumulé
-  var displayTotal=totalCumul;
-  var displayLabel='XPF encaissés';
   if(totalCumul>=1000000){
     svgHtml+='<text x="50" y="51" text-anchor="middle" font-size="9" font-weight="500" fill="var(--text)" style="font-family:var(--mono)">'+(totalCumul/1000000).toFixed(1)+'M</text>';
   } else if(totalCumul>=1000){
@@ -20654,35 +20709,93 @@ function _renderFADonut(data){
   } else {
     svgHtml+='<text x="50" y="51" text-anchor="middle" font-size="9" font-weight="500" fill="var(--text)" style="font-family:var(--mono)">'+fNloc(totalCumul)+'</text>';
   }
-  svgHtml+='<text x="50" y="60" text-anchor="middle" font-size="5.5" fill="var(--muted-soft)">'+displayLabel+'</text>';
+  svgHtml+='<text x="50" y="60" text-anchor="middle" font-size="5.5" fill="var(--muted-soft)">XPF encaissés</text>';
   svgHtml+='</svg>';
 
   // === Légende horizontale : 12 mois en grille 6×2 ===
+  // Si un mois a du "sans date", on affiche un second swatch violet à côté du teal.
   var legendHtml='<div style="flex:1;display:grid;grid-template-columns:repeat(6,1fr);gap:6px 14px;font-size:10.5px;align-content:center;align-self:center">';
   for(var k=0;k<12;k++){
     var isPast=k<=todayMonth;
-    var hasData=monthly[k]>0;
-    var swatch=colorFor(k);
+    var totalK=monthlyTotal[k];
+    var confK=monthlyConfirmed[k];
+    var ndK=monthlyNoDate[k];
+    var hasData=totalK>0;
+    var swatch=colorTealFor(k);
     var labelColor=isPast?'var(--muted)':'var(--muted-soft)';
     var valueColor=hasData?'var(--text)':'var(--muted-soft)';
     // Format compact : 1.2M / 350k / 42 (XPF)
-    var v=monthly[k];
-    var valStr;
-    if(v<=0) valStr='—';
-    else if(v>=1000000) valStr=(v/1000000).toFixed(1)+'M';
-    else if(v>=1000) valStr=Math.round(v/1000)+'k';
-    else valStr=fNloc(v);
-    // Border light pour mois futurs pour mieux les distinguer
+    function compact(v){
+      if(v<=0) return '—';
+      if(v>=1000000) return (v/1000000).toFixed(1)+'M';
+      if(v>=1000) return Math.round(v/1000)+'k';
+      return fNloc(v);
+    }
+    // Border pour les mois futurs
     var swatchBorder=(!hasData && !isPast)?'border:0.5px solid rgba(255,255,255,0.15);':'';
+    // Construction valeur (avec sous-valeur violette si mix)
+    var valHtml;
+    if(ndK>0 && confK>0){
+      // Mix → afficher les 2 valeurs : "1.2M + 0.3M"
+      valHtml='<span style="color:var(--text);font-size:10px" class="num" data-money>'+compact(confK)+'</span>'+
+              '<span style="color:#a78bfa;font-size:9.5px;margin-left:2px" class="num" data-money>+'+compact(ndK)+'</span>';
+    } else if(ndK>0){
+      // Que du sans-date
+      valHtml='<span style="color:#a78bfa;font-size:10px" class="num" data-money>'+compact(ndK)+'</span>';
+    } else if(confK>0){
+      // Que du confirmé
+      valHtml='<span style="color:'+valueColor+';font-size:10px" class="num" data-money>'+compact(confK)+'</span>';
+    } else {
+      valHtml='<span style="color:var(--muted-soft);font-size:10px">—</span>';
+    }
+
+    // Swatch : si mix, 2 demi-cercles côte à côte
+    var swatchHtml;
+    if(ndK>0 && confK>0){
+      // Mini barre split teal/violet
+      var ratioConf=confK/totalK;
+      swatchHtml='<span style="display:inline-flex;width:10px;height:8px;border-radius:1.5px;overflow:hidden;flex-shrink:0">'+
+        '<span style="flex:'+ratioConf+';background:'+swatch+'"></span>'+
+        '<span style="flex:'+(1-ratioConf)+';background:#a78bfa"></span>'+
+        '</span>';
+    } else if(ndK>0){
+      // Que violet
+      swatchHtml='<span style="width:8px;height:8px;background:#a78bfa;border-radius:1.5px;flex-shrink:0"></span>';
+    } else {
+      // Que teal (ou pas de data)
+      swatchHtml='<span style="width:8px;height:8px;background:'+swatch+';border-radius:1.5px;flex-shrink:0;'+swatchBorder+'"></span>';
+    }
+
     legendHtml+='<div style="display:flex;align-items:center;gap:5px;line-height:1.4" data-leg-month="'+k+'">'+
-      '<span style="width:8px;height:8px;background:'+swatch+';border-radius:1.5px;flex-shrink:0;'+swatchBorder+'"></span>'+
+      swatchHtml+
       '<span style="color:'+labelColor+'">'+monthsFR[k]+'</span>'+
-      '<span class="num" style="color:'+valueColor+';margin-left:auto;font-size:10px" data-money>'+valStr+'</span>'+
+      '<span style="margin-left:auto;display:inline-flex;align-items:baseline;gap:2px">'+valHtml+'</span>'+
       '</div>';
   }
   legendHtml+='</div>';
 
-  // Empty state : aucun encaissement sur la période
+  // === Légende globale en bas : 2 catégories avec totaux ===
+  // Affichée uniquement si on a du "sans date" (sinon redondant)
+  var globalLegendHtml='';
+  if(totalNoDate>0 || totalConfirmed>0){
+    globalLegendHtml='<div style="margin-top:14px;padding-top:10px;border-top:0.5px solid rgba(255,255,255,0.06);display:flex;gap:18px;font-size:10.5px;align-items:center;flex-wrap:wrap">'+
+      '<span style="display:inline-flex;align-items:center;gap:6px">'+
+        '<span style="width:10px;height:10px;background:#5dcaa5;border-radius:2px"></span>'+
+        '<span style="color:var(--muted)">Encaissé confirmé</span>'+
+        '<span class="num" style="color:var(--text);font-weight:500" data-money>'+fNloc(totalConfirmed)+' XPF</span>'+
+      '</span>';
+    if(totalNoDate>0){
+      globalLegendHtml+='<span style="display:inline-flex;align-items:center;gap:6px" title="Factures marquées payées mais sans date d\'encaissement renseignée. Le mois affiché est celui de la date d\'envoi par défaut.">'+
+        '<span style="width:10px;height:10px;background:#a78bfa;border-radius:2px"></span>'+
+        '<span style="color:var(--muted)">Payé sans date</span>'+
+        '<span class="num" style="color:#a78bfa;font-weight:500" data-money>'+fNloc(totalNoDate)+' XPF</span>'+
+        '<i class="ti ti-info-circle" style="font-size:11px;color:var(--muted-soft);margin-left:-2px"></i>'+
+      '</span>';
+    }
+    globalLegendHtml+='</div>';
+  }
+
+  // Empty state
   if(totalCumul===0){
     el.innerHTML='<div style="display:flex;align-items:center;gap:18px;min-height:100px">'+
       svgHtml+
@@ -20691,11 +20804,11 @@ function _renderFADonut(data){
     return;
   }
 
-  el.innerHTML='<div style="display:flex;align-items:center;gap:18px">'+svgHtml+legendHtml+'</div>';
+  el.innerHTML='<div style="display:flex;align-items:center;gap:18px">'+svgHtml+legendHtml+'</div>'+globalLegendHtml;
 
   // === Interactions : survol segment ↔ légende ===
-  // - Survol segment → opacity 1 sur ce segment, autres atténués + highlight de la ligne légende
-  // - Survol légende → idem côté segment
+  // Plusieurs paths peuvent partager le même data-month (cas mix confirmé+sans date),
+  // donc on highlight TOUS les paths de ce mois quand on survole l'un d'eux ou la légende.
   function highlight(idx){
     el.querySelectorAll('path[data-month]').forEach(function(p){
       var m=parseInt(p.dataset.month,10);
