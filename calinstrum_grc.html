@@ -2380,7 +2380,11 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <div class="form-group"><label>Contact destinataire</label><input class="form-input" id="bl-contact"></div>
     </div>
     <div class="form-group"><label>Adresse destinataire</label><textarea class="form-textarea" id="bl-adrdest" rows="3"></textarea></div>
-    <div class="form-group"><label>Email destinataire</label><input class="form-input" id="bl-emaildest"></div>
+    <div class="form-group"><label style="display:flex;align-items:center;gap:8px">
+      <span>Email destinataire</span>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="openBLEmailManager()" title="Gérer les emails BL par client" style="font-size:10px;padding:1px 7px;line-height:1.4">⚙️</button>
+      <span id="bl-email-save-badge" style="display:none"></span>
+    </label><input class="form-input" id="bl-emaildest" oninput="_refreshBLEmailSaveBadge()"></div>
     <div class="form-row">
       <div class="form-group"><label>N° commande lié</label><input class="form-input" id="bl-po"></div>
       <div class="form-group"><label>Émis par</label><input class="form-input" id="bl-emis" value="Fabrice RIZZO"></div>
@@ -3833,6 +3837,18 @@ function fillCCFromSelect(pfx){
   if(ce) ce.value=c.contact||'';
   if(ee) ee.value=c.email||'';
   if(ae) ae.value=(c.adresse||'').replace(/\\n/g,'\n');
+  // === BL : auto-fill bl-emaildest depuis le mapping DB.params.blEmailsByClient ===
+  // Le mapping est centralisé (pas le c.email du client). Ne remplit que si vide
+  // pour ne pas écraser une saisie utilisateur.
+  if(pfx==='bl'){
+    var emailDest=document.getElementById('bl-emaildest');
+    if(emailDest && !emailDest.value.trim() && v){
+      var mapped=getBLEmailForClient(v);
+      if(mapped) emailDest.value=mapped;
+    }
+    // Mettre à jour le badge "💾 Sauvegarder pour ce client" inline
+    if(typeof _refreshBLEmailSaveBadge==='function') _refreshBLEmailSaveBadge();
+  }
   // Auto-set TGC mention for exempt clients
   var tgcSel=document.getElementById(pfx+'-tgc-mention');
   if(tgcSel&&v){
@@ -10431,17 +10447,17 @@ function _interactiveSparkline(values, color, monthlyData, formatter, idSuffix){
   html+='<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" style="display:block">';
   // Aire sous courbe (toute la période, en fond translucide)
   html+='<polyline points="'+ptsStr+' '+(w-pad)+','+(h-pad)+' '+pad+','+(h-pad)+'" class="sparkline-area" style="fill:'+color+';stroke:none"/>';
-  // Segment ACQUIS — trait plein, fin
+  // Segment ACQUIS — trait plein, très fin
   if(ptsAcquis.length>=2){
-    html+='<polyline points="'+ptsAcquisStr+'" style="stroke:'+color+';fill:none;stroke-width:0.8;stroke-linejoin:round;stroke-linecap:round"/>';
+    html+='<polyline points="'+ptsAcquisStr+'" style="stroke:'+color+';fill:none;stroke-width:0.5;stroke-linejoin:round;stroke-linecap:round"/>';
   }
-  // Segment PRÉVISION — trait pointillé, même finesse
+  // Segment PRÉVISION — trait pointillé, très fin
   if(ptsPrev.length>=2){
-    html+='<polyline points="'+ptsPrevStr+'" style="stroke:'+color+';fill:none;stroke-width:0.8;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:2.5 1.5;opacity:0.65"/>';
+    html+='<polyline points="'+ptsPrevStr+'" style="stroke:'+color+';fill:none;stroke-width:0.5;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:2 1.5;opacity:0.6"/>';
   }
   // Crosshair caché par défaut
-  html+='<line id="'+idPrefix+'_ch" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" stroke="rgba(255,255,250,0.4)" stroke-width="0.5" stroke-dasharray="1.5 1.5" style="display:none;pointer-events:none"/>';
-  html+='<circle id="'+idPrefix+'_dot" cx="0" cy="0" r="2.2" fill="'+color+'" stroke="var(--bg)" stroke-width="0.8" style="display:none;pointer-events:none"/>';
+  html+='<line id="'+idPrefix+'_ch" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" stroke="rgba(255,255,250,0.4)" stroke-width="0.3" stroke-dasharray="1.5 1.5" style="display:none;pointer-events:none"/>';
+  html+='<circle id="'+idPrefix+'_dot" cx="0" cy="0" r="1.6" fill="'+color+'" stroke="var(--bg)" stroke-width="0.5" style="display:none;pointer-events:none"/>';
   // Hit area
   html+='<rect class="ispark-hitarea" x="0" y="0" width="'+w+'" height="'+h+'" fill="transparent" style="cursor:crosshair"/>';
   html+='</svg>';
@@ -12964,7 +12980,183 @@ function getParams(){
   if(!p.delaisPaiement)p.delaisPaiement=['Paiement sous 30 jours à reception de la facture','Paiement immédiat','Paiement sous 60 jours','100% à la réception de la marchandise','50% à la commande, 50% à la livraison'];
   if(!p.devises)p.devises=['AUD','USD','EUR','XPF'];
   if(!p.typesDevis)p.typesDevis=['Fourniture','Prestation de service','Fourniture + Prestation'];
+  // Emails clients pour l'envoi des Bons de Livraison.
+  // Format : { 'PREFIXE': 'email@domaine' } où PREFIXE est le préfixe court
+  // du nom client (ex: 'SLN' matche 'SLN - Yannick PAKORO').
+  // Utilisé par fillCCFromSelect('bl') pour pré-remplir bl-emaildest.
+  if(!p.blEmailsByClient){
+    p.blEmailsByClient={
+      'SLN':'gen_sct.dbo@eramet-sln.com',
+      'PRNC':'PRNC-Compta@pronyresources.com'
+    };
+  }
   return p;
+}
+
+// Helper : retourne l'email BL pour un nom client donné, en matchant par préfixe.
+// Ex: getBLEmailForClient('SLN - Yannick PAKORO') → 'gen_sct.dbo@eramet-sln.com'
+// Retourne '' si aucun mapping trouvé.
+function getBLEmailForClient(clientName){
+  if(!clientName)return '';
+  var map=(getParams().blEmailsByClient)||{};
+  var prefix=getClientPrefix(clientName); // ex: 'SLN', 'PRNC'
+  if(prefix && map[prefix]) return map[prefix];
+  // Fallback : match exact sur le nom complet
+  if(map[clientName]) return map[clientName];
+  return '';
+}
+
+// Sauvegarde/ajoute un email BL pour un préfixe client donné.
+// Utilisé par le bouton inline "💾 Sauvegarder pour ce client" et la modale Gestion.
+function setBLEmailForPrefix(prefix,email){
+  if(!prefix)return;
+  var p=getParams();
+  if(!p.blEmailsByClient) p.blEmailsByClient={};
+  if(email){
+    p.blEmailsByClient[prefix]=email;
+  } else {
+    delete p.blEmailsByClient[prefix];
+  }
+  saveDB();
+}
+
+// =============================================================================
+// _refreshBLEmailSaveBadge — Met à jour le badge inline "💾 Sauvegarder pour <prefix>"
+// =============================================================================
+// Affiché à côté de Email destinataire quand :
+//   - un client est sélectionné dans bl-client
+//   - l'email saisi diffère du mapping actuel (ou n'existe pas dans le mapping)
+//   - l'email est non-vide
+// Permet à l'utilisateur de persister l'email saisi comme valeur par défaut pour
+// ce préfixe client.
+// =============================================================================
+function _refreshBLEmailSaveBadge(){
+  var badge=document.getElementById('bl-email-save-badge');
+  if(!badge) return;
+  var sel=document.getElementById('bl-client');
+  var emailInp=document.getElementById('bl-emaildest');
+  if(!sel || !emailInp){badge.style.display='none';return;}
+  var clientName=sel.value;
+  var emailValue=(emailInp.value||'').trim();
+  if(!clientName || !emailValue || !emailValue.includes('@')){
+    badge.style.display='none';
+    return;
+  }
+  var prefix=(typeof getClientPrefix==='function')?getClientPrefix(clientName):'';
+  if(!prefix){badge.style.display='none';return;}
+  var current=getBLEmailForClient(clientName);
+  // Afficher uniquement si la valeur saisie diffère du mapping actuel
+  if(current===emailValue){badge.style.display='none';return;}
+  badge.style.display='inline-flex';
+  badge.innerHTML='<button type="button" onclick="saveBLEmailInline()" '+
+    'style="font-size:9.5px;padding:2px 8px;background:rgba(45,212,191,0.15);color:#5dcaa5;'+
+    'border:0.5px solid rgba(45,212,191,0.4);border-radius:10px;cursor:pointer;font-weight:500" '+
+    'title="Persister cet email comme valeur par défaut pour les BL de '+esc(prefix)+'">'+
+    '💾 Sauvegarder pour '+esc(prefix)+'</button>';
+}
+
+// Persiste l'email saisi pour le préfixe du client sélectionné
+function saveBLEmailInline(){
+  var sel=document.getElementById('bl-client');
+  var emailInp=document.getElementById('bl-emaildest');
+  if(!sel || !emailInp) return;
+  var prefix=(typeof getClientPrefix==='function')?getClientPrefix(sel.value):'';
+  var email=(emailInp.value||'').trim();
+  if(!prefix || !email) return;
+  setBLEmailForPrefix(prefix,email);
+  if(typeof showBCSaveToast==='function'){
+    showBCSaveToast('✓ Email BL sauvegardé pour '+prefix);
+  }
+  _refreshBLEmailSaveBadge();
+}
+
+// =============================================================================
+// Modale Gestion des emails BL par client
+// =============================================================================
+function openBLEmailManager(){
+  var modal=document.getElementById('mBLEmailMgr');
+  if(modal){modal.remove();}
+  modal=document.createElement('div');
+  modal.id='mBLEmailMgr';
+  modal.className='modal-overlay';
+  modal.style.cssText='display:flex;align-items:center;justify-content:center';
+  modal.innerHTML='<div class="modal" style="max-width:560px">'+
+    '<div class="modal-header">'+
+      '<h3>📧 Gestion des emails BL par client</h3>'+
+      '<button class="modal-close" onclick="document.getElementById(\'mBLEmailMgr\').remove()">✕</button>'+
+    '</div>'+
+    '<div class="modal-body">'+
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">'+
+        'Mapping <b>préfixe client → email</b> utilisé pour pré-remplir automatiquement le champ <i>"Email destinataire"</i> de chaque nouveau BL. '+
+        'Le préfixe est la partie avant le tiret du nom client (ex: <code>SLN</code> pour <code>SLN - Yannick PAKORO</code>).'+
+      '</div>'+
+      '<div id="bl-email-list" style="margin-bottom:14px"></div>'+
+      '<div style="border-top:1px solid rgba(255,255,255,0.06);padding-top:12px">'+
+        '<div style="font-size:10px;font-weight:700;color:var(--teal);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:8px">+ Ajouter un mapping</div>'+
+        '<div style="display:grid;grid-template-columns:120px 1fr auto;gap:8px;align-items:start">'+
+          '<input class="form-input" id="bl-email-new-prefix" placeholder="Préfixe (ex: SLN)" style="font-family:monospace;text-transform:uppercase">'+
+          '<input class="form-input" id="bl-email-new-email" placeholder="email@domaine.com">'+
+          '<button class="btn btn-teal btn-sm" onclick="addBLEmailMapping()" style="padding:6px 14px">+ Ajouter</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>'+
+    '<div class="modal-footer">'+
+      '<button class="btn btn-ghost" onclick="document.getElementById(\'mBLEmailMgr\').remove()">Fermer</button>'+
+    '</div>'+
+    '</div>';
+  document.body.appendChild(modal);
+  _renderBLEmailList();
+}
+
+function _renderBLEmailList(){
+  var listEl=document.getElementById('bl-email-list');
+  if(!listEl) return;
+  var map=(getParams().blEmailsByClient)||{};
+  var keys=Object.keys(map).sort();
+  if(keys.length===0){
+    listEl.innerHTML='<div style="padding:14px;text-align:center;color:var(--muted);font-style:italic;font-size:11px">Aucun mapping configuré</div>';
+    return;
+  }
+  listEl.innerHTML='<div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:0.05em;text-transform:uppercase;margin-bottom:8px">Mappings actuels ('+keys.length+')</div>'+
+    keys.map(function(prefix){
+      var email=map[prefix]||'';
+      return '<div style="display:grid;grid-template-columns:90px 1fr auto;gap:8px;align-items:center;padding:8px 10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);border-radius:6px;margin-bottom:5px">'+
+        '<span style="font-family:monospace;font-weight:700;color:var(--blue);font-size:12px">'+esc(prefix)+'</span>'+
+        '<input class="form-input" data-bl-prefix="'+esc(prefix)+'" value="'+esc(email)+'" style="font-size:11px;padding:5px 8px" onchange="_updateBLEmailMapping(this)">'+
+        '<button class="btn btn-red btn-sm" onclick="_deleteBLEmailMapping(\''+esc(prefix.replace(/'/g,"\\'"))+'\')" title="Supprimer ce mapping" style="font-size:10px;padding:3px 8px">🗑</button>'+
+      '</div>';
+    }).join('');
+}
+
+function _updateBLEmailMapping(inputEl){
+  var prefix=inputEl.dataset.blPrefix;
+  var newEmail=(inputEl.value||'').trim();
+  if(!prefix) return;
+  setBLEmailForPrefix(prefix,newEmail);
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Mapping '+prefix+' mis à jour');
+}
+
+function _deleteBLEmailMapping(prefix){
+  if(!confirm('Supprimer le mapping pour "'+prefix+'" ?')) return;
+  setBLEmailForPrefix(prefix,'');
+  _renderBLEmailList();
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Mapping '+prefix+' supprimé');
+}
+
+function addBLEmailMapping(){
+  var prefix=((document.getElementById('bl-email-new-prefix')||{}).value||'').trim().toUpperCase();
+  var email=((document.getElementById('bl-email-new-email')||{}).value||'').trim();
+  if(!prefix){alert('Préfixe manquant');return;}
+  if(!email || !email.includes('@')){alert('Email invalide');return;}
+  var map=(getParams().blEmailsByClient)||{};
+  if(map[prefix]){
+    if(!confirm('Un mapping existe déjà pour "'+prefix+'" ('+map[prefix]+'). Le remplacer ?')) return;
+  }
+  setBLEmailForPrefix(prefix,email);
+  gv('bl-email-new-prefix','');
+  gv('bl-email-new-email','');
+  _renderBLEmailList();
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Mapping ajouté : '+prefix+' → '+email);
 }
 function buildParamSelect(elId,listKey,allowEmpty){
   var el=document.getElementById(elId);if(!el)return;
