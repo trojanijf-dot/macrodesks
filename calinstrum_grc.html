@@ -15599,9 +15599,12 @@ function parseLegacyDevisTextV1(text){
   // Validité, paiement, délai, remarque
   var mVal=flat.match(/(?:Dur[ée]e\s+de\s+validit[ée]|Validit[ée])\s+du\s+devis\s*:?\s*([^|\n]+?)(?=\s+(?:Modalit|D[ée]lai|Remarque|Banque|R[èe]glement|$))/i);
   if(mVal)out.validite=mVal[1].trim().replace(/\s+/g,' ');
-  var mPai=flat.match(/Modalit[ée]e?s?\s+de\s+paiement\s*:?\s*([^|\n]+?)(?=\s+(?:D[ée]lai|Remarque|Banque|R[èe]glement|Code|$))/i);
+  var mPai=flat.match(/Modalit[ée]e?s?\s+de\s+paiement\s*:?\s*([^|\n]+?)(?=\s+(?:D[ée]lai|Remarque|Banque|R[èe]glement|Code|D[ée]signation|$))/i);
   if(mPai)out.paiement=mPai[1].trim().replace(/\s+/g,' ');
-  var mDel=flat.match(/D[ée]lai\s+des\s+travaux\s*:?\s*([^|\n]+?)(?=\s+(?:Remarque|Banque|R[èe]glement|Modalit|Code|$))/i);
+  // Délai : accepter les 2 libellés selon les gabarits ("livraison" pour produits, "travaux" pour prestations)
+  // Lookahead : on stoppe au prochain label OU à "Désignation" (= début du tableau articles
+  // sur les devis CALINSTRUM modernes) pour ne pas absorber les articles.
+  var mDel=flat.match(/D[ée]lai\s+(?:de\s+livraison|des\s+travaux)\s*:?\s*([^|\n]+?)(?=\s+(?:Remarque|Banque|R[èe]glement|Modalit|Code|D[ée]signation|FOURNITURE|PRESTATION|$))/i);
   if(mDel)out.delai=mDel[1].trim().replace(/\s+/g,' ');
   var mRem=flat.match(/Remarque\s*:?\s*([^|\n]+?)(?=\s+(?:Montant|Dur[ée]e|Validit[ée]|Modalit|D[ée]lai|Banque|R[èe]glement|$))/i);
   if(mRem)out.remarque=mRem[1].trim().replace(/\s+/g,' ');
