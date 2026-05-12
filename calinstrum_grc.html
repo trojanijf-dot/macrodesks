@@ -23221,9 +23221,27 @@ function parseEmersonQuoteText(text){
   }
   var mCref=text.match(/(?:Customer\s*Ref\s*#?|Reference)\s*:?\s*(\d{5,})/i);
   if(mCref){header.cref=mCref[1].trim();}
-  // Date au format "27 - Aug - 25" ou "28-Jul-25" (avec ou sans espaces autour des tirets)
+  // Date Emerson — plusieurs formats observés :
+  //   1. "27-Aug-25" ou "28/Jul/25" (format compact, valeur après "Date:")
+  //   2. "Tuesday, 9 December 2025" (format long anglais, gabarit récent)
+  //      Dans ce cas, pdf.js peut extraire "Date:" SEUL puis placer la valeur
+  //      plus loin dans le texte (à cause du layout en 2 colonnes du PDF).
+  //
+  // Stratégie :
+  //   - Passe 1 : "Date: <valeur compacte>"
+  //   - Passe 2 : si rien trouvé, chercher la 1ère date longue anglaise du document
+  //               (la 2e date longue, si présente, est l'Expiration Date — on prend la 1ère)
   var mDate=text.match(/Date\s*:?\s*(\d{1,2}\s*-\s*\w{3}\s*-\s*\d{2,4}|\d{1,2}\/\w{3}\/\d{2,4})/i);
-  if(mDate){header.date=mDate[1].replace(/\s+/g,'').replace(/\-/g,'-').trim();}
+  if(mDate){
+    header.date=mDate[1].replace(/\s+/g,'').replace(/\-/g,'-').trim();
+  } else {
+    // Format long anglais : "Tuesday, 9 December 2025" → on capture "9 December 2025"
+    // (le jour de semaine est optionnel, le mois 3-9 lettres, l'année 4 chiffres)
+    var mDateLong=text.match(/(?:[A-Z][a-z]+day,?\s+)?(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})/);
+    if(mDateLong){
+      header.date=mDateLong[1].trim();
+    }
+  }
   // Project peut être sur plusieurs lignes (ex: "AMS Wireless Vibration Monitor\nPOC Starter Kit")
   // On capture la 1ère ligne puis éventuellement la ligne suivante si elle n'est pas un autre label
   var mProject=text.match(/Project\s*:?\s*([^\n\r]{2,80})(?:[\n\r]+([^\n\r]{2,80}))?/i);
