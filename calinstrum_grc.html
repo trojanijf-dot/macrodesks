@@ -1397,10 +1397,11 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <div class="flex-between mb12"><div></div><div style="display:flex;gap:8px"><button class="btn btn-ghost no-print" onclick="seedSLNArticles()" title="Ajoute les 2 transmetteurs Emerson du BC SLN exemple">⚡ Articles d'exemple</button><button class="btn btn-teal no-print" onclick="openART()">+ Nouvel article</button></div></div>
   <div class="search-bar no-print">
     <input class="search-input" placeholder="Rechercher..." id="sART" oninput="renderART()">
-    <select class="filter-sel" id="fARTtype" onchange="renderART()"><option value="">Tous</option><option>Produit</option><option>Service</option></select>
+    <select class="filter-sel" id="fARTtype" onchange="renderART()"><option value="">Tous types</option><option>Produit</option><option>Service</option></select>
+    <select class="filter-sel" id="fARTclient" onchange="renderART()"><option value="">Tous clients</option><option value="__GENERAL__">— Catalogue général —</option></select>
   </div>
   <div class="tbl-wrap">
-    <table><thead><tr><th>Code SLN</th><th>Réf. Constr.</th><th>Désignation</th><th>Type</th><th>Unité</th><th>Prix (AUD)</th><th>TGC%</th><th class="no-print">Actions</th></tr></thead>
+    <table><thead><tr><th>Code GMAO</th><th>Réf. Constr.</th><th>Désignation</th><th>Type</th><th>Unité</th><th>Prix (AUD)</th><th>TGC%</th><th class="no-print">Actions</th></tr></thead>
     <tbody id="tbART"></tbody></table>
   </div>
 </div>
@@ -2440,9 +2441,14 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <div class="modal-header"><h3>Article / Prestation</h3><button class="modal-close" onclick="cm('mART')">✕</button></div>
   <div class="modal-body">
     <div class="form-row">
-      <div class="form-group"><label>Code SLN <span style="color:var(--muted);font-weight:400;font-size:10px">(traçabilité client)</span></label><input class="form-input" id="art-codeSLN" placeholder="ex: 2518912"></div>
-      <div class="form-group"><label>Type</label><select class="form-select" id="art-type"><option>Produit</option><option>Service</option></select></div>
+      <div class="form-group"><label>Code Client GMAO <span style="color:var(--muted);font-weight:400;font-size:10px">(traçabilité client)</span></label><input class="form-input" id="art-codeSLN" placeholder="ex: 2518912"></div>
+      <div class="form-group"><label>Client GMAO <span style="color:var(--muted);font-weight:400;font-size:10px">(propriétaire du code)</span></label>
+        <select class="form-select" id="art-clientGmao">
+          <option value="">— Catalogue général (Calinstrum) —</option>
+        </select>
+      </div>
     </div>
+    <div class="form-group"><label>Type</label><select class="form-select" id="art-type"><option>Produit</option><option>Service</option></select></div>
     <div class="form-group"><label>Référence constructeur <span style="color:var(--muted);font-weight:400;font-size:10px">(réf Emerson - principale)</span></label><input class="form-input" id="art-ref" placeholder="ex: 3051TG4A2C21BBLEK8Q4D1M6"></div>
     <div class="form-group"><label>Désignation <span class="req">*</span></label><textarea class="form-input" id="art-nom" rows="2" style="resize:vertical;font-family:inherit" placeholder="ex: TRANSMETTEUR DE PRESSION RELATIVE 3051T -1..275BARG 1/2 BSP ATEX"></textarea></div>
     <div class="form-row">
@@ -14385,8 +14391,10 @@ function saveDV(){
 // === SYNCHRONISATION DEVIS CADRE → CATALOGUE ARTICLES ===
 // Pour chaque ligne du devis cadre, crée ou met à jour un article dans DB.articles.
 // Match par codeSLN (priorité) → ref → désignation. Si nouveau, ajout. Si existant, mise à jour du prix.
+// Le client du devis cadre est propagé en tant que clientGmao sur chaque article créé.
 function syncCadreLinesToCatalog(d){
   if(!DB.articles)DB.articles=[];
+  var cadreClient=(d.client||'').trim();
   var added=0,updated=0;
   ['fourniture','service'].forEach(function(secKey){
     var arr=(d.lines&&d.lines[secKey])||[];
@@ -14397,11 +14405,11 @@ function syncCadreLinesToCatalog(d){
       // Pour TÂCHE avec sublines, chaque subline devient un article
       if(Array.isArray(l.subLines)&&l.subLines.length){
         l.subLines.forEach(function(sub){
-          var art=findOrCreateCatalogArticle(sub,l.designation);
+          var art=findOrCreateCatalogArticle(sub,l.designation,cadreClient);
           if(art.created)added++;else if(art.updated)updated++;
         });
       } else {
-        var art2=findOrCreateCatalogArticle(l,'');
+        var art2=findOrCreateCatalogArticle(l,'',cadreClient);
         if(art2.created)added++;else if(art2.updated)updated++;
       }
     });
@@ -14410,7 +14418,8 @@ function syncCadreLinesToCatalog(d){
 }
 
 // Helper : trouve un article existant ou en crée un nouveau dans DB.articles
-function findOrCreateCatalogArticle(line,parentDesignation){
+// `cadreClient` (optionnel) = nom du client du devis cadre, propagé en clientGmao
+function findOrCreateCatalogArticle(line,parentDesignation,cadreClient){
   var codeSLN=(line.codeSLN||'').trim();
   var ref=(line.ref||'').trim();
   var desig=(line.designation||parentDesignation||'').trim();
@@ -14418,16 +14427,40 @@ function findOrCreateCatalogArticle(line,parentDesignation){
   var unite=line.unite||'U';
   var tgc=Number(line.tgc)||0;
   // Recherche cascade : codeSLN > ref exact > désignation
+  // IMPORTANT : si cadreClient est défini, on contraint la recherche au même client,
+  // car le même codeSLN peut exister pour des clients différents.
   var existing=null;
   if(codeSLN){
-    existing=DB.articles.find(function(a){return (a.codeSLN||'').trim()===codeSLN;});
+    existing=DB.articles.find(function(a){
+      if((a.codeSLN||'').trim()!==codeSLN)return false;
+      // Si on a un cadreClient, on exige soit clientGmao identique soit catalogue général (vide)
+      if(cadreClient){
+        var aCli=(a.clientGmao||'').trim();
+        return aCli===cadreClient || aCli==='';
+      }
+      return true;
+    });
   }
   if(!existing&&ref){
-    existing=DB.articles.find(function(a){return (a.ref||'').trim()===ref;});
+    existing=DB.articles.find(function(a){
+      if((a.ref||'').trim()!==ref)return false;
+      if(cadreClient){
+        var aCli=(a.clientGmao||'').trim();
+        return aCli===cadreClient || aCli==='';
+      }
+      return true;
+    });
   }
   if(!existing&&desig){
     var dnLow=desig.toLowerCase();
-    existing=DB.articles.find(function(a){return (a.nom||'').toLowerCase().trim()===dnLow;});
+    existing=DB.articles.find(function(a){
+      if((a.nom||'').toLowerCase().trim()!==dnLow)return false;
+      if(cadreClient){
+        var aCli=(a.clientGmao||'').trim();
+        return aCli===cadreClient || aCli==='';
+      }
+      return true;
+    });
   }
   if(existing){
     var changed=false;
@@ -14436,12 +14469,15 @@ function findOrCreateCatalogArticle(line,parentDesignation){
     if(tgc!==existing.tgc){existing.tgc=tgc;changed=true;}
     if(codeSLN&&!existing.codeSLN){existing.codeSLN=codeSLN;changed=true;}
     if(ref&&!existing.ref){existing.ref=ref;changed=true;}
+    // Si l'article existant n'avait pas de clientGmao mais qu'on en a un, on l'ajoute
+    if(cadreClient&&!existing.clientGmao){existing.clientGmao=cadreClient;changed=true;}
     return {created:false,updated:changed,article:existing};
   }
   // Création nouvel article
   var newArt={
     id:Date.now()+Math.floor(Math.random()*10000),
     codeSLN:codeSLN,ref:ref,nom:desig,
+    clientGmao:cadreClient||'',  // hérite du client du devis cadre
     type:'Produit',unite:unite,
     prix:pu,tgc:tgc,
     _fromCadre:true // flag : provient d'un devis cadre
@@ -15922,6 +15958,25 @@ function confirmLegacyImport(){
   // Les frais locaux et le service ne polluent PAS les notes — ils sont stockés dans
   // newDevis.fraisLocauxImport et newDevis.service / newDevis.adresse respectivement.
 
+  // === ADRESSE DU DEVIS ===
+  // Stratégie de remplissage par priorité :
+  //   1. Si client existant → reprendre son adresse (champ adresse de DB.clients)
+  //   2. Sinon (client créé à la volée) → champ adresse vide ou "Service XXX" si renseigné
+  // Avant : adresse=''/'Service X' uniquement → onChange du dropdown plus tard "rattrapait"
+  // l'oubli, créant le bug "il faut switcher pour que ça apparaisse".
+  // Note : on enrichit aussi le client nouvellement créé avec le service+adresse.
+  var clientAdresse='';
+  if(existingCli && existingCli.adresse){
+    clientAdresse=existingCli.adresse;
+  } else if(newCli && newCli.adresse){
+    clientAdresse=newCli.adresse;
+  }
+  // Si on a un service explicite mais pas dans l'adresse du client, on l'ajoute en préfixe
+  var devisAdresse=clientAdresse;
+  if(service && !clientAdresse.toLowerCase().includes(service.toLowerCase())){
+    devisAdresse=clientAdresse?('Service '+service+'\n'+clientAdresse):('Service '+service);
+  }
+
   var newDevis={
     id:Date.now()+1,
     num:num,
@@ -15931,7 +15986,7 @@ function confirmLegacyImport(){
     client:clientNom,
     contact:contact||'',
     email:email||'',
-    adresse:service?'Service '+service:'',
+    adresse:devisAdresse,
     objet:objet||'',
     incoterms:shipping||'',transport:voie||'',freight:freight||'',danger:danger||'Non',
     status:'Brouillon',
@@ -25852,34 +25907,161 @@ function rClients(){
 var eARTid=null;
 function openART(id){
   eARTid=id||null;
-  if(id){var a=DB.articles.find(function(x){return x.id===id;});if(a){gv('art-codeSLN',a.codeSLN||'');gv('art-ref',a.ref||'');gv('art-type',a.type||'Produit');gv('art-nom',a.nom||'');gv('art-unite',a.unite||'U');gv('art-prix',a.prix||0);gv('art-tgc',a.tgc||0);}}
-  else{['art-codeSLN','art-ref','art-nom','art-prix'].forEach(function(i){gv(i,'');});}
+  // (Re)peupler le select clientGmao avec les clients existants
+  populateClientGmaoSelect('art-clientGmao');
+  if(id){
+    var a=DB.articles.find(function(x){return x.id===id;});
+    if(a){
+      gv('art-codeSLN',a.codeSLN||'');
+      gv('art-clientGmao',a.clientGmao||'');
+      gv('art-ref',a.ref||'');
+      gv('art-type',a.type||'Produit');
+      gv('art-nom',a.nom||'');
+      gv('art-unite',a.unite||'U');
+      gv('art-prix',a.prix||0);
+      gv('art-tgc',a.tgc||0);
+    }
+  } else {
+    ['art-codeSLN','art-clientGmao','art-ref','art-nom','art-prix'].forEach(function(i){gv(i,'');});
+  }
   om('mART');
 }
 function saveART(){
-  var a={id:eARTid||Date.now(),codeSLN:gvg('art-codeSLN'),ref:gvg('art-ref'),type:gvg('art-type'),nom:gvg('art-nom'),unite:gvg('art-unite'),prix:+gvg('art-prix')||0,tgc:+gvg('art-tgc')||0};
+  var a={
+    id:eARTid||Date.now(),
+    codeSLN:gvg('art-codeSLN'),
+    clientGmao:gvg('art-clientGmao')||'',
+    ref:gvg('art-ref'),
+    type:gvg('art-type'),
+    nom:gvg('art-nom'),
+    unite:gvg('art-unite'),
+    prix:+gvg('art-prix')||0,
+    tgc:+gvg('art-tgc')||0
+  };
   if(!a.nom){alert('Désignation manquante');return;}
   if(eARTid){var i=DB.articles.findIndex(function(x){return x.id===eARTid;});if(i>=0)DB.articles[i]=a;else DB.articles.push(a);}
   else DB.articles.push(a);
   saveDB();cm('mART');renderART();
 }
+
+// Helper : peuple un <select> avec la liste des clients de DB.clients.
+// Utilisé pour le champ "Client GMAO" du formulaire article et pour les filtres.
+function populateClientGmaoSelect(selectId){
+  var sel=document.getElementById(selectId);
+  if(!sel)return;
+  var currentVal=sel.value;
+  // Liste unique des clients existants (par nom)
+  var clients=(DB.clients||[]).map(function(c){return c.nom;}).filter(function(n,i,arr){return n && arr.indexOf(n)===i;}).sort();
+  // Conserve l'option par défaut (vide), ajoute les clients
+  sel.innerHTML='<option value="">— Catalogue général (Calinstrum) —</option>'+
+    clients.map(function(n){return '<option value="'+esc(n)+'">'+esc(n)+'</option>';}).join('');
+  // Restaurer la valeur si elle existe
+  if(currentVal) sel.value=currentVal;
+}
 function renderART(){
-  var s=(gvg('sART')||'').toLowerCase(),ft=gvg('fARTtype');
-  var data=DB.articles.filter(function(x){return(!ft||x.type===ft)&&(!s||((x.codeSLN||'')+(x.ref||'')+(x.nom||'')).toLowerCase().indexOf(s)>=0);});
-  var tb=document.getElementById('tbART');if(!tb)return;
-  tb.innerHTML=data.length?data.map(function(x){
-    return'<tr>'+
-      '<td style="font-weight:700;color:var(--blue)">'+esc(x.codeSLN||'—')+'</td>'+
-      '<td style="font-weight:700;color:var(--teal);font-family:monospace;font-size:11px">'+esc(x.ref||'—')+'</td>'+
-      '<td>'+esc(x.nom||'')+'</td>'+
-      '<td><span style="font-size:9.5px;padding:1px 7px;border-radius:10px;background:'+(x.type==='Produit'?'rgba(56,189,248,.15);color:var(--blue)':'rgba(16,185,129,.15);color:var(--green)')+'">'+(x.type||'')+'</span></td>'+
-      '<td>'+esc(x.unite||'')+'</td><td style="font-weight:700;color:var(--teal)">'+(x.prix?fN(x.prix)+' AUD':'—')+'</td>'+
-      '<td>'+x.tgc+'%</td>'+
-      '<td class="no-print">'+
-        '<button class="btn btn-ghost btn-sm" onclick="openART('+x.id+')">✏️</button> '+
-        '<button class="btn btn-red btn-sm" onclick="delDoc(\'articles\','+x.id+')">🗑</button>'+
-      '</td></tr>';
-  }).join(''):'<tr><td colspan="8" class="empty">Aucun article</td></tr>';
+  var s=(gvg('sART')||'').toLowerCase();
+  var ft=gvg('fARTtype');
+  var fcli=gvg('fARTclient');
+  // (Re)peupler le select clients depuis DB.clients
+  populateARTClientFilter();
+  // Filtrage
+  var data=(DB.articles||[]).filter(function(x){
+    // Type filter
+    if(ft && x.type!==ft) return false;
+    // Client filter
+    if(fcli==='__GENERAL__'){
+      if(x.clientGmao && x.clientGmao.trim()!=='') return false;
+    } else if(fcli){
+      if((x.clientGmao||'').trim()!==fcli) return false;
+    }
+    // Search filter
+    if(s){
+      var hay=((x.codeSLN||'')+'|'+(x.ref||'')+'|'+(x.nom||'')+'|'+(x.clientGmao||'')).toLowerCase();
+      if(hay.indexOf(s)<0) return false;
+    }
+    return true;
+  });
+  var tb=document.getElementById('tbART');
+  if(!tb)return;
+  if(!data.length){
+    tb.innerHTML='<tr><td colspan="8" class="empty">Aucun article</td></tr>';
+    return;
+  }
+  // Grouper par clientGmao
+  // 1. Trier les articles par clientGmao (général en premier, puis ordre alpha)
+  // 2. Insérer un en-tête de section avant chaque groupe
+  var groups={};
+  data.forEach(function(x){
+    var key=(x.clientGmao||'').trim() || '__GENERAL__';
+    if(!groups[key]) groups[key]=[];
+    groups[key].push(x);
+  });
+  // Ordre d'affichage : général d'abord, puis alphabétique
+  var groupKeys=Object.keys(groups).sort(function(a,b){
+    if(a==='__GENERAL__') return -1;
+    if(b==='__GENERAL__') return 1;
+    return a.localeCompare(b);
+  });
+  var html='';
+  groupKeys.forEach(function(key){
+    var rows=groups[key];
+    // Trier les lignes du groupe par codeSLN puis nom
+    rows.sort(function(a,b){
+      var ca=(a.codeSLN||'').toString(); var cb=(b.codeSLN||'').toString();
+      if(ca && cb && ca!==cb) return ca.localeCompare(cb);
+      return (a.nom||'').localeCompare(b.nom||'');
+    });
+    // Header de section (si plusieurs groupes OU si on filtre par catalogue général)
+    var hasMultipleGroups=groupKeys.length>1;
+    if(hasMultipleGroups){
+      var labelGrp,iconGrp,colorGrp;
+      if(key==='__GENERAL__'){
+        labelGrp='📦 Catalogue général (Calinstrum)';
+        iconGrp='📦'; colorGrp='#94a3b8';
+      } else {
+        labelGrp='🏭 '+key+'  ·  '+rows.length+' article'+(rows.length>1?'s':'');
+        colorGrp='#38bdf8';
+      }
+      html+='<tr class="art-group-header" style="background:linear-gradient(90deg,rgba(56,189,248,0.10) 0%,rgba(56,189,248,0.02) 100%)">'+
+        '<td colspan="8" style="padding:10px 14px;font-weight:700;font-size:12px;color:'+colorGrp+';letter-spacing:0.04em;border-top:2px solid rgba(56,189,248,0.25);text-transform:uppercase">'+
+          esc(labelGrp)+
+        '</td>'+
+      '</tr>';
+    }
+    rows.forEach(function(x){
+      html+='<tr>'+
+        '<td style="font-weight:700;color:var(--blue)">'+esc(x.codeSLN||'—')+'</td>'+
+        '<td style="font-weight:700;color:var(--teal);font-family:monospace;font-size:11px">'+esc(x.ref||'—')+'</td>'+
+        '<td>'+esc(x.nom||'')+'</td>'+
+        '<td><span style="font-size:9.5px;padding:1px 7px;border-radius:10px;background:'+(x.type==='Produit'?'rgba(56,189,248,.15);color:var(--blue)':'rgba(16,185,129,.15);color:var(--green)')+'">'+esc(x.type||'')+'</span></td>'+
+        '<td>'+esc(x.unite||'')+'</td>'+
+        '<td style="font-weight:700;color:var(--teal)">'+(x.prix?fN(x.prix)+' AUD':'—')+'</td>'+
+        '<td>'+x.tgc+'%</td>'+
+        '<td class="no-print">'+
+          '<button class="btn btn-ghost btn-sm" onclick="openART('+x.id+')">✏️</button> '+
+          '<button class="btn btn-red btn-sm" onclick="delDoc(\'articles\','+x.id+')">🗑</button>'+
+        '</td></tr>';
+    });
+  });
+  tb.innerHTML=html;
+}
+
+// Helper : peuple le <select> id=fARTclient avec la liste des clientsGmao présents en catalogue
+function populateARTClientFilter(){
+  var sel=document.getElementById('fARTclient');
+  if(!sel) return;
+  var currentVal=sel.value;
+  // Extraire la liste des clients GMAO depuis DB.articles
+  var clientsSet={};
+  (DB.articles||[]).forEach(function(a){
+    var c=(a.clientGmao||'').trim();
+    if(c) clientsSet[c]=1;
+  });
+  var clients=Object.keys(clientsSet).sort();
+  sel.innerHTML='<option value="">Tous clients</option>'+
+    '<option value="__GENERAL__">— Catalogue général —</option>'+
+    clients.map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('');
+  if(currentVal) sel.value=currentVal;
 }
 
 // Pré-remplissage des articles d'exemple (BC SLN 00742887-01)
