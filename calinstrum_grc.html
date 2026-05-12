@@ -429,7 +429,14 @@ body.theme-pro #yearFiscal{font-family:'JetBrains Mono',monospace}
 
 /* Sparkline SVG inline */
 .sparkline{display:block;width:100%;overflow:visible}
-.sparkline polyline{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.sparkline polyline{fill:none;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round}
+
+/* Pulsation pour l'étape courante d'un devis suivi dans le Cycle Moyen Fourniture */
+@keyframes cycleStepPulse {
+  0%, 100% { box-shadow:0 0 0 3px rgba(255,255,255,0.10), 0 0 8px rgba(255,255,255,0.15); }
+  50%      { box-shadow:0 0 0 5px rgba(255,255,255,0.18), 0 0 16px rgba(255,255,255,0.30); }
+}
+.cycle-step-pulse { animation: cycleStepPulse 1.8s ease-in-out infinite; }
 .sparkline-area{fill-opacity:0.12}
 
 /* Bouton Verrouiller : rouge en classique, orange/warning en pro (cf mockup) */
@@ -10999,7 +11006,7 @@ function _miniSparkline(values, color){
   var pts=values.map(function(v,i){
     return ((i/(values.length-1))*w).toFixed(1)+','+(h-(v/max)*h).toFixed(1);
   }).join(' ');
-  return '<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" style="width:100%;height:'+h+'px"><polyline points="'+pts+'" fill="none" stroke="'+color+'" stroke-width="1.5"/></svg>';
+  return '<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" style="width:100%;height:'+h+'px"><polyline points="'+pts+'" fill="none" stroke="'+color+'" stroke-width="0.5"/></svg>';
 }
 
 // Page Devis pro
@@ -12113,6 +12120,39 @@ function renderActivePagePro(){
 // (chaque delta indépendant : un devis peut contribuer aux deltas 1-2-3 mais pas
 //  aux suivants s'il n'est pas allé jusqu'au bout).
 // =============================================================================
+// =============================================================================
+// HIGHLIGHT D'UN DEVIS DANS LE CYCLE MOYEN FOURNITURE
+// =============================================================================
+// État global stocké dans window._cycleHighlightClient + window._cycleHighlightDevisId.
+// Quand un devis est highlighté, la timeline du cycle moyen affiche son état
+// (étape acquise, courante, à venir) avec dates.
+// =============================================================================
+function _setCycleHighlightClient(client){
+  window._cycleHighlightClient=client||'';
+  // Reset du devis sélectionné quand on change de client
+  window._cycleHighlightDevisId='';
+  if(typeof _renderCycleMoyenFourniture==='function'){
+    try{ _renderCycleMoyenFourniture(); }catch(e){ console.warn(e); }
+  }
+}
+
+function _setCycleHighlightDevis(devisId){
+  // devisId vient d'un <option value="<id>"> donc string ; on garde tel quel
+  // (le find dans _renderCycleMoyenFourniture fait une comparaison ==)
+  window._cycleHighlightDevisId=devisId||'';
+  if(typeof _renderCycleMoyenFourniture==='function'){
+    try{ _renderCycleMoyenFourniture(); }catch(e){ console.warn(e); }
+  }
+}
+
+function _clearCycleHighlight(){
+  window._cycleHighlightClient='';
+  window._cycleHighlightDevisId='';
+  if(typeof _renderCycleMoyenFourniture==='function'){
+    try{ _renderCycleMoyenFourniture(); }catch(e){ console.warn(e); }
+  }
+}
+
 function _renderCycleMoyenFourniture(){
   // Sélectionner le bon container selon le mode actif (classic ou pro).
   // Les 2 modes utilisent les mêmes IDs (#dashCycle, #cycle-sample) mais on
@@ -12296,17 +12336,144 @@ function _renderCycleMoyenFourniture(){
   // [Step1] → [Δ1] → [Step2] → [Δ2] → ... → [Step8]
   // Chaque step : icône + label
   // Chaque delta : nombre de jours + label
-  var html='<div style="overflow-x:auto;padding:8px 0">';
+  //
+  // === MODE SUIVI DEVIS (highlightDevisId) ===
+  // Si window._cycleHighlightDevisId est défini, on récupère le devis et ses
+  // dates de phase, puis on annote chaque step avec son état (✅ terminé /
+  // 🟡 en cours / ⚪ à venir) et la date acquise sous l'étape.
+  var highlightDV=null;
+  if(window._cycleHighlightDevisId){
+    // Comparaison souple (le select retourne string, d.id est number)
+    highlightDV=fourn.find(function(d){return String(d.id)===String(window._cycleHighlightDevisId);});
+  }
+  var hSteps=highlightDV?getStepDates(highlightDV):null;
+  // Détermine l'index de l'étape COURANTE = la dernière étape avec date <= aujourd'hui
+  // qui n'a pas encore d'étape suivante avec une date.
+  var hCurrentStep=-1;
+  if(hSteps){
+    for(var hi=0;hi<8;hi++){
+      if(hSteps[hi]) hCurrentStep=hi;
+    }
+  }
+
+  // === Sélecteur "Suivre un devis" (toujours affiché en haut) ===
+  // Permet de visualiser l'étape actuelle d'un devis Fourniture en cours.
+  // Format : <select client> → <select devis du client> → "✕ Retirer"
+  var sel='<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;margin-bottom:12px;'+
+    'background:rgba(124,58,237,0.06);border:0.5px solid rgba(124,58,237,0.25);border-radius:8px;flex-wrap:wrap">'+
+    '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#c4b5fd;font-weight:600;letter-spacing:0.04em;text-transform:uppercase">'+
+      '<i class="ti ti-target" style="font-size:13px"></i>Suivre un devis :'+
+    '</div>';
+  // Construire liste de clients ayant des devis Fourniture en cours
+  var clientsActifs={};
+  fourn.forEach(function(d){
+    // Devis "en cours" = phaseHistory non vide ET pas encore encaissé
+    var stTmp=getStepDates(d);
+    var hasStart=!!stTmp[0];
+    var isEncaisse=!!stTmp[7];
+    if(hasStart && !isEncaisse){
+      var cli=d.client||'?';
+      if(!clientsActifs[cli]) clientsActifs[cli]=0;
+      clientsActifs[cli]++;
+    }
+  });
+  var clientsList=Object.keys(clientsActifs).sort();
+  var currentClient=window._cycleHighlightClient||'';
+  var currentDevisId=window._cycleHighlightDevisId||'';
+  sel+='<select onchange="_setCycleHighlightClient(this.value)" '+
+    'style="padding:5px 10px;background:rgba(0,0,0,0.25);border:0.5px solid rgba(255,255,255,0.10);'+
+    'border-radius:5px;color:var(--text);font-size:11px;font-family:inherit;outline:none;cursor:pointer;min-width:200px">'+
+    '<option value="">— Choisir un client —</option>'+
+    clientsList.map(function(c){
+      return '<option value="'+esc(c)+'"'+(currentClient===c?' selected':'')+'>'+esc(c)+' ('+clientsActifs[c]+')</option>';
+    }).join('')+
+  '</select>';
+  // Si client sélectionné, montrer les devis du client
+  if(currentClient){
+    var devisCli=fourn.filter(function(d){
+      if((d.client||'')!==currentClient) return false;
+      var st=getStepDates(d);
+      return !!st[0] && !st[7]; // en cours
+    });
+    // Tri par date BC reçu desc (plus récents en premier)
+    devisCli.sort(function(a,b){
+      var sa=getStepDates(a)[0]||'';
+      var sb=getStepDates(b)[0]||'';
+      return sb.localeCompare(sa);
+    });
+    sel+='<select onchange="_setCycleHighlightDevis(this.value)" '+
+      'style="padding:5px 10px;background:rgba(0,0,0,0.25);border:0.5px solid rgba(255,255,255,0.10);'+
+      'border-radius:5px;color:var(--text);font-size:11px;font-family:var(--mono);outline:none;cursor:pointer;min-width:240px">'+
+      '<option value="">— Choisir un devis —</option>'+
+      devisCli.map(function(d){
+        // Trouver l'étape courante pour annotation
+        var st=getStepDates(d);
+        var stepIdx=-1;
+        for(var i=0;i<8;i++) if(st[i]) stepIdx=i;
+        var stepLabel=stepIdx>=0?stepsMeta[stepIdx].short:'—';
+        var sel_=(currentDevisId==d.id)?' selected':'';
+        return '<option value="'+d.id+'"'+sel_+'>'+esc(d.num||'?')+' · '+esc(stepLabel)+'</option>';
+      }).join('')+
+    '</select>';
+  }
+  // Bouton "✕ Retirer" si un devis est en cours de suivi
+  if(currentDevisId){
+    sel+='<button onclick="_clearCycleHighlight()" '+
+      'style="padding:4px 10px;background:rgba(239,68,68,0.12);color:#fca5a5;'+
+      'border:0.5px solid rgba(239,68,68,0.35);border-radius:5px;cursor:pointer;font-size:10.5px;font-weight:500" '+
+      'title="Retirer le suivi visuel">✕ Retirer</button>';
+  }
+  // Indication si un devis est en cours de visualisation (info contextuelle)
+  if(highlightDV){
+    sel+='<div style="margin-left:auto;font-size:10px;color:var(--muted);font-family:var(--mono)">'+
+      '<i class="ti ti-info-circle" style="font-size:11px;vertical-align:-1px;margin-right:3px;color:var(--teal)"></i>'+
+      'Étape actuelle : <span style="color:'+(hCurrentStep>=0?stepsMeta[hCurrentStep].color:'#fff')+';font-weight:600">'+
+      esc(hCurrentStep>=0?stepsMeta[hCurrentStep].short:'—')+'</span>'+
+    '</div>';
+  }
+  sel+='</div>';
+
+  var html=sel+'<div style="overflow-x:auto;padding:8px 0">';
   html+='<div style="display:flex;align-items:stretch;min-width:100%;gap:0;font-family:var(--font-sans, sans-serif)">';
 
   for(var s=0;s<8;s++){
     var step=stepsMeta[s];
-    // Card étape : icône + label
-    html+='<div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:90px;text-align:center;padding:6px 0">'+
-      '<div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.04);border:1px solid '+step.color+';display:flex;align-items:center;justify-content:center;margin-bottom:6px">'+
+    // === État de l'étape pour le devis suivi (si applicable) ===
+    var stepState='inert'; // inert / done / current / pending
+    var stepDate='';
+    if(hSteps){
+      if(hSteps[s]){
+        stepState=(s===hCurrentStep)?'current':'done';
+        stepDate=hSteps[s];
+      } else {
+        stepState='pending';
+      }
+    }
+    // Style adaptatif selon l'état
+    var bgCircle='rgba(255,255,255,0.04)';
+    var borderCircle=step.color;
+    var opacityWrap='1';
+    var pulseClass='';
+    if(stepState==='done'){
+      bgCircle=step.color+'22'; // teinte légère
+      borderCircle=step.color;
+    } else if(stepState==='current'){
+      bgCircle=step.color+'40'; // teinte forte
+      borderCircle=step.color;
+      pulseClass=' cycle-step-pulse';
+    } else if(stepState==='pending'){
+      opacityWrap='0.35';
+    }
+    // Card étape : icône + label + date acquise si dispo
+    var fmtDate=(typeof _fmtDateShort==='function')?_fmtDateShort(stepDate):(stepDate||'');
+    html+='<div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:90px;text-align:center;padding:6px 0;opacity:'+opacityWrap+';transition:opacity .2s">'+
+      '<div class="'+pulseClass.trim()+'" style="width:36px;height:36px;border-radius:50%;background:'+bgCircle+';border:1px solid '+borderCircle+(stepState==='current'?';box-shadow:0 0 0 3px '+step.color+'33':'')+';display:flex;align-items:center;justify-content:center;margin-bottom:6px;transition:all .2s">'+
         '<i class="ti ti-'+step.icon+'" style="font-size:16px;color:'+step.color+'"></i>'+
+        (stepState==='done'?'<span style="position:absolute;margin-top:-25px;margin-left:25px;background:var(--bg);border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#5dcaa5">✓</span>':'')+
       '</div>'+
-      '<div style="font-size:10px;color:var(--text);font-weight:500;line-height:1.2;max-width:80px">'+esc(step.short)+'</div>'+
+      '<div style="font-size:10px;color:var(--text);font-weight:'+(stepState==='current'?'600':'500')+';line-height:1.2;max-width:80px">'+esc(step.short)+'</div>'+
+      (highlightDV && stepDate ? '<div style="font-size:9px;color:'+step.color+';font-family:var(--mono);margin-top:2px;opacity:0.85">'+esc(fmtDate)+'</div>' : '')+
+      (highlightDV && !stepDate ? '<div style="font-size:9px;color:var(--muted-soft);font-style:italic;margin-top:2px">à venir</div>' : '')+
       '</div>';
 
     // Si pas le dernier step, on affiche le delta
