@@ -1362,7 +1362,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   </div>
   <div class="client-tabs no-print" id="bcClientTabs"></div>
   <div class="tbl-wrap">
-    <table><thead><tr><th>N° PO</th><th>Date</th><th>Fournisseur</th><th>Client final</th><th>Description</th><th>Devise</th><th>Montant</th><th>Statut</th><th class="no-print">Actions</th></tr></thead>
+    <table><thead><tr><th>N° PO</th><th>Date</th><th>Fournisseur</th><th>Client final</th><th>BC Client(s)</th><th>Description</th><th>Devise</th><th>Montant</th><th>Statut</th><th class="no-print">Actions</th></tr></thead>
     <tbody id="tbBC"></tbody></table>
   </div>
 </div>
@@ -2256,16 +2256,33 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         <select class="form-select" id="bc-status" onchange="onBCStatusChange()"><option>En attente</option><option>Confirmé</option><option>Livré</option><option>Annulé</option></select>
       </div>
       <div class="form-group">
-        <label>🔗 Devis lié <span style="color:var(--muted);font-weight:400;font-size:10px">(auto-remplit le client final)</span></label>
-        <select class="form-select" id="bc-devis-lie" onchange="onBCDevisLie()">
-          <option value="">— Sélectionner un devis —</option>
-        </select>
+        <label>🔗 Devis lié(s) <span style="color:var(--muted);font-weight:400;font-size:10px">(plusieurs possibles — cas groupage Emerson : 1 PO = N devis SLN)</span></label>
+        <!-- Widget multi-select : bouton qui ouvre un dropdown de checkboxes.
+             Avantages vs <select multiple> : UX plus intuitive (pas de Ctrl+clic), recherche live,
+             synthèse "X devis sélectionnés" affichée directement.
+             Le state des sélections est dans la variable JS _bcSelectedDevisIds, lue par getBC()
+             au save pour persister devisLieIds[]. -->
+        <div style="position:relative">
+          <button type="button" id="bc-devis-lie-btn" onclick="toggleBCDevisLieDropdown()" class="form-input" style="text-align:left;display:flex;justify-content:space-between;align-items:center;cursor:pointer;width:100%">
+            <span id="bc-devis-lie-label" style="color:var(--muted);font-size:11px">— Sélectionner un ou plusieurs devis —</span>
+            <span style="color:var(--muted);font-size:10px">▼</span>
+          </button>
+          <div id="bc-devis-lie-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-elev);border:1px solid var(--border);border-radius:4px;max-height:320px;overflow-y:auto;z-index:50;box-shadow:0 6px 24px rgba(0,0,0,.5);margin-top:2px">
+            <div style="position:sticky;top:0;background:var(--bg-elev);padding:6px;border-bottom:1px solid var(--border)">
+              <input type="text" id="bc-devis-lie-search" placeholder="Rechercher (N° devis, BC Client, client...)" class="form-input" style="width:100%;font-size:11px;padding:4px 6px" oninput="_renderBCDevisLieOptions()">
+            </div>
+            <div id="bc-devis-lie-options" style="padding:4px"></div>
+          </div>
+        </div>
+        <!-- Champ caché de compat : certains anciens codes lisent gvg('bc-devis-lie').
+             On y stocke le 1er ID sélectionné (singleton legacy). getBC() persiste devisLieIds[]. -->
+        <input type="hidden" id="bc-devis-lie" value="">
       </div>
     </div>
     <div class="form-group">
-      <label>Client final</label>
+      <label>Client final <span style="color:var(--muted);font-weight:400;font-size:10px">(auto si devis lié — warn si clients différents)</span></label>
       <select class="form-select" id="bc-client-final">
-        <option value="">— Sélectionner un client (rempli auto si devis lié) —</option>
+        <option value="">— Sélectionner un client —</option>
       </select>
     </div>
     <hr class="sep">
@@ -2334,7 +2351,17 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <div style="font-weight:700;color:var(--teal);margin-bottom:12px;font-size:12px">📎 Documents liés au dossier <span style="font-weight:400;color:var(--muted)">(non imprimés)</span></div>
       <div class="form-row">
         <div class="form-group"><label>📋 Devis CALINSTRUM (ref)</label><input class="form-input" id="bc-link-devis" placeholder="ex: SLN-DV166"></div>
-        <div class="form-group"><label>📄 BC Client reçu (URL/ref)</label><input class="form-input" id="bc-link-bc-client" placeholder="ex: PO-SLN-2025-001 ou lien Drive"></div>
+        <div class="form-group">
+          <label>📄 BC Client reçu (réf) <span style="color:var(--muted);font-weight:400;font-size:10px">(auto-rempli depuis devis lié)</span></label>
+          <!-- Combobox HTML natif : input texte LIBRE + suggestions depuis datalist.
+               Permet à la fois de choisir un BC Client existant (option suggérée) ET de saisir
+               un nouveau (texte libre). C'est l'option 3 demandée.
+               La datalist est repeuplée à chaque openBC() avec tous les bcClientSLN uniques
+               connus en DB (depuis DB.devis). Évite les variantes (ex: "00722464-01-" vs
+               "00722464-01") qui cassent les jointures plus tard. -->
+          <input class="form-input" id="bc-link-bc-client" list="bc-client-bcs-list" placeholder="Tape ou choisis (ex: 00722464-01)">
+          <datalist id="bc-client-bcs-list"></datalist>
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group"><label>📦 BC CALINSTRUM → Emerson (ref)</label><input class="form-input" id="bc-link-po-cali" placeholder="ex: PO CALINSTRUM 2025-042"></div>
@@ -13857,6 +13884,28 @@ function openDV(id){
       }
       buildClientOptions('dv-client',d.client);
       gv('dv-contact',d.contact||'');gv('dv-email',d.email||'');gv('dv-adresse',d.adresse||'');gv('dv-objet',d.objet||'');
+      // === FIX BUG « il faut switcher de client pour que l'adresse apparaisse » ===
+      // Si le devis a été créé avec adresse/contact/email vides (cas typique : import PDF où
+      // le client a été créé à la volée sans ces infos, ou devis legacy importé d'Excel)
+      // et qu'on a maintenant un client en DB avec ces infos remplies → on les copie une fois.
+      // On ne touche QUE les champs vides, pour préserver une saisie volontaire de l'utilisateur
+      // (cas où il a effacé l'adresse de ce devis spécifique pour la laisser vide).
+      // Avant ce fix, l'utilisateur devait sélectionner un autre client puis revenir au sien
+      // pour déclencher fillCCFromSelect via l'onchange — bug très inconfortable.
+      if(d.client){
+        var clientObj = (DB.clients||[]).find(function(c){return c.nom===d.client;});
+        if(clientObj){
+          if(!(d.adresse||'').trim() && clientObj.adresse){
+            gv('dv-adresse', clientObj.adresse.replace(/\\n/g,'\n'));
+          }
+          if(!(d.contact||'').trim() && clientObj.contact){
+            gv('dv-contact', clientObj.contact);
+          }
+          if(!(d.email||'').trim() && clientObj.email){
+            gv('dv-email', clientObj.email);
+          }
+        }
+      }
       gv('dv-incoterms',d.incoterms||'');gv('dv-transport',d.transport||'');gv('dv-freight',d.freight||'');gv('dv-danger',d.danger||'Non');
       gv('dv-status',d.status||'Brouillon');gv('dv-validite',d.validite||'1 mois');gv('dv-delai',d.delai||'');
       gv('dv-paiement',d.paiement||'100% à la réception de la marchandise');gv('dv-notes',d.notes||'');
@@ -16774,28 +16823,74 @@ function parseLegacyDevisTextV1(text){
   //
   // Cela permet de gérer correctement les rowspan PDF où plusieurs lignes "H sup",
   // "H tech" partagent une seule grande description.
-  var unitRegex=/(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|jour|jours|U|lot|Lot|forfait|Forfait|km|m\b)/i;
+  // ⚠ ANCIEN unitRegex utilisait `.test()` sur des cellules entières, ce qui matchait
+  // n'importe quelle ref qui CONTIENT le caractère "U" comme "PE-GOUL", "SUPERVISION",
+  // "CHAUDRON.-INST", "INSTRUMENT.". Résultat : la classification cassait + qte/pu
+  // calculés sur les mauvaises positions → items ignorés (qte=0).
+  // FIX : on n'utilise PLUS unitRegex.test() mais une fonction qui vérifie si la cellule
+  // entière (après trim) est une UNITÉ VALIDE depuis un ensemble fermé.
+  var VALID_UNITS = {
+    // Forme normalisée → variantes acceptées (regex sur cellule entière)
+    'H':       /^H$/,
+    'H sup':   /^H\s*sup\.?$/i,
+    'H tech':  /^H\s*tech\.?$/i,
+    'H qual':  /^H\s*qual\.?$/i,
+    'jour':    /^jours?$/i,
+    'U':       /^U$/,
+    'Lot':     /^lot$/i,
+    'Forfait': /^forfait$/i,
+    'Ft':      /^Ft$/i,    // Forfait abrégé (template Calinstrum 2026+)
+    'km':      /^km$/i,
+    'm':       /^m$/,
+    'Kg':      /^kg$/i
+  };
+  function matchUnitCell(cell){
+    if(!cell || cell.length > 10) return null;
+    var t = cell.trim();
+    for(var u in VALID_UNITS){
+      if(VALID_UNITS[u].test(t)) return u;
+    }
+    return null;
+  }
+  // Garde l'ancien `unitRegex` pour la fallback inline (cas pdf.js sans pipes), mais on
+  // ajoute des word-boundaries autour de "U" pour éviter le match dans "PE-GOUL" etc.
+  // Et on ajoute H (\bH\b) et Ft (\bFt\b).
+  var unitRegex=/\b(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|jours?|U|Lot|Forfait|Ft|km|H|m)\b/i;
 
   // === PASS 1 : classification ===
   function classifyV1(line){
     var trimmed=line.trim();
     if(!trimmed)return {type:'empty'};
     if(/MAIN\s*D['\u2019]?\s*[ŒOE]+UVRE/i.test(line))return {type:'header',section:'service'};
-    if(/^FOURNITURE\b/i.test(line))return {type:'header',section:'fourniture'};
+    // FIX : le header peut être préfixé par "|" (cas pdf.js).
+    // Avant : /^FOURNITURE\b/ ne matchait pas "| FOURNITURES ET CONSOMMABLES"
+    // → currentSectionV1 restait à 'service' → toutes les lignes 4-10 classées comme service.
+    // Maintenant on tolère un "|" et des espaces en début.
+    if(/(?:^|\|)\s*FOURNITURES?\b/i.test(line))return {type:'header',section:'fourniture'};
+    // Idem pour les frais annexes / locations (template Calinstrum 2026+)
+    if(/(?:^|\|)\s*FRAIS\s+ANNEXES/i.test(line))return {type:'header',section:'fret'};
     var firstColCheck=line.replace(/\s*\|.*$/,'').trim();
-    var hasItemColumnsCheck=/\|[^|]*\b(?:lot|Lot|U|forfait|Forfait|H\s*sup|H\s*tech|H\s*qual|jour|jours|km)\b/i.test(line);
+    var hasItemColumnsCheck=/\|[^|]*\b(?:lot|Lot|U|forfait|Forfait|Ft|H\s*sup|H\s*tech|H\s*qual|jour|jours|km|H)\b/i.test(line);
     if(/^(?:FRET\b|TRANSPORT\b|FRAIS\s+LOCAUX|FRAIS\s+DIVERS|FRET\s*\/\s*FRAIS|Total\s+FRET)/i.test(firstColCheck) && !hasItemColumnsCheck){
       return {type:'header',section:'fret'};
     }
     if(/^(Désignation|TGC|Montant|Remarque|Banque|Code|IBAN|BIC|Le\s+Client|Signature|RIDET|Adresse|T[ée]l|e-?mail|Op[ée]ration|D[ée]lai|Validit|Paiement|Modalit|R[èe]glement|Nom\s+du)/i.test(line))return {type:'meta'};
     if(/^Page\s+\d+/i.test(line))return {type:'meta'};
+    // Skip aussi les lignes de header de table "# RÉF. DÉSIGNATION TGC% UTÉ QTÉ PU TOTAL HT"
+    // qui apparaissent au début de chaque page dans le template 2026+.
+    if(/RÉF\.?\s*\|.*DÉSIGNATION.*UTÉ.*QTÉ.*PU.*TOTAL/i.test(line))return {type:'meta'};
+    // Sous-totaux : "Sous-total (Main d'œuvre) (XPF)" — éviter de les compter comme items
+    if(/Sous-?total/i.test(line))return {type:'meta'};
     // Tenter de parser comme item
     var partsCl=line.split(/\s*\|\s*/).map(function(s){return s.trim();}).filter(Boolean);
     var unitClPos=-1, unitCl='';
     if(partsCl.length>=4){
       for(var pii=0;pii<partsCl.length;pii++){
-        if(unitRegex.test(partsCl[pii]) && partsCl[pii].length<=10){
-          unitClPos=pii;unitCl=partsCl[pii];break;
+        // FIX : matchUnitCell vérifie que la CELLULE ENTIÈRE est une unité,
+        // pas juste qu'elle contient un caractère qui ressemble à une unité.
+        var matched = matchUnitCell(partsCl[pii]);
+        if(matched){
+          unitClPos=pii;unitCl=matched;break;
         }
       }
     }
@@ -16807,8 +16902,7 @@ function parseLegacyDevisTextV1(text){
         if(!isNaN(nn))numsCl.push(nn);
       });
       if(numsCl.length>=2){
-        var designationCl=partsCl.slice(0,unitClPos).join(' ').trim();
-        // Détection TGC%
+        // Détection TGC% et extraction REF
         var tgcPctCl=0;
         for(var pjj=0;pjj<partsCl.length;pjj++){
           var pctMcl=partsCl[pjj].match(/^(\d+(?:[,.]\d+)?)\s*%$/);
@@ -16817,12 +16911,42 @@ function parseLegacyDevisTextV1(text){
             if([0,3,6,11,22].indexOf(vCl)>=0){tgcPctCl=vCl;break;}
           }
         }
-        designationCl=designationCl.replace(/\s+(?:0|3|6|11|22)\s*%\s*$/,'').trim();
-        return {type:'item',designation:designationCl,unit:unitCl,nums:numsCl,tgc:tgcPctCl,raw:line};
+        // === FIX : EXTRACTION DE LA RÉF + DÉSIGNATION ===
+        // Template moderne (DV2026+) : la ligne est structurée comme :
+        //   parts[0] = n° d'item (1-99)         ex: "4"
+        //   parts[1] = RÉF                       ex: "CHEMIN"
+        //   parts[2..unitPos-1] = désignation (peut comprendre "0%" qu'on retire)
+        //   parts[unitPos] = unité
+        //   parts[unitPos+1..] = qte, pu, total
+        //
+        // Heuristique pour extraire la ref :
+        //   - parts[0] = nombre entier 1-99
+        //   - parts[1] = court (≤25 chars), pas d'espace (un seul "mot" ou avec tirets/points)
+        //     ET pas un %, pas un nombre seul
+        //   → alors parts[1] est la ref, désignation = parts[2..unitPos-1]
+        //   Sinon (ancien format Excel) → tout est désignation
+        var refCl = '';
+        var designStart = 0;
+        if(partsCl.length >= 3 && /^\d{1,3}$/.test(partsCl[0])){
+          var candRef = partsCl[1];
+          // Pas un % (sinon c'est le TGC en 2e position), pas un nombre, court, pas d'espace
+          if(candRef && candRef.length <= 25 && !/%$/.test(candRef) && !/^\d+([,.\s]\d+)*$/.test(candRef) && candRef.indexOf(' ') < 0){
+            refCl = candRef;
+            designStart = 2;
+          }
+        }
+        var designationCl = partsCl.slice(designStart, unitClPos).join(' ').trim();
+        // Retirer le n° d'item s'il est encore au début ("4 CHEMIN ...")
+        designationCl = designationCl.replace(/^\d{1,3}\s+/, '');
+        // Retirer la ref si elle est encore au début (au cas où designStart=0 mais ref détectée
+        // dans designation par regex). Pas critique ici car designStart gère déjà ce cas.
+        // Retirer le % de TGC trailing
+        designationCl = designationCl.replace(/\s+(?:0|3|6|11|22)\s*%\s*$/,'').trim();
+        return {type:'item',designation:designationCl,ref:refCl,unit:unitCl,nums:numsCl,tgc:tgcPctCl,raw:line};
       }
     }
     // Tentative regex inline complète (cas où pdf.js a tout collé sans pipes)
-    var mInline=line.match(/^(.+?)\s+(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|jour|jours|km|m)\s+(\d+(?:[\s,.]\d+)*)\s+(\d+(?:[\s,.]\d+)*)\s+(\d+(?:[\s,.]\d+)*)\s*$/i);
+    var mInline=line.match(/^(.+?)\s+(H\s*sup\.?|H\s*tech\.?|H\s*qual\.?|U|lot|Lot|forfait|Forfait|Ft|jour|jours|km|H|m)\s+(\d+(?:[\s,.]\d+)*)\s+(\d+(?:[\s,.]\d+)*)\s+(\d+(?:[\s,.]\d+)*)\s*$/i);
     if(mInline){
       var nIn=[parseFloat(mInline[3].replace(/\s/g,'').replace(',','.')),
               parseFloat(mInline[4].replace(/\s/g,'').replace(',','.')),
@@ -16831,7 +16955,7 @@ function parseLegacyDevisTextV1(text){
       var tgcIn=pctIn?parseFloat(pctIn[1]):0;
       var dIn=mInline[1].trim();
       if(pctIn)dIn=dIn.replace(/\b(?:0|3|6|11|22)\s*%\s*/,'').trim();
-      return {type:'item',designation:dIn,unit:mInline[2],nums:nIn,tgc:tgcIn,raw:line};
+      return {type:'item',designation:dIn,ref:'',unit:mInline[2],nums:nIn,tgc:tgcIn,raw:line};
     }
     // Sinon : descriptif (orphan)
     var clean=partsCl.join(' ').replace(/\s+/g,' ').trim();
@@ -16903,6 +17027,7 @@ function parseLegacyDevisTextV1(text){
       else if(/^forfait$/i.test(unitNorm))unitNorm='Forfait';
       out.lignes.push({
         designation:finalDesignation,
+        ref:ci.ref||'',
         unite:unitNorm,
         qte:qte,
         pu:pu,
@@ -16941,6 +17066,7 @@ function parseLegacyDevisTextV1(text){
 
 // Toggle du champ "Nouveau client" dans le modal Import devis selon la valeur du select.
 // Appelé au onchange du select #li-client. Affiche ou cache le wrap #li-client-new-wrap.
+// Et synchronise automatiquement la mention TGC selon le statut d'exonération du client.
 function onLiClientChange(){
   var sel=document.getElementById('li-client');
   var wrap=document.getElementById('li-client-new-wrap');
@@ -16951,7 +17077,36 @@ function onLiClientChange(){
     if(inp){setTimeout(function(){inp.focus();inp.select();},10);}
   } else {
     wrap.style.display='none';
+    // === FIX : auto-fill de la mention TGC selon le client sélectionné ===
+    // Avant : le select TGC restait sur ce que le parser avait deviné depuis le PDF,
+    // même si l'utilisateur changeait de client. Du coup pour un client SLN (exo art.494)
+    // le PDF pouvait imprimer "TGC applicable" et il fallait corriger à la main à chaque fois.
+    // Maintenant : si le client choisi a exo='oui' → mention "506-2" (exonéré),
+    // sinon → mention "tgc" (TGC applicable). Cohérent avec saveDV qui applique aussi
+    // l'exo si le client est marqué.
+    var clientName = sel.value;
+    if(clientName && clientName !== '__NEW__'){
+      var clientObj = (DB.clients||[]).find(function(c){return c.nom===clientName;});
+      if(clientObj){
+        var tgcSel = document.getElementById('li-tgcM');
+        if(tgcSel){
+          // Préserver le choix utilisateur s'il a déjà modifié manuellement (flag dataset)
+          if(!tgcSel.dataset.userTouched){
+            tgcSel.value = (clientObj.exo === 'oui') ? '506-2' : 'tgc';
+          }
+        }
+      }
+    }
   }
+}
+// Marqueur de "modification manuelle" : dès que l'utilisateur change le select TGC à la main,
+// on ne le re-écrase plus automatiquement lors d'un changement de client.
+// On l'attache une fois au moment de la création du modal d'import via _bindLiTgcManualFlag.
+function _bindLiTgcManualFlag(){
+  var tgcSel = document.getElementById('li-tgcM');
+  if(!tgcSel || tgcSel.dataset.manualBound) return;
+  tgcSel.addEventListener('change', function(){ this.dataset.userTouched = '1'; });
+  tgcSel.dataset.manualBound = '1';
 }
 
 function showLegacyImportPreview(parsed,rawText,fileName){
@@ -17128,6 +17283,14 @@ function showLegacyImportPreview(parsed,rawText,fileName){
   modal._isV2=isV2;
   modal._fraisLocaux=parsed.fraisLocaux||0;
   modal._fraisLocauxLabel=parsed.fraisLocauxLabel||'';
+  // Bind le marqueur "manual edit" sur le select TGC (pour ne pas écraser un choix volontaire)
+  _bindLiTgcManualFlag();
+  // Sync initial : si on a un client pré-sélectionné (auto-match fuzzy), aligner la
+  // mention TGC dessus. Sinon, on laisse ce que le parser a deviné depuis le PDF.
+  var liClient = document.getElementById('li-client');
+  if(liClient && liClient.value && liClient.value !== '__NEW__'){
+    onLiClientChange();
+  }
 }
 
 function closeLegacyImport(){
@@ -24021,11 +24184,236 @@ document.addEventListener('DOMContentLoaded',function(){
     el.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();persistCurrentEmersonContact();}});
   }
 });
+
+// =============================================================================
+// TRAÇABILITÉ BC ↔ DEVIS ↔ BC CLIENT (V2 — multi-devis, groupage Emerson)
+// =============================================================================
+// Contexte métier :
+//   Un PO Emerson (= BC Calinstrum envoyé chez Emerson) peut couvrir PLUSIEURS devis
+//   SLN différents quand Calinstrum fait du groupage (commande groupée pour amortir
+//   le fret, regrouper plusieurs petites commandes clients, etc.).
+//
+//   Avant : DB.bcs[i].devisLieId (singleton string) → 1 devis max → modèle infidèle.
+//   Après : DB.bcs[i].devisLieIds (array d'IDs) → plusieurs devis OK.
+//   Legacy géré à la lecture via getBCsDevisIds() qui retourne TOUJOURS un array,
+//   peu importe l'ancien ou le nouveau format.
+//
+// Champ "BC Client reçu" (linkBCclient) :
+//   Auto-rempli avec la concaténation des bcClientSLN des devis liés (joints par " + ").
+//   L'utilisateur peut éditer manuellement. On NE re-écrase PAS si l'utilisateur a tapé
+//   quelque chose qui n'est pas la version auto (flag _bcLinkBCclientIsAuto).
+// =============================================================================
+
+// State des sélections multi-devis pour la modale BC en cours
+var _bcSelectedDevisIds = [];
+// Marqueur : true tant que linkBCclient = la valeur auto-générée par notre code.
+// Devient false dès que l'utilisateur tape autre chose dans le champ → on ne touche plus.
+var _bcLinkBCclientIsAuto = true;
+
+// Retourne TOUJOURS un array d'IDs (number), avec migration legacy automatique.
+function getBCsDevisIds(bc){
+  if(!bc) return [];
+  if(Array.isArray(bc.devisLieIds)){
+    return bc.devisLieIds.map(function(x){return +x;}).filter(function(x){return x>0;});
+  }
+  if(bc.devisLieId){
+    var n=+bc.devisLieId;
+    return n>0 ? [n] : [];
+  }
+  return [];
+}
+
+// Construit la chaîne consolidée des bcClientSLN à partir d'une liste d'IDs de devis.
+// Dédoublonne et joint par " + ". Retourne '' si aucun.
+function _consolidateBCClientFromDevisIds(devisIds){
+  var seen = {};
+  var parts = [];
+  (devisIds||[]).forEach(function(id){
+    var d = (DB.devis||[]).find(function(x){return x.id===id;});
+    if(!d) return;
+    var v = (d.bcClientSLN||'').trim();
+    if(!v || seen[v]) return;
+    seen[v] = true;
+    parts.push(v);
+  });
+  return parts.join(' + ');
+}
+
+// Construit l'array des clients uniques pour une liste d'IDs de devis
+function _consolidateClientFromDevisIds(devisIds){
+  var seen = {};
+  var parts = [];
+  (devisIds||[]).forEach(function(id){
+    var d = (DB.devis||[]).find(function(x){return x.id===id;});
+    if(!d || !d.client) return;
+    if(seen[d.client]) return;
+    seen[d.client] = true;
+    parts.push(d.client);
+  });
+  return parts;
+}
+
+// (Re)peuple la datalist des suggestions BC Client à partir des bcClientSLN uniques
+// présents dans DB.devis. Appelé à chaque openBC().
+function _refreshBCClientDatalist(){
+  var dl = document.getElementById('bc-client-bcs-list');
+  if(!dl) return;
+  var seen = {};
+  var vals = [];
+  (DB.devis||[]).forEach(function(d){
+    var v = (d.bcClientSLN||'').trim();
+    if(!v || seen[v]) return;
+    seen[v] = true;
+    vals.push({val:v, label:v+(d.num?' — '+d.num:'')+(d.client?' ('+d.client+')':'')});
+  });
+  vals.sort(function(a,b){return a.val.localeCompare(b.val);});
+  dl.innerHTML = vals.map(function(v){
+    return '<option value="'+esc(v.val)+'">'+esc(v.label)+'</option>';
+  }).join('');
+}
+
+// Toggle l'ouverture du dropdown multi-select devis
+function toggleBCDevisLieDropdown(){
+  var dd = document.getElementById('bc-devis-lie-dropdown');
+  if(!dd) return;
+  if(dd.style.display === 'none' || !dd.style.display){
+    dd.style.display = 'block';
+    _renderBCDevisLieOptions();
+    setTimeout(function(){
+      document.addEventListener('mousedown', _bcDevisLieClickOutsideHandler, {once:true});
+    }, 50);
+  } else {
+    dd.style.display = 'none';
+  }
+}
+function _bcDevisLieClickOutsideHandler(e){
+  var btn = document.getElementById('bc-devis-lie-btn');
+  var dd = document.getElementById('bc-devis-lie-dropdown');
+  if(!dd || !btn) return;
+  if(dd.contains(e.target) || btn.contains(e.target)){
+    // Click dans le widget → re-register pour la prochaine fois
+    document.addEventListener('mousedown', _bcDevisLieClickOutsideHandler, {once:true});
+    return;
+  }
+  dd.style.display = 'none';
+}
+
+// Rend les options (checkboxes) du dropdown, filtrées par la recherche
+function _renderBCDevisLieOptions(){
+  var optsEl = document.getElementById('bc-devis-lie-options');
+  if(!optsEl) return;
+  var search = ((document.getElementById('bc-devis-lie-search')||{}).value || '').toLowerCase().trim();
+  var devis = (DB.devis||[]).filter(function(d){
+    if(!search) return true;
+    var hay = ((d.num||'') + ' ' + (d.bcClientSLN||'') + ' ' + (d.client||'') + ' ' + (d.objet||'')).toLowerCase();
+    return hay.indexOf(search) >= 0;
+  });
+  // Tri : sélectionnés d'abord, puis date décroissante
+  devis.sort(function(a,b){
+    var selA = _bcSelectedDevisIds.indexOf(a.id) >= 0 ? 0 : 1;
+    var selB = _bcSelectedDevisIds.indexOf(b.id) >= 0 ? 0 : 1;
+    if(selA !== selB) return selA - selB;
+    return (b.date||'').localeCompare(a.date||'');
+  });
+  if(devis.length === 0){
+    optsEl.innerHTML = '<div style="padding:10px;text-align:center;color:var(--muted);font-style:italic;font-size:11px">Aucun devis ne correspond.</div>';
+    return;
+  }
+  optsEl.innerHTML = devis.slice(0, 50).map(function(d){
+    var selected = _bcSelectedDevisIds.indexOf(d.id) >= 0;
+    var bcClientBadge = d.bcClientSLN ? '<span style="color:#fbbf24;font-size:9.5px;font-family:monospace;margin-left:6px" title="BC Client SLN">📄 '+esc(d.bcClientSLN)+'</span>' : '';
+    return '<label style="display:flex;align-items:center;gap:6px;padding:5px 6px;cursor:pointer;font-size:11px;border-radius:3px;'+(selected?'background:rgba(45,212,191,.08)':'')+'">'+
+      '<input type="checkbox" '+(selected?'checked':'')+' onchange="_toggleBCDevisLieSelection('+d.id+',this.checked)" style="flex-shrink:0">'+
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+
+        '<b style="color:var(--teal);font-family:monospace">'+esc(d.num||'')+'</b>'+
+        ' <span style="color:var(--muted)">'+esc(d.client||'')+'</span>'+
+        (d.objet?' <span style="color:var(--text-dim);font-size:10px">| '+esc(d.objet.substring(0,40))+(d.objet.length>40?'…':'')+'</span>':'')+
+        bcClientBadge+
+      '</span>'+
+    '</label>';
+  }).join('') + (devis.length > 50 ? '<div style="padding:6px;text-align:center;color:var(--muted);font-size:10px;font-style:italic">'+devis.length+' résultats — affiche les 50 premiers, affine ta recherche</div>' : '');
+}
+
+// Toggle sélection d'un devis dans le widget multi-select
+function _toggleBCDevisLieSelection(devisId, checked){
+  var idx = _bcSelectedDevisIds.indexOf(devisId);
+  if(checked && idx < 0) _bcSelectedDevisIds.push(devisId);
+  else if(!checked && idx >= 0) _bcSelectedDevisIds.splice(idx, 1);
+  _refreshBCDevisLieUI();
+  _autoFillClientFinalFromDevis();
+  _autoFillLinkBCclientFromDevis();
+}
+
+// Met à jour le label du bouton multi-select (synthèse de la sélection)
+function _refreshBCDevisLieUI(){
+  var lblEl = document.getElementById('bc-devis-lie-label');
+  if(!lblEl) return;
+  var n = _bcSelectedDevisIds.length;
+  if(n === 0){
+    lblEl.textContent = '— Sélectionner un ou plusieurs devis —';
+    lblEl.style.color = 'var(--muted)';
+  } else if(n === 1){
+    var d = (DB.devis||[]).find(function(x){return x.id===_bcSelectedDevisIds[0];});
+    lblEl.innerHTML = d ? '<b style="color:var(--teal);font-family:monospace">'+esc(d.num||'?')+'</b> <span style="color:var(--muted)">— '+esc(d.client||'')+'</span>' : '(devis introuvable)';
+    lblEl.style.color = 'var(--text)';
+  } else {
+    var nums = _bcSelectedDevisIds.map(function(id){
+      var d = (DB.devis||[]).find(function(x){return x.id===id;});
+      return d ? (d.num||'?') : '?';
+    });
+    lblEl.innerHTML = '<b style="color:var(--teal)">'+n+' devis liés</b> <span style="color:var(--muted);font-size:10px">— '+esc(nums.join(', '))+'</span>';
+    lblEl.style.color = 'var(--text)';
+  }
+  // Maintenir le hidden bc-devis-lie en sync (compat ascendante)
+  var hidden = document.getElementById('bc-devis-lie');
+  if(hidden) hidden.value = _bcSelectedDevisIds.length > 0 ? String(_bcSelectedDevisIds[0]) : '';
+  // Re-render les options pour réordonner les sélectionnés en haut
+  if((document.getElementById('bc-devis-lie-dropdown')||{}).style.display === 'block'){
+    _renderBCDevisLieOptions();
+  }
+}
+
+// Auto-fill du select Client final selon les devis liés
+function _autoFillClientFinalFromDevis(){
+  var clients = _consolidateClientFromDevisIds(_bcSelectedDevisIds);
+  var cf = document.getElementById('bc-client-final');
+  if(!cf) return;
+  if(clients.length === 1){
+    populateBCClientFinalSelect(clients[0]);
+    cf.value = clients[0];
+  } else if(clients.length > 1){
+    // Multi-clients : warn console mais ne touche pas au champ (l'utilisateur doit choisir)
+    console.warn('BC lié à '+clients.length+' clients différents:', clients);
+  }
+}
+
+// Auto-fill du champ "BC Client reçu" — uniquement si vide OU = valeur auto précédente
+function _autoFillLinkBCclientFromDevis(){
+  var inp = document.getElementById('bc-link-bc-client');
+  if(!inp) return;
+  var consolidated = _consolidateBCClientFromDevisIds(_bcSelectedDevisIds);
+  if(!inp.value.trim() || _bcLinkBCclientIsAuto){
+    inp.value = consolidated;
+    _bcLinkBCclientIsAuto = true;
+  }
+}
+
+// Setter pour _bcSelectedDevisIds qui re-rend le widget (utilisé par openBC)
+function _setBCSelectedDevisIds(ids){
+  _bcSelectedDevisIds = (ids||[]).slice();
+  _refreshBCDevisLieUI();
+}
+
 function openBC(id){
   eBCid=id||null;bcL=[];rebuildAllParamSelects();
+  // Refresh datalist suggestions BC Client (à chaque ouverture car DB.devis peut bouger)
+  _refreshBCClientDatalist();
   if(id){
     var b=DB.bcs.find(function(x){return x.id===id;});
-    if(b){gv('bc-num',b.num);gv('bc-date',b.date||td());gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();gv('bc-devis-lie',b.devisLieId||'');populateBCClientFinalSelect(b.clientFinal||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:(b.cref||''));
+    if(b){gv('bc-num',b.num);gv('bc-date',b.date||td());gv('bc-devise',b.devise);setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();
+    // Multi-devis : charger via getBCsDevisIds (gère migration legacy devisLieId → devisLieIds)
+    _setBCSelectedDevisIds(getBCsDevisIds(b));
+    populateBCClientFinalSelect(b.clientFinal||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:(b.cref||''));
     // Migration : props (nouveau format liste) sinon prop2/prop (ancien format unique)
     if(Array.isArray(b.props)&&b.props.length){bcProps=JSON.parse(JSON.stringify(b.props));}
     else if(b.prop2||b.prop){
@@ -24040,6 +24428,11 @@ function openBC(id){
     ensurePropIds();
     renderEmersonProps();
     gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');
+    // Tracker auto-fill : si linkBCclient courant == valeur que la consolidation produirait,
+    // alors c'est probablement la valeur auto → on autorisera l'écrasement au prochain
+    // toggle de devis. Sinon, valeur custom → on ne touchera plus.
+    var expectedAuto = _consolidateBCClientFromDevisIds(getBCsDevisIds(b));
+    _bcLinkBCclientIsAuto = (b.linkBCclient||'').trim() === expectedAuto;
     // Nouveaux champs Coût réel
     gv('bc-tauxAUD',b.tauxAUD!==undefined&&b.tauxAUD!==null?b.tauxAUD:'');
     gv('bc-fraisXPF',b.fraisXPF!==undefined&&b.fraisXPF!==null?b.fraisXPF:'');
@@ -24047,13 +24440,24 @@ function openBC(id){
     bindCoutReelLive();updateCoutReelPreview();
     sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
-    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();gv('bc-devis-lie','');populateBCClientFinalSelect('');gv('bc-client-final','');gv('bc-cref2','');
+    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();
+    _setBCSelectedDevisIds([]); // nouveau BC : aucun devis lié
+    populateBCClientFinalSelect('');gv('bc-client-final','');gv('bc-cref2','');
     bcProps=[];renderEmersonProps();
     gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');
+    _bcLinkBCclientIsAuto = true; // champ vide → on autorise l'auto-fill au 1er devis lié
     // Nouveaux champs Coût réel : vides = utiliser défauts
     gv('bc-tauxAUD','');gv('bc-fraisXPF','');gv('bc-fraisNote','');
     bindCoutReelLive();updateCoutReelPreview();
     sv('mBCtitle','Nouveau BC — Emerson');
+  }
+  // Listener input manuel sur bc-link-bc-client : dès que l'utilisateur édite, on
+  // libère le contrôle auto-fill (on ne re-écrasera plus). Une seule fois par
+  // session via dataset flag.
+  var bcClientInp = document.getElementById('bc-link-bc-client');
+  if(bcClientInp && !bcClientInp.dataset.manualEditBound){
+    bcClientInp.addEventListener('input', function(){ _bcLinkBCclientIsAuto = false; });
+    bcClientInp.dataset.manualEditBound = '1';
   }
   rBClines();om('mBC');
 }
@@ -24444,7 +24848,13 @@ function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot
   var tauxNum=tauxStr===''?null:Number(tauxStr);
   var fraisStr=gvg('bc-fraisXPF');
   var fraisNum=fraisStr===''?null:Number(fraisStr);
-  return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieId:gvg('bc-devis-lie'),lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
+  // === Traçabilité multi-devis ===
+  // Source de vérité : _bcSelectedDevisIds (array d'IDs cochés dans le widget multi-select).
+  // Persistés en `devisLieIds` (nouveau format). `devisLieId` (legacy, string singleton) est
+  // conservé en sortie = 1er ID, pour ne pas casser les anciens reads sur DB.bcs.
+  var devisIdsArr = (_bcSelectedDevisIds||[]).slice();
+  var devisIdLegacy = devisIdsArr.length > 0 ? String(devisIdsArr[0]) : '';
+  return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieIds:devisIdsArr,devisLieId:devisIdLegacy,lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
   tauxAUD:(tauxNum!==null&&!isNaN(tauxNum)&&tauxNum>0)?tauxNum:undefined,
   fraisXPF:(fraisNum!==null&&!isNaN(fraisNum)&&fraisNum>=0)?fraisNum:undefined,
   fraisNote:gvg('bc-fraisNote')||''
@@ -24487,22 +24897,15 @@ function populateBCClientFinalSelect(currentVal){
   sel.innerHTML=opts;
 }
 
+// ⚠ DEPRECATED — Conservé inerte pour compat (au cas où du code legacy l'appellerait).
+// L'ancien select <bc-devis-lie> singleton a été remplacé par un widget multi-select.
+// La logique auto-fill client final + linkDevis est désormais dans :
+//   - _autoFillClientFinalFromDevis() (déclenchée à chaque toggle de devis lié)
+//   - _autoFillLinkBCclientFromDevis() (idem)
+// Cette fonction reste pour ne pas casser un éventuel onchange="onBCDevisLie()" oublié.
 function onBCDevisLie(){
-  var sel=document.getElementById('bc-devis-lie');
-  var id=sel?+sel.value:0;
-  if(!id)return;
-  var d=DB.devis.find(function(x){return x.id===id;});
-  if(!d)return;
-  var cf=document.getElementById('bc-client-final');
-  if(cf && !cf.value){
-    // Avec un <select>, on doit s'assurer que l'option existe avant de pouvoir la sélectionner.
-    // Si le client du devis n'est pas dans DB.clients (cas rare : client supprimé),
-    // populateBCClientFinalSelect l'ajoute en mode "legacy".
-    populateBCClientFinalSelect(d.client||'');
-    cf.value=d.client||'';
-  }
-  var lDevis=document.getElementById('bc-link-devis');
-  if(lDevis&&!lDevis.value)lDevis.value=d.num||'';
+  // No-op : le widget multi-select gère tout via _toggleBCDevisLieSelection.
+  return;
 }
 
 // ========================================================================
@@ -26564,10 +26967,30 @@ function renderBC(){
   var sm={'En attente':'b-draft',Confirmé:'b-sent',Livré:'b-delivered',Annulé:'b-refused'};
   var tb=document.getElementById('tbBC');if(!tb)return;
   function renderBCRow(x){
+    // === Cellule BC Client(s) ===
+    // Affiche le ou les BC Client (= bcClientSLN du/des devis lié(s) au BC Emerson).
+    // Priorité : si linkBCclient est rempli (saisi ou auto) on l'affiche tel quel.
+    // Sinon, on consolide à la volée depuis les devis liés.
+    // Cliquable : ouvre le 1er devis lié pour navigation rapide.
+    var devisIds = getBCsDevisIds(x);
+    var firstDevisId = devisIds.length > 0 ? devisIds[0] : null;
+    var bcClientStr = (x.linkBCclient||'').trim();
+    if(!bcClientStr) bcClientStr = _consolidateBCClientFromDevisIds(devisIds);
+    var bcClientCell;
+    if(bcClientStr){
+      var multiBadge = devisIds.length > 1
+        ? ' <span style="background:rgba(167,139,250,.2);color:#a78bfa;padding:1px 5px;border-radius:8px;font-size:9px;font-weight:700;margin-left:4px" title="'+esc(devisIds.length+' devis liés (groupage)')+'">+'+(devisIds.length-1)+' devis</span>'
+        : '';
+      var clickAction = firstDevisId ? 'onclick="event.stopPropagation();openDV('+firstDevisId+')" style="color:#fbbf24;font-family:monospace;cursor:pointer;text-decoration:underline" title="Cliquer pour ouvrir le devis lié"' : 'style="color:var(--muted);font-family:monospace"';
+      bcClientCell = '<td style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span '+clickAction+'>'+esc(bcClientStr)+'</span>'+multiBadge+'</td>';
+    } else {
+      bcClientCell = '<td style="color:var(--muted);font-style:italic;font-size:10px">— non renseigné —</td>';
+    }
     return'<tr class="hgr-data-row">'+
       '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td>'+
       '<td style="color:var(--muted)">Emerson</td>'+
       '<td style="font-weight:600;color:var(--text)">'+esc(x.clientFinal||'—')+'</td>'+
+      bcClientCell+
       '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(x.lines||[]).map(function(l){return esc(l.desc);}).join(' / ')+'</td>'+
       '<td>'+esc(x.devise||'')+'</td><td style="font-weight:700;color:var(--teal)">'+fN(x.total)+' '+esc(x.devise||'')+'</td>'+
       '<td><span class="badge '+(sm[x.status]||'b-draft')+'">'+esc(x.status||'')+'</span></td>'+
@@ -26580,7 +27003,7 @@ function renderBC(){
   tb.innerHTML=renderHierarchicalRows({
     type:'bc',
     items:data,
-    colspan:9,
+    colspan:10,
     // Les BC Emerson sont en AUD natif — pas de conversion à l'agrégation pour ne pas
     // mélanger des taux différents (chaque BC a son propre tauxAUD figé pour la marge).
     // Si un jour des BC en USD apparaissent, prévoir une logique multi-devises.
