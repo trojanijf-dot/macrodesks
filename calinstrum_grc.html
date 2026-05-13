@@ -3573,6 +3573,13 @@ setTimeout(function(){
     try{ normalizeAllBcClientSLN(); }
     catch(e){ console.warn('[CALINSTRUM] Normalisation bcClientSLN échouée :', e); }
   }
+  // ⭐ Synchronisation atomique DB.factures ↔ DB.invoices au boot
+  // Garantit que tous les statuts/phases entre les 2 stockages sont cohérents
+  // (gère les cas où l'utilisateur a modifié l'un sans recharger l'autre).
+  if(typeof syncAllFacturesInvoices==='function'){
+    try{ syncAllFacturesInvoices(); }
+    catch(e){ console.warn('[CALINSTRUM] Synchro factures/invoices échouée :', e); }
+  }
 },0);
 
 // =============================================================================
@@ -4540,6 +4547,9 @@ function setSUIVIPhase(id,newPhase){
   commitInvoiceChange(inv);
   saveDB();renderSuivi();rDash();
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
+  // ⭐ Rafraîchir page Devis : le badge facture (_renderFactureCell) doit refléter
+  // le nouveau statut/phase de l'invoice (cohérence avec saveFA → renderDV).
+  if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
 }
 
 // =============================================================================
@@ -4647,6 +4657,82 @@ function migrateLegacyDevisPhases(){
     try{ saveDB(); }catch(e){ console.warn('saveDB après migration phases devis échoué :', e); }
   }
   return migratedCount;
+}
+
+// =============================================================================
+// SYNCHRONISATION ATOMIQUE DB.factures ↔ DB.invoices
+// =============================================================================
+// Garantit qu'à tout moment, pour chaque paire (facture GRC, invoice Suivi)
+// matchée par num, les champs statut/phase/dates sont COHÉRENTS.
+// Source de vérité : DB.factures (modèle plus riche, contient les versements).
+//
+// Cas couverts :
+//   1. Facture GRC marquée Payée mais invoice Suivi encore "pending" → push Payée
+//   2. Invoice Suivi paid mais facture GRC encore "En attente" → push Payée
+//   3. Dates encaissement désynchronisées → on prend la plus récente
+//
+// Exécutée :
+//   - Une fois au boot (rattrape les modifs faites entre versions)
+//   - À chaque saveFA (via syncFactureToSuivi déjà en place)
+//   - À chaque saveInvoice (via commitInvoiceChange déjà en place)
+//
+// Idempotent : multiple runs convergent vers le même état.
+// =============================================================================
+function syncAllFacturesInvoices(){
+  if(!DB.factures || !DB.invoices) return 0;
+  var nbSync=0;
+  // Pour chaque facture GRC, chercher l'invoice correspondante et harmoniser
+  DB.factures.forEach(function(f){
+    if(!f.num) return;
+    // Trouver l'invoice par num (avec tolérance casse/espaces)
+    var num=String(f.num||'').trim().toLowerCase();
+    var inv=DB.invoices.find(function(i){return String(i.num||'').trim().toLowerCase()===num;});
+    if(!inv) return; // pas de doublon, rien à faire
+    var changed=false;
+    // === STATUT ===
+    // Facture GRC source de vérité. Compute le statutSuivi attendu et l'imposer.
+    var totVerse=(f.versements&&f.versements.length)?f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0):(Number(f.paye)||0);
+    var ttc=f.ttc||0;
+    var statutExpected='pending';
+    if(f.status==='Payée' || (totVerse>=ttc && ttc>0)) statutExpected='paid';
+    else if(f.status==='Partiel' || (totVerse>0 && totVerse<ttc)) statutExpected='partial';
+    if(inv.statut !== statutExpected){
+      inv.statut=statutExpected;
+      changed=true;
+    }
+    // Pct cohérent
+    var pctExpected=ttc>0?Math.round(totVerse/ttc*100):0;
+    if(inv.pct !== pctExpected){
+      inv.pct=pctExpected;
+      changed=true;
+    }
+    // Date encaissement : si la facture en a une, propager
+    if(f.dateEncaissement && inv.dateEncaissement !== f.dateEncaissement){
+      inv.dateEncaissement=f.dateEncaissement;
+      changed=true;
+    }
+    // Phase : si la facture en a une, propager
+    if(f.phase && inv.phase !== f.phase){
+      inv.phase=f.phase;
+      changed=true;
+    }
+    // Lien inverse : si manquant, ajouter
+    if(!inv.grcFactureId && !inv._factureId){
+      inv.grcFactureId=f.id;
+      inv._factureId=f.id;
+      changed=true;
+    }
+    if(!f.suiviId){
+      f.suiviId=inv.id;
+      changed=true;
+    }
+    if(changed) nbSync++;
+  });
+  if(nbSync>0){
+    console.log('[CALINSTRUM] Synchro factures/invoices : '+nbSync+' paire(s) ré-alignée(s)');
+    try{ saveDB(); }catch(e){ console.warn('saveDB après synchro échoué :', e); }
+  }
+  return nbSync;
 }
 
 // =============================================================================
@@ -6631,6 +6717,7 @@ function saveSUIVI(){
   commitInvoiceChange(inv);
   saveDB();cm('mSUIVI');renderSuivi();rDash();
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
+  if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
 }
 function delInv(id){
   var inv=invoices.find(function(x){return x.id===id;});
@@ -7948,6 +8035,7 @@ function reclassifyExcelInvoices(){
   });
   saveDB();renderSuivi();rDash();
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
+  if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
   alert('✅ Reclassification terminée !\n\n• '+changed+' facture(s) mise(s) à jour\n• '+unchanged+' déjà correcte(s)\n\nClassification finale (selon couleur cellule Excel) :\n🔧 '+fournitures+' Fournitures (matériel Emerson)\n🛠 '+prestations+' Prestations (chantiers SLN)');
 }
 
@@ -8314,6 +8402,7 @@ function avisRegApply(){
   if(typeof renderFA==='function')renderFA();
   if(typeof rDash==='function')rDash();
   if(typeof renderHist==='function')renderHist();
+  if(typeof renderDV==='function')renderDV();
   // Rapport
   var msg='✅ Avis de règlement appliqué !\n\n';
   msg+='• '+nbApplied+' facture(s) marquée(s) Payée\n';
@@ -22175,12 +22264,25 @@ function saveFA(){
   if(eFAid){var i=DB.factures.findIndex(function(x){return x.id===eFAid;});if(i>=0)DB.factures[i]=f;else DB.factures.push(f);}
   else DB.factures.push(f);
   // Sync vers Suivi Factures (DB.invoices) : créer ou mettre à jour l'entrée miroir
+  // ⚠ Critique : c'est cette synchro qui garde DB.invoices cohérent avec DB.factures
+  // pour que le badge facture dans Devis et la liste Suivi affichent le bon statut.
   syncFactureToSuivi(f);
   // Mettre à jour le f dans DB.factures avec le suiviId retourné
   var fi=DB.factures.findIndex(function(x){return x.id===f.id;});
   if(fi>=0) DB.factures[fi]=f;
-  saveDB();cm('mFA');renderFA();rDash();renderHist();
+  saveDB();cm('mFA');
+  // ⚠ Cascade de rafraîchissements : la facture peut être référencée dans plusieurs UI :
+  //   - renderFA  → page Factures (la liste actuelle)
+  //   - rDash     → Dashboard (KPIs, alertes facturation, devis récents)
+  //   - renderHist → Historique (timeline d'activité)
+  //   - renderSuivi → Suivi Factures (liste des invoices)
+  //   - renderDV  → ⭐ Page Devis (badges facture liée sur chaque devis)
+  // Le badge facture dans la liste Devis (_renderFactureCell) lit dynamiquement
+  // le statut via _normalizeFactureStatus(f.obj). Sans renderDV() ici, le badge
+  // garde son état stale (ex: reste orange "en retard" après passage à Payée).
+  renderFA();rDash();renderHist();
   if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){console.warn('renderSuivi skipped:',e.message);}}
+  if(typeof renderDV==='function'){try{renderDV();}catch(e){console.warn('renderDV skipped:',e.message);}}
   // Push undo si on modifiait une facture existante (pas si nouvelle création)
   if(prevSnapshot){
     var lbl='Modif. facture « '+(f.num||'')+' »';
@@ -22188,8 +22290,11 @@ function saveFA(){
       var idx=DB.factures.findIndex(function(x){return x.id===prevSnapshot.id;});
       if(idx>=0)DB.factures[idx]=prevSnapshot;
       else DB.factures.push(prevSnapshot);
+      // ⚠ Re-sync vers Suivi pour rétablir la cohérence
+      syncFactureToSuivi(prevSnapshot);
       saveDB();renderFA();rDash();renderHist();
       if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+      if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
     });
   }
 }
