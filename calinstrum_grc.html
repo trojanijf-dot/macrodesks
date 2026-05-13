@@ -12678,29 +12678,57 @@ function renderSuiviPro(){
   function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
 
   // Build HTML
+  // ⚠ Annotations sur chaque KPI : ajoutées dans `title` (tooltip natif) ET sous forme
+  // de petit "?" visible en haut-droite de chaque card. Le tooltip explique la FORMULE
+  // exacte du calcul tel qu'implémenté dans cette fonction. Indispensable pour que
+  // l'utilisateur comprenne d'où viennent les chiffres et pourquoi par exemple
+  // "Trésorerie nette ≠ Marge nette" (cash réel vs comptable).
+  var helpDot = function(txt){
+    return '<span class="kpi-help" title="'+esc(txt)+'" style="position:absolute;top:8px;right:8px;width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.08);color:var(--muted);font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:help;font-family:monospace" aria-label="Aide">?</span>';
+  };
   var html='<div class="kpi-grid-pro">';
   // KPI émis
-  html+='<div class="kpi-pro kpi-blue">'+
+  var emisHelp = 'TOTAL ÉMIS '+fy+' = somme des montants TTC de toutes les factures émises en '+fy+'.\n\n'+
+    'Inclus :\n• Factures status Pending, Partiel ou Payée\n• Phase « livre » ou « recu » (= facture envoyée au client)\n\n'+
+    'Exclus :\n• Factures pré-facturées (= backlog, pas encore envoyées au client)\n• Factures d\'autres années fiscales\n\n'+
+    'C\'est ton chiffre d\'affaires émis de l\'année (peu importe si déjà payé ou non).';
+  html+='<div class="kpi-pro kpi-blue" style="position:relative">'+
+    helpDot(emisHelp)+
     '<div class="kpi-label"><i class="ti ti-receipt-2"></i>Total émis '+fy+'</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalEmis)+'</div>'+
     '<div class="kpi-sub">XPF · '+nbEmis+' factures</div>'+
     makeSparkline(emisCum,'#88aae0',true)+
     '</div>';
   // Encaissé
-  html+='<div class="kpi-pro kpi-green">'+
+  var encHelp = 'ENCAISSÉ = somme de ce que les clients t\'ont réellement versé sur les factures émises '+fy+'.\n\n'+
+    'Mode de calcul par facture :\n• Status « Payée » → 100% du montant\n• Status « Partiel » → montant × (pct/100)\n• Status « Pending » → 0\n\n'+
+    'Ratio « % des émises » = Encaissé / Total Émis.\n'+
+    'C\'est ton indicateur de recouvrement client (plus c\'est haut, mieux c\'est).';
+  html+='<div class="kpi-pro kpi-green" style="position:relative">'+
+    helpDot(encHelp)+
     '<div class="kpi-label"><i class="ti ti-cash"></i>Encaissé</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalEnc)+'</div>'+
     '<div class="kpi-sub">'+(totalEmis>0?Math.round(totalEnc/totalEmis*100):0)+'% des émises</div>'+
     makeSparkline(encCum,'#5dcaa5',true)+
     '</div>';
   // Coût Emerson + frais
-  html+='<div class="kpi-pro kpi-amber">'+
+  var coutHelp = 'COÛT EMERSON + FRAIS = total des coûts liés à tes factures '+fy+'.\n\n'+
+    'Détail :\n• Emerson = ce que tu DOIS à Emerson pour la marchandise (somme des BC Emerson liés aux factures '+fy+')\n• Frais = transit, douane, transport local, etc. (champ « frais » des BC)\n\n'+
+    'Les BC Emerson sont DÉDUPLIQUÉS : un BC qui couvre 3 factures n\'est compté qu\'une fois.\n\n'+
+    'C\'est ton coût de revient total de l\'année.';
+  html+='<div class="kpi-pro kpi-amber" style="position:relative">'+
+    helpDot(coutHelp)+
     '<div class="kpi-label"><i class="ti ti-package"></i>Coût Emerson + frais</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalCoutEm+totalFrais)+'</div>'+
     '<div class="kpi-sub">Emerson '+fNloc(totalCoutEm)+' · Frais '+fNloc(totalFrais)+'</div>'+
     '</div>';
   // Marge nette
-  html+='<div class="kpi-pro kpi-green">'+
+  var margeHelp = 'MARGE NETTE = bénéfice réel après tous les coûts (vue comptable).\n\n'+
+    'Formules :\n• Marge brute = Total Émis − Coût Emerson\n• Marge nette = Marge brute − Frais (= Total Émis − Coût Emerson − Frais)\n• % net = Marge nette / Total Émis\n\n'+
+    'Vert = bénéfice / Rouge = perte.\n\n'+
+    '⚠ Différence avec « Trésorerie nette » :\n• Marge = vue COMPTABLE (basée sur les factures émises, qu\'elles soient payées ou non)\n• Trésorerie = vue CASH (entrées et sorties réelles)';
+  html+='<div class="kpi-pro kpi-green" style="position:relative">'+
+    helpDot(margeHelp)+
     '<div class="kpi-label"><i class="ti ti-chart-pie"></i>Marge nette</div>'+
     '<div class="kpi-value" data-money style="color:'+(margeNette>=0?'var(--green)':'var(--red)')+'">'+fNloc(margeNette)+'</div>'+
     '<div class="kpi-sub">'+pctMargeNette.toFixed(1)+'% net · brut '+fNloc(margeBrute)+'</div>'+
@@ -12709,12 +12737,25 @@ function renderSuiviPro(){
 
   // 2nde row : trésorerie + restant à payer
   html+='<div class="kpi-grid-pro" style="grid-template-columns:1fr 1fr">';
-  html+='<div class="kpi-pro" style="border-top:2px solid '+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+
+  var tresoHelp = 'TRÉSORERIE NETTE = cash réel en caisse sur les opérations '+fy+' (vue cash flow).\n\n'+
+    'Formule : Encaissé (entrées clients) − Payé Emerson (sorties fournisseur)\n\n'+
+    'Vert (+) = tu as du cash en banque\n'+
+    'Rouge (−) = tu as plus payé Emerson que tu n\'as encaissé du client → cash flow tendu\n\n'+
+    '⚠ Différence avec « Marge nette » :\n• Trésorerie = encaissements − décaissements EFFECTIFS\n• Marge = revenus émis − coûts THÉORIQUES (peu importe si payés)\n\n'+
+    'Une marge positive peut coexister avec une trésorerie négative si tu as payé Emerson avant que les clients ne paient leur facture.';
+  html+='<div class="kpi-pro" style="position:relative;border-top:2px solid '+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+
+    helpDot(tresoHelp)+
     '<div class="kpi-label"><i class="ti ti-wallet"></i>Trésorerie nette</div>'+
     '<div class="kpi-value" data-money style="color:'+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+(tresoNette>=0?'+':'')+fNloc(tresoNette)+'</div>'+
     '<div class="kpi-sub">Encaissé '+fNloc(totalEnc)+' − Payé Emerson '+fNloc(totalCoutPaye)+'</div>'+
     '</div>';
-  html+='<div class="kpi-pro kpi-red">'+
+  var restantHelp = 'RESTANT EMERSON = ce qu\'il te reste à payer à Emerson sur les BC liés aux factures '+fy+'.\n\n'+
+    'Formule : Coût Emerson Total − Coût Emerson déjà payé\n'+
+    '« déjà payé » = somme des BC marqués paidEmerson=true.\n\n'+
+    'C\'est ta dette fournisseur courante.\n\n'+
+    'Détail affiché :\n• X% non payé = Restant / Coût Total\n• N BC liés = nombre de BC Emerson concernés';
+  html+='<div class="kpi-pro kpi-red" style="position:relative">'+
+    helpDot(restantHelp)+
     '<div class="kpi-label"><i class="ti ti-alert-triangle"></i>Restant Emerson</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalCoutRest)+'</div>'+
     '<div class="kpi-sub">'+(totalCoutEm>0?Math.round(totalCoutRest/totalCoutEm*100):0)+'% non payé · '+Object.keys(bcsLies).length+' BC liés</div>'+
@@ -12722,7 +12763,19 @@ function renderSuiviPro(){
   html+='</div>';
 
   // Gros graphique : émis vs encaissé mensuel
-  html+='<div class="card-pro">';
+  var chartHelp = 'ÉVOLUTION MENSUELLE = chronologie des flux sur 12 mois.\n\n'+
+    'Courbes affichées :\n'+
+    '• Bleu (Devis émis) = chiffre d\'affaires émis chaque mois\n'+
+    '• Gris (Facturé) = montant facturé (identique à Devis émis quand tout est facturé)\n'+
+    '• Vert (Encaissé) = ce qui est rentré sur ton compte chaque mois\n'+
+    '• Pointillé = moyenne mobile 3 mois (lisse les pics)\n\n'+
+    'Lecture pratique :\n'+
+    'L\'ÉCART vertical bleu↔vert à un mois donné = délai de paiement client.\n'+
+    'Si tu factures en avril mais encaisses en juin → le délai est de ~2 mois.\n\n'+
+    'Bouton « Mensuel » = barres par mois (vue détaillée).\n'+
+    'Bouton « Cumulé » = somme glissante (trajectoire annuelle).';
+  html+='<div class="card-pro" style="position:relative">';
+  html+=helpDot(chartHelp);
   html+='<div class="card-pro-title"><i class="ti ti-trending-up"></i>Évolution mensuelle '+fy+'</div>';
   html+=renderMonthlyChartPro(emisM, emisM.map(function(v,i){return Math.max(0,v);}), encM);
   html+='</div>';
