@@ -2453,7 +2453,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
 <!-- ARTICLE -->
 <div class="modal-overlay" id="mART">
 <div class="modal">
-  <div class="modal-header"><h3>Article / Prestation</h3><button class="modal-close" onclick="cm('mART')">✕</button></div>
+  <div class="modal-header"><h3 id="mARTtitle">Article / Prestation</h3><button class="modal-close" onclick="cm('mART')">✕</button></div>
   <div class="modal-body">
     <div class="form-row">
       <div class="form-group"><label>Code Client GMAO <span style="color:var(--muted);font-weight:400;font-size:10px">(traçabilité client)</span></label><input class="form-input" id="art-codeSLN" placeholder="ex: 2518912"></div>
@@ -6705,6 +6705,7 @@ function saveSUIVI(){
   // virtuels mélangés depuis getSuiviSource). On délègue à commitInvoiceChange() qui
   // route correctement vers DB.factures (si la facture y existe) ou DB.invoices.
   var existing=eSUIVIid?invoices.find(function(x){return x.id===eSUIVIid;}):null;
+  var wasNew=!eSUIVIid;
   var phaseInput = gvg('si-phase');
   // Sécurité : si la phase est vide ou inconnue (cas legacy), forcer la phase par défaut selon type
   var typeInput = gvg('si-type')||'Fourniture';
@@ -6731,9 +6732,16 @@ function saveSUIVI(){
     }
   }
   commitInvoiceChange(inv);
-  saveDB();cm('mSUIVI');renderSuivi();rDash();
+  // IMPORTANT : mémoriser l'ID pour éviter doublon si re-save sans fermer
+  if(wasNew) eSUIVIid=inv.id;
+  saveDB();
+  // ⚠ La modale RESTE ouverte (pattern unifié avec saveDV)
+  if(wasNew) sv('mSUIVItitle','Modifier '+inv.num);
+  renderSuivi();rDash();
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
   if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
+  // Feedback bouton
+  flashSaveBtn('mSUIVI');
 }
 function delInv(id){
   var inv=invoices.find(function(x){return x.id===id;});
@@ -14445,6 +14453,60 @@ function computeTaskTotal(taskMainLine){
   });
   return Math.round(total);
 }
+
+// =============================================================================
+// _updateDVLineTotal — recalcul LIVE de la cellule "Total HT" d'une ligne devis
+// =============================================================================
+// Sans ce helper, l'utilisateur devait save → close → reopen pour voir le nouveau
+// total après modif de TGC/Qté/PU. Appelé depuis les listeners 'input' de rDVlines.
+//
+// Cellules cibles (marquées par data-attribute pour pouvoir être retrouvées sans
+// reconstruire la table, ce qui préserverait le focus et la position du curseur) :
+//   - data-line-total="<sec>:<idx>"           → ligne normale ou KIT principale
+//   - data-sub-total="<sec>:<idx>:<subIdx>"   → sous-ligne TASK (chiffrée)
+//   - data-task-mother-total="<sec>:<idx>"    → Σ de la ligne porteuse TASK
+//
+// Si `subIdx` est fourni : on met à jour la sub-cell ET le Σ porteuse.
+// Sinon : on met à jour la cellule total de la ligne (et si c'est une TASK, le Σ).
+// =============================================================================
+function _updateDVLineTotal(tb, sec, idx, subIdx){
+  if(!tb || !sec) return;
+  var arr=dvL[sec]||[]; var l=arr[idx]; if(!l) return;
+  // Cas SOUS-LIGNE TASK
+  if(typeof subIdx==='number' && Array.isArray(l.subLines) && l.subLines[subIdx]){
+    var sub=l.subLines[subIdx];
+    var subT=Math.round((Number(sub.qte)||0)*(Number(sub.pu)||0)*(1+(Number(sub.tgc)||0)/100));
+    var subCell=tb.querySelector('[data-sub-total="'+sec+':'+idx+':'+subIdx+'"]');
+    if(subCell){
+      // Préserver le bouton ✕ éventuel (placé après le total) en ne modifiant que le texte initial.
+      // Stratégie : on retrouve le 1er noeud texte et on le remplace.
+      var firstTextNode=null;
+      for(var n=0;n<subCell.childNodes.length;n++){
+        if(subCell.childNodes[n].nodeType===3){ firstTextNode=subCell.childNodes[n]; break; }
+      }
+      if(firstTextNode) firstTextNode.nodeValue=fN(subT)+' ';
+      else subCell.textContent=fN(subT)+' ';
+    }
+    // Maj du Σ porteuse de la TASK
+    var totalTask=computeTaskTotal(l);
+    var motherEl=tb.querySelector('[data-task-mother-total="'+sec+':'+idx+'"]');
+    if(motherEl) motherEl.textContent='Σ '+fN(totalTask);
+    return;
+  }
+  // Cas LIGNE NORMALE / KIT principale : recalcul qte*pu*(1+tgc/100)
+  if(!l || l.type==='header') return;
+  // Si c'est une TASK mais qu'on a tapé sur la porteuse (ref/designation) — on update juste le Σ
+  if(isTaskMainLine(arr,idx)){
+    var totalTaskP=computeTaskTotal(l);
+    var motherElP=tb.querySelector('[data-task-mother-total="'+sec+':'+idx+'"]');
+    if(motherElP) motherElP.textContent='Σ '+fN(totalTaskP);
+    return;
+  }
+  var tot=Math.round((Number(l.qte)||0)*(Number(l.pu)||0)*(1+(Number(l.tgc)||0)/100));
+  var cell=tb.querySelector('[data-line-total="'+sec+':'+idx+'"]');
+  if(cell) cell.textContent=fN(tot);
+}
+
 function rDVlines(){
   var sections=[['fourniture','dvFR'],['service','dvSV'],['fret','dvFT']];
   sections.forEach(function(pair){
@@ -14582,7 +14644,7 @@ function rDVlines(){
             '<td><select data-sub-field="unite" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10.5px">'+taskUteOpts(sub.unite||'H sup')+'</select></td>'+
             '<td><input type="number" style="width:50px;font-size:10.5px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
             '<td><input type="number" style="width:75px;font-size:10.5px" value="'+(sub.pu||0)+'" data-sub-field="pu" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
-            '<td style="font-weight:700;color:#fbbf24;font-size:10.5px;white-space:nowrap">'+fN(subT)+
+            '<td style="font-weight:700;color:#fbbf24;font-size:10.5px;white-space:nowrap" data-sub-total="'+sec+':'+i+':'+si+'">'+fN(subT)+
               (canDelSub?' <button onclick="delDVKitSubLine(\''+sec+'\','+i+','+si+')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px;opacity:.6;padding:0 0 0 4px" title="Supprimer cette sous-ligne">✕</button>':'')+
             '</td>';
         }
@@ -14596,7 +14658,7 @@ function rDVlines(){
           '<td rowspan="'+rowspan+'" style="vertical-align:middle;border-right:1px solid rgba(245,158,11,.15)"><textarea style="min-width:130px;width:100%;min-height:'+(28*rowspan)+'px;resize:vertical;font-family:inherit;font-size:11.5px;padding:4px 6px" data-field="designation" data-sec="'+sec+'" data-idx="'+i+'" placeholder="Description de la tâche groupée">'+esc(l.designation||'')+'</textarea></td>'+
           buildTaskSubCells(subs[0],0,canDelSub)+
           '<td rowspan="'+rowspan+'" style="white-space:nowrap;vertical-align:middle;border-left:1px solid rgba(245,158,11,.15);text-align:center">'+
-            '<div style="font-size:9.5px;color:var(--muted);margin-bottom:3px" title="Sous-total de la tâche (additionné au Total HT général)">Σ '+fN(totalTask)+'</div>'+
+            '<div style="font-size:9.5px;color:var(--muted);margin-bottom:3px" data-task-mother-total="'+sec+':'+i+'" title="Sous-total de la tâche (additionné au Total HT général)">Σ '+fN(totalTask)+'</div>'+
             '<button onclick="moveDVL(\''+sec+'\','+i+',-1)" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 2px;font-size:11px" title="Monter">▲</button>'+
             '<button onclick="moveDVL(\''+sec+'\','+i+',1)" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 2px;font-size:11px" title="Descendre">▼</button>'+
             '<button class="dv-del-btn" data-sec="'+sec+'" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:13px" title="Supprimer ce bloc tâche">✕</button>'+
@@ -14619,7 +14681,7 @@ function rDVlines(){
           '<td><select data-field="unite" data-sec="'+sec+'" data-idx="'+i+'">'+uteOpts+'</select></td>'+
           '<td><input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-sec="'+sec+'" data-idx="'+i+'"></td>'+
           '<td><input type="number" style="width:75px" value="'+(l.pu||0)+'" data-field="pu" data-sec="'+sec+'" data-idx="'+i+'"></td>'+
-          '<td style="font-weight:700;min-width:65px;color:var(--teal)">'+fN(tot)+'</td>'+
+          '<td style="font-weight:700;min-width:65px;color:var(--teal)" data-line-total="'+sec+':'+i+'">'+fN(tot)+'</td>'+
           '<td style="white-space:nowrap">'+
             '<button onclick="moveDVL(\''+sec+'\','+i+',-1)" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 2px;font-size:11px" title="Monter">▲</button>'+
             '<button onclick="moveDVL(\''+sec+'\','+i+',1)" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:0 2px;font-size:11px" title="Descendre">▼</button>'+
@@ -14685,6 +14747,10 @@ function rDVlines(){
             cDVtot();
             return;
           }
+          // ⭐ Mise à jour LIVE du total de la ligne (cellule "TOTAL HT" à droite).
+          // Sans cet update, l'utilisateur devait save→close→reopen pour voir le nouveau total.
+          // Voir _updateDVLineTotal pour le calcul (gère lignes normales et porteuse TASK).
+          _updateDVLineTotal(tb, sec2, idx);
           cDVtot();
         }
       });
@@ -14709,11 +14775,11 @@ function rDVlines(){
             l.subLines[subIdx][field]=numFields.indexOf(field)>=0?+this.value:this.value;
             // Si la sous-ligne appartient à une TASK, son prix change le total → recalcul
             if(isTaskMainLine(dvL[sec2],mainIdx)){
+              // ⭐ Mise à jour LIVE du sub-total de cette sous-ligne ET du Σ porteuse de la tâche.
+              // Pour le sub-total : cellule marquée data-sub-total="sec:mainIdx:subIdx".
+              // Pour le Σ porteuse : élément marqué data-task-mother-total="sec:mainIdx".
+              _updateDVLineTotal(tb, sec2, mainIdx, subIdx);
               cDVtot();
-              // Mettre à jour le sous-total de la tâche dans la ligne porteuse en live
-              // sans re-rendre tout le tableau (évite de perdre le focus)
-              // Le sous-total est dans la cellule .total-task de la ligne du header.
-              // Pour faire simple : on relit directement cDVtot et on met à jour la cellule.
             }
           }
         }
@@ -15468,6 +15534,35 @@ function generateFactureFromDV(){
   cm('mDV');
   setTimeout(function(){openFA(fa.id);},250);
 }
+
+// ===== HELPER : FEEDBACK BOUTON ENREGISTRER =====
+// Pattern unifié pour TOUTES les modales d'édition : le bouton Enregistrer ne ferme
+// PAS la modale (l'utilisateur peut continuer à éditer / vérifier visuellement les modifs).
+// À la place, feedback visuel temporaire sur le bouton (« ✓ Enregistré » 1.5s).
+// Adopté en référence sur saveDV ; étendu aux saves FA, SUIVI, BL, CL, ART.
+// (saveBC a son propre toast spécifique, on ne le modifie pas.)
+function flashSaveBtn(modalId){
+  if(!modalId)return;
+  var modal=document.getElementById(modalId);
+  if(!modal)return;
+  var btns=modal.querySelectorAll('button');
+  btns.forEach(function(b){
+    if(b.textContent.indexOf('Enregistrer')>=0){
+      var orig=b.textContent;
+      b.textContent='✓ Enregistré';
+      b.style.opacity='0.7';
+      setTimeout(function(){
+        // Ne restaure que si le bouton est toujours dans le DOM ET montre encore « Enregistré »
+        // (sécurité si l'utilisateur a entre-temps re-cliqué ou si une autre logique a changé le label)
+        if(b.isConnected && b.textContent==='✓ Enregistré'){
+          b.textContent=orig;
+          b.style.opacity='';
+        }
+      },1500);
+    }
+  });
+}
+
 function saveDV(){
   var d=getDV();
   if(!d.num||!d.client){alert('Champs obligatoires: N° Devis et Client');return;}
@@ -15492,14 +15587,8 @@ function saveDV(){
         'Les BC SLN GMAO pourront désormais auto-matcher leurs articles avec ces prix.');
     },300);
   }
-  // Feedback bouton
-  var btns=document.querySelectorAll('#mDV button');
-  btns.forEach(function(b){
-    if(b.textContent.indexOf('Enregistrer')>=0){
-      var orig=b.textContent;b.textContent='✓ Enregistré';b.style.opacity='0.7';
-      setTimeout(function(){b.textContent=orig;b.style.opacity='';},1500);
-    }
-  });
+  // Feedback bouton (helper unifié)
+  flashSaveBtn('mDV');
 }
 
 // === SYNCHRONISATION DEVIS CADRE → CATALOGUE ARTICLES ===
@@ -21333,6 +21422,55 @@ function delFAKitSubLine(parentIdx,subIdx){
   faL[parentIdx].subLines.splice(subIdx,1);
   rFAlines();
 }
+
+// =============================================================================
+// _updateFALineTotal — recalcul LIVE de la cellule "TOTAL HT" d'une ligne facture
+// =============================================================================
+// Cellules cibles (marquées dans rFAlines) :
+//   - data-line-total="<idx>"            → cellule total de la ligne principale
+//   - data-sub-total="<idx>:<subIdx>"    → cellule total d'une sub-ligne TASK
+//
+// Si subIdx est fourni : on update la sub-cell ET la cellule mère (pour TASK).
+// Sinon : on update juste la ligne (gère KIT principale et ligne normale, y compris
+// le cas où la ligne EST une TASK porteuse — on lit alors la somme des sub-lignes).
+// =============================================================================
+function _updateFALineTotal(tb, idx, subIdx){
+  if(!tb || typeof idx!=='number') return;
+  var l=faL[idx]; if(!l || l.type==='header') return;
+  // Cas SOUS-LIGNE
+  if(typeof subIdx==='number' && Array.isArray(l.subLines) && l.subLines[subIdx]){
+    var sub=l.subLines[subIdx];
+    var subT=Math.round((Number(sub.qte)||0)*(Number(sub.pu)||0)*(1+(Number(sub.tgc)||0)/100));
+    var subCell=tb.querySelector('[data-sub-total="'+idx+':'+subIdx+'"]');
+    if(subCell) subCell.textContent=fN(subT);
+    // Si la mère est une TASK, sa cellule total = somme des sub-lignes chiffrées
+    var hasSubs=Array.isArray(l.subLines)&&l.subLines.length>0;
+    var isTaskMain = !!l._isTaskMain ||
+      (hasSubs && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
+       l.subLines.some(function(s){return (Number(s.pu)||0)>0;}));
+    if(isTaskMain){
+      var motherTot=l.subLines.reduce(function(s,sb){return s+(Number(sb.qte)||0)*(Number(sb.pu)||0)*(1+(Number(sb.tgc)||0)/100);},0);
+      var motherCell=tb.querySelector('[data-line-total="'+idx+'"]');
+      if(motherCell) motherCell.textContent=fN(Math.round(motherTot));
+    }
+    return;
+  }
+  // Cas LIGNE PRINCIPALE : KIT principale OU ligne normale (TASK ne devrait pas
+  // arriver ici car ses qte/pu sont read-only, mais on gère par sécurité).
+  var hasSubs2=Array.isArray(l.subLines)&&l.subLines.length>0;
+  var isTaskMain2 = !!l._isTaskMain ||
+    (hasSubs2 && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
+     l.subLines.some(function(s){return (Number(s.pu)||0)>0;}));
+  var tot;
+  if(isTaskMain2){
+    tot=l.subLines.reduce(function(s,sb){return s+(Number(sb.qte)||0)*(Number(sb.pu)||0)*(1+(Number(sb.tgc)||0)/100);},0);
+  } else {
+    tot=(Number(l.qte)||0)*(Number(l.pu)||0)*(1+(Number(l.tgc)||0)/100);
+  }
+  var cell=tb.querySelector('[data-line-total="'+idx+'"]');
+  if(cell) cell.textContent=fN(Math.round(tot));
+}
+
 function rFAlines(){
   var tb=document.getElementById('faLN');if(!tb)return;
   tb.innerHTML=faL.map(function(l,i){
@@ -21375,7 +21513,7 @@ function rFAlines(){
       '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<select data-field="unite" data-idx="'+i+'">'+uteOpts+'</select>'))+'</td>'+
       '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'">'))+'</td>'+
       '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<input type="number" style="width:75px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'">'))+'</td>'+
-      '<td style="font-weight:700;color:var(--teal)">'+fN(Math.round(motherTotal))+'</td>'+
+      '<td style="font-weight:700;color:var(--teal)" data-line-total="'+i+'">'+fN(Math.round(motherTotal))+'</td>'+
       '<td><button class="fa-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
       '</tr>';
     // === SOUS-LIGNES ===
@@ -21400,7 +21538,7 @@ function rFAlines(){
             '<td><select data-sub-field="unite" data-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10px">'+subUteOpts+'</select></td>'+
             '<td><input type="number" style="width:50px;font-size:11px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
             '<td><input type="number" style="width:75px;font-size:11px" value="'+(sub.pu||0)+'" data-sub-field="pu" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
-            '<td style="font-weight:600;color:var(--teal);font-size:11px">'+fN(subTot)+'</td>'+
+            '<td style="font-weight:600;color:var(--teal);font-size:11px" data-sub-total="'+i+':'+si+'">'+fN(subTot)+'</td>'+
             '<td><button class="fa-subdel-btn" data-idx="'+i+'" data-sub-idx="'+si+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px" title="Supprimer cette sous-ligne">✕</button></td>'+
           '</tr>';
         } else {
@@ -21446,6 +21584,8 @@ function rFAlines(){
         if(!sf)return;
         var sval=(sf==='qte'||sf==='pu'||sf==='tgc')?(Number(this.value)||0):this.value;
         faL[idx].subLines[subI][sf]=sval;
+        // ⭐ Mise à jour LIVE du sub-total + total porteuse TASK (sans re-render → focus préservé)
+        _updateFALineTotal(tb, idx, subI);
         cFAtot();
         return;
       }
@@ -21455,7 +21595,11 @@ function rFAlines(){
       var val=(f==='tgc'||f==='qte'||f==='pu')?(Number(this.value)||0):this.value;
       faL[idx][f]=val;
       // Pour le bandeau de section (type:'header'), pas de recalcul total
-      if(faL[idx].type!=='header')cFAtot();
+      if(faL[idx].type!=='header'){
+        // ⭐ Mise à jour LIVE de la cellule "TOTAL HT" de la ligne (sans re-render → focus préservé)
+        _updateFALineTotal(tb, idx);
+        cFAtot();
+      }
     });
   });
   // Boutons supprimer ligne principale
@@ -22292,6 +22436,7 @@ function saveFA(){
   var f=getFA();if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
   // Snapshot pour undo : si on modifie une facture existante, on garde son ancien état
   var prevSnapshot=null;
+  var wasNew=!eFAid;
   if(eFAid){
     var prev=DB.factures.find(function(x){return x.id===eFAid;});
     if(prev)prevSnapshot=JSON.parse(JSON.stringify(prev));
@@ -22301,7 +22446,7 @@ function saveFA(){
   // par l'utilisateur est volontaire et doit primer sur le contenu BC d'origine.
   f._manuallyEditedAt=new Date().toISOString();
   if(eFAid){var i=DB.factures.findIndex(function(x){return x.id===eFAid;});if(i>=0)DB.factures[i]=f;else DB.factures.push(f);}
-  else DB.factures.push(f);
+  else {DB.factures.push(f);eFAid=f.id;} // IMPORTANT : mémoriser l'ID pour éviter doublon si re-save sans fermer
   // Sync vers Suivi Factures (DB.invoices) : créer ou mettre à jour l'entrée miroir
   // ⚠ Critique : c'est cette synchro qui garde DB.invoices cohérent avec DB.factures
   // pour que le badge facture dans Devis et la liste Suivi affichent le bon statut.
@@ -22309,7 +22454,11 @@ function saveFA(){
   // Mettre à jour le f dans DB.factures avec le suiviId retourné
   var fi=DB.factures.findIndex(function(x){return x.id===f.id;});
   if(fi>=0) DB.factures[fi]=f;
-  saveDB();cm('mFA');
+  saveDB();
+  // ⚠ La modale RESTE ouverte (pattern unifié avec saveDV) : l'utilisateur peut continuer
+  // à vérifier visuellement ses modifs sans rouvrir la facture.
+  // Si c'était une nouvelle facture, on met à jour le titre (passe de "Nouvelle..." à "Modifier...")
+  if(wasNew) sv('mFAtitle','Modifier '+f.num);
   // ⚠ Cascade de rafraîchissements : la facture peut être référencée dans plusieurs UI :
   //   - renderFA  → page Factures (la liste actuelle)
   //   - rDash     → Dashboard (KPIs, alertes facturation, devis récents)
@@ -22336,6 +22485,8 @@ function saveFA(){
       if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
     });
   }
+  // Feedback bouton
+  flashSaveBtn('mFA');
 }
 
 // Synchronise une facture GRC vers le Suivi Factures (DB.invoices)
@@ -26949,9 +27100,15 @@ function cBLtot(){var tot=blL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)
 function getBL(){var tot=cBLtot();return{id:eBLid||Date.now(),num:gvg('bl-num'),date:gvg('bl-date'),lieu:gvg('bl-lieu'),client:gvg('bl-client'),contact:gvg('bl-contact'),adrdest:gvg('bl-adrdest'),emaildest:gvg('bl-emaildest'),po:gvg('bl-po'),emis:gvg('bl-emis'),status:gvg('bl-status'),lines:JSON.parse(JSON.stringify(blL)),total:tot};}
 function saveBL(){
   var b=getBL();if(!b.num||!b.client){alert('N° BL et Client obligatoires');return;}
+  var wasNew=!eBLid;
   if(eBLid){var i=DB.bls.findIndex(function(x){return x.id===eBLid;});if(i>=0)DB.bls[i]=b;else DB.bls.push(b);}
-  else DB.bls.push(b);
-  saveDB();cm('mBL');renderBL();rDash();renderHist();
+  else {DB.bls.push(b);eBLid=b.id;} // mémoriser pour éviter doublon si re-save sans fermer
+  saveDB();
+  // ⚠ La modale RESTE ouverte (pattern unifié avec saveDV)
+  if(wasNew) sv('mBLtitle','Modifier BL — '+b.num);
+  renderBL();rDash();renderHist();
+  // Feedback bouton
+  flashSaveBtn('mBL');
 }
 function renderBL(){
   updFC('fBLcli',DB.bls);
@@ -27011,9 +27168,15 @@ function saveCL(){
       if(!confirm('⚠️ Il y a déjà '+nbPrio+' clients prioritaires. La barre d\'import devis dans le modal Facture pourrait devenir trop dense.\n\nMarquer « '+c.nom+' » comme prioritaire quand même ?'))return;
     }
   }
+  var wasNew=!eCLid;
   if(eCLid){var i=DB.clients.findIndex(function(x){return x.id===eCLid;});if(i>=0)DB.clients[i]=c;else DB.clients.push(c);}
-  else DB.clients.push(c);
-  saveDB();cm('mCL');rClients();
+  else {DB.clients.push(c);eCLid=c.id;} // mémoriser pour éviter doublon si re-save sans fermer
+  saveDB();
+  // ⚠ La modale RESTE ouverte (pattern unifié avec saveDV)
+  if(wasNew) sv('mCLtitle','Modifier '+c.nom);
+  rClients();
+  // Feedback bouton
+  flashSaveBtn('mCL');
 }
 // Suppression d'un client avec confirmation et undo.
 // Confirmation simple : pas d'alerte sur les docs liés (le bouton Annuler en haut permet de
@@ -27085,9 +27248,11 @@ function openART(id){
       gv('art-unite',a.unite||'U');
       gv('art-prix',a.prix||0);
       gv('art-tgc',a.tgc||0);
+      sv('mARTtitle','Modifier — '+(a.nom||a.codeSLN||a.ref||'article'));
     }
   } else {
     ['art-codeSLN','art-clientGmao','art-ref','art-nom','art-prix'].forEach(function(i){gv(i,'');});
+    sv('mARTtitle','Article / Prestation');
   }
   om('mART');
 }
@@ -27104,9 +27269,15 @@ function saveART(){
     tgc:+gvg('art-tgc')||0
   };
   if(!a.nom){alert('Désignation manquante');return;}
+  var wasNew=!eARTid;
   if(eARTid){var i=DB.articles.findIndex(function(x){return x.id===eARTid;});if(i>=0)DB.articles[i]=a;else DB.articles.push(a);}
-  else DB.articles.push(a);
-  saveDB();cm('mART');renderART();
+  else {DB.articles.push(a);eARTid=a.id;} // mémoriser pour éviter doublon si re-save sans fermer
+  saveDB();
+  // ⚠ La modale RESTE ouverte (pattern unifié avec saveDV)
+  if(wasNew) sv('mARTtitle','Modifier — '+(a.nom||a.codeSLN||a.ref||'article'));
+  renderART();
+  // Feedback bouton
+  flashSaveBtn('mART');
 }
 
 // Helper : peuple un <select> avec la liste des clients de DB.clients.
