@@ -1369,7 +1369,13 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
 
 <!-- BL -->
 <div class="page" id="page-bl">
-  <div class="flex-between mb12"><div></div><button class="btn btn-teal no-print" onclick="openBL()">+ Nouveau bon de livraison</button></div>
+  <div class="flex-between mb12">
+    <div></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost no-print" onclick="uploadBLPdf()" title="Importer un ou plusieurs PDFs de Bon de Livraison Calinstrum existants (anciens BL faits hors GRC). Détecte automatiquement N° BL, date, lieu, PO, contact, client et lignes. Anti-doublon strict sur le N° BL." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Importer BL PDF</button>
+      <button class="btn btn-teal no-print" onclick="openBL()">+ Nouveau bon de livraison</button>
+    </div>
+  </div>
   <div class="search-bar no-print">
     <input class="search-input" placeholder="Rechercher..." id="sBL" oninput="renderBL()">
     <select class="filter-sel" id="fBLcli" onchange="renderBL()"><option value="">Tous les clients</option></select>
@@ -27040,6 +27046,772 @@ function confirmPOCalinstrumImport(){
   var msg = '✅ Import terminé !\n\n';
   msg += '• '+nbCreated+' PO créé'+(nbCreated>1?'s':'')+'\n';
   if(nbSkipped>0) msg += '• '+nbSkipped+' PO ignoré'+(nbSkipped>1?'s':'')+' (doublon ou erreur)\n';
+  alert(msg);
+}
+
+// =============================================================================
+// ===== IMPORT BL PDF (ANCIENS BONS DE LIVRAISON HORS GRC) =====
+// =============================================================================
+// Objectif : permettre l'import de PDFs de BL Calinstrum générés AVANT le GRC
+// (template legacy : Word/HTML imprimé en PDF). Calibré sur l'exemple :
+//   BON_DE_LIVRAISON_CALINSTRUM-BL-F040_L72923.pdf
+//
+// Stratégie d'extraction :
+//   - On utilise pdf.js avec les coordonnées (transform[4]=x, transform[5]=y) pour
+//     regrouper les items en lignes (Y) puis colonnes (X). C'est BEAUCOUP plus robuste
+//     qu'un join(' ') sur le texte, parce que :
+//     1) le tableau d'items est aligné en colonnes : Item, Part Number, Quantités, PU, Total
+//     2) les designations multi-lignes occupent 2 ou 3 valeurs de Y proches
+//     3) le n° d'item est parfois sur un Y légèrement décalé de son contenu (offset visuel)
+//
+// Heuristiques clés :
+//   - Tolérance Y de ±3 pour regrouper les items d'une même ligne logique
+//   - Détection des colonnes par bandes X :
+//       Item        ≈ x:[70, 110]
+//       Part Number ≈ x:[140, 360]
+//       Quantités   ≈ x:[370, 425]
+//       PU          ≈ x:[430, 510]
+//       Total HT    ≈ x:[510, 560]
+//   - "Lot de 10", "Lot de N", etc. → extraire le nombre N pour la qté
+//   - Stop tableau = ligne contenant "TOTAL" en colonne PU sans ligne item active
+//
+// Anti-doublon : sur le N° BL exact (b.num).
+// =============================================================================
+
+// État global pendant un import (analogue à _poImportState)
+var _blImportState = { items:[], skipped:[] };
+
+// ---- Entrée utilisateur : ouvre le picker fichier multi-sélection ----
+function uploadBLPdf(){
+  if(typeof pdfjsLib==='undefined'){
+    alert('❌ Erreur : pdf.js non chargé. Rechargez la page.');
+    return;
+  }
+  var input = document.createElement('input');
+  input.type='file'; input.accept='.pdf'; input.multiple=true; input.style.display='none';
+  document.body.appendChild(input);
+  input.onchange = function(e){
+    var files = Array.from(e.target.files||[]);
+    document.body.removeChild(input);
+    if(!files.length) return;
+    _blImportState = { items:[], skipped:[] };
+    var promises = files.map(function(file){ return _parseBLPdfFile(file); });
+    Promise.all(promises).then(function(results){
+      _blImportState.items = results.filter(function(r){return r;});
+      if(_blImportState.items.length===0){
+        alert('⚠ Aucun BL n\'a pu être lu. Vérifiez que les fichiers sont bien des PDFs de Bon de Livraison Calinstrum.');
+        return;
+      }
+      // Anti-doublon : marquer ceux dont le N° existe déjà en DB
+      _blImportState.items.forEach(function(item){
+        if(item.parsed && item.parsed.num){
+          var existing = (DB.bls||[]).find(function(b){return (b.num||'')===item.parsed.num;});
+          item.isDuplicate = !!existing;
+        }
+      });
+      showBLImportPreview();
+    });
+  };
+  input.click();
+}
+
+// ---- Lit un PDF, extrait items avec coordonnées, parse → {fileName, parsed} ----
+function _parseBLPdfFile(file){
+  return new Promise(function(resolve){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      try{
+        var typedArray = new Uint8Array(e.target.result);
+        pdfjsLib.getDocument({data:typedArray}).promise.then(function(pdf){
+          var pagePromises = [];
+          for(var p=1;p<=pdf.numPages;p++){
+            pagePromises.push(pdf.getPage(p).then(function(page){
+              return page.getTextContent().then(function(tc){
+                // On garde la STRUCTURE (str + x + y) pour pouvoir parser en colonnes
+                return tc.items.filter(function(it){return it.str && it.str.trim();}).map(function(it){
+                  return { str: it.str, x: it.transform[4], y: it.transform[5] };
+                });
+              });
+            }));
+          }
+          Promise.all(pagePromises).then(function(pages){
+            // On agrège tous les items de toutes les pages
+            var allItems = [];
+            pages.forEach(function(p){ p.forEach(function(it){ allItems.push(it); }); });
+            try{
+              var parsed = parseBLPdfItems(allItems);
+              resolve({fileName: file.name, parsed: parsed});
+            } catch(err){
+              resolve({fileName: file.name, parsed: null, error: 'Parse: '+err.message});
+            }
+          });
+        }).catch(function(err){
+          resolve({fileName: file.name, parsed: null, error: 'PDF: '+err.message});
+        });
+      } catch(err){
+        resolve({fileName: file.name, parsed: null, error: 'Lecture: '+err.message});
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// ---- PARSER : items pdf.js (avec x,y) → objet BL structuré ----
+// Cœur de la logique. Calibré sur le template Calinstrum legacy.
+// Pour ajouter de nouveaux templates : étendre les regexes mais ne pas casser
+// les heuristiques existantes (multi-lignes, colonnes X). Tester avec le
+// fichier exemple en commentaire ci-dessus.
+function parseBLPdfItems(items){
+  var result = {
+    num:'', date:'', lieu:'', po:'', contact:'', emis:'',
+    client:'', adrdest:'',
+    lines:[], total:0,
+    _parseErrors: [],
+    _rawText: items.map(function(it){return it.str;}).join(' ')
+  };
+
+  // ===== 1) Regrouper par Y (lignes logiques) =====
+  // Tolérance ±3 : pdf.js retourne parfois 2 items sur des Y voisins pour une même ligne visuelle.
+  // On groupe en clusters Y avec un greedy : pour chaque item, on cherche un cluster existant
+  // dont la moyenne Y est dans la tolérance ; sinon on crée un nouveau cluster.
+  var TOL_Y = 3;
+  var lineGroups = []; // [{yAvg, items:[]}, ...]
+  items.forEach(function(it){
+    var found = false;
+    for(var i=0;i<lineGroups.length;i++){
+      if(Math.abs(lineGroups[i].yAvg - it.y) <= TOL_Y){
+        lineGroups[i].items.push(it);
+        // recalc moyenne
+        var sum=0; lineGroups[i].items.forEach(function(x){sum+=x.y;});
+        lineGroups[i].yAvg = sum / lineGroups[i].items.length;
+        found = true; break;
+      }
+    }
+    if(!found) lineGroups.push({yAvg: it.y, items:[it]});
+  });
+  // Tri par Y descendant (haut en bas, car PDF a Y vers le haut)
+  lineGroups.sort(function(a,b){return b.yAvg - a.yAvg;});
+  // Trier chaque ligne par X ascendant
+  lineGroups.forEach(function(g){ g.items.sort(function(a,b){return a.x - b.x;}); });
+
+  // Helper : recolle les items d'une ligne en une chaîne avec espaces
+  function lineText(g){
+    return g.items.map(function(it){return it.str;}).join(' ').replace(/\s+/g,' ').trim();
+  }
+  // Helper : récupère la valeur dans une bande X
+  function valueInBand(g, xMin, xMax){
+    var parts = g.items.filter(function(it){return it.x>=xMin && it.x<xMax;});
+    return parts.map(function(p){return p.str;}).join(' ').replace(/\s+/g,' ').trim();
+  }
+
+  // ===== 2) En-tête : champs nommés (label en x≈38, valeur en x≈152) =====
+  // On parcourt les premières lignes (Y haut), on cherche les labels connus.
+  // Patterns acceptés (avec espaces parasites possibles) :
+  //   "Bon de livraison N° :  <valeur>"
+  //   "Date :  <valeur>"
+  //   "Lieu :  <valeur>"
+  //   "Numéro de commande : <valeur>"
+  //   "Contact client :  <valeur>"
+  //   "Émis par :  <valeur>"
+  var headerPatterns = [
+    { key:'num',     re:/Bon\s*de\s*livraison\s*N°?\s*:?\s*(\S[^\n]*?)(?:\s{2,}|$)/i },
+    { key:'date',    re:/Date\s*:?\s*(\d{1,2}\s*\/\s*\d{1,2}\s*\/\s*\d{2,4})/i },
+    { key:'lieu',    re:/Lieu\s*:?\s*([A-ZÀ-Ÿa-zà-ÿ][\w\s\-]{1,40}?)(?:\s{2,}|$)/i },
+    { key:'po',      re:/(?:Numéro\s*de\s*commande|N°?\s*commande|N°?\s*PO|Purchase\s*Order)\s*:?\s*([^\n]+?)(?:\s{2,}|$)/i },
+    { key:'contact', re:/Contact\s*client\s*:?\s*([^\n]+?)(?:\s{2,}|$)/i },
+    { key:'emis',    re:/(?:Émis|Emis)\s*par\s*:?\s*([^\n]+?)(?:\s{2,}|$)/i }
+  ];
+  // Pour chaque ligne avant le tableau, tester les patterns
+  for(var li=0;li<lineGroups.length;li++){
+    var g = lineGroups[li];
+    var txt = lineText(g);
+    // Quand on tombe sur la ligne "Item ... Part Number ... Quantités ... TOTAL HT", on stoppe
+    if(/^\s*Item\s+Part\s*Number/i.test(txt)) break;
+    headerPatterns.forEach(function(p){
+      if(!result[p.key]){
+        var m = txt.match(p.re);
+        if(m){
+          // Pour les labels qui apparaissent à gauche, la regex peut avaler du contenu du bloc Destinataire
+          // qui se trouve à droite (x>400). Donc on extrait juste la zone gauche (x<350) pour les labels.
+          var leftText = valueInBand(g, 0, 350);
+          var mLeft = leftText.match(p.re);
+          if(mLeft){
+            result[p.key] = mLeft[1].trim();
+          } else {
+            // Fallback : prendre le match complet mais nettoyer
+            result[p.key] = m[1].trim();
+          }
+        }
+      }
+    });
+  }
+  // Normaliser la date "15/04/2026" → "2026-04-15"
+  if(result.date){
+    var dm = result.date.match(/(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/);
+    if(dm){
+      var jj = dm[1].padStart(2,'0');
+      var mm = dm[2].padStart(2,'0');
+      var aa = dm[3].length===2 ? ('20'+dm[3]) : dm[3];
+      result.date = aa+'-'+mm+'-'+jj;
+    }
+  }
+  // Nettoyer le PO : "PO L72923" → on garde tel quel (l'utilisateur le verra)
+  if(result.po){
+    // Si le PO contient un email/adresse par accident (bloc Destinataire mal capturé), on tronque
+    if(result.po.indexOf('@')>=0) result.po = result.po.split('@')[0].split(/\s+/).slice(-1)[0] || '';
+  }
+
+  // ===== 3) Détection du CLIENT (bloc Destinataire, x≥400) =====
+  // Le bloc Destinataire est dans la colonne de droite. On cherche le 1er nom court
+  // (1-4 mots) en majuscules après le mot "Destinataire" ou après un email.
+  // Heuristique : on lit toutes les lignes avec items en x>=400, et on prend la première
+  // ligne courte SANS @ et sans chiffre (pour éviter d'attraper "BP 218", "98845 Nouméa...").
+  // Pour notre exemple : "PRNC" est en Y=591.
+  var destLines = [];
+  lineGroups.forEach(function(g){
+    var rightItems = g.items.filter(function(it){return it.x>=400;});
+    if(rightItems.length>0){
+      var txt = rightItems.map(function(p){return p.str;}).join(' ').replace(/\s+/g,' ').trim();
+      if(txt) destLines.push(txt);
+    }
+  });
+  // Trouver le 1er nom court qui suit "Destinataire" ou un email
+  var foundDestSection = false;
+  var clientCandidate = '';
+  for(var di=0;di<destLines.length;di++){
+    var dl = destLines[di];
+    if(/Destinataire/i.test(dl)){ foundDestSection = true; continue; }
+    if(!foundDestSection) continue;
+    // Sauter les emails (1ère ligne après Destinataire est souvent l'email)
+    if(dl.indexOf('@')>=0) continue;
+    // Candidat : court (1-4 mots), pas que des chiffres, pas une adresse type "BP 218"
+    var words = dl.split(/\s+/);
+    if(words.length>=1 && words.length<=4 && !/^\d/.test(dl) && !/^BP\b/i.test(dl) && !/Nouméa\s+Cedex/i.test(dl) && !/Nouvelle-Calédonie/i.test(dl)){
+      clientCandidate = dl;
+      break;
+    }
+  }
+  result.client = clientCandidate;
+  // Adresse destinataire : tout le bloc Destinataire après le client (et avant la fin du bloc)
+  if(foundDestSection){
+    // Collecter les lignes après le client jusqu'à un saut significatif
+    var startIdx = destLines.indexOf(clientCandidate);
+    if(startIdx>=0){
+      var addrLines = destLines.slice(startIdx+1).filter(function(l){
+        // Stop si on tombe sur un truc bancaire ou "Banque:"
+        return !/^(Banque|COMPTE|IBAN|BIC|Nom\s+du\s+propriétaire)/i.test(l);
+      });
+      // Ne garder que les 5 premières lignes "raisonnables" comme adresse
+      result.adrdest = addrLines.slice(0,5).join('\n');
+    }
+  }
+
+  // ===== 4) Tableau des lignes =====
+  // On localise la ligne du HEADER tableau : items "Item", "Part Number", "Quantités", ...
+  // Puis on lit les lignes suivantes en s'arrêtant à "TOTAL".
+  var headerIdx = -1;
+  var headerColumns = null; // {item:xStart, partNumber:xStart, qte:xStart, pu:xStart, total:xStart}
+  for(var hi=0; hi<lineGroups.length; hi++){
+    var hg = lineGroups[hi];
+    var htxt = lineText(hg);
+    if(/Item\b/i.test(htxt) && /Part\s*Number/i.test(htxt) && /(?:Quantités|Qté)/i.test(htxt) && /TOTAL/i.test(htxt)){
+      headerIdx = hi;
+      // Mémoriser les X de chaque mot-clé pour utiliser comme bornes de colonnes
+      var cols = {};
+      hg.items.forEach(function(it){
+        var s = it.str.trim();
+        if(/^Item$/i.test(s)) cols.item = it.x;
+        else if(/Part\s*Number/i.test(s)) cols.partNumber = it.x;
+        else if(/Quantités|Qté/i.test(s)) cols.qte = it.x;
+        else if(/Prix\s*unitaire|^PU$/i.test(s)) cols.pu = it.x;
+        else if(/TOTAL\s*HT/i.test(s)) cols.total = it.x;
+      });
+      // Bandes par défaut si certaines colonnes non détectées (template normal).
+      // ATTENTION : les bandes doivent être DISJOINTES — sinon des items du Part Number
+      // (x≈152) tomberaient dans la bande Item, et `itemCell` deviendrait "2 1410S2NA32AD4NAJ1"
+      // qui ne matche plus le regex /^(\d+)$/ → la ligne serait silencieusement ignorée.
+      // Largeur item ≈ x:[55, 110] (juste le chiffre), Part Number commence à x≈140.
+      headerColumns = {
+        itemMin: 50,
+        itemMax: 130,
+        partMin: 140,
+        partMax: (cols.qte || 370) - 10,
+        qteMin:  (cols.qte || 370) - 5,
+        qteMax:  (cols.pu || 430) - 5,
+        puMin:   (cols.pu || 430) - 5,
+        puMax:   (cols.total || 510) - 5,
+        totMin:  (cols.total || 510) - 5,
+        totMax:  600
+      };
+      break;
+    }
+  }
+  if(headerIdx<0){
+    result._parseErrors.push('En-tête de tableau introuvable (Item / Part Number / Quantités / TOTAL HT).');
+    return result;
+  }
+
+  // ===== Lire les lignes du tableau =====
+  // Pour chaque ligne après le header :
+  //   - si elle contient un nombre d'item dans la colonne Item → c'est une ligne logique
+  //   - sinon → c'est probablement la continuation d'une désignation multi-ligne
+  // On stoppe à la 1ère ligne contenant "TOTAL" en colonne PU ou label (Y sous le tableau)
+  var currentLine = null;
+  var inlineTotal = null; // pour récupérer le total imprimé en bas du tableau
+  // Buffer pour les fragments de désignation qui apparaissent AVANT le n° d'item.
+  // Exemple type (PDF Calinstrum) :
+  //   Y=455 : "SNG-A9530V3-T01 AUNZ / A43USER-1-0 /"       ← AVANT le n°
+  //   Y=450 : "1"  "Lot de 10"  "956707"  "956707"          ← ligne d'item
+  //   Y=445 : "A43-SYSTEM-0 / A43TAGS-500-0"                ← APRÈS le n°
+  // Sans buffer, le fragment Y=455 est perdu car currentLine est null à ce moment.
+  var pendingDesignation = '';
+
+  for(var ri=headerIdx+1; ri<lineGroups.length; ri++){
+    var rg = lineGroups[ri];
+    var rtxt = lineText(rg);
+    if(!rtxt) continue;
+
+    // Stop si on rencontre la ligne "TOTAL XXX" finale (cumul global)
+    // Pattern : item "TOTAL" en x≈400 et un nombre à droite
+    var totalCellItems = rg.items.filter(function(it){ return /^TOTAL$/i.test(it.str.trim()); });
+    if(totalCellItems.length>0){
+      // Capturer la valeur à droite de "TOTAL"
+      var afterTotal = rg.items.filter(function(it){return it.x>totalCellItems[0].x;});
+      if(afterTotal.length>0){
+        inlineTotal = afterTotal.map(function(p){return p.str;}).join('').replace(/\s+/g,'');
+        var nT = parseInt(inlineTotal.replace(/[^\d]/g,''),10);
+        if(!isNaN(nT)) result.total = nT;
+      }
+      break; // fin du tableau
+    }
+    // Stop aussi si on tombe sur "Visa du client" ou "Siège social"
+    if(/Visa\s+du\s+(client|fournisseur)|Siège\s+social/i.test(rtxt)) break;
+
+    // Extraire les valeurs par colonne
+    var itemCell = valueInBand(rg, headerColumns.itemMin, headerColumns.itemMax);
+    var partCell = valueInBand(rg, headerColumns.partMin, headerColumns.partMax);
+    var qteCell  = valueInBand(rg, headerColumns.qteMin,  headerColumns.qteMax);
+    var puCell   = valueInBand(rg, headerColumns.puMin,   headerColumns.puMax);
+    var totCell  = valueInBand(rg, headerColumns.totMin,  headerColumns.totMax);
+
+    // Détection : item présent ET nombre dans la colonne Item ?
+    var itemNumMatch = itemCell.match(/^(\d+)$/);
+    // Cas 1 : c'est une nouvelle ligne (item présent)
+    if(itemNumMatch){
+      // Pousser la ligne précédente
+      if(currentLine) result.lines.push(currentLine);
+      // Parser quantité : peut être "1", "10", "50", "Lot de 10", etc.
+      var qteVal = 1;
+      var qm = qteCell.match(/(\d+)/);
+      if(qm) qteVal = parseInt(qm[1],10);
+      // PU et Total : nettoyer espaces
+      var puVal = parseInt(puCell.replace(/[^\d]/g,''),10) || 0;
+      var totVal = parseInt(totCell.replace(/[^\d]/g,''),10) || 0;
+      // Construire la désignation en préfixant les fragments orphelins (apparus AVANT le n° item)
+      var initialDesc = pendingDesignation ? pendingDesignation : '';
+      pendingDesignation = ''; // consommé
+      // Vérif cohérence : qte * pu == tot ? (à ±2 d'arrondi, sinon on garde le tot imprimé)
+      // Pour les BL, le total est ce qui compte (peut être un montant forfaitaire type "Lot de N").
+      // On stocke pu et qte, le total est implicitement calculé par cBLtot.
+      currentLine = {
+        ref: partCell.trim(),
+        desc: '',  // rempli ci-dessous selon les cas
+        qte: qteVal,
+        pu: puVal,
+        _itemNum: parseInt(itemNumMatch[1],10),
+        _totPrinted: totVal,
+        _qteRaw: qteCell // pour debug / cas "Lot de N"
+      };
+      // === HEURISTIQUE "LOT DE N" ===
+      // Cas typique BL Calinstrum : "Lot de 10" + PU 956707 + TOTAL 956707
+      // Le PDF imprime le prix DU LOT (pas par unité), donc qte×pu donnerait 10x trop.
+      // Si on détecte que :
+      //   - la chaîne quantité contient "lot" (sans matcher juste un nombre simple)
+      //   - OU qte*pu ≠ totPrinted mais 1*pu == totPrinted (à 2 près pour arrondi)
+      // alors on force qte=1 (et on préserve "Lot de N" dans la désignation pour traçabilité).
+      var qteRawLow = (qteCell||'').toLowerCase();
+      var isLotForm = /\blot\s*de\s*\d/i.test(qteCell||'');
+      var qtPu = qteVal * puVal;
+      var matchesLotPrice = (totVal > 0) && (Math.abs(puVal - totVal) <= 2) && (Math.abs(qtPu - totVal) > 2);
+      if(isLotForm || matchesLotPrice){
+        // Préserver l'info "Lot de N" dans la désignation pour ne pas la perdre
+        var lotTag = (qteCell||'').trim();
+        if(lotTag && lotTag.toLowerCase().indexOf('lot') >= 0){
+          // Ajouter "(Lot de N)" au début de la désignation si pas déjà présent
+          var descSoFar = (initialDesc + ' ' + partCell.trim()).trim();
+          if(descSoFar.toLowerCase().indexOf('lot') < 0){
+            descSoFar = '['+lotTag+'] ' + descSoFar;
+          }
+          currentLine.desc = descSoFar.trim();
+          if(partCell.length > 30) currentLine.ref = '';
+        }
+        currentLine.qte = 1;
+      }
+      // Si ref est très longue (>30 chars) → c'est en fait la désignation, ref vide
+      if(partCell.length > 30 && !currentLine.desc){
+        currentLine.desc = (initialDesc + ' ' + partCell.trim()).trim();
+        currentLine.ref = '';
+      } else if(!currentLine.desc){
+        // Cas standard : ref courte (Part Number), desc = ref (pour rester intelligible côté UI)
+        // Si on a un fragment pré-item, on l'utilise comme désignation principale, et ref reste le Part Number
+        currentLine.desc = (initialDesc + ' ' + partCell.trim()).trim();
+      }
+    }
+    // Cas 2 : pas d'item dans la colonne Item, mais du contenu en Part Number → continuation
+    else if(currentLine && partCell.trim()){
+      // Ajouter à la désignation
+      if(currentLine.desc){
+        currentLine.desc += ' ' + partCell.trim();
+      } else {
+        currentLine.desc = partCell.trim();
+      }
+      // Si la ligne a aussi un total (cas rare où le n° item est sur l'autre Y mais le total dans cette ligne)
+      if(!currentLine._totPrinted){
+        var tt = parseInt(totCell.replace(/[^\d]/g,''),10);
+        if(!isNaN(tt) && tt>0) currentLine._totPrinted = tt;
+      }
+    }
+    // Cas 2bis : fragment de désignation avant le n° item (pas de currentLine encore, juste du texte en colonne Part Number)
+    // → buffer pour la prochaine ligne. Pas de qte/pu/tot attendu ici.
+    else if(!currentLine && partCell.trim() && !qteCell && !puCell){
+      pendingDesignation = (pendingDesignation ? pendingDesignation + ' ' : '') + partCell.trim();
+    }
+    // Cas 3 : item présent mais pas dans le format attendu (numéro avec offset Y bizarre)
+    // → on essaie quand même : si itemCell contient juste un chiffre, on traite comme cas 1
+    else if(itemCell.match(/^\d{1,3}$/) && (puCell || totCell)){
+      // Fallback : on traite comme nouvelle ligne même si itemNumMatch n'a pas matché strictement
+      if(currentLine) result.lines.push(currentLine);
+      var qVal2 = 1;
+      var qm2 = qteCell.match(/(\d+)/);
+      if(qm2) qVal2 = parseInt(qm2[1],10);
+      currentLine = {
+        ref: partCell.trim().substring(0, 80),
+        desc: partCell.trim(),
+        qte: qVal2,
+        pu: parseInt(puCell.replace(/[^\d]/g,''),10) || 0,
+        _itemNum: parseInt(itemCell,10),
+        _totPrinted: parseInt(totCell.replace(/[^\d]/g,''),10) || 0
+      };
+    }
+  }
+  // Pousser la dernière ligne
+  if(currentLine) result.lines.push(currentLine);
+
+  // Nettoyer : enlever les champs _* avant retour (debug only)
+  result.lines.forEach(function(l){
+    delete l._itemNum; delete l._totPrinted; delete l._qteRaw;
+  });
+
+  // Validation post-parse
+  if(result.lines.length===0){
+    result._parseErrors.push('Aucune ligne extraite du tableau.');
+  }
+  if(!result.num){
+    result._parseErrors.push('N° BL introuvable (cherché "Bon de livraison N° : …").');
+  }
+
+  return result;
+}
+
+// ---- MODAL APERÇU IMPORT BL ----
+// Affiche la liste des BL parsés avec tous les champs éditables.
+// L'utilisateur peut décocher des lignes, ajuster client (via select), N°, date, lignes,
+// puis valider l'import du batch.
+function showBLImportPreview(){
+  var existing = document.getElementById('mBLImport');
+  if(existing) existing.remove();
+
+  var modal = document.createElement('div');
+  modal.id='mBLImport';
+  modal.className='modal-overlay open';
+
+  // Options clients pour les dropdowns par BL
+  var clientOpts = '<option value="">— Aucun (à compléter manuellement) —</option>';
+  (DB.clients||[]).forEach(function(c){
+    clientOpts += '<option value="'+esc(c.nom)+'">'+esc(c.nom)+'</option>';
+  });
+
+  var nbToImport = _blImportState.items.filter(function(it){return it.parsed && !it.isDuplicate;}).length;
+  var nbDuplicates = _blImportState.items.filter(function(it){return it.isDuplicate;}).length;
+  var nbErrors = _blImportState.items.filter(function(it){return !it.parsed;}).length;
+
+  modal.innerHTML =
+    '<div class="modal modal-lg" style="max-width:1100px">'+
+      '<div class="modal-header">'+
+        '<h3>📥 Import BL PDF — '+_blImportState.items.length+' fichier(s)</h3>'+
+        '<button class="modal-close" onclick="cm(\'mBLImport\')">✕</button>'+
+      '</div>'+
+      '<div class="modal-body">'+
+        '<div style="background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.25);border-radius:6px;padding:10px;margin-bottom:12px;font-size:11.5px;color:var(--muted)">'+
+          '✅ <b>'+nbToImport+'</b> BL prêt(s) à être importé(s)'+
+          (nbDuplicates>0?' · 🔁 <b style="color:var(--amber)">'+nbDuplicates+'</b> doublon(s) (N° déjà existant, seront ignorés)':'')+
+          (nbErrors>0?' · ❌ <b style="color:var(--red)">'+nbErrors+'</b> erreur(s) de lecture':'')+
+          '<br><span style="font-size:10.5px">Vérifie chaque BL ci-dessous, ajuste si besoin, puis valide l\'import. Les lignes sont éditables individuellement.</span>'+
+        '</div>'+
+        '<div id="blImp-list" style="max-height:60vh;overflow-y:auto"></div>'+
+      '</div>'+
+      '<div class="modal-footer" style="display:flex;justify-content:space-between;gap:8px">'+
+        '<button class="btn btn-ghost" onclick="cm(\'mBLImport\')">Annuler</button>'+
+        '<button class="btn btn-teal" onclick="commitBLImport()">✓ Importer les BL cochés</button>'+
+      '</div>'+
+    '</div>';
+
+  document.body.appendChild(modal);
+  _renderBLImportList(clientOpts);
+}
+
+// Rend la liste des BL dans le modal (séparé pour pouvoir re-render après édition d'une ligne)
+function _renderBLImportList(clientOpts){
+  var listEl = document.getElementById('blImp-list');
+  if(!listEl) return;
+  listEl.innerHTML = _blImportState.items.map(function(item, idx){
+    if(!item.parsed){
+      return '<div style="background:rgba(244,63,94,.05);border:1px solid rgba(244,63,94,.3);border-radius:6px;padding:10px;margin-bottom:8px">'+
+        '<div style="color:var(--red);font-weight:700">❌ '+esc(item.fileName)+'</div>'+
+        '<div style="font-size:10.5px;color:var(--muted);margin-top:4px">'+esc(item.error||'Erreur inconnue')+'</div>'+
+      '</div>';
+    }
+    var p = item.parsed;
+    var cardBg = item.isDuplicate ? 'rgba(245,158,11,.06)' : 'rgba(45,212,191,.04)';
+    var cardBorder = item.isDuplicate ? 'rgba(245,158,11,.3)' : 'rgba(45,212,191,.2)';
+    var statusBadge = item.isDuplicate
+      ? '<span style="background:rgba(245,158,11,.2);color:#fbbf24;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700">🔁 DOUBLON (sera ignoré)</span>'
+      : '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--teal);cursor:pointer"><input type="checkbox" data-blimp-idx="'+idx+'" '+(item._unchecked?'':'checked')+' onchange="_toggleBLImportItem('+idx+',this.checked)"> ✓ Importer</label>';
+
+    // Construire le HTML des lignes (éditables)
+    var linesHTML = (p.lines||[]).map(function(l, li){
+      return '<tr>'+
+        '<td style="padding:3px 5px;font-size:10.5px;color:var(--muted)">'+(li+1)+'</td>'+
+        '<td style="padding:3px 5px"><input class="form-input" style="width:100%;font-size:11px;padding:3px 5px;font-family:monospace" value="'+esc(l.ref||'')+'" data-blimp-line="'+idx+':'+li+':ref"></td>'+
+        '<td style="padding:3px 5px"><input class="form-input" style="width:100%;font-size:11px;padding:3px 5px" value="'+esc(l.desc||'')+'" data-blimp-line="'+idx+':'+li+':desc"></td>'+
+        '<td style="padding:3px 5px"><input type="number" class="form-input" style="width:60px;font-size:11px;padding:3px 5px" value="'+(l.qte||0)+'" data-blimp-line="'+idx+':'+li+':qte"></td>'+
+        '<td style="padding:3px 5px"><input type="number" class="form-input" style="width:90px;font-size:11px;padding:3px 5px" value="'+(l.pu||0)+'" data-blimp-line="'+idx+':'+li+':pu"></td>'+
+        '<td style="padding:3px 5px;text-align:center"><button onclick="_delBLImportLine('+idx+','+li+')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:13px" title="Supprimer cette ligne">✕</button></td>'+
+      '</tr>';
+    }).join('');
+
+    // Calcul total prévu (somme qte*pu) — pour comparaison avec total détecté
+    var calcTotal = (p.lines||[]).reduce(function(s,l){return s+(Number(l.qte)||0)*(Number(l.pu)||0);},0);
+    var totalDiff = '';
+    if(p.total && Math.abs(p.total - calcTotal) > 5){
+      totalDiff = ' <span style="color:var(--amber);font-size:10px" title="Total PDF ('+fN(p.total)+') ≠ somme des lignes ('+fN(calcTotal)+')">⚠ Écart total</span>';
+    }
+    // Erreurs de parsing
+    var errorsHTML = '';
+    if(p._parseErrors && p._parseErrors.length){
+      errorsHTML = '<div style="background:rgba(245,158,11,.08);border-left:3px solid #f59e0b;padding:5px 8px;margin:4px 0 8px;font-size:10.5px;color:#fbbf24">⚠ '+p._parseErrors.map(esc).join(' · ')+'</div>';
+    }
+
+    return '<div style="background:'+cardBg+';border:1px solid '+cardBorder+';border-radius:6px;padding:10px;margin-bottom:10px" data-blimp-card="'+idx+'">'+
+      // Header de la carte
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:10px">'+
+        '<div style="font-size:11px;color:var(--muted);font-family:monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 '+esc(item.fileName)+'</div>'+
+        statusBadge+
+      '</div>'+
+      errorsHTML+
+      // Champs en-tête éditables (grid 3 colonnes)
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">'+
+        '<div>'+
+          '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">N° BL</label>'+
+          '<input class="form-input" style="margin-top:2px" value="'+esc(p.num||'')+'" data-blimp="'+idx+':num">'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Date</label>'+
+          '<input type="date" class="form-input" style="margin-top:2px" value="'+esc(p.date||'')+'" data-blimp="'+idx+':date">'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Lieu</label>'+
+          '<input class="form-input" style="margin-top:2px" value="'+esc(p.lieu||'')+'" data-blimp="'+idx+':lieu">'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">N° PO Client</label>'+
+          '<input class="form-input" style="margin-top:2px" value="'+esc(p.po||'')+'" data-blimp="'+idx+':po">'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Contact</label>'+
+          '<input class="form-input" style="margin-top:2px" value="'+esc(p.contact||'')+'" data-blimp="'+idx+':contact">'+
+        '</div>'+
+        '<div>'+
+          '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Émis par</label>'+
+          '<input class="form-input" style="margin-top:2px" value="'+esc(p.emis||'Fabrice RIZZO')+'" data-blimp="'+idx+':emis">'+
+        '</div>'+
+      '</div>'+
+      // Client : select PRIORITAIRE (avec mention du client détecté brut)
+      '<div style="margin-bottom:8px">'+
+        '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Client final '+(p.client?'<span style="color:var(--teal);text-transform:none;letter-spacing:0;font-weight:400">(détecté : <b>'+esc(p.client)+'</b>)</span>':'<span style="color:var(--red);text-transform:none;letter-spacing:0;font-weight:400">(non détecté)</span>')+'</label>'+
+        '<select class="form-select" style="margin-top:2px" data-blimp="'+idx+':client">'+
+          _buildBLImportClientOptions(p.client, clientOpts)+
+        '</select>'+
+      '</div>'+
+      // Lignes (table éditable)
+      '<div style="background:rgba(0,0,0,.15);border-radius:4px;padding:6px;margin-top:6px">'+
+        '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:4px">'+(p.lines||[]).length+' ligne(s) détectée(s) — Total : <b style="color:var(--teal)">'+fN(calcTotal)+' XPF</b>'+totalDiff+'</div>'+
+        '<table style="width:100%;font-size:11px">'+
+          '<thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase">'+
+            '<th style="text-align:left;padding:3px 5px">#</th>'+
+            '<th style="text-align:left;padding:3px 5px">Réf / Part Number</th>'+
+            '<th style="text-align:left;padding:3px 5px">Désignation</th>'+
+            '<th style="text-align:left;padding:3px 5px">Qté</th>'+
+            '<th style="text-align:left;padding:3px 5px">PU</th>'+
+            '<th></th>'+
+          '</tr></thead>'+
+          '<tbody>'+linesHTML+'</tbody>'+
+        '</table>'+
+        '<button onclick="_addBLImportLine('+idx+')" style="margin-top:5px;padding:3px 8px;border:1px dashed rgba(45,212,191,.4);background:rgba(45,212,191,.05);color:var(--teal);border-radius:3px;cursor:pointer;font-size:10.5px">+ Ajouter une ligne</button>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+
+  // Attacher les listeners pour les inputs (édition inline du state)
+  // - data-blimp="<idx>:<field>"  → champ en-tête
+  // - data-blimp-line="<idx>:<li>:<field>" → champ de ligne
+  listEl.querySelectorAll('[data-blimp]').forEach(function(inp){
+    inp.addEventListener('input', function(){
+      var parts = this.getAttribute('data-blimp').split(':');
+      var idx = parseInt(parts[0],10), field = parts[1];
+      if(_blImportState.items[idx] && _blImportState.items[idx].parsed){
+        var val = this.value;
+        // Conversion numérique pour les champs adéquats (aucun pour l'en-tête en fait)
+        _blImportState.items[idx].parsed[field] = val;
+      }
+    });
+  });
+  listEl.querySelectorAll('[data-blimp-line]').forEach(function(inp){
+    inp.addEventListener('input', function(){
+      var parts = this.getAttribute('data-blimp-line').split(':');
+      var idx = parseInt(parts[0],10), li = parseInt(parts[1],10), field = parts[2];
+      var item = _blImportState.items[idx];
+      if(item && item.parsed && item.parsed.lines && item.parsed.lines[li]){
+        var val = (field==='qte'||field==='pu') ? (Number(this.value)||0) : this.value;
+        item.parsed.lines[li][field] = val;
+      }
+    });
+  });
+}
+
+// Helper : construit le <option> pour le select client en pré-sélectionnant
+// la meilleure correspondance (match exact ou par préfixe sur le client détecté).
+function _buildBLImportClientOptions(detectedClient, baseOpts){
+  if(!detectedClient){
+    // Pas de détection : rendre le select avec "Aucun" pré-sélectionné
+    return baseOpts;
+  }
+  // Match exact ?
+  var exactMatch = (DB.clients||[]).find(function(c){return c.nom===detectedClient;});
+  if(exactMatch){
+    return baseOpts.replace('value="'+esc(detectedClient)+'"', 'value="'+esc(detectedClient)+'" selected');
+  }
+  // Match par préfixe (ex: "PRNC" → "PRNC - Christopher FICHTER")
+  // On prend le 1er client dont le nom commence par la valeur détectée + ' - '
+  var prefixMatch = (DB.clients||[]).find(function(c){return c.nom.indexOf(detectedClient + ' - ')===0 || c.nom.indexOf(detectedClient + ' -')===0;});
+  if(prefixMatch){
+    return baseOpts.replace('value="'+esc(prefixMatch.nom)+'"', 'value="'+esc(prefixMatch.nom)+'" selected');
+  }
+  // Match insensible à la casse
+  var lower = detectedClient.toLowerCase();
+  var ciMatch = (DB.clients||[]).find(function(c){return c.nom.toLowerCase().indexOf(lower)>=0;});
+  if(ciMatch){
+    return baseOpts.replace('value="'+esc(ciMatch.nom)+'"', 'value="'+esc(ciMatch.nom)+'" selected');
+  }
+  return baseOpts;
+}
+
+function _toggleBLImportItem(idx, checked){
+  if(_blImportState.items[idx]){
+    _blImportState.items[idx]._unchecked = !checked;
+  }
+}
+
+function _delBLImportLine(idx, lineIdx){
+  var item = _blImportState.items[idx];
+  if(item && item.parsed && item.parsed.lines){
+    item.parsed.lines.splice(lineIdx,1);
+    // Re-render la carte (simple : re-render tout)
+    var clientOpts = '<option value="">— Aucun (à compléter manuellement) —</option>';
+    (DB.clients||[]).forEach(function(c){
+      clientOpts += '<option value="'+esc(c.nom)+'">'+esc(c.nom)+'</option>';
+    });
+    _renderBLImportList(clientOpts);
+  }
+}
+
+function _addBLImportLine(idx){
+  var item = _blImportState.items[idx];
+  if(item && item.parsed){
+    if(!Array.isArray(item.parsed.lines)) item.parsed.lines = [];
+    item.parsed.lines.push({ref:'',desc:'',qte:1,pu:0});
+    var clientOpts = '<option value="">— Aucun (à compléter manuellement) —</option>';
+    (DB.clients||[]).forEach(function(c){
+      clientOpts += '<option value="'+esc(c.nom)+'">'+esc(c.nom)+'</option>';
+    });
+    _renderBLImportList(clientOpts);
+  }
+}
+
+// ---- COMMIT : créer les BL en base ----
+function commitBLImport(){
+  var nbCreated = 0, nbSkipped = 0, nbErrors = 0;
+  // Snapshot pour undo
+  var snapshot = JSON.parse(JSON.stringify(DB.bls||[]));
+  var createdIds = []; // pour pouvoir rollback dans l'undo
+
+  _blImportState.items.forEach(function(item){
+    if(!item.parsed){ nbErrors++; return; }
+    if(item.isDuplicate){ nbSkipped++; return; }
+    if(item._unchecked){ nbSkipped++; return; }
+    var p = item.parsed;
+    if(!p.num){ nbErrors++; return; }
+    // Re-check anti-doublon au moment du commit (DB peut avoir bougé)
+    if((DB.bls||[]).find(function(b){return (b.num||'')===p.num;})){
+      nbSkipped++; return;
+    }
+    // Construire l'objet BL au format attendu (cf openBL/saveBL)
+    var bl = {
+      id: Date.now() + Math.floor(Math.random()*1000) + nbCreated, // unicité même en boucle rapide
+      num: p.num,
+      date: p.date || td(),
+      lieu: p.lieu || 'NOUMEA',
+      client: p.client || '',
+      contact: p.contact || '',
+      adrdest: p.adrdest || '',
+      emaildest: '', // pas dans le PDF
+      po: p.po || '',
+      emis: p.emis || 'Fabrice RIZZO',
+      status: 'Livré', // par défaut : un BL importé d'un PDF historique a déjà été livré
+      lines: (p.lines||[]).map(function(l){return {ref:l.ref||'', desc:l.desc||'', qte:Number(l.qte)||1, pu:Number(l.pu)||0};}),
+      total: (p.lines||[]).reduce(function(s,l){return s+(Number(l.qte)||0)*(Number(l.pu)||0);},0),
+      _importedFromPdf: true, // marqueur traçabilité
+      _importedAt: new Date().toISOString()
+    };
+    DB.bls.push(bl);
+    createdIds.push(bl.id);
+    nbCreated++;
+  });
+
+  saveDB();
+  cm('mBLImport');
+  if(typeof renderBL==='function') renderBL();
+  if(typeof rDash==='function') rDash();
+  if(typeof renderHist==='function') renderHist();
+
+  // Push undo si au moins 1 BL créé
+  if(nbCreated>0){
+    var undoLabel = 'Import '+nbCreated+' BL PDF';
+    pushUndo(undoLabel, function(){
+      // Restaurer l'état pré-import
+      DB.bls = snapshot;
+      saveDB();
+      if(typeof renderBL==='function') renderBL();
+      if(typeof rDash==='function') rDash();
+      if(typeof renderHist==='function') renderHist();
+    });
+  }
+
+  // Rapport final
+  var msg = '✅ Import BL terminé !\n\n';
+  msg += '• '+nbCreated+' BL créé'+(nbCreated>1?'s':'')+'\n';
+  if(nbSkipped>0) msg += '• '+nbSkipped+' BL ignoré'+(nbSkipped>1?'s':'')+' (doublon, décoché ou erreur)\n';
+  if(nbErrors>0) msg += '• '+nbErrors+' erreur'+(nbErrors>1?'s':'')+' de lecture\n';
   alert(msg);
 }
 
