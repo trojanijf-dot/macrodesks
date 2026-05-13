@@ -1065,6 +1065,9 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <option value="ttc-desc">💰 Montant ↓</option>
       <option value="ttc-asc">💰 Montant ↑</option>
     </select>
+    <button class="btn btn-ghost btn-sm" onclick="openExternalRefSearch()" title="Rechercher une cotation par sa référence Emerson, ACT ou PO Calinstrum" style="font-size:11px;padding:5px 10px;border-color:rgba(124,58,237,0.4);color:#c4b5fd;white-space:nowrap">
+      🔍 Réf. externe
+    </button>
   </div>
   <!-- Onglets horizontaux clients (Tous + 1 par client trouvé). Cliquer sur un onglet = filtre actif.
        Drag-and-drop pour réorganiser l'ordre (persisté dans localStorage). -->
@@ -1553,12 +1556,13 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
                 <option value="envoye">1. Devis envoyé</option>
                 <option value="bc_recu">2. BC client reçu</option>
                 <option value="po_emerson">3. PO Emerson envoyé</option>
-                <option value="confirm_emerson">4. Confirmation Emerson</option>
-                <option value="production">5. En production</option>
-                <option value="expedie">6. Expédié</option>
-                <option value="receptionne">7. Réceptionné</option>
-                <option value="debut_chantier">8. Début chantier</option>
-                <option value="fin_chantier_pv">9. Fin chantier + PV</option>
+                <option value="production">4. Production (Ack Emerson)</option>
+                <option value="sortie_usine">5. Sortie usine Melbourne</option>
+                <option value="transit_aus">6. Transit AUS→NC</option>
+                <option value="receptionne">7. Réceptionné Nouméa</option>
+                <option value="livre_client">8. Livré client</option>
+                <option value="debut_chantier">8b. Début chantier (Presta)</option>
+                <option value="fin_chantier_pv">9. Fin chantier + PV (Presta)</option>
                 <option value="facture">10. Facturé client</option>
               </select>
             </div>
@@ -3338,6 +3342,10 @@ setTimeout(function(){
     try{ migrateLegacyEmisePhase(); }
     catch(e){ console.warn('[CALINSTRUM] Migration legacy phase="" échouée :', e); }
   }
+  if(typeof migrateLegacyDevisPhases==='function'){
+    try{ migrateLegacyDevisPhases(); }
+    catch(e){ console.warn('[CALINSTRUM] Migration phases devis échouée :', e); }
+  }
   if(typeof migrateDateReceptionBC==='function'){
     try{ migrateDateReceptionBC(); }
     catch(e){ console.warn('[CALINSTRUM] Migration dateReceptionBC échouée :', e); }
@@ -4339,6 +4347,83 @@ function migrateLegacyEmisePhase(){
     try{ saveDB(); }catch(e){ console.warn('saveDB après migration a échoué :', e); }
   }
   return migrated;
+}
+
+// =============================================================================
+// MIGRATION DES PHASES DEVIS — Cycle 8 étapes → 9 étapes (mai 2026)
+// =============================================================================
+// Refactor du cycle : Confirmation Emerson + Production → fusionnées en "Production"
+// + ajout de "Sortie usine Melbourne" + ajout de "Livré client"
+// + renommage 'expedie' → 'transit_aus'
+//
+// Migrations effectuées (idempotentes, basées sur le flag d._phasesMigrated_v2) :
+//   1. confirm_emerson → production (en gardant la PLUS ANCIENNE date des 2,
+//      car c'est l'Ack qui marque le début de production)
+//   2. expedie → transit_aus (renommage 1-to-1)
+//
+// Les phases dépréciées sont retirées du phaseHistory après migration pour éviter
+// les doublons à l'affichage.
+// =============================================================================
+function migrateLegacyDevisPhases(){
+  if(!DB.devis || !Array.isArray(DB.devis)) return 0;
+  var migratedCount=0;
+  DB.devis.forEach(function(d){
+    if(d._phasesMigrated_v2) return; // déjà migré
+    if(!Array.isArray(d.phaseHistory) || d.phaseHistory.length===0){
+      d._phasesMigrated_v2=true;
+      return;
+    }
+    var changed=false;
+    // --- 1. confirm_emerson → production (fusion) ---
+    var confirmEntries=d.phaseHistory.filter(function(e){return e.phase==='confirm_emerson';});
+    var prodEntries=d.phaseHistory.filter(function(e){return e.phase==='production';});
+    if(confirmEntries.length>0){
+      // Si on a aussi production, on garde la PLUS ANCIENNE des 2 dates
+      // (l'Ack Emerson est le vrai marqueur de démarrage)
+      var confirmDate=confirmEntries[0].date||'';
+      var prodDate=prodEntries.length>0?(prodEntries[0].date||''):'';
+      var keepDate=confirmDate;
+      if(prodDate && confirmDate){
+        keepDate=(confirmDate<prodDate)?confirmDate:prodDate;
+      } else if(prodDate && !confirmDate){
+        keepDate=prodDate;
+      }
+      // Retirer toutes les entrées confirm_emerson ET production
+      d.phaseHistory=d.phaseHistory.filter(function(e){
+        return e.phase!=='confirm_emerson' && e.phase!=='production';
+      });
+      // Ajouter la nouvelle entrée production fusionnée
+      if(keepDate){
+        d.phaseHistory.push({phase:'production',date:keepDate,_migrated:true});
+      }
+      changed=true;
+    }
+    // --- 2. expedie → transit_aus (renommage) ---
+    var renamed=0;
+    d.phaseHistory.forEach(function(e){
+      if(e.phase==='expedie'){
+        e.phase='transit_aus';
+        e._migrated=true;
+        renamed++;
+      }
+    });
+    if(renamed>0) changed=true;
+    // Re-tri chronologique
+    if(changed){
+      d.phaseHistory.sort(function(a,b){
+        return (a.date||'').localeCompare(b.date||'');
+      });
+      d._phasesMigrated_v2=true;
+      migratedCount++;
+    } else {
+      d._phasesMigrated_v2=true;
+    }
+  });
+  if(migratedCount>0){
+    console.log('[CALINSTRUM] Migration phases devis v2 : '+migratedCount+' devis migré(s) (8 étapes → 9 étapes)');
+    try{ saveDB(); }catch(e){ console.warn('saveDB après migration phases devis échoué :', e); }
+  }
+  return migratedCount;
 }
 
 // =============================================================================
@@ -8764,13 +8849,28 @@ var PHASES_META={
   'envoye':           {idx:1, label:'Devis envoyé',         color:'#88aae0', icon:'send',          pill:'p-info',          applicableTo:['Fourniture','Prestation','Mixte']},
   'bc_recu':          {idx:2, label:'BC client reçu',       color:'#5dcaa5', icon:'mail-check',    pill:'p-success',       applicableTo:['Fourniture','Prestation','Mixte']},
   'po_emerson':       {idx:3, label:'PO Emerson envoyé',    color:'#818cf8', icon:'arrow-up-right',pill:'p-indigo',        applicableTo:['Fourniture']},
-  'confirm_emerson':  {idx:4, label:'Confirmation Emerson', color:'#22d3ee', icon:'check',         pill:'p-cyan',          applicableTo:['Fourniture']},
-  'production':       {idx:5, label:'En production',        color:'#ef9f27', icon:'tools',         pill:'p-warning',       applicableTo:['Fourniture']},
-  'expedie':          {idx:6, label:'Expédié',              color:'#a78bfa', icon:'truck-delivery',pill:'p-purple',        applicableTo:['Fourniture']},
-  'receptionne':      {idx:7, label:'Réceptionné',          color:'#86efac', icon:'package-import',pill:'p-success-soft',  applicableTo:['Fourniture']},
+  // Production = Acknowledgment Emerson reçu = Emerson confirme avoir reçu la PO Calinstrum
+  // et lance la production. C'est la seule donnée disponible côté production (pas de
+  // "fin de prod" séparée — la donnée suivante est "Sortie usine" = livré au transitaire).
+  'production':       {idx:4, label:'Production (Ack Emerson)', color:'#ef9f27', icon:'tools',     pill:'p-warning',       applicableTo:['Fourniture']},
+  // Sortie usine = marchandise livrée par Emerson au transitaire à Melbourne
+  'sortie_usine':     {idx:5, label:'Sortie usine Melbourne', color:'#fb923c', icon:'package',     pill:'p-warning',       applicableTo:['Fourniture']},
+  // Transit AUS→NC = transitaire achemine Sydney → Nouméa par avion (ancienne phase 'expedie')
+  'transit_aus':      {idx:6, label:'Transit AUS→NC',       color:'#a78bfa', icon:'truck-delivery',pill:'p-purple',        applicableTo:['Fourniture']},
+  'receptionne':      {idx:7, label:'Réceptionné Nouméa',   color:'#86efac', icon:'package-import',pill:'p-success-soft',  applicableTo:['Fourniture']},
+  // Livré client = Calinstrum livre la marchandise au client final
+  'livre_client':     {idx:8, label:'Livré client',         color:'#34d399', icon:'truck-loading', pill:'p-success',       applicableTo:['Fourniture']},
   'debut_chantier':   {idx:8, label:'Début chantier',       color:'#f59e0b', icon:'pick',          pill:'p-warning',       applicableTo:['Prestation','Mixte']},
   'fin_chantier_pv':  {idx:9, label:'Fin chantier + PV',    color:'#10b981', icon:'file-check',    pill:'p-success',       applicableTo:['Prestation','Mixte']},
-  'facture':          {idx:10,label:'Facturé client',       color:'#7c3aed', icon:'receipt',       pill:'p-purple-deep',   applicableTo:['Fourniture','Prestation','Mixte']}
+  'facture':          {idx:10,label:'Facturé client',       color:'#7c3aed', icon:'receipt',       pill:'p-purple-deep',   applicableTo:['Fourniture','Prestation','Mixte']},
+  // === Phases dépréciées conservées pour rétrocompat lecture des anciens devis ===
+  // Ces phases sont migrées au boot vers leurs équivalents nouveaux :
+  //   confirm_emerson → production (Ack Emerson)
+  //   expedie         → transit_aus
+  // Elles ne doivent PAS être proposées dans les nouveaux sélecteurs UI mais peuvent
+  // encore apparaître dans le phaseHistory d'un devis pré-migration.
+  'confirm_emerson':  {idx:4, label:'Confirmation Emerson (deprecated)', color:'#22d3ee', icon:'check', pill:'p-cyan', applicableTo:['Fourniture'], _deprecated:true, _migrateTo:'production'},
+  'expedie':          {idx:6, label:'Expédié (deprecated)',  color:'#a78bfa', icon:'truck-delivery', pill:'p-purple', applicableTo:['Fourniture'], _deprecated:true, _migrateTo:'transit_aus'}
 };
 
 // Helpers Phases - getCurrentPhase, isApplicable, getNextApplicable
@@ -8855,22 +8955,23 @@ function _buildPhaseHistory(d){
   if(invLinked){
     var ip=invLinked.phase||'';
     var dEnv=invLinked.dateEnvoi||'';
-    // 4. Confirmation Emerson : si phase invoice >= emerson, on suppose la date d'envoi
-    //    Note : c'est une approximation, la confirmation Emerson arrive après le PO Cali
+    // 4. Production (= Acknowledgment Emerson) : si la facture est en phase Emerson ou plus avancée
+    //    Approximation : la prod démarre quand Emerson confirme la PO (= Ack).
+    //    NOTE : on n'ajoute plus 'confirm_emerson' (déprécié, fusionné avec 'production').
     if(['emerson','chantier_attente','chantier_cours','transit','recu','livre'].indexOf(ip)>=0 && dEnv){
-      add('confirm_emerson',dEnv,true);
-    }
-    // 5. En production : phase invoice 'emerson' ou 'chantier_cours' ou 'chantier_attente'
-    if(['emerson','chantier_attente','chantier_cours'].indexOf(ip)>=0 && dEnv){
       add('production',dEnv,true);
     }
-    // 6. Expédié : phase invoice 'transit'
+    // 5. Transit AUS→NC : phase invoice 'transit' (remplace ancienne 'expedie')
     if(['transit','recu','livre'].indexOf(ip)>=0 && dEnv){
-      add('expedie',dEnv,true);
+      add('transit_aus',dEnv,true);
     }
-    // 7. Réceptionné : phase invoice 'recu' ou 'livre'
+    // 6. Réceptionné Nouméa : phase invoice 'recu' ou 'livre'
     if(['recu','livre'].indexOf(ip)>=0 && dEnv){
       add('receptionne',dEnv,true);
+    }
+    // 7. Livré client : phase invoice 'livre' (= marchandise livrée au client final)
+    if(ip==='livre' && dEnv){
+      add('livre_client',dEnv,true);
     }
   }
 
@@ -10031,6 +10132,186 @@ function _openManualFactureLinker(devisId){
     }
   };
   document.addEventListener('keydown',escH);
+}
+
+// =============================================================================
+// openExternalRefSearch — Recherche unifiée Emerson / ACT / PO Calinstrum
+// =============================================================================
+// Ouvre une modale avec un champ recherche live qui matche sur les 3 réfs
+// externes d'un devis (refEmerson, refACT, poCalinstrum). Chaque résultat
+// affiche le devis avec ses 3 réfs et un highlight jaune sur la portion matchée.
+// =============================================================================
+function openExternalRefSearch(){
+  // Fermer toute instance existante
+  var existing=document.getElementById('mExtRefSearch');
+  if(existing) existing.remove();
+  var modal=document.createElement('div');
+  modal.id='mExtRefSearch';
+  modal.style.cssText='position:fixed;z-index:100001;top:50%;left:50%;transform:translate(-50%,-50%);'+
+    'background:#161922;border:1px solid rgba(124,58,237,0.4);border-radius:10px;'+
+    'box-shadow:0 12px 40px rgba(0,0,0,0.7);padding:0;width:680px;max-width:calc(100vw - 24px);'+
+    'max-height:80vh;display:flex;flex-direction:column;font-family:Inter,system-ui,sans-serif';
+  modal.innerHTML=
+    // Header
+    '<div style="padding:12px 16px;background:linear-gradient(135deg,rgba(124,58,237,0.18) 0%,rgba(124,58,237,0.06) 100%);border-bottom:1px solid rgba(124,58,237,0.25);border-radius:10px 10px 0 0;flex-shrink:0">'+
+      '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px">'+
+        '<div>'+
+          '<div style="font-size:9.5px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;display:flex;align-items:center;gap:5px">'+
+            '<i class="ti ti-search" style="font-size:11px"></i> Recherche par référence externe'+
+          '</div>'+
+          '<div style="font-size:12px;color:rgba(255,255,255,0.75)">Devis Emerson · Cotation ACT · PO Calinstrum</div>'+
+        '</div>'+
+        '<button onclick="document.getElementById(\'mExtRefSearch\').remove();var b=document.getElementById(\'extref-backdrop\');if(b)b.remove();" '+
+          'style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.6);'+
+          'cursor:pointer;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;'+
+          'font-size:14px;flex-shrink:0;line-height:1" title="Fermer (Échap)">✕</button>'+
+      '</div>'+
+    '</div>'+
+    // Search bar
+    '<div style="padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.05);flex-shrink:0">'+
+      '<input type="text" id="extref-search" placeholder="N° proposition Emerson, cotation ACT, PO Calinstrum, partiel..." '+
+        'style="width:100%;padding:10px 14px;background:rgba(0,0,0,0.25);border:1px solid rgba(124,58,237,0.30);border-radius:6px;color:#fff;font-size:13px;font-family:JetBrains Mono,monospace;outline:none;box-sizing:border-box" autofocus>'+
+      '<div style="font-size:9.5px;color:rgba(255,255,255,0.4);margin-top:6px">'+
+        '<i class="ti ti-bulb" style="font-size:10px;vertical-align:-1px"></i> '+
+        'Tape au moins 2 caractères. Match insensible à la casse sur les 3 références (préfixe ou contenu).'+
+      '</div>'+
+    '</div>'+
+    // Body
+    '<div id="extref-results" style="padding:10px;overflow-y:auto;flex:1;min-height:240px">'+
+      '<div style="padding:36px 14px;text-align:center;color:rgba(255,255,255,0.35);font-size:11.5px">'+
+        '<i class="ti ti-search" style="font-size:24px;display:block;margin-bottom:8px;opacity:0.4"></i>'+
+        'Commence à taper pour voir les résultats'+
+      '</div>'+
+    '</div>';
+
+  // Backdrop
+  var backdrop=document.createElement('div');
+  backdrop.id='extref-backdrop';
+  backdrop.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:100000;'+
+    'background:rgba(0,0,0,0.45);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)';
+  backdrop.onclick=function(){
+    var m=document.getElementById('mExtRefSearch');if(m)m.remove();
+    backdrop.remove();
+  };
+  document.body.appendChild(backdrop);
+  document.body.appendChild(modal);
+
+  // Wire la recherche
+  var inp=document.getElementById('extref-search');
+  if(inp){
+    setTimeout(function(){inp.focus();},50);
+    inp.addEventListener('input',function(){_runExternalRefSearch(this.value);});
+  }
+
+  // Échap
+  var escH=function(ev){
+    if(ev.key==='Escape'){
+      var m=document.getElementById('mExtRefSearch');if(m)m.remove();
+      var b=document.getElementById('extref-backdrop');if(b)b.remove();
+      document.removeEventListener('keydown',escH);
+    }
+  };
+  document.addEventListener('keydown',escH);
+}
+
+// Effectue la recherche et met à jour la liste des résultats
+function _runExternalRefSearch(query){
+  var results=document.getElementById('extref-results');
+  if(!results) return;
+  var q=(query||'').trim();
+  if(q.length<2){
+    results.innerHTML='<div style="padding:36px 14px;text-align:center;color:rgba(255,255,255,0.35);font-size:11.5px">'+
+      '<i class="ti ti-search" style="font-size:24px;display:block;margin-bottom:8px;opacity:0.4"></i>'+
+      'Tape au moins 2 caractères'+
+    '</div>';
+    return;
+  }
+  var qLow=q.toLowerCase();
+  // Filtrer les devis qui ont au moins une réf externe matchant la requête
+  // On normalise sans tirets/espaces pour des recherches plus tolérantes
+  function _norm(s){return (s||'').toString().toLowerCase().replace(/[\s\-\/_]/g,'');}
+  var qNorm=_norm(q);
+  var matches=[];
+  (DB.devis||[]).forEach(function(d){
+    var emerson=(d.refEmerson||'').toString();
+    var act=(d.refACT||'').toString();
+    var poCali=(d.poCalinstrum||'').toString();
+    var hitEmerson=emerson && (emerson.toLowerCase().indexOf(qLow)>=0 || _norm(emerson).indexOf(qNorm)>=0);
+    var hitAct=act && (act.toLowerCase().indexOf(qLow)>=0 || _norm(act).indexOf(qNorm)>=0);
+    var hitPo=poCali && (poCali.toLowerCase().indexOf(qLow)>=0 || _norm(poCali).indexOf(qNorm)>=0);
+    if(hitEmerson || hitAct || hitPo){
+      matches.push({d:d,hitEmerson:hitEmerson,hitAct:hitAct,hitPo:hitPo});
+    }
+  });
+  // Tri : devis récents d'abord
+  matches.sort(function(a,b){return (b.d.date||'').localeCompare(a.d.date||'');});
+  if(matches.length===0){
+    results.innerHTML='<div style="padding:36px 14px;text-align:center;color:rgba(255,255,255,0.4);font-size:11.5px;font-style:italic">'+
+      '<i class="ti ti-mood-confuzed" style="font-size:24px;display:block;margin-bottom:8px;opacity:0.5"></i>'+
+      'Aucune cotation ne correspond à "'+esc(q)+'"'+
+    '</div>';
+    return;
+  }
+  // Helper pour highlight du terme matché
+  function _highlight(text,query){
+    if(!text) return '<span style="color:rgba(255,255,255,0.3);font-style:italic">—</span>';
+    var t=String(text);
+    var i=t.toLowerCase().indexOf(query.toLowerCase());
+    if(i<0) return esc(t);
+    return esc(t.substring(0,i))+
+      '<mark style="background:rgba(251,191,36,0.30);color:#fbd24a;padding:0 2px;border-radius:2px;font-weight:600">'+
+      esc(t.substring(i,i+query.length))+
+      '</mark>'+
+      esc(t.substring(i+query.length));
+  }
+  // Helper formatage devise
+  function _fNloc(n){return (typeof fNloc==='function')?fNloc(n):String(n);}
+  function _fmtD(s){return (typeof _fmtDateShort==='function')?_fmtDateShort(s):(s||'—');}
+
+  var html='<div style="font-size:9.5px;color:rgba(255,255,255,0.5);margin-bottom:8px;padding:0 4px">'+
+    matches.length+' résultat'+(matches.length>1?'s':'')+' trouvé'+(matches.length>1?'s':'')+
+  '</div>';
+  matches.forEach(function(m){
+    var d=m.d;
+    var ttc=Number(d.ttc||0);
+    // Récupérer le TTC réel
+    if(typeof _getDevisTTC==='function') ttc=_getDevisTTC(d);
+    var statusColors={
+      'Brouillon':'#94a3b8','Envoyé':'#38bdf8','Accepté':'#22d3ee',
+      'Refusé':'#f87171','Facturé':'#7c3aed','Cadre':'#fbbf24',
+      'Obsolète':'#475569'
+    };
+    var stCol=statusColors[d.status]||'#94a3b8';
+    html+='<div onclick="openDV('+d.id+');document.getElementById(\'mExtRefSearch\').remove();var b=document.getElementById(\'extref-backdrop\');if(b)b.remove();" '+
+      'style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:11px 13px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);border-radius:7px;margin-bottom:6px;cursor:pointer;transition:all .15s" '+
+      'onmouseover="this.style.background=\'rgba(124,58,237,0.08)\';this.style.borderColor=\'rgba(124,58,237,0.30)\'" '+
+      'onmouseout="this.style.background=\'rgba(255,255,255,0.02)\';this.style.borderColor=\'rgba(255,255,255,0.05)\'">'+
+      '<div style="min-width:0">'+
+        // Ligne 1 : N° devis + statut + date
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">'+
+          '<span style="font-family:JetBrains Mono,monospace;font-size:12.5px;color:#fff;font-weight:600">'+esc(d.num||'?')+'</span>'+
+          '<span style="font-size:9px;padding:1px 7px;border-radius:10px;background:'+stCol+'22;color:'+stCol+';font-weight:600;letter-spacing:0.04em">'+esc(d.status||'?')+'</span>'+
+          '<span style="font-size:10px;color:rgba(255,255,255,0.45);font-family:JetBrains Mono,monospace">'+esc(_fmtD(d.date||''))+'</span>'+
+        '</div>'+
+        // Ligne 2 : client + objet
+        '<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-bottom:6px">'+
+          '<span style="color:#5dcaa5">'+esc(d.client||'?')+'</span>'+
+          (d.objet?'<span style="color:rgba(255,255,255,0.45)"> · '+esc((d.objet||'').substring(0,70))+(d.objet&&d.objet.length>70?'…':'')+'</span>':'')+
+        '</div>'+
+        // Ligne 3 : les 3 réfs externes avec highlight
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:10px;font-family:JetBrains Mono,monospace">'+
+          (m.hitEmerson||d.refEmerson?'<span style="padding:2px 7px;border-radius:4px;background:rgba(34,211,238,0.10);border:0.5px solid '+(m.hitEmerson?'rgba(34,211,238,0.45)':'rgba(34,211,238,0.15)')+';color:#67e8f9">⚡ '+_highlight(d.refEmerson||'',q)+'</span>':'')+
+          (m.hitAct||d.refACT?'<span style="padding:2px 7px;border-radius:4px;background:rgba(251,191,36,0.10);border:0.5px solid '+(m.hitAct?'rgba(251,191,36,0.45)':'rgba(251,191,36,0.15)')+';color:#fcd34d">🏭 '+_highlight(d.refACT||'',q)+'</span>':'')+
+          (m.hitPo||d.poCalinstrum?'<span style="padding:2px 7px;border-radius:4px;background:rgba(167,139,250,0.10);border:0.5px solid '+(m.hitPo?'rgba(167,139,250,0.45)':'rgba(167,139,250,0.15)')+';color:#c4b5fd">🛒 '+_highlight(d.poCalinstrum||'',q)+'</span>':'')+
+        '</div>'+
+      '</div>'+
+      '<div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:5px">'+
+        '<div style="font-family:JetBrains Mono,monospace;font-size:12px;color:#fff;font-weight:600">'+_fNloc(ttc)+' <span style="font-size:9px;color:rgba(255,255,255,0.4)">XPF</span></div>'+
+        '<span style="font-size:10px;padding:3px 9px;background:rgba(45,212,191,0.12);color:#5dcaa5;border:0.5px solid rgba(45,212,191,0.35);border-radius:4px;font-weight:500">Ouvrir →</span>'+
+      '</div>'+
+      '</div>';
+  });
+  results.innerHTML=html;
 }
 
 // Ajouter un lien manuel facture↔devis
@@ -11643,26 +11924,26 @@ function _mountMonthlyCharts(root){
 
       // Moyenne mobile (sur Devis émis, fenêtre 3 mois) — référence visuelle
       var ma=_movingAverage(d.dv,3);
-      s+='<polyline points="'+poly(ma)+'" fill="none" stroke="rgba(255,255,250,0.25)" stroke-width="1" stroke-dasharray="3 3" stroke-linejoin="round"/>';
+      s+='<polyline points="'+poly(ma)+'" fill="none" stroke="rgba(255,255,250,0.25)" stroke-width="0.5" stroke-dasharray="3 3" stroke-linejoin="round"/>';
 
       // Courbes
-      s+='<polyline points="'+poly(d.dv)+'" fill="none" stroke="#88aae0" stroke-width="1.8" stroke-linejoin="round"/>';
-      s+='<polyline points="'+poly(d.fa)+'" fill="none" stroke="#a3a39a" stroke-width="1.5" stroke-dasharray="4 3" stroke-linejoin="round"/>';
-      s+='<polyline points="'+poly(d.enc)+'" fill="none" stroke="#5dcaa5" stroke-width="1.8" stroke-linejoin="round"/>';
+      s+='<polyline points="'+poly(d.dv)+'" fill="none" stroke="#88aae0" stroke-width="0.5" stroke-linejoin="round"/>';
+      s+='<polyline points="'+poly(d.fa)+'" fill="none" stroke="#a3a39a" stroke-width="0.5" stroke-dasharray="4 3" stroke-linejoin="round"/>';
+      s+='<polyline points="'+poly(d.enc)+'" fill="none" stroke="#5dcaa5" stroke-width="0.5" stroke-linejoin="round"/>';
 
       // Points sur la courbe Encaissé (valeurs > 0)
       d.enc.forEach(function(v,i){
-        if(v>0) s+='<circle cx="'+xPos(i).toFixed(1)+'" cy="'+yPos(v).toFixed(1)+'" r="2.5" fill="#5dcaa5"/>';
+        if(v>0) s+='<circle cx="'+xPos(i).toFixed(1)+'" cy="'+yPos(v).toFixed(1)+'" r="1.6" fill="#5dcaa5"/>';
       });
 
       // Mois en cours : repère vertical pointillé + point gros sur la courbe Encaissé
       if(todayMonth>=0 && todayMonth<=11){
         var xT=xPos(todayMonth);
-        s+='<line x1="'+xT.toFixed(1)+'" y1="'+padY+'" x2="'+xT.toFixed(1)+'" y2="'+(h-padBottom)+'" stroke="rgba(239,159,39,0.35)" stroke-width="0.7" stroke-dasharray="2 3"/>';
+        s+='<line x1="'+xT.toFixed(1)+'" y1="'+padY+'" x2="'+xT.toFixed(1)+'" y2="'+(h-padBottom)+'" stroke="rgba(239,159,39,0.35)" stroke-width="0.5" stroke-dasharray="2 3"/>';
         // Marker "Aujourd'hui" en haut
         s+='<text x="'+xT.toFixed(1)+'" y="'+(padY-8)+'" text-anchor="middle" font-family="Inter,sans-serif" font-size="8.5" fill="var(--amber)" letter-spacing="0.04em">aujourd\'hui</text>';
         // Point gros sur la courbe Devis (la plus haute en général)
-        s+='<circle cx="'+xT.toFixed(1)+'" cy="'+yPos(d.dv[todayMonth]).toFixed(1)+'" r="4" fill="#88aae0" stroke="var(--bg)" stroke-width="1.5"/>';
+        s+='<circle cx="'+xT.toFixed(1)+'" cy="'+yPos(d.dv[todayMonth]).toFixed(1)+'" r="2.5" fill="#88aae0" stroke="var(--bg)" stroke-width="0.5"/>';
       }
 
       // Labels axe X
@@ -12216,33 +12497,36 @@ function _renderCycleMoyenFourniture(){
   // Retourne un tableau [d1..d8] avec '' si manquant
   // useRebuild = true → utilise _buildPhaseHistory en fallback si phaseHistory absent
   function getStepDates(d){
+    // Cycle 9 étapes (mai 2026 — nouvelle version après fusion confirm+production)
     // Étape 1 : BC client reçu
     var t1=getPhaseDateWithRebuild(d,'bc_recu',true) || d.bcClientSLNDate || '';
     // Étape 2 : PO Emerson envoyé
     var t2=getPhaseDateWithRebuild(d,'po_emerson',true) || d.poCalinstrumDate || '';
-    // Étape 3 : Confirmation Emerson
-    var t3=getPhaseDateWithRebuild(d,'confirm_emerson',true) || '';
-    // Étape 4 : En production
-    var t4=getPhaseDateWithRebuild(d,'production',true) || '';
-    // Étape 5 : Expédié
-    var t5=getPhaseDateWithRebuild(d,'expedie',true) || '';
-    // Étape 6 : Réceptionné
+    // Étape 3 : Production (= Acknowledgment Emerson reçu)
+    // Fallback sur ancienne phase confirm_emerson pour les devis pré-migration
+    var t3=getPhaseDateWithRebuild(d,'production',true) || getPhaseDateWithRebuild(d,'confirm_emerson',true) || '';
+    // Étape 4 : Sortie usine Melbourne
+    var t4=getPhaseDateWithRebuild(d,'sortie_usine',true) || '';
+    // Étape 5 : Transit AUS→NC (anciennement 'expedie')
+    var t5=getPhaseDateWithRebuild(d,'transit_aus',true) || getPhaseDateWithRebuild(d,'expedie',true) || '';
+    // Étape 6 : Réceptionné Nouméa (douane + comptoir)
     var t6=getPhaseDateWithRebuild(d,'receptionne',true) || '';
-    // Étape 7 : Facturé — phaseHistory.facture OU facture.dateEnvoi
-    var t7=getPhaseDateWithRebuild(d,'facture',true) || '';
-    // Étape 8 : Encaissement (depuis facture liée)
-    var t8='';
+    // Étape 7 : Livré client (nouveau)
+    var t7=getPhaseDateWithRebuild(d,'livre_client',true) || '';
+    // Étape 8 : Facturé — phaseHistory.facture OU facture.dateEnvoi
+    var t8=getPhaseDateWithRebuild(d,'facture',true) || '';
+    // Étape 9 : Encaissement (depuis facture liée)
+    var t9='';
     if(typeof _findLinkedFactures==='function'){
       var linked=_findLinkedFactures(d);
-      // Chercher dans factures GRC d'abord, puis invoices
       var allFA=(linked.factures||[]).concat(linked.invoices||[]);
       for(var k=0;k<allFA.length;k++){
         var f=allFA[k];
-        if(!t7 && f.dateEnvoi) t7=f.dateEnvoi;
-        if(!t8 && (f.dateEncaissement||f.datePaiement)) t8=f.dateEncaissement||f.datePaiement;
+        if(!t8 && f.dateEnvoi) t8=f.dateEnvoi;
+        if(!t9 && (f.dateEncaissement||f.datePaiement)) t9=f.dateEncaissement||f.datePaiement;
       }
     }
-    return [t1,t2,t3,t4,t5,t6,t7,t8];
+    return [t1,t2,t3,t4,t5,t6,t7,t8,t9];
   }
 
   // Helper : delta en jours entre 2 dates ISO (YYYY-MM-DD), null si invalide
@@ -12262,21 +12546,21 @@ function _renderCycleMoyenFourniture(){
     return t.indexOf('Fourniture')>=0;
   });
 
-  // Calculer les 7 deltas (jours)
+  // Calculer les 8 deltas (jours) — cycle 9 étapes
   // delta[i] = différence entre step[i] et step[i+1]
-  var deltaSums=new Array(7).fill(0);
-  var deltaCounts=new Array(7).fill(0);
+  var deltaSums=new Array(8).fill(0);
+  var deltaCounts=new Array(8).fill(0);
   var nbDevisAvecAuMoinsUnDelta=0;
-  var nbDevisCompletsTousDeltas=0; // devis qui ont les 8 dates
+  var nbDevisCompletsTousDeltas=0; // devis qui ont les 9 dates
 
   fourn.forEach(function(d){
     var steps=getStepDates(d);
     var hadAtLeastOne=false;
-    var allEight=true;
-    for(var i=0;i<7;i++){
+    var allNine=true;
+    for(var i=0;i<8;i++){
       var dj=deltaDays(steps[i], steps[i+1]);
       if(dj===null){
-        allEight=false;
+        allNine=false;
         continue;
       }
       deltaSums[i]+=dj;
@@ -12284,7 +12568,7 @@ function _renderCycleMoyenFourniture(){
       hadAtLeastOne=true;
     }
     if(hadAtLeastOne) nbDevisAvecAuMoinsUnDelta++;
-    if(allEight) nbDevisCompletsTousDeltas++;
+    if(allNine) nbDevisCompletsTousDeltas++;
   });
 
   // === Affichage ===
@@ -12304,31 +12588,36 @@ function _renderCycleMoyenFourniture(){
 
   // Calculer le total moyen (somme des deltas moyens, pour les deltas qui ont une valeur)
   var totalAvgDays=0;
-  for(var j=0;j<7;j++){
+  for(var j=0;j<8;j++){
     if(deltaCounts[j]>0) totalAvgDays+=Math.round(deltaSums[j]/deltaCounts[j]);
   }
 
-  // Définition des 8 étapes + leurs icônes Tabler + couleurs
+  // Définition des 9 étapes + leurs icônes Tabler + couleurs
+  // Cycle réel Calinstrum Mai 2026 :
+  // BC client → PO Emerson → Production (Ack) → Sortie usine Melbourne →
+  // Transit AUS→NC → Réceptionné Nouméa → Livré client → Facturé → Encaissé
   var stepsMeta=[
-    {label:'BC client reçu',     short:'BC client',     icon:'mail-check',     color:'#5dcaa5'},
-    {label:'PO Emerson',         short:'PO Emerson',    icon:'arrow-up-right', color:'#818cf8'},
-    {label:'Confirmation Emerson', short:'Confirm.',    icon:'check',          color:'#22d3ee'},
-    {label:'En production',      short:'Production',    icon:'tools',          color:'#ef9f27'},
-    {label:'Expédié',            short:'Expédié',       icon:'truck-delivery', color:'#a78bfa'},
-    {label:'Réceptionné Nouméa', short:'Réceptionné',   icon:'package-import', color:'#86efac'},
-    {label:'Facturé',            short:'Facturé',       icon:'receipt',        color:'#7c3aed'},
-    {label:'Encaissé',           short:'Encaissé',      icon:'cash',           color:'#10b981'}
+    {label:'BC client reçu',           short:'BC client',     icon:'mail-check',     color:'#5dcaa5'},
+    {label:'PO Emerson envoyé',        short:'PO Emerson',    icon:'arrow-up-right', color:'#818cf8'},
+    {label:'Production (Ack Emerson)', short:'Production',    icon:'tools',          color:'#ef9f27'},
+    {label:'Sortie usine Melbourne',   short:'Sortie usine',  icon:'package',        color:'#fb923c'},
+    {label:'Transit AUS→NC',           short:'Transit AUS-NC',icon:'truck-delivery', color:'#a78bfa'},
+    {label:'Réceptionné Nouméa',       short:'Réceptionné',   icon:'package-import', color:'#86efac'},
+    {label:'Livré client',             short:'Livré client',  icon:'truck-loading',  color:'#34d399'},
+    {label:'Facturé',                  short:'Facturé',       icon:'receipt',        color:'#7c3aed'},
+    {label:'Encaissé',                 short:'Encaissé',      icon:'cash',           color:'#10b981'}
   ];
 
-  // Labels des deltas (entre les étapes)
+  // Labels des 8 deltas (entre les 9 étapes)
   var deltaLabels=[
-    'Traitement BC',
-    'Acknowledgment',
-    'Démarrage prod.',
-    'Production Aus',
-    'Transit + douane',
-    'Livraison + fact.',
-    'Recouvrement'
+    'Traitement BC',         // delta 1→2 : BC reçu → PO Emerson envoyé
+    'Acknowledgment',        // delta 2→3 : PO envoyé → Production (Ack reçu)
+    'Production Aus',        // delta 3→4 : Production → Sortie usine
+    'Transit Aus',           // delta 4→5 : Sortie usine → Transit AUS-NC
+    'Vol + douane',          // delta 5→6 : Transit → Réceptionné Nouméa
+    'Livraison',             // delta 6→7 : Réceptionné → Livré client
+    'Facturation',           // delta 7→8 : Livré → Facturé
+    'Recouvrement'           // delta 8→9 : Facturé → Encaissé
   ];
 
   // === Construction de la timeline ===
@@ -12351,7 +12640,7 @@ function _renderCycleMoyenFourniture(){
   // qui n'a pas encore d'étape suivante avec une date.
   var hCurrentStep=-1;
   if(hSteps){
-    for(var hi=0;hi<8;hi++){
+    for(var hi=0;hi<9;hi++){
       if(hSteps[hi]) hCurrentStep=hi;
     }
   }
@@ -12367,10 +12656,10 @@ function _renderCycleMoyenFourniture(){
   // Construire liste de clients ayant des devis Fourniture en cours
   var clientsActifs={};
   fourn.forEach(function(d){
-    // Devis "en cours" = phaseHistory non vide ET pas encore encaissé
+    // Devis "en cours" = phaseHistory non vide ET pas encore encaissé (idx 8 = encaissé)
     var stTmp=getStepDates(d);
     var hasStart=!!stTmp[0];
-    var isEncaisse=!!stTmp[7];
+    var isEncaisse=!!stTmp[8];
     if(hasStart && !isEncaisse){
       var cli=d.client||'?';
       if(!clientsActifs[cli]) clientsActifs[cli]=0;
@@ -12393,7 +12682,7 @@ function _renderCycleMoyenFourniture(){
     var devisCli=fourn.filter(function(d){
       if((d.client||'')!==currentClient) return false;
       var st=getStepDates(d);
-      return !!st[0] && !st[7]; // en cours
+      return !!st[0] && !st[8]; // en cours (idx 8 = encaissé dans cycle 9 étapes)
     });
     // Tri par date BC reçu desc (plus récents en premier)
     devisCli.sort(function(a,b){
@@ -12409,7 +12698,7 @@ function _renderCycleMoyenFourniture(){
         // Trouver l'étape courante pour annotation
         var st=getStepDates(d);
         var stepIdx=-1;
-        for(var i=0;i<8;i++) if(st[i]) stepIdx=i;
+        for(var i=0;i<9;i++) if(st[i]) stepIdx=i;
         var stepLabel=stepIdx>=0?stepsMeta[stepIdx].short:'—';
         var sel_=(currentDevisId==d.id)?' selected':'';
         return '<option value="'+d.id+'"'+sel_+'>'+esc(d.num||'?')+' · '+esc(stepLabel)+'</option>';
@@ -12436,7 +12725,7 @@ function _renderCycleMoyenFourniture(){
   var html=sel+'<div style="overflow-x:auto;padding:8px 0">';
   html+='<div style="display:flex;align-items:stretch;min-width:100%;gap:0;font-family:var(--font-sans, sans-serif)">';
 
-  for(var s=0;s<8;s++){
+  for(var s=0;s<9;s++){
     var step=stepsMeta[s];
     // === État de l'étape pour le devis suivi (si applicable) ===
     var stepState='inert'; // inert / done / current / pending
@@ -12477,17 +12766,25 @@ function _renderCycleMoyenFourniture(){
       '</div>';
 
     // Si pas le dernier step, on affiche le delta
-    if(s<7){
+    if(s<8){
       var count=deltaCounts[s];
       var avgD=count>0?Math.round(deltaSums[s]/count):null;
       var deltaContent='';
       if(avgD===null){
         deltaContent='<span style="color:var(--muted-soft);font-style:italic">—</span>';
       } else {
-        // Couleur conditionnelle : vert si < 7j, amber si < 30j, rouge si >= 30j
-        // (sauf pour le delta "Production Aus" qui est inévitablement long)
+        // Couleur conditionnelle : vert si < seuil, amber si < 3×seuil, rouge sinon
+        // Seuils ajustés par delta (jours) pour le cycle 9 étapes :
+        //  [0] Traitement BC      : 7j  (admin Calinstrum)
+        //  [1] Acknowledgment     : 7j  (Emerson confirme rapidement)
+        //  [2] Production Aus     : 45j (production effective Emerson)
+        //  [3] Transit Aus        : 7j  (Melbourne → Sydney transitaire)
+        //  [4] Vol + douane       : 14j (Sydney → Nouméa + dédouanement)
+        //  [5] Livraison          : 7j  (Calinstrum livre au client)
+        //  [6] Facturation        : 7j  (admin facturation post-livraison)
+        //  [7] Recouvrement       : 30j (paiement client)
         var dColor='#5dcaa5';
-        var thresh=[7,7,7,45,30,7,30]; // seuils par delta (jours)
+        var thresh=[7,7,45,7,14,7,7,30];
         var t=thresh[s];
         if(avgD>t*3) dColor='#f09595';
         else if(avgD>t) dColor='#fbbf24';
@@ -25619,30 +25916,65 @@ function parsePOCalinstrumText(text){
   };
 
   // === N° PO + Date ===
-  // Cas gérés (pdf.js peut introduire des espaces parasites entre/dans les chiffres) :
-  //   - Ancien format : "30032026 /0 95   30/03/2026" (espaces dans le N°)
-  //   - Ancien format : "30032026/095 30/03/2026"     (sans espace, valeurs côte à côte)
-  //   - Nouveau format : "07052026/042  DATE  07/05/2026" (label DATE intercalé)
-  // Regex : capture les 8 chiffres + slash + chiffres pouvant contenir des espaces,
-  //         puis tolère jusqu'à 50 chars non-numériques avant la date.
-  var mNum = text.match(/(\d{8})\s*\/\s*(\d(?:[\s\d]*\d)?)[^\d\/]{0,50}(\d{2}\/\d{2}\/\d{4})/);
+  // Cas gérés (pdf.js introduit des espaces parasites un peu partout) :
+  //   - "30032026/095 30/03/2026"          (sans espace)
+  //   - "30032026 /0 95   30/03/2026"      (espaces dans le suffixe)
+  //   - "07052026/042  DATE  07/05/2026"   (label DATE intercalé)
+  //   - "19032026/08 8   19/03/2026"       (espaces suffixe)
+  //   - "13 0 3 2026/08 7   13 /0 3 /2026" (espaces dans le PRÉFIXE 8 chiffres ET dans la date,
+  //                                          espaces avant les slashes de la date)
+  //
+  // Regex date permissive : `\d{1,2}\s*\/\s*\d{1,2}\s*\/\s*\d{4}` ne suffit pas car les
+  // espaces peuvent aussi être DANS les nombres jour/mois (ex: "0 3" pour mars).
+  // Nouveau pattern accepte 1-3 chiffres séparés par espaces autour de chaque slash.
+  //
+  // Pattern N° + Date (capture-tout permissif, validé en post-traitement) :
+  var mNum = text.match(/([\d\s]{8,16})\s*\/\s*(\d(?:\s*\d){0,3})(?:\s{2,}|[^\d\/\s][^\d\/]{0,80})(\d{1,2}(?:\s*\d)*\s*\/\s*\d{1,2}(?:\s*\d)*\s*\/\s*\d{4})/);
   if(mNum){
-    // Strip espaces dans le suffixe N° : "0 95" → "095"
-    result.num = mNum[1] + '/' + mNum[2].replace(/\s+/g,'');
-    var dParts = mNum[3].split('/');
-    if(dParts.length===3) result.date = dParts[2]+'-'+dParts[1]+'-'+dParts[0];
-  } else {
-    // Fallback : extraire séparément
-    // Pour le N°, on cherche aussi le pattern avec espaces parasites
-    var mNumOnly = text.match(/(\d{8})\s*\/\s*(\d(?:[\s\d]*\d)?)\b/);
-    var mDateOnly = text.match(/(\d{2}\/\d{2}\/\d{4})/);
-    if(mNumOnly && mDateOnly){
-      result.num = mNumOnly[1] + '/' + mNumOnly[2].replace(/\s+/g,'');
-      var dp = mDateOnly[1].split('/');
-      if(dp.length===3) result.date = dp[2]+'-'+dp[1]+'-'+dp[0];
-    } else {
-      result._parseErrors.push('N° PO et/ou date introuvables');
+    var prefDigits = mNum[1].replace(/\s+/g,'');
+    var suffDigits = mNum[2].replace(/\s+/g,'');
+    if(prefDigits.length===8 && suffDigits.length>=1 && suffDigits.length<=4){
+      result.num = prefDigits + '/' + suffDigits;
+      // Date : retirer espaces puis split sur /
+      var dClean = mNum[3].replace(/\s+/g,'');
+      var dParts = dClean.split('/');
+      if(dParts.length===3){
+        var jj = dParts[0].padStart(2,'0');
+        var mm = dParts[1].padStart(2,'0');
+        // Validation basique : jour 01-31, mois 01-12, année 2020-2099
+        var jjN=parseInt(jj,10), mmN=parseInt(mm,10), aaN=parseInt(dParts[2],10);
+        if(jjN>=1 && jjN<=31 && mmN>=1 && mmN<=12 && aaN>=2020 && aaN<=2099){
+          result.date = dParts[2]+'-'+mm+'-'+jj;
+        }
+      }
     }
+  }
+  // Fallback N° si pas trouvé
+  if(!result.num){
+    var mNumOnly = text.match(/([\d\s]{8,16})\s*\/\s*(\d(?:\s*\d){0,3})(?:\s|$)/);
+    if(mNumOnly){
+      var pf = mNumOnly[1].replace(/\s+/g,'');
+      var sf = mNumOnly[2].replace(/\s+/g,'');
+      if(pf.length===8 && sf.length<=4) result.num = pf + '/' + sf;
+    }
+  }
+  // Fallback Date INDÉPENDANT : se déclenche aussi si on a le N° mais pas la date.
+  // Permissive sur les espaces dans les chiffres jour/mois.
+  if(!result.date){
+    var mDateOnly = text.match(/(\d{1,2}(?:\s*\d)*\s*\/\s*\d{1,2}(?:\s*\d)*\s*\/\s*\d{4})/);
+    if(mDateOnly){
+      var dC = mDateOnly[1].replace(/\s+/g,'');
+      var dpf = dC.split('/');
+      if(dpf.length===3){
+        var jjN2=parseInt(dpf[0],10), mmN2=parseInt(dpf[1],10), aaN2=parseInt(dpf[2],10);
+        if(jjN2>=1 && jjN2<=31 && mmN2>=1 && mmN2<=12 && aaN2>=2020 && aaN2<=2099){
+          result.date = dpf[2]+'-'+dpf[1].padStart(2,'0')+'-'+dpf[0].padStart(2,'0');
+        }
+      }
+    }
+  }
+  if(!result.num || !result.date){
+    result._parseErrors.push('N° PO et/ou date introuvables');
   }
 
   // === Vendor : contact name (1ère colonne avant "RIZZO FABRICE" qui est le customer) ===
