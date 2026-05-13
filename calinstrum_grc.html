@@ -6120,8 +6120,22 @@ function renderProgression(){
 }
 function getAlertData(){
   var alerts=[],td2=today();
+  // Helper : détermine si une invoice/facture est en pré-facturation
+  // (N° réservé mais pas vraiment émise au client → ne génère pas d'alerte)
+  function _isPrefactured(item){
+    var s=String(item.status||item.statut||'').toLowerCase();
+    var isPaid=(s.indexOf('payé')>=0 || s==='paid' || s==='payée');
+    if(isPaid) return false;
+    var dateEnvoi=item.dateEnvoi||'';
+    var phase=(item.phase||'').toString();
+    var preFacturationPhases=['', 'emerson', 'chantier_attente', 'transit', 'chantier_cours'];
+    var isStatutPending=(s==='pending' || s==='en attente' || s==='partiel' || s==='partial');
+    return isStatutPending && !dateEnvoi && preFacturationPhases.indexOf(phase)>=0;
+  }
   invoices.forEach(function(inv){
     var st=getStatus(inv);if(st==='paid')return;
+    // ⭐ Skip pré-facturations : pas encore émises, pas d'alerte de retard légitime
+    if(_isPrefactured(inv))return;
     var bd=parseDate(inv.dateButoir);if(!bd)return;
     var d=diffDays(td2,bd),dateStr=bd.toLocaleDateString('fr-FR');
     if(d<0)alerts.push(Object.assign({},inv,{type:'late',message:'En retard de '+Math.abs(d)+' jour'+(Math.abs(d)>1?'s':'')+' - echeance '+dateStr,_source:'invoice'}));
@@ -6130,6 +6144,8 @@ function getAlertData(){
   });
   // Alertes factures GRC : si reste à payer > 0 et date butoir dépassée (calculée via delai)
   (DB.factures||[]).forEach(function(f){
+    // ⭐ Skip pré-facturations côté GRC aussi
+    if(_isPrefactured(f))return;
     var totVerse=(f.versements&&f.versements.length)?f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0):(Number(f.paye)||0);
     var reste=(f.ttc||0)-totVerse;
     if(reste<=0)return;
@@ -9977,15 +9993,38 @@ function _normalizeFactureStatus(f){
   // Reconnaître facture GRC (status) ou invoice Suivi (statut)
   var s=String(f.status||f.statut||'').toLowerCase();
   var isPaid=(s.indexOf('payé')>=0 || s==='paid' || s==='payée');
-  // Vérification retard
+  if(isPaid) return {key:'paid',label:'Payée',color:'#10b981',icon:'check-bold'};
+
+  // === DÉTECTION PRÉ-FACTURATION ===
+  // Workflow Calinstrum : dès qu'un devis est accepté, on RÉSERVE un N° de facture
+  // (pour verrouiller la séquence avec le devis et le BC). La marchandise est
+  // ensuite en prod chez Emerson, en transit Australie→Nouvelle-Calédonie, ou en
+  // cours de chantier — mais la facture N'A PAS ENCORE ÉTÉ ÉMISE au client.
+  //
+  // Critères :
+  //   - statut/status pending OU "En attente" (= pas encore payée)
+  //   - dateEnvoi vide (pas encore émise au client)
+  //   - phase ∈ {emerson, chantier_attente, transit, chantier_cours, ''} (phases
+  //     non finales — c'est-à-dire avant la phase "billed" livre/recu)
+  //
+  // Une fois la marchandise réceptionnée → dateEnvoi est renseignée → la facture
+  // passe en "En attente" (vraiment émise, attente paiement client).
+  var dateEnvoi = f.dateEnvoi || '';
+  var phase     = (f.phase || '').toString();
+  var preFacturationPhases = ['', 'emerson', 'chantier_attente', 'transit', 'chantier_cours'];
+  var isStatutPending = (s==='pending' || s==='en attente' || s==='partiel' || s==='partial');
+  if(isStatutPending && !dateEnvoi && preFacturationPhases.indexOf(phase)>=0){
+    return {key:'prefactured',label:'Pré-facturé',color:'#a78bfa',icon:'file-pencil'};
+  }
+
+  // Vérification retard (facture vraiment émise mais pas payée à temps)
   var today=new Date().toISOString().substring(0,10);
   var isLate=false, daysLate=0;
-  if(!isPaid && f.dateButoir && f.dateButoir<today){
+  if(f.dateButoir && f.dateButoir<today){
     isLate=true;
     var diff=Math.floor((new Date(today)-new Date(f.dateButoir))/(1000*60*60*24));
     daysLate=diff;
   }
-  if(isPaid) return {key:'paid',label:'Payée',color:'#10b981',icon:'check-bold'};
   if(isLate) return {key:'late',label:'Retard '+daysLate+'j',color:'#ef4444',icon:'alert-triangle'};
   return {key:'pending',label:'En attente',color:'#fbbf24',icon:'clock'};
 }
