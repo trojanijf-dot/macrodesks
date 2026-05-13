@@ -1372,6 +1372,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <div class="flex-between mb12">
     <div></div>
     <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost no-print" onclick="openBLFromDVPicker()" title="Créer un BL à partir d'un ou plusieurs devis acceptés ou facturés. Gère les livraisons partielles : si une ligne a déjà été partiellement livrée par un autre BL, le restant à livrer s'affiche. Supporte le groupage de plusieurs devis dans un même BL." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📦 Créer BL depuis devis</button>
       <button class="btn btn-ghost no-print" onclick="uploadBLPdf()" title="Importer un ou plusieurs PDFs de Bon de Livraison Calinstrum existants (anciens BL faits hors GRC). Détecte automatiquement N° BL, date, lieu, PO, contact, client et lignes. Anti-doublon strict sur le N° BL." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Importer BL PDF</button>
       <button class="btn btn-teal no-print" onclick="openBL()">+ Nouveau bon de livraison</button>
     </div>
@@ -2405,6 +2406,10 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <div class="form-row">
       <div class="form-group"><label>N° commande lié</label><input class="form-input" id="bl-po"></div>
       <div class="form-group"><label>Émis par</label><input class="form-input" id="bl-emis" value="Fabrice RIZZO"></div>
+    </div>
+    <div class="form-group">
+      <label>Devis lié(s) <span style="color:var(--muted);font-weight:400;font-size:10px">— N° devis source(s), séparés par virgule</span></label>
+      <input class="form-input" id="bl-dvlie" placeholder="ex: SLN-DV-BCGMAO-00722464" title="N° des devis source(s) de ce BL. Rempli automatiquement quand le BL est créé via 'Créer BL depuis devis'.">
     </div>
     <div class="form-group"><label>Statut</label>
       <select class="form-select" id="bl-status"><option>En préparation</option><option>Livré</option><option>Annulé</option></select>
@@ -27834,9 +27839,488 @@ function commitBLImport(){
   alert(msg);
 }
 
+// =============================================================================
+// ===== CRÉER BL DEPUIS DEVIS (avec suivi livraisons partielles) =====
+// =============================================================================
+// Objectif métier : transformer un (ou plusieurs) devis Fourniture accepté(s) en BL,
+// en gérant les 3 cas de figure :
+//   - CAS A : 1 devis → 1 BL (livraison unique, simple)
+//   - CAS B : 1 devis → N BL (livraison partielle dans le temps : on suit le "restant à livrer")
+//   - CAS C : N devis → 1 BL (groupage : tout arrive en même temps, même client)
+//
+// Architecture :
+//   1. openBLFromDVPicker()  → modale étape 1 : sélection devis
+//   2. Liste filtrée : devis Accepté OU Facturé avec section fourniture non vide
+//   3. Sélection multi-checkbox + bouton "Continuer" (warn si clients différents)
+//   4. _openBLFromDVStep2() → modale étape 2 : sélection lignes + qté à livrer
+//   5. Pour chaque ligne : calcul du "déjà livré" (via BL existants) → "restant"
+//      L'input qté est limité au restant (warn si dépasse)
+//   6. Bouton "Créer BL" → ferme picker, ouvre openBL avec prefill
+//
+// Traçabilité bidirectionnelle :
+//   - BL._sourceDevisIds = [id1, id2, ...]      (IDs internes, requêtable)
+//   - BL.dvlie = 'SLN-DV-XYZ, SLN-DV-ABC'        (lisible humain, modifiable)
+//   - BL.po = 'PO1+PO2'                          (BC Client consolidés)
+//
+// Calcul "déjà livré" pour une ligne de devis :
+//   - On agrège toutes les lignes BL dont _sourceDevisIds contient le devisId
+//   - On matche par ref + désignation (heuristique simple) pour retrouver la ligne BL
+//     qui correspond à la ligne devis. Si match imparfait, on retombe sur le total
+//     livré tous BL confondus (qui est plus conservateur).
+// =============================================================================
+
+// État de la sélection multi-étape (analogue à _blImportState et _poImportState)
+// {
+//   selectedDevisIds: [id1, id2, ...],
+//   linesData: { devisId: [ {ref, desc, qte_dispo, qte_a_livrer, _devisLineKey}, ... ] }
+// }
+var _blFromDVState = { selectedDevisIds: [], linesData: {} };
+
+// ---- ÉTAPE 1 : modale de sélection des devis ----
+function openBLFromDVPicker(){
+  // Filtrer les devis "valides pour BL" :
+  //   - Status Accepté OU Facturé (les autres ne sont pas censés générer une livraison)
+  //   - Au moins 1 ligne dans la section fourniture (BL = matière livrée physique)
+  var allDevis = (DB.devis||[]).filter(function(d){
+    var status = (d.status||'').toLowerCase();
+    var validStatus = status === 'accepté' || status === 'accepte' || status === 'facturé' || status === 'facture';
+    if(!validStatus) return false;
+    var four = (d.lines && d.lines.fourniture) || [];
+    return four.some(function(l){ return l && l.type !== 'header' && (Number(l.qte)||0) > 0 && (Number(l.pu)||0) > 0; });
+  });
+
+  if(allDevis.length === 0){
+    alert('⚠ Aucun devis fourniture validé disponible.\n\nUn devis doit être en status "Accepté" ou "Facturé" ET contenir au moins une ligne fourniture chiffrée pour être éligible à la création de BL.');
+    return;
+  }
+
+  // Réinitialiser l'état
+  _blFromDVState = { selectedDevisIds: [], linesData: {} };
+
+  // Construire le modal
+  var existing = document.getElementById('mBLFromDV');
+  if(existing) existing.remove();
+
+  var modal = document.createElement('div');
+  modal.id = 'mBLFromDV';
+  modal.className = 'modal-overlay open';
+
+  // Construire les options de filtre client
+  var clientCounts = {};
+  allDevis.forEach(function(d){
+    var c = d.client || '(sans client)';
+    clientCounts[c] = (clientCounts[c]||0) + 1;
+  });
+  var clientFilterOpts = '<option value="">Tous les clients ('+allDevis.length+')</option>' +
+    Object.keys(clientCounts).sort().map(function(c){
+      return '<option value="'+esc(c)+'">'+esc(c)+' ('+clientCounts[c]+')</option>';
+    }).join('');
+
+  modal.innerHTML =
+    '<div class="modal modal-lg" style="max-width:1000px">'+
+      '<div class="modal-header">'+
+        '<h3>📦 Créer BL depuis devis — Étape 1/2 : Sélection des devis</h3>'+
+        '<button class="modal-close" onclick="cm(\'mBLFromDV\')">✕</button>'+
+      '</div>'+
+      '<div class="modal-body">'+
+        '<div style="background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.25);border-radius:6px;padding:10px;margin-bottom:12px;font-size:11.5px;color:var(--muted)">'+
+          '💡 <b>Choisis un ou plusieurs devis</b> à transformer en BL.'+
+          '<br><span style="font-size:10.5px">• <b>1 devis</b> = BL simple (cas A) ou partiel si tu réduis les quantités (cas B)<br>'+
+          '• <b>N devis du même client</b> = BL groupé (cas C : marchandises arrivées ensemble)<br>'+
+          '• <b>N devis de clients différents</b> = ⚠ déconseillé (1 BL = 1 destinataire). Crée plusieurs BL plutôt.</span>'+
+        '</div>'+
+        // Filtre client + recherche
+        '<div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;margin-bottom:10px">'+
+          '<div>'+
+            '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Filtrer par client</label>'+
+            '<select class="form-select" id="blfdv-client-filter" onchange="_renderBLFromDVList()">'+clientFilterOpts+'</select>'+
+          '</div>'+
+          '<div>'+
+            '<label style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Rechercher (N° devis, BC Client, objet)</label>'+
+            '<input class="form-input" id="blfdv-search" oninput="_renderBLFromDVList()" placeholder="Tapez pour filtrer...">'+
+          '</div>'+
+        '</div>'+
+        // Liste des devis (rendue dynamiquement)
+        '<div id="blfdv-list" style="max-height:55vh;overflow-y:auto"></div>'+
+        // Compteur de sélection
+        '<div id="blfdv-summary" style="margin-top:10px;padding:8px;background:rgba(45,212,191,.05);border-radius:4px;font-size:11px;color:var(--muted);text-align:center">'+
+          'Aucun devis sélectionné'+
+        '</div>'+
+      '</div>'+
+      '<div class="modal-footer" style="display:flex;justify-content:space-between;gap:8px">'+
+        '<button class="btn btn-ghost" onclick="cm(\'mBLFromDV\')">Annuler</button>'+
+        '<button class="btn btn-teal" id="blfdv-next-btn" onclick="_openBLFromDVStep2()" disabled style="opacity:0.5">Continuer →</button>'+
+      '</div>'+
+    '</div>';
+
+  document.body.appendChild(modal);
+  _renderBLFromDVList();
+}
+
+// Rend la liste des devis dans l'étape 1 (filtrable par client + recherche)
+function _renderBLFromDVList(){
+  var listEl = document.getElementById('blfdv-list');
+  if(!listEl) return;
+  var clientFilter = (document.getElementById('blfdv-client-filter')||{}).value || '';
+  var search = ((document.getElementById('blfdv-search')||{}).value || '').toLowerCase().trim();
+
+  var allDevis = (DB.devis||[]).filter(function(d){
+    var status = (d.status||'').toLowerCase();
+    var validStatus = status === 'accepté' || status === 'accepte' || status === 'facturé' || status === 'facture';
+    if(!validStatus) return false;
+    var four = (d.lines && d.lines.fourniture) || [];
+    return four.some(function(l){ return l && l.type !== 'header' && (Number(l.qte)||0) > 0 && (Number(l.pu)||0) > 0; });
+  });
+
+  // Appliquer filtres
+  var filtered = allDevis.filter(function(d){
+    if(clientFilter && d.client !== clientFilter) return false;
+    if(search){
+      var hay = ((d.num||'') + ' ' + (d.bcClientSLN||'') + ' ' + (d.objet||'')).toLowerCase();
+      if(hay.indexOf(search) < 0) return false;
+    }
+    return true;
+  });
+
+  if(filtered.length === 0){
+    listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted);font-style:italic">Aucun devis ne correspond aux critères.</div>';
+    return;
+  }
+
+  // Tri : Accepté en haut, puis Facturé, puis par date décroissante
+  filtered.sort(function(a,b){
+    var sA = (a.status||'').toLowerCase();
+    var sB = (b.status||'').toLowerCase();
+    var rankA = sA.indexOf('accept') >= 0 ? 0 : 1;
+    var rankB = sB.indexOf('accept') >= 0 ? 0 : 1;
+    if(rankA !== rankB) return rankA - rankB;
+    return (b.date||'').localeCompare(a.date||'');
+  });
+
+  listEl.innerHTML = filtered.map(function(d){
+    var isSelected = _blFromDVState.selectedDevisIds.indexOf(d.id) >= 0;
+    var four = (d.lines && d.lines.fourniture) || [];
+    var fourLines = four.filter(function(l){ return l && l.type !== 'header' && (Number(l.qte)||0) > 0 && (Number(l.pu)||0) > 0; });
+    var totalFour = fourLines.reduce(function(s,l){ return s + (Number(l.qte)||0) * (Number(l.pu)||0); }, 0);
+    // Détecter si ce devis a déjà des BL liés (info utile)
+    var existingBLs = (DB.bls||[]).filter(function(bl){
+      return Array.isArray(bl._sourceDevisIds) && bl._sourceDevisIds.indexOf(d.id) >= 0;
+    });
+    var blBadge = existingBLs.length > 0
+      ? '<span style="background:rgba(245,158,11,.2);color:#fbbf24;padding:2px 6px;border-radius:3px;font-size:9.5px;font-weight:700;margin-left:6px" title="'+existingBLs.length+' BL déjà créé(s) à partir de ce devis : '+existingBLs.map(function(b){return b.num;}).join(', ')+'">📦 '+existingBLs.length+' BL existant'+(existingBLs.length>1?'s':'')+'</span>'
+      : '';
+    var statusBadge = (d.status||'').toLowerCase().indexOf('accept') >= 0
+      ? '<span style="background:rgba(45,212,191,.2);color:var(--teal);padding:2px 6px;border-radius:3px;font-size:9.5px;font-weight:700">ACCEPTÉ</span>'
+      : '<span style="background:rgba(167,139,250,.2);color:#a78bfa;padding:2px 6px;border-radius:3px;font-size:9.5px;font-weight:700">FACTURÉ</span>';
+    var bgColor = isSelected ? 'rgba(45,212,191,.08)' : 'rgba(255,255,255,.02)';
+    var borderColor = isSelected ? 'var(--teal)' : 'rgba(255,255,255,.08)';
+    return '<label style="display:block;background:'+bgColor+';border:1px solid '+borderColor+';border-radius:6px;padding:10px;margin-bottom:6px;cursor:pointer;transition:all .15s">'+
+      '<div style="display:flex;gap:10px;align-items:flex-start">'+
+        '<input type="checkbox" data-blfdv-devis-id="'+d.id+'" '+(isSelected?'checked':'')+' onchange="_toggleBLFromDVDevis('+d.id+', this.checked)" style="margin-top:3px;flex-shrink:0">'+
+        '<div style="flex:1;min-width:0">'+
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:3px">'+
+            '<span style="font-family:monospace;font-weight:700;font-size:12px;color:var(--teal)">'+esc(d.num||'(sans n°)')+'</span>'+
+            statusBadge+
+            blBadge+
+          '</div>'+
+          '<div style="font-size:11px;color:var(--text);margin-bottom:2px">'+esc(d.client||'(sans client)')+'</div>'+
+          '<div style="font-size:10.5px;color:var(--muted);line-height:1.4">'+esc((d.objet||'(sans objet)').substring(0,120))+(d.objet&&d.objet.length>120?'…':'')+'</div>'+
+          '<div style="display:flex;gap:14px;margin-top:4px;font-size:10px;color:var(--muted)">'+
+            '<span>📋 BC Client : <b style="color:var(--text)">'+esc(d.bcClientSLN||'(non renseigné)')+'</b></span>'+
+            '<span>📦 '+fourLines.length+' ligne'+(fourLines.length>1?'s':'')+' fourniture</span>'+
+            '<span>💰 <b style="color:var(--teal)">'+fN(totalFour)+'</b> XPF</span>'+
+            (d.date?'<span>📅 '+fD(d.date)+'</span>':'')+
+          '</div>'+
+        '</div>'+
+      '</div>'+
+    '</label>';
+  }).join('');
+}
+
+// Toggle sélection d'un devis (étape 1)
+function _toggleBLFromDVDevis(devisId, checked){
+  var idx = _blFromDVState.selectedDevisIds.indexOf(devisId);
+  if(checked && idx < 0){
+    _blFromDVState.selectedDevisIds.push(devisId);
+  } else if(!checked && idx >= 0){
+    _blFromDVState.selectedDevisIds.splice(idx, 1);
+  }
+  _updateBLFromDVSummary();
+}
+
+// Met à jour le bandeau résumé + état du bouton "Continuer"
+function _updateBLFromDVSummary(){
+  var ids = _blFromDVState.selectedDevisIds;
+  var summary = document.getElementById('blfdv-summary');
+  var nextBtn = document.getElementById('blfdv-next-btn');
+  if(!summary || !nextBtn) return;
+  if(ids.length === 0){
+    summary.innerHTML = 'Aucun devis sélectionné';
+    summary.style.background = 'rgba(45,212,191,.05)';
+    nextBtn.disabled = true; nextBtn.style.opacity = '0.5';
+    return;
+  }
+  var devis = ids.map(function(id){ return DB.devis.find(function(d){return d.id===id;}); }).filter(Boolean);
+  var clients = {};
+  devis.forEach(function(d){ if(d.client) clients[d.client] = (clients[d.client]||0)+1; });
+  var clientNames = Object.keys(clients);
+  var multiClient = clientNames.length > 1;
+
+  var summaryHTML = '<b>'+ids.length+'</b> devis sélectionné'+(ids.length>1?'s':'')+
+    ' · Clients : <b>'+clientNames.map(esc).join(', ')+'</b>';
+  if(multiClient){
+    summaryHTML += '<br><span style="color:#fbbf24;font-weight:700">⚠ Devis de clients différents</span> — un BL = un destinataire. Considère créer plusieurs BL.';
+    summary.style.background = 'rgba(245,158,11,.08)';
+    summary.style.border = '1px solid rgba(245,158,11,.3)';
+  } else {
+    summary.style.background = 'rgba(45,212,191,.08)';
+    summary.style.border = '1px solid rgba(45,212,191,.3)';
+  }
+  summary.innerHTML = summaryHTML;
+  nextBtn.disabled = false; nextBtn.style.opacity = '1';
+}
+
+// ---- ÉTAPE 2 : modale de sélection des lignes + saisie qté à livrer ----
+function _openBLFromDVStep2(){
+  var ids = _blFromDVState.selectedDevisIds;
+  if(ids.length === 0) return;
+  var devis = ids.map(function(id){ return DB.devis.find(function(d){return d.id===id;}); }).filter(Boolean);
+  if(devis.length === 0) return;
+
+  // Construire le state lignes : pour chaque devis, ses lignes fourniture éligibles
+  // avec calcul du "déjà livré" via BL existants liés.
+  _blFromDVState.linesData = {};
+  devis.forEach(function(d){
+    var four = (d.lines && d.lines.fourniture) || [];
+    var fourLines = four.filter(function(l){ return l && l.type !== 'header' && (Number(l.qte)||0) > 0 && (Number(l.pu)||0) > 0; });
+    _blFromDVState.linesData[d.id] = fourLines.map(function(l, idx){
+      var qteCommandee = Number(l.qte) || 0;
+      var qteDejaLivree = _computeQteAlreadyDelivered(d.id, l);
+      var qteRestante = Math.max(0, qteCommandee - qteDejaLivree);
+      return {
+        _devisLineIdx: idx,         // index dans fourLines (pas dans la section globale)
+        ref: l.ref || '',
+        desc: l.designation || l.desc || '',
+        pu: Number(l.pu) || 0,
+        qte_commandee: qteCommandee,
+        qte_deja_livree: qteDejaLivree,
+        qte_restante: qteRestante,
+        qte_a_livrer: qteRestante,  // par défaut on propose tout le restant
+        selected: qteRestante > 0   // sélectionné par défaut SAUF si rien à livrer
+      };
+    });
+  });
+
+  // Rendre l'étape 2 (remplace le contenu de la modale)
+  var modal = document.getElementById('mBLFromDV');
+  if(!modal) return;
+  modal.querySelector('.modal').innerHTML =
+    '<div class="modal-header">'+
+      '<h3>📦 Créer BL depuis devis — Étape 2/2 : Quantités à livrer</h3>'+
+      '<button class="modal-close" onclick="cm(\'mBLFromDV\')">✕</button>'+
+    '</div>'+
+    '<div class="modal-body">'+
+      '<div style="background:rgba(45,212,191,.06);border:1px solid rgba(45,212,191,.25);border-radius:6px;padding:10px;margin-bottom:12px;font-size:11.5px;color:var(--muted)">'+
+        '💡 <b>Ajuste les quantités à livrer</b> pour chaque ligne.'+
+        '<br><span style="font-size:10.5px">Par défaut, la quantité = restant à livrer (commandé − déjà livré sur les BL existants). Tu peux livrer moins (BL partiel), ou décocher une ligne pour ne pas l\'inclure dans ce BL.</span>'+
+      '</div>'+
+      '<div id="blfdv-step2-content"></div>'+
+    '</div>'+
+    '<div class="modal-footer" style="display:flex;justify-content:space-between;gap:8px">'+
+      '<button class="btn btn-ghost" onclick="openBLFromDVPicker()">← Retour</button>'+
+      '<button class="btn btn-teal" onclick="_commitBLFromDV()">✓ Créer le BL</button>'+
+    '</div>';
+  _renderBLFromDVStep2Content();
+}
+
+// Rend le contenu lignes de l'étape 2 (séparé pour pouvoir re-render lors d'une modif)
+function _renderBLFromDVStep2Content(){
+  var contentEl = document.getElementById('blfdv-step2-content');
+  if(!contentEl) return;
+  var ids = _blFromDVState.selectedDevisIds;
+
+  var html = ids.map(function(devisId){
+    var d = DB.devis.find(function(x){return x.id===devisId;});
+    if(!d) return '';
+    var lines = _blFromDVState.linesData[devisId] || [];
+    var nbToDeliver = lines.filter(function(l){return l.selected && l.qte_a_livrer > 0;}).length;
+    return '<div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:10px;margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+        '<div>'+
+          '<span style="font-family:monospace;font-weight:700;font-size:12px;color:var(--teal)">'+esc(d.num||'')+'</span>'+
+          '<span style="margin-left:8px;font-size:11px;color:var(--text)">'+esc(d.client||'')+'</span>'+
+          '<span style="margin-left:8px;font-size:10.5px;color:var(--muted)">· BC Client : <b style="color:var(--text)">'+esc(d.bcClientSLN||'(non renseigné)')+'</b></span>'+
+        '</div>'+
+        '<div style="font-size:10px;color:var(--muted)">'+nbToDeliver+'/'+lines.length+' ligne'+(lines.length>1?'s':'')+' à livrer</div>'+
+      '</div>'+
+      '<table style="width:100%;font-size:11px;border-collapse:collapse">'+
+        '<thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,.08)">'+
+          '<th style="width:30px;padding:4px"></th>'+
+          '<th style="text-align:left;padding:4px">Réf</th>'+
+          '<th style="text-align:left;padding:4px">Désignation</th>'+
+          '<th style="text-align:right;padding:4px;width:75px">Commandé</th>'+
+          '<th style="text-align:right;padding:4px;width:75px">Déjà livré</th>'+
+          '<th style="text-align:right;padding:4px;width:75px">Restant</th>'+
+          '<th style="text-align:right;padding:4px;width:90px">À livrer</th>'+
+        '</tr></thead>'+
+        '<tbody>'+
+        lines.map(function(l, li){
+          var rowDisabled = l.qte_restante <= 0;
+          var rowStyle = rowDisabled ? 'opacity:0.4' : '';
+          var restantColor = l.qte_restante === 0 ? '#10b981' : (l.qte_restante < l.qte_commandee ? '#fbbf24' : 'var(--muted)');
+          var aLivrerWarn = l.qte_a_livrer > l.qte_restante ? '<span style="color:#fbbf24;font-size:9px;margin-left:4px" title="Quantité supérieure au restant à livrer">⚠</span>' : '';
+          return '<tr style="'+rowStyle+';border-bottom:1px solid rgba(255,255,255,.03)">'+
+            '<td style="padding:4px;text-align:center">'+
+              '<input type="checkbox" '+(l.selected?'checked':'')+' '+(rowDisabled?'disabled':'')+' onchange="_toggleBLFromDVLine('+devisId+','+li+',this.checked)">'+
+            '</td>'+
+            '<td style="padding:4px;font-family:monospace;font-size:10px;color:var(--muted)">'+esc(l.ref||'')+'</td>'+
+            '<td style="padding:4px">'+esc((l.desc||'').substring(0,80))+(l.desc&&l.desc.length>80?'…':'')+'</td>'+
+            '<td style="padding:4px;text-align:right;font-weight:600">'+l.qte_commandee+'</td>'+
+            '<td style="padding:4px;text-align:right;color:'+(l.qte_deja_livree>0?'#fbbf24':'var(--muted)')+'">'+l.qte_deja_livree+'</td>'+
+            '<td style="padding:4px;text-align:right;font-weight:700;color:'+restantColor+'">'+l.qte_restante+'</td>'+
+            '<td style="padding:4px;text-align:right">'+
+              (rowDisabled
+                ? '<span style="color:#10b981;font-size:10px">✓ tout livré</span>'
+                : '<input type="number" min="0" max="'+l.qte_commandee+'" step="1" value="'+l.qte_a_livrer+'" data-blfdv-qte="'+devisId+':'+li+'" onchange="_updateBLFromDVQte('+devisId+','+li+',this.value)" style="width:65px;text-align:right;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.15);border-radius:3px;padding:3px 5px;color:var(--text)">'+aLivrerWarn
+              )+
+            '</td>'+
+          '</tr>';
+        }).join('')+
+        '</tbody>'+
+      '</table>'+
+    '</div>';
+  }).join('');
+
+  contentEl.innerHTML = html;
+}
+
+function _toggleBLFromDVLine(devisId, lineIdx, checked){
+  var lines = _blFromDVState.linesData[devisId];
+  if(!lines || !lines[lineIdx]) return;
+  lines[lineIdx].selected = checked;
+  // Pas besoin de re-render, le checkbox UI est déjà à jour
+}
+
+function _updateBLFromDVQte(devisId, lineIdx, value){
+  var lines = _blFromDVState.linesData[devisId];
+  if(!lines || !lines[lineIdx]) return;
+  lines[lineIdx].qte_a_livrer = Math.max(0, Number(value)||0);
+  // Re-render uniquement la ligne concernée serait idéal mais pour simplicité on re-render tout
+  _renderBLFromDVStep2Content();
+}
+
+// ---- COMMIT : ferme la modale picker et ouvre la modale BL pré-remplie ----
+function _commitBLFromDV(){
+  var ids = _blFromDVState.selectedDevisIds;
+  if(ids.length === 0) return;
+  var devis = ids.map(function(id){ return DB.devis.find(function(d){return d.id===id;}); }).filter(Boolean);
+  if(devis.length === 0) return;
+
+  // Collecter toutes les lignes sélectionnées avec qte > 0
+  var prefillLines = [];
+  ids.forEach(function(devisId){
+    var d = DB.devis.find(function(x){return x.id===devisId;});
+    if(!d) return;
+    var lines = _blFromDVState.linesData[devisId] || [];
+    lines.forEach(function(l){
+      if(!l.selected || l.qte_a_livrer <= 0) return;
+      // Pour le BL on consolide ref + désignation. Si plusieurs devis source, on peut ajouter
+      // un préfixe [DV-XXX] pour traçabilité ligne par ligne — utile si l'utilisateur veut
+      // savoir d'où vient chaque ligne en cas de groupage. On le fait uniquement si N>1 devis.
+      var descPrefix = ids.length > 1 ? '['+(d.num||'')+'] ' : '';
+      prefillLines.push({
+        ref: l.ref || '',
+        desc: descPrefix + (l.desc || ''),
+        qte: l.qte_a_livrer,
+        pu: l.pu
+      });
+    });
+  });
+
+  if(prefillLines.length === 0){
+    alert('⚠ Aucune ligne sélectionnée avec une quantité à livrer.\n\nCoche au moins une ligne avec qté > 0.');
+    return;
+  }
+
+  // Consolider les BC Client (champ devis.bcClientSLN), dédoublonnés
+  var poSet = {};
+  devis.forEach(function(d){ if(d.bcClientSLN) poSet[d.bcClientSLN.trim()] = true; });
+  var poConsolide = Object.keys(poSet).join(' + ');
+
+  // Consolider les numéros de devis (pour le champ "Devis lié(s)")
+  var dvliesNumStr = devis.map(function(d){return d.num||'';}).filter(Boolean).join(', ');
+
+  // Pour le client/contact/adresse : prendre celui du 1er devis. Si plusieurs clients
+  // différents, l'utilisateur a déjà été warn à l'étape 1 — il pourra rectifier dans
+  // la modale BL avant d'enregistrer.
+  var firstDV = devis[0];
+  var clientName = firstDV.client || '';
+  // Récupérer contact/adresse via DB.clients (info canonique) sinon depuis le devis
+  var clientObj = (DB.clients||[]).find(function(c){return c.nom===clientName;});
+  var contact = (clientObj && clientObj.contact) || firstDV.contact || '';
+  var adrdest = (clientObj && clientObj.adresse) || firstDV.adresse || '';
+
+  // Fermer le picker et ouvrir la modale BL avec prefill
+  cm('mBLFromDV');
+  openBL(null, {
+    fromDevisIds: ids,
+    prefillLines: prefillLines,
+    poConsolide: poConsolide,
+    dvliesNumStr: dvliesNumStr,
+    client: clientName,
+    contact: contact,
+    adrdest: adrdest
+  });
+}
+
+// =============================================================================
+// CALCUL "DÉJÀ LIVRÉ" pour une ligne de devis
+// =============================================================================
+// Pour chaque devis, on cherche tous les BL qui ont ce devisId dans _sourceDevisIds.
+// Pour chaque BL, on cherche les lignes BL qui matchent la ligne devis (par ref).
+// On somme les quantités de ces lignes BL.
+//
+// Match heuristique :
+//   1. Match exact sur ref (si la ref devis est non vide)
+//   2. Sinon match approximatif sur les 30 premiers caractères de la désignation
+//      (en retirant le préfixe optionnel "[SLN-DV-XXX] " ajouté lors d'un import groupé)
+//
+// Note : ce calcul est défensif. Si le match échoue (ref/desc différentes), on peut
+// sous-estimer le déjà livré → l'utilisateur livrera "trop" et un warn s'affichera.
+// C'est préférable à l'inverse (sur-estimer et bloquer une livraison légitime).
+// =============================================================================
+function _computeQteAlreadyDelivered(devisId, devisLine){
+  if(!devisId || !devisLine) return 0;
+  var refDV = (devisLine.ref || '').trim().toLowerCase();
+  var descDV = ((devisLine.designation || devisLine.desc || '') + '').trim().toLowerCase();
+  // Préfixe d'identification dans desc BL (cas groupage) : "[SLN-DV-XXX] désignation"
+  // On compare aussi la version "sans préfixe" de la désignation BL
+  var descDVStart = descDV.substring(0, 30);
+
+  var totalDelivered = 0;
+  (DB.bls||[]).forEach(function(bl){
+    if(!Array.isArray(bl._sourceDevisIds) || bl._sourceDevisIds.indexOf(devisId) < 0) return;
+    (bl.lines||[]).forEach(function(blLine){
+      var refBL = (blLine.ref || '').trim().toLowerCase();
+      var descBL = (blLine.desc || '').trim().toLowerCase();
+      // Retirer le préfixe [...] éventuel pour comparer
+      var descBLClean = descBL.replace(/^\[[^\]]+\]\s*/, '');
+      var matched = false;
+      if(refDV && refBL && refDV === refBL) matched = true;
+      else if(!matched && descDVStart && descBLClean.substring(0, 30) === descDVStart) matched = true;
+      if(matched){
+        totalDelivered += Number(blLine.qte) || 0;
+      }
+    });
+  });
+  return totalDelivered;
+}
+
 // ===== BL =====
 var eBLid=null,blL=[];
-function openBL(id){
+function openBL(id, opts){
+  // opts (optionnel) : { fromDevisIds: [id1,id2,...], prefillLines: [{ref,desc,qte,pu}], poConsolide: 'PO1+PO2', dvliesNumStr: 'SLN-DV-XYZ, SLN-DV-ABC', client: '...', contact: '...', adrdest: '...' }
+  // Utilisé par "Créer BL depuis devis" pour pré-remplir directement la modale.
   eBLid=id||null;blL=[];
   buildClientOptions('bl-client','');
   if(id){
@@ -27845,13 +28329,40 @@ function openBL(id){
       gv('bl-num',b.num);gv('bl-date',b.date||td());gv('bl-lieu',b.lieu||'');
       buildClientOptions('bl-client',b.client||'');
       gv('bl-contact',b.contact||'');gv('bl-adrdest',b.adrdest||'');gv('bl-emaildest',b.emaildest||'');gv('bl-po',b.po||'');gv('bl-emis',b.emis||'');gv('bl-status',b.status||'En préparation');
+      gv('bl-dvlie', b.dvlie || (b._sourceDevisNums||[]).join(', '));
       blL=JSON.parse(JSON.stringify(b.lines||[]));sv('mBLtitle','Modifier BL — '+b.num);
     }
+  } else if(opts && opts.fromDevisIds){
+    // === Création depuis "Créer BL depuis devis" ===
+    // On récupère les infos des devis source pour pré-remplir client/contact/adresse/PO
+    gv('bl-num', nxt('bl', getClientPrefix(opts.client||'')));
+    gv('bl-date', td());
+    gv('bl-lieu', 'NOUMEA');
+    buildClientOptions('bl-client', opts.client || '');
+    gv('bl-contact', opts.contact || '');
+    gv('bl-adrdest', opts.adrdest || '');
+    gv('bl-emaildest', '');
+    gv('bl-po', opts.poConsolide || '');
+    gv('bl-emis', 'Fabrice RIZZO');
+    gv('bl-status', 'En préparation');
+    gv('bl-dvlie', opts.dvliesNumStr || '');
+    // Pré-remplir les lignes
+    blL = (opts.prefillLines || []).map(function(l){
+      return { ref: l.ref || '', desc: l.desc || '', qte: Number(l.qte)||1, pu: Number(l.pu)||0 };
+    });
+    // Mémoriser les IDs sources pour la traçabilité (utilisé par saveBL via getBL)
+    _blPendingSourceDevisIds = (opts.fromDevisIds||[]).slice();
+    sv('mBLtitle', 'Nouveau BL depuis devis');
   } else {
-    gv('bl-num',nxt('bl'));gv('bl-date',td());gv('bl-lieu','NOUMEA');gv('bl-contact','');gv('bl-adrdest','');gv('bl-emaildest','');gv('bl-po','');gv('bl-emis','Fabrice RIZZO');gv('bl-status','En préparation');sv('mBLtitle','Nouveau Bon de Livraison');
+    gv('bl-num',nxt('bl'));gv('bl-date',td());gv('bl-lieu','NOUMEA');gv('bl-contact','');gv('bl-adrdest','');gv('bl-emaildest','');gv('bl-po','');gv('bl-emis','Fabrice RIZZO');gv('bl-status','En préparation');gv('bl-dvlie','');sv('mBLtitle','Nouveau Bon de Livraison');
+    _blPendingSourceDevisIds = null;
   }
   rBLlines();om('mBL');
 }
+// État temporaire : IDs des devis source d'un BL en cours de création.
+// Lu par getBL() au moment du save pour les persister dans _sourceDevisIds.
+// Vidé après chaque save ou ouverture sans context.
+var _blPendingSourceDevisIds = null;
 function addBLL(){blL.push({ref:'',desc:'',qte:1,pu:0});rBLlines();}
 function rBLlines(){
   var tb=document.getElementById('blLN');if(!tb)return;
@@ -27888,12 +28399,46 @@ function rBLlines(){
   cBLtot();
 }
 function cBLtot(){var tot=blL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0);},0);sv('blTT',fN(tot)+' XPF');return tot;}
-function getBL(){var tot=cBLtot();return{id:eBLid||Date.now(),num:gvg('bl-num'),date:gvg('bl-date'),lieu:gvg('bl-lieu'),client:gvg('bl-client'),contact:gvg('bl-contact'),adrdest:gvg('bl-adrdest'),emaildest:gvg('bl-emaildest'),po:gvg('bl-po'),emis:gvg('bl-emis'),status:gvg('bl-status'),lines:JSON.parse(JSON.stringify(blL)),total:tot};}
+function getBL(){
+  var tot=cBLtot();
+  // Pour la traçabilité Devis → BL (livraisons partielles, groupage) :
+  //   - dvlie : chaîne lisible des N° devis liés, modifiable manuellement par l'utilisateur
+  //   - _sourceDevisIds : IDs internes (pour requêtes "quels BL livrent ce devis ?")
+  //     préservés lors d'une édition (lus depuis DB.bls existant) ou injectés depuis
+  //     _blPendingSourceDevisIds lors d'une création via "Créer BL depuis devis".
+  var sourceIds = null;
+  if(eBLid){
+    var existing = DB.bls.find(function(x){return x.id===eBLid;});
+    if(existing && Array.isArray(existing._sourceDevisIds)) sourceIds = existing._sourceDevisIds.slice();
+  }
+  if(_blPendingSourceDevisIds && _blPendingSourceDevisIds.length){
+    sourceIds = _blPendingSourceDevisIds.slice();
+  }
+  return {
+    id: eBLid||Date.now(),
+    num: gvg('bl-num'),
+    date: gvg('bl-date'),
+    lieu: gvg('bl-lieu'),
+    client: gvg('bl-client'),
+    contact: gvg('bl-contact'),
+    adrdest: gvg('bl-adrdest'),
+    emaildest: gvg('bl-emaildest'),
+    po: gvg('bl-po'),
+    emis: gvg('bl-emis'),
+    status: gvg('bl-status'),
+    dvlie: gvg('bl-dvlie'),
+    _sourceDevisIds: sourceIds,
+    lines: JSON.parse(JSON.stringify(blL)),
+    total: tot
+  };
+}
 function saveBL(){
   var b=getBL();if(!b.num||!b.client){alert('N° BL et Client obligatoires');return;}
   var wasNew=!eBLid;
   if(eBLid){var i=DB.bls.findIndex(function(x){return x.id===eBLid;});if(i>=0)DB.bls[i]=b;else DB.bls.push(b);}
   else {DB.bls.push(b);eBLid=b.id;} // mémoriser pour éviter doublon si re-save sans fermer
+  // Les IDs sources sont maintenant persistés dans b._sourceDevisIds → on libère le buffer global
+  _blPendingSourceDevisIds = null;
   saveDB();
   // ⚠ La modale RESTE ouverte (pattern unifié avec saveDV)
   if(wasNew) sv('mBLtitle','Modifier BL — '+b.num);
