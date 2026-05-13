@@ -5815,9 +5815,9 @@ function getAlertData(){
     var st=getStatus(inv);if(st==='paid')return;
     var bd=parseDate(inv.dateButoir);if(!bd)return;
     var d=diffDays(td2,bd),dateStr=bd.toLocaleDateString('fr-FR');
-    if(d<0)alerts.push(Object.assign({},inv,{type:'late',message:'En retard de '+Math.abs(d)+' jour'+(Math.abs(d)>1?'s':'')+' - echeance '+dateStr}));
-    else if(d===0)alerts.push(Object.assign({},inv,{type:'today',message:'Echeance AUJOURD\'HUI - '+dateStr}));
-    else if(d<=7)alerts.push(Object.assign({},inv,{type:'soon',message:'Echeance dans '+d+' jour'+(d>1?'s':'')+' - '+dateStr}));
+    if(d<0)alerts.push(Object.assign({},inv,{type:'late',message:'En retard de '+Math.abs(d)+' jour'+(Math.abs(d)>1?'s':'')+' - echeance '+dateStr,_source:'invoice'}));
+    else if(d===0)alerts.push(Object.assign({},inv,{type:'today',message:'Echeance AUJOURD\'HUI - '+dateStr,_source:'invoice'}));
+    else if(d<=7)alerts.push(Object.assign({},inv,{type:'soon',message:'Echeance dans '+d+' jour'+(d>1?'s':'')+' - '+dateStr,_source:'invoice'}));
   });
   // Alertes factures GRC : si reste à payer > 0 et date butoir dépassée (calculée via delai)
   (DB.factures||[]).forEach(function(f){
@@ -5830,11 +5830,29 @@ function getAlertData(){
     var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
     var bd=new Date(fd);bd.setDate(bd.getDate()+days);
     var d=diffDays(td2,bd),dateStr=bd.toLocaleDateString('fr-FR');
-    if(d<0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'late',message:'GRC — En retard de '+Math.abs(d)+'j, reste '+fN(reste)+' XPF (ech. '+dateStr+')',dateEnvoi:f.date,dateButoir:bd.toISOString().slice(0,10)});
-    else if(d===0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'today',message:'GRC — Echeance AUJOURD\'HUI, reste '+fN(reste)+' XPF'});
-    else if(d<=7) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'soon',message:'GRC — Echeance dans '+d+'j, reste '+fN(reste)+' XPF'});
+    if(d<0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'late',message:'GRC — En retard de '+Math.abs(d)+'j, reste '+fN(reste)+' XPF (ech. '+dateStr+')',dateEnvoi:f.date,dateButoir:bd.toISOString().slice(0,10),_factureId:f.id,_source:'facture'});
+    else if(d===0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'today',message:'GRC — Echeance AUJOURD\'HUI, reste '+fN(reste)+' XPF',_factureId:f.id,dateButoir:bd.toISOString().slice(0,10),_source:'facture'});
+    else if(d<=7) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'soon',message:'GRC — Echeance dans '+d+'j, reste '+fN(reste)+' XPF',_factureId:f.id,dateButoir:bd.toISOString().slice(0,10),_source:'facture'});
   });
-  return alerts.sort(function(a,b){var o={late:0,today:1,soon:2};return o[a.type]-o[b.type];});
+  // === DÉDUPLICATION par num ===
+  // Une même facture peut exister dans DB.factures (GRC) ET dans DB.invoices (suivi).
+  // On préfère la version DB.factures car elle a le client complet, le delai détaillé
+  // et le bon montant TTC. La version invoice est gardée si elle est la seule.
+  var seen={}; // num → alerte conservée
+  alerts.forEach(function(a){
+    var key=a.num||('__noNum_'+a.id);
+    if(!seen[key]){
+      seen[key]=a;
+    } else {
+      // Doublon : on garde la version 'facture' si dispo, sinon la 1ère
+      if(a._source==='facture' && seen[key]._source!=='facture'){
+        seen[key]=a;
+      }
+      // Sinon on garde la 1ère (par effet de bord du if au-dessus)
+    }
+  });
+  var deduped=Object.keys(seen).map(function(k){return seen[k];});
+  return deduped.sort(function(a,b){var o={late:0,today:1,soon:2};return o[a.type]-o[b.type];});
 }
 function renderAlertes(){
   var alerts=getAlertData(),list=document.getElementById('alertes-list');if(!list)return;
