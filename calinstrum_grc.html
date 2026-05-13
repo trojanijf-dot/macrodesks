@@ -3332,6 +3332,221 @@ document.addEventListener('DOMContentLoaded',function(){
   },200);
 });
 
+// =============================================================================
+// 🐛 DEBUG MODE — Activé via Shift+D
+// =============================================================================
+// Affiche un overlay flottant en bas à droite qui collecte en temps réel :
+//   - Les erreurs JS levées (window.onerror)
+//   - Les promesses rejetées non gérées (unhandledrejection)
+//   - Les console.error / console.warn
+// L'utilisateur peut copier toutes les erreurs avec un clic.
+//
+// Cible : permettre à l'utilisateur de remonter facilement les bugs qu'il
+// rencontre, sans devoir ouvrir DevTools.
+// =============================================================================
+(function(){
+  var debugBuffer=[]; // {ts, type, msg, stack?}
+  var MAX_ENTRIES=200;
+  var overlay=null;
+  var isOpen=false;
+  var startedAt=Date.now();
+
+  // === Interception erreurs ===
+  function _capture(type, payload){
+    var entry={
+      ts:new Date().toLocaleTimeString('fr-FR'),
+      type:type,
+      msg:String(payload.msg||payload).substring(0,500),
+      stack:payload.stack||''
+    };
+    debugBuffer.push(entry);
+    if(debugBuffer.length>MAX_ENTRIES) debugBuffer.shift();
+    // Si overlay ouvert, refresh la liste
+    if(isOpen) _refreshList();
+    // Pulse l'icône s'il y a une nouvelle erreur et que l'overlay est fermé
+    if(!isOpen && (type==='error'||type==='unhandledrejection')){
+      _showFloatingBadge();
+    }
+  }
+
+  window.addEventListener('error', function(ev){
+    _capture('error', {msg:(ev.error&&ev.error.message)||ev.message, stack:(ev.error&&ev.error.stack)||''});
+  });
+  window.addEventListener('unhandledrejection', function(ev){
+    var reason=ev.reason||{};
+    _capture('unhandledrejection', {msg:reason.message||String(reason), stack:reason.stack||''});
+  });
+
+  // Wrapper console.error / console.warn pour collecter aussi
+  var _origErr=console.error;
+  var _origWarn=console.warn;
+  console.error=function(){
+    _capture('console.error', {msg:Array.prototype.slice.call(arguments).map(function(a){return typeof a==='object'?JSON.stringify(a):String(a);}).join(' ')});
+    return _origErr.apply(console, arguments);
+  };
+  console.warn=function(){
+    _capture('console.warn', {msg:Array.prototype.slice.call(arguments).map(function(a){return typeof a==='object'?JSON.stringify(a):String(a);}).join(' ')});
+    return _origWarn.apply(console, arguments);
+  };
+
+  // === Toggle via Shift+D ===
+  document.addEventListener('keydown', function(ev){
+    if(ev.shiftKey && (ev.key==='D'||ev.key==='d') && !ev.ctrlKey && !ev.altKey && !ev.metaKey){
+      // Ignorer si focus est dans un input/textarea (pour ne pas perturber la saisie)
+      var tag=(document.activeElement&&document.activeElement.tagName)||'';
+      if(tag==='INPUT'||tag==='TEXTAREA') return;
+      ev.preventDefault();
+      _toggle();
+    }
+  });
+
+  function _toggle(){
+    if(isOpen) _close();
+    else _open();
+  }
+
+  function _open(){
+    if(overlay) overlay.remove();
+    overlay=document.createElement('div');
+    overlay.id='debug-overlay';
+    overlay.style.cssText='position:fixed;z-index:99999;bottom:20px;right:20px;width:420px;max-height:520px;background:#0f1419;border:1px solid rgba(239,68,68,0.4);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.7);font-family:JetBrains Mono,monospace;font-size:11px;display:flex;flex-direction:column;overflow:hidden';
+    overlay.innerHTML=
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:linear-gradient(135deg,rgba(239,68,68,0.20) 0%,rgba(239,68,68,0.05) 100%);border-bottom:1px solid rgba(239,68,68,0.25)">'+
+        '<div style="display:flex;align-items:center;gap:8px">'+
+          '<span style="font-size:14px">🐛</span>'+
+          '<span style="font-weight:600;color:#fff;font-size:12px;letter-spacing:0.04em">DEBUG MODE</span>'+
+          '<span id="debug-count" style="background:rgba(239,68,68,0.20);color:#fca5a5;padding:1px 7px;border-radius:8px;font-size:9.5px;font-weight:600"></span>'+
+        '</div>'+
+        '<div style="display:flex;gap:5px">'+
+          '<button onclick="window._debugCopy()" title="Copier toutes les erreurs" style="background:rgba(45,212,191,0.12);border:1px solid rgba(45,212,191,0.35);color:#5dcaa5;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-family:inherit">📋 Copier</button>'+
+          '<button onclick="window._debugClear()" title="Vider la liste" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);padding:3px 8px;border-radius:4px;cursor:pointer;font-size:10px;font-family:inherit">🧹 Vider</button>'+
+          '<button onclick="window._debugClose()" title="Fermer (Shift+D)" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.7);padding:3px 7px;border-radius:4px;cursor:pointer;font-size:10px;font-family:inherit">✕</button>'+
+        '</div>'+
+      '</div>'+
+      '<div id="debug-list" style="flex:1;overflow-y:auto;padding:8px;line-height:1.4"></div>'+
+      '<div style="padding:7px 12px;background:rgba(255,255,255,0.02);border-top:1px solid rgba(255,255,255,0.05);font-size:9.5px;color:rgba(255,255,255,0.35);text-align:center">'+
+        'Shift+D pour basculer · session depuis '+new Date(startedAt).toLocaleTimeString('fr-FR')+
+      '</div>';
+    document.body.appendChild(overlay);
+    isOpen=true;
+    _hideFloatingBadge();
+    _refreshList();
+  }
+
+  function _close(){
+    if(overlay){overlay.remove();overlay=null;}
+    isOpen=false;
+  }
+
+  function _refreshList(){
+    var list=document.getElementById('debug-list');
+    var count=document.getElementById('debug-count');
+    if(!list)return;
+    if(count){
+      var nErr=debugBuffer.filter(function(e){return e.type==='error'||e.type==='unhandledrejection'||e.type==='console.error';}).length;
+      var nWarn=debugBuffer.filter(function(e){return e.type==='console.warn';}).length;
+      count.textContent=nErr+' err · '+nWarn+' warn';
+    }
+    if(debugBuffer.length===0){
+      list.innerHTML='<div style="padding:18px;text-align:center;color:rgba(255,255,255,0.35);font-style:italic">✓ Aucune erreur capturée</div>';
+      return;
+    }
+    // Plus récent en haut
+    var sorted=debugBuffer.slice().reverse();
+    list.innerHTML=sorted.map(function(e,i){
+      var typeColors={
+        'error':'#fca5a5','unhandledrejection':'#fca5a5',
+        'console.error':'#f87171','console.warn':'#fbbf24'
+      };
+      var col=typeColors[e.type]||'#94a3b8';
+      var msgEsc=e.msg.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      var stackEsc=(e.stack||'').split('\n').slice(0,3).join('\n').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return '<div style="border-left:2px solid '+col+';padding:5px 8px;margin-bottom:5px;background:rgba(255,255,255,0.02);border-radius:0 4px 4px 0">'+
+        '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:2px">'+
+          '<span style="color:'+col+';font-size:9px;font-weight:600;text-transform:uppercase">'+e.type+'</span>'+
+          '<span style="color:rgba(255,255,255,0.35);font-size:9px">'+e.ts+'</span>'+
+        '</div>'+
+        '<div style="color:rgba(255,255,255,0.85);word-break:break-word">'+msgEsc+'</div>'+
+        (stackEsc?'<details style="margin-top:3px"><summary style="color:rgba(255,255,255,0.4);cursor:pointer;font-size:9.5px">Stack</summary><pre style="color:rgba(255,255,255,0.55);font-size:9px;white-space:pre-wrap;margin:3px 0 0 0">'+stackEsc+'</pre></details>':'')+
+      '</div>';
+    }).join('');
+  }
+
+  function _showFloatingBadge(){
+    if(document.getElementById('debug-floating-badge')) return;
+    if(isOpen) return;
+    var b=document.createElement('div');
+    b.id='debug-floating-badge';
+    b.style.cssText='position:fixed;z-index:99998;bottom:20px;right:20px;background:rgba(239,68,68,0.95);color:#fff;padding:6px 11px;border-radius:14px;font-size:11px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(239,68,68,0.35);font-family:Inter,sans-serif;animation:debugPulse 1.5s ease-in-out infinite';
+    b.innerHTML='🐛 <span id="debug-floating-count">'+debugBuffer.length+'</span> err. Shift+D';
+    b.onclick=_open;
+    document.body.appendChild(b);
+    // Animation pulse (inline)
+    if(!document.getElementById('debug-pulse-style')){
+      var st=document.createElement('style');
+      st.id='debug-pulse-style';
+      st.innerHTML='@keyframes debugPulse{0%,100%{box-shadow:0 4px 12px rgba(239,68,68,0.35);}50%{box-shadow:0 4px 24px rgba(239,68,68,0.65);}}';
+      document.head.appendChild(st);
+    }
+  }
+  function _hideFloatingBadge(){
+    var b=document.getElementById('debug-floating-badge');
+    if(b) b.remove();
+  }
+
+  // === Helpers exposés ===
+  window._debugCopy=function(){
+    if(debugBuffer.length===0){alert('Aucune erreur à copier');return;}
+    var text='=== Calinstrum GRC Debug Report ===\n';
+    text+='Heure: '+new Date().toLocaleString('fr-FR')+'\n';
+    text+='Session démarrée: '+new Date(startedAt).toLocaleString('fr-FR')+'\n';
+    text+='User-Agent: '+navigator.userAgent+'\n';
+    text+='URL: '+window.location.href+'\n';
+    text+='===================================\n\n';
+    debugBuffer.slice().reverse().forEach(function(e,i){
+      text+='['+e.ts+'] '+e.type.toUpperCase()+'\n';
+      text+=e.msg+'\n';
+      if(e.stack){
+        text+='--- Stack ---\n'+e.stack.split('\n').slice(0,5).join('\n')+'\n';
+      }
+      text+='\n';
+    });
+    // Tentative clipboard moderne, fallback textarea
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){
+        if(typeof showBCSaveToast==='function') showBCSaveToast('✓ '+debugBuffer.length+' erreur(s) copiées dans le presse-papier');
+        else alert('Copié ('+debugBuffer.length+' entrées)');
+      }).catch(function(){
+        _fallbackCopy(text);
+      });
+    } else {
+      _fallbackCopy(text);
+    }
+  };
+  function _fallbackCopy(text){
+    var ta=document.createElement('textarea');
+    ta.value=text;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');alert('Copié');}catch(e){alert('Impossible de copier. Sélectionne manuellement.');}
+    ta.remove();
+  }
+  window._debugClear=function(){
+    debugBuffer.length=0;
+    _refreshList();
+  };
+  window._debugClose=_close;
+  window._debugOpen=_open;
+  // Helper console pour activer manuellement
+  window._debug=function(){
+    return {
+      open:_open, close:_close, buffer:debugBuffer.slice(),
+      copy:window._debugCopy, clear:window._debugClear
+    };
+  };
+})();
+
+// =============================================================================
+
 // Migration legacy : factures phase='' → 'livre' ou 'recu' selon type.
 // + Migration dateReceptionBC : auto-remplit pour les pré-facturées.
 // + Migration normalizeAllBCs : normalise le format des N° BC au format propre.
@@ -3934,7 +4149,15 @@ function initStampCanvas(){
   populateSigSelect();
   var c=document.getElementById('stampCanvas');
   if(!c||stampCtx)return;
-  stampCtx=c.getContext('2d');
+  // Defensive : getContext peut retourner null si le canvas n'est pas encore
+  // attaché au DOM ou si le navigateur a un policy bloquant (rare mais possible).
+  // Plutôt que de crasher avec "Cannot set strokeStyle of null", on sort proprement.
+  var ctx=c.getContext('2d');
+  if(!ctx){
+    console.warn('[stamp] getContext(2d) a retourné null — canvas tampon désactivé');
+    return;
+  }
+  stampCtx=ctx;
   stampCtx.strokeStyle='#1e3a5f';
   stampCtx.lineWidth=2;
   stampCtx.lineCap='round';
@@ -8528,29 +8751,50 @@ function rDashPro(){
   // Totaux annuels
   function devisTtc(d){return Number(d.ttc)||0;}
   function factureMt(f){return Number(f.montant||f.ttc||0);}
+  // Helper : montant réellement encaissé d'une facture
+  //   Priorité : somme des versements > fallback status Payée → TTC entier > 0
+  // Cohérent avec _findLinkedFactures et le widget Suivi factures.
+  function factureEncaisse(f){
+    if(Array.isArray(f.versements) && f.versements.length){
+      return f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
+    }
+    var st=(f.status||f.statut||'').toLowerCase();
+    if(st.indexOf('payée')>=0||st==='paid') return factureMt(f);
+    if(st.indexOf('partiel')>=0||st==='partial') return factureMt(f)*((Number(f.pct)||0)/100);
+    return 0;
+  }
   var totalDevis=dvFy.reduce(function(s,d){return s+devisTtc(d);},0);
   var totalFa=faFy.reduce(function(s,f){return s+factureMt(f);},0);
-  // Encaissé : on prend les factures avec status Payée ou Partiel
-  var totalEnc=0;
-  faFy.forEach(function(f){
-    var st=(f.status||f.statut||'').toLowerCase();
-    if(st.indexOf('payée')>=0||st==='paid') totalEnc+=factureMt(f);
-    else if(st.indexOf('partiel')>=0||st==='partial') totalEnc+=factureMt(f)*((f.pct||0)/100);
-  });
-  var totalRest=totalFa-totalEnc;
+  // Encaissé : utilise factureEncaisse() qui regarde les versements en priorité
+  var totalEnc=faFy.reduce(function(s,f){return s+factureEncaisse(f);},0);
+  var totalRest=Math.max(0,totalFa-totalEnc);
 
   // Sparklines (cumul mensuel)
   var dvMonthly=getMonthlyTotals(dvFy,devisTtc);
   var faMonthly=getMonthlyTotals(faFy,factureMt);
   var dvCum=getMonthlyCumulative(dvMonthly);
   var faCum=getMonthlyCumulative(faMonthly);
-  // Encaissé mensuel
+  // Encaissé mensuel : utilise les versements (chaque versement compte pour son mois)
+  // Fallback : facture Payée sans versements ni dateEncaissement → ignorée du mensuel
+  // (mais comptée dans totalEnc via factureEncaisse — le but du mensuel est la chronologie)
   var encMonthly=new Array(12).fill(0);
   faFy.forEach(function(f){
-    var ds=f.dateEncaissement||(((f.status||'').toLowerCase().indexOf('payée')>=0)?f.date:'');
-    if(!ds)return;
-    var m=parseInt(ds.substring(5,7),10);
-    if(m>=1&&m<=12) encMonthly[m-1]+=factureMt(f);
+    // Cas 1 : versements explicites — chacun à sa date
+    if(Array.isArray(f.versements) && f.versements.length){
+      f.versements.forEach(function(v){
+        var vd=v.date||'';
+        var m=parseInt(vd.substring(5,7),10);
+        if(m>=1&&m<=12) encMonthly[m-1]+=Number(v.montant)||0;
+      });
+      return;
+    }
+    // Cas 2 : status Payée + dateEncaissement → utilise dateEncaissement
+    var st=(f.status||'').toLowerCase();
+    if(st.indexOf('payée')>=0||st==='paid'){
+      var ds=f.dateEncaissement||f.date||'';
+      var m=parseInt(ds.substring(5,7),10);
+      if(m>=1&&m<=12) encMonthly[m-1]+=factureMt(f);
+    }
   });
   var encCum=getMonthlyCumulative(encMonthly);
 
@@ -10473,15 +10717,24 @@ function _calcKpiDV(devis){
     else if(st==='Envoyé'||st==='Refusé'){bucket.pertinents++;}
   });
   // === Taux de devis RÉVISÉS ===
-  // Un devis est dit "révisé" s'il a des enfants (révisions REV1, REV2...) OU
-  // s'il porte lui-même un _revisionNumber (= c'est une révision).
-  // On compte combien de devis "racines" ont au moins une révision.
+  // Deux modèles cohabitent dans la base :
+  //   (a) Modèle parent/enfant : un devis racine + révisions séparées avec _parentDevisId
+  //   (b) Modèle "champ texte" : un seul devis avec d.rev = "REV1"/"REV2"/"REV3" rempli
+  //       (cas le plus courant pour les devis édités manuellement)
+  // On compte les deux pour avoir le bon total.
   var rootsWithRev={};
   var revisionsCount=0;
   dvFy.forEach(function(d){
+    // Modèle (a) : révision avec parent explicite
     if(d._parentDevisId){
       revisionsCount++;
       rootsWithRev[d._parentDevisId]=true;
+    }
+    // Modèle (b) : devis avec champ rev rempli (REV1, REV2...) sans parent
+    // → on le compte comme une "révision" (le devis lui-même est révisé)
+    else if(d.rev && /^rev/i.test(String(d.rev).trim())){
+      revisionsCount++;
+      rootsWithRev[d.id]=true;
     }
   });
   var rootsTotal=dvFy.filter(function(d){return !d._parentDevisId;}).length;
@@ -11609,6 +11862,13 @@ function renderDVPro(){
   if(s||fs||fType||fPrefix||fContact){
     html+='<button title="Réinitialiser les filtres" onclick="document.getElementById(\'sDV\').value=\'\';document.getElementById(\'fDVst\').value=\'\';window._dvProFilters={type:\'\',prefix:\'\',contact:\'\'};renderDV()" style="background:transparent;border:0.5px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--muted-soft);cursor:pointer;font-size:11px;display:flex;align-items:center;gap:5px"><i class="ti ti-x" style="font-size:13px"></i>Effacer</button>';
   }
+  // Bouton "🔍 Réf. externe" — recherche unifiée Emerson / ACT / PO Calinstrum
+  html+='<button onclick="openExternalRefSearch()" title="Rechercher une cotation par sa référence Emerson, ACT ou PO Calinstrum" '+
+    'style="background:rgba(124,58,237,0.10);border:0.5px solid rgba(124,58,237,0.4);border-radius:6px;padding:7px 12px;color:#c4b5fd;cursor:pointer;font-size:11px;font-weight:500;display:flex;align-items:center;gap:5px;white-space:nowrap" '+
+    'onmouseover="this.style.background=\'rgba(124,58,237,0.18)\'" '+
+    'onmouseout="this.style.background=\'rgba(124,58,237,0.10)\'">'+
+    '<i class="ti ti-search" style="font-size:13px"></i>Réf. externe'+
+  '</button>';
   // Compteur résultats
   html+='<span style="margin-left:auto;color:var(--muted-soft);font-size:11px;letter-spacing:0.04em" class="no-pm-blur">'+
     '<span data-money>'+data.length+'</span> résultat'+(data.length>1?'s':'')+
@@ -11629,12 +11889,55 @@ function renderDVPro(){
     // Tri
     var sorted=data.slice();
     function getDvTTC(x){return (typeof _getDevisTTC==='function')?_getDevisTTC(x):x.ttc||0;}
+
+    // === Tri "naturel" pour les N° de devis ===
+    // localeCompare donne un tri alphabétique pur qui sort mal les nombres :
+    //   SLN-DV100, SLN-DV101, SLN-DV9   → ordre alpha incorrect
+    //   On veut : SLN-DV9, SLN-DV100, SLN-DV101
+    //
+    // Solution : extraire (préfixe alpha, numéro principal, suffixe rev) puis
+    // comparer composant par composant — alpha pour préfixe, numérique pour
+    // le N°, alpha pour rev.
+    function _parseDevisNum(num){
+      var s=String(num||'').toUpperCase().trim();
+      // Match : <prefix non-numérique>-<digits>[-<extra-digits>]?[<suffix>]?
+      // Ex: "SLN-DV166"          → prefix=SLN-DV, num=166
+      //     "SLN-DV128 REV2"     → prefix=SLN-DV, num=128, suffix=" REV2"
+      //     "SLN-DV-BCGMAO-00734811" → prefix=SLN-DV-BCGMAO-, num=734811
+      //     "PRNC-DV029"         → prefix=PRNC-DV, num=29
+      var m=s.match(/^([^\d]*?)(\d+)(.*)$/);
+      if(!m) return {prefix:s, num:0, suffix:''};
+      return {
+        prefix: (m[1]||'').replace(/-+$/,''), // garde "SLN-DV" sans "-" final
+        num:    parseInt(m[2],10)||0,
+        suffix: (m[3]||'').trim()
+      };
+    }
+    function _cmpDevisNum(a,b){
+      var pa=_parseDevisNum(a), pb=_parseDevisNum(b);
+      // 1) Préfixe alpha
+      if(pa.prefix !== pb.prefix) return pa.prefix.localeCompare(pb.prefix);
+      // 2) N° principal numérique
+      if(pa.num !== pb.num) return pa.num - pb.num;
+      // 3) Suffixe alpha (REV1 < REV2 < REV10 → on re-parse récursivement le suffixe)
+      if(pa.suffix !== pb.suffix){
+        // Cas suffixe contient un nombre (REV1, V2…) → tri naturel aussi
+        var sa=pa.suffix.match(/(\d+)/), sb=pb.suffix.match(/(\d+)/);
+        if(sa && sb){
+          var na=parseInt(sa[1],10), nb=parseInt(sb[1],10);
+          if(na !== nb) return na - nb;
+        }
+        return pa.suffix.localeCompare(pb.suffix);
+      }
+      return 0;
+    }
+
     sorted.sort(function(a,b){
       switch(sortKey){
         case 'date-asc': return (a.date||'').localeCompare(b.date||'');
         case 'date-desc': return (b.date||'').localeCompare(a.date||'');
-        case 'num-asc': return (a.num||'').localeCompare(b.num||'');
-        case 'num-desc': return (b.num||'').localeCompare(a.num||'');
+        case 'num-asc':  return _cmpDevisNum(a.num, b.num);
+        case 'num-desc': return _cmpDevisNum(b.num, a.num);
         case 'ttc-asc': return getDvTTC(a)-getDvTTC(b);
         case 'ttc-desc': return getDvTTC(b)-getDvTTC(a);
         default: return (b.date||'').localeCompare(a.date||'');
@@ -11660,8 +11963,17 @@ function renderDVPro(){
       var clientShort=esc((d.client||'').substring(0,40));
       var objet=esc((d.objet||d.intitule||'').replace(/\n/g,' ').substring(0,60));
       var dateF=(typeof fD==='function')?fD(d.date):(d.date||'');
-      // Indicateur révision si présent
-      var revBadge=d._revisionNumber?' <span style="background:rgba(251,191,36,0.15);color:#fbbf24;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:500;margin-left:4px;letter-spacing:0.04em">REV'+d._revisionNumber+'</span>':'';
+      // Indicateur révision si présent :
+      //   - d.rev = champ texte "REV1" / "REV2"... (modèle courant, saisie manuelle)
+      //   - d._revisionNumber = entier (modèle parent/enfant)
+      var revLabel='';
+      if(d.rev && String(d.rev).trim()){
+        revLabel=String(d.rev).trim().toUpperCase();
+        if(!/^REV/i.test(revLabel)) revLabel='REV'+revLabel; // tolère "1" → "REV1"
+      } else if(d._revisionNumber){
+        revLabel='REV'+d._revisionNumber;
+      }
+      var revBadge=revLabel?' <span style="background:rgba(251,191,36,0.15);color:#fbbf24;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:500;margin-left:4px;letter-spacing:0.04em">'+esc(revLabel)+'</span>':'';
       // Date selon statut (Accepté → date BC, Facturé → date facture, etc.)
       var statusDate=(typeof _getStatusDate==='function')?_getStatusDate(d):null;
 
@@ -12288,7 +12600,7 @@ function renderSuiviPro(){
   }
   // Mount des graphiques mensuels interactifs
   if(typeof _mountMonthlyCharts==='function') _mountMonthlyCharts(pro);
-  // Rendu de la card cycle moyen Fourniture (timeline 8 étapes / 7 deltas)
+  // Rendu de la card cycle moyen Fourniture (timeline 9 étapes / 8 deltas)
   if(typeof _renderCycleMoyenFourniture==='function'){
     try{ _renderCycleMoyenFourniture(); }catch(e){ console.warn('Cycle moyen failed:',e); }
   }
