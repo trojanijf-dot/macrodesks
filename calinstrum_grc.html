@@ -9206,7 +9206,10 @@ function rDashPro(){
   html+='</div>';
   html+='</div>';
 
-  page.innerHTML=html;
+  // FIX FOCUS — voir renderDVPro pour le contexte.
+  preserveFocus(function(){
+    page.innerHTML=html;
+  });
   // Mount des graphiques mensuels interactifs (crosshair, toggle, etc.)
   if(typeof _mountMonthlyCharts==='function') _mountMonthlyCharts(page);
   // Mount des sparklines interactives des KPIs (crosshair + tooltip)
@@ -11735,6 +11738,68 @@ function _miniSparkline(values, color){
   return '<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" style="width:100%;height:'+h+'px"><polyline points="'+pts+'" fill="none" stroke="'+color+'" stroke-width="0.5"/></svg>';
 }
 
+// =============================================================================
+// HELPER : preserveFocus — préserve focus + curseur à travers un re-render destructif
+// =============================================================================
+// CONTEXTE DU BUG :
+// Plusieurs renderers (renderDVPro, renderSuiviPro, etc.) font `container.innerHTML = html`
+// pour reconstruire tout le bloc UI. Si l'utilisateur est en train de taper dans un
+// input contenu DANS ce bloc, son input est détruit + recréé → focus perdu à chaque
+// frappe → l'utilisateur doit re-cliquer entre chaque caractère. UX catastrophique.
+//
+// SOLUTION :
+// Wrapper le render avec un snapshot/restore du focus.
+// On capture : id de l'élément focusé + selectionStart/End (position curseur).
+// Après le render, on re-focus l'élément (par id) et on remet le curseur à sa
+// position d'origine. Si l'élément a disparu, on ne fait rien.
+//
+// USAGE :
+//   preserveFocus(function(){
+//     container.innerHTML = newHtml;
+//   });
+// =============================================================================
+function preserveFocus(renderFn){
+  // 1) Snapshot
+  var active = document.activeElement;
+  var snap = null;
+  if(active && active.id && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')){
+    snap = {
+      id: active.id,
+      // selectionStart/End ne sont accessibles que pour les inputs texte/textarea
+      // (pas pour type=number sur tous les browsers, pas pour select)
+      selStart: null,
+      selEnd: null
+    };
+    try {
+      if(typeof active.selectionStart === 'number'){
+        snap.selStart = active.selectionStart;
+        snap.selEnd = active.selectionEnd;
+      }
+    } catch(e){ /* certains inputs (number, date) throw, on ignore */ }
+  }
+  // 2) Exécuter le render
+  try { renderFn(); } catch(e){ console.error('preserveFocus render error:', e); throw e; }
+  // 3) Restore — APRÈS le render. On utilise requestAnimationFrame pour s'assurer que
+  // le DOM est settled avant de focus (sinon Firefox peut perdre le focus à nouveau).
+  if(!snap) return;
+  var doRestore = function(){
+    var el = document.getElementById(snap.id);
+    if(!el) return; // l'élément a disparu (changement de page, etc.)
+    try {
+      el.focus();
+      if(snap.selStart !== null && typeof el.setSelectionRange === 'function'){
+        el.setSelectionRange(snap.selStart, snap.selEnd);
+      }
+    } catch(e){ /* élément peut-être pas focusable, on ignore */ }
+  };
+  // Préférer requestAnimationFrame si dispo, sinon setTimeout 0
+  if(typeof requestAnimationFrame === 'function'){
+    requestAnimationFrame(doRestore);
+  } else {
+    setTimeout(doRestore, 0);
+  }
+}
+
 // Page Devis pro
 function renderDVPro(){
   var page=document.getElementById('page-devis');
@@ -12228,18 +12293,24 @@ function renderDVPro(){
   // contenu visible, et on injecte des contrôles invisibles synchronisés.
   // Cherche ou crée un container dédié au mode pro.
   var existingPro=page.querySelector('.dvpro-content');
-  if(existingPro){
-    existingPro.innerHTML=html;
-  } else {
-    // Cacher tout le contenu original
-    Array.from(page.children).forEach(function(c){
-      if(!c.classList.contains('dvpro-content')) c.style.display='none';
-    });
-    var container=document.createElement('div');
-    container.className='dvpro-content';
-    container.innerHTML=html;
-    page.appendChild(container);
-  }
+  // FIX FOCUS : on wrappe le re-render destructif (innerHTML = ...) avec preserveFocus
+  // qui capture l'élément focusé (input recherche, select filtre…) AVANT la destruction
+  // et le restaure APRÈS, en remettant aussi la position du curseur. Sans ça,
+  // l'utilisateur perd le focus à chaque frappe sur la barre de recherche du bloc.
+  preserveFocus(function(){
+    if(existingPro){
+      existingPro.innerHTML=html;
+    } else {
+      // Cacher tout le contenu original
+      Array.from(page.children).forEach(function(c){
+        if(!c.classList.contains('dvpro-content')) c.style.display='none';
+      });
+      var container=document.createElement('div');
+      container.className='dvpro-content';
+      container.innerHTML=html;
+      page.appendChild(container);
+    }
+  });
 
   // S'assurer que les contrôles legacy (utilisés par gvg) existent toujours quelque part
   // → ils sont dans page-devis (cachés), donc gvg('sDV') etc continuent de marcher.
@@ -12834,7 +12905,11 @@ function renderSuiviPro(){
   html+='<div id="dashCycle"></div>';
   html+='</div>';
 
-  pro.innerHTML=html;
+  // FIX FOCUS — voir renderDVPro pour le contexte. Le bloc innerHTML détruit
+  // les inputs de recherche/filtre du Suivi → focus perdu à chaque frappe.
+  preserveFocus(function(){
+    pro.innerHTML=html;
+  });
 
   // Si on a des dossiers, on rend les cards "affaire" version pro
   if(typeof buildDossiers==='function'){
@@ -16874,7 +16949,14 @@ function parseLegacyDevisTextV1(text){
     if(/^(?:FRET\b|TRANSPORT\b|FRAIS\s+LOCAUX|FRAIS\s+DIVERS|FRET\s*\/\s*FRAIS|Total\s+FRET)/i.test(firstColCheck) && !hasItemColumnsCheck){
       return {type:'header',section:'fret'};
     }
-    if(/^(Désignation|TGC|Montant|Remarque|Banque|Code|IBAN|BIC|Le\s+Client|Signature|RIDET|Adresse|T[ée]l|e-?mail|Op[ée]ration|D[ée]lai|Validit|Paiement|Modalit|R[èe]glement|Nom\s+du)/i.test(line))return {type:'meta'};
+    // === MÉTA / FOOTER : pattern restrictif ===
+    // Les labels typiques d'un en-tête/pied de page (RIDET:, Banque:, IBAN:, Tél:, etc.).
+    // Auparavant : /^(Désignation|TGC|Montant|.../  matchait "Opération" en début de "opérations"
+    // (en milieu de désignation continue), tronquant la désignation. Maintenant chaque pattern
+    // exige soit un ":" suffixe, soit un mot-clé spécifique du footer, pour éviter ces faux positifs.
+    if(/^(?:Désignation\s*$|TGC\s*%|Montant\s+(?:en\s+lettres|à\s+payer|TTC|HT)|Montant\s*:|Remarque\s*:|Banque\s*:|Code\s*:|IBAN\s*:|BIC\s*:|Le\s+Client\s*$|Signature\s*(?:précédée|$)|RIDET\s*:|Adresse\s*:|T[ée]l[ée]?(?:phone)?\s*:|e-?mail\s*:|D[ée]lai\s+(?:d'ex|de)|Validit[ée]\s*:|Paiement\s*:|Modalit[ée]s\s*(?:de|:)|R[èe]glement\s+par|Nom\s+du)/i.test(line))return {type:'meta'};
+    // "Opération" en début de ligne UNIQUEMENT suivi de mots-clés footer (pas "opérations nécessitant" en milieu de desc)
+    if(/^Op[ée]ration\s+(?:r[ée]alis[ée]e|exonéré[e]?|exonérée|factur[ée]e|hors|en\s+franchise)/i.test(line))return {type:'meta'};
     if(/^Page\s+\d+/i.test(line))return {type:'meta'};
     // Skip aussi les lignes de header de table "# RÉF. DÉSIGNATION TGC% UTÉ QTÉ PU TOTAL HT"
     // qui apparaissent au début de chaque page dans le template 2026+.
@@ -17016,6 +17098,39 @@ function parseLegacyDevisTextV1(text){
         }
       }
       finalDesignation=pieces.join(' ').replace(/\s+/g,' ').trim();
+    } else {
+      // === FIX : item-WITH-desc — récupérer les wrap qui suivent ===
+      // Sur le template Calinstrum 2026+, pdf.js extrait l'item ainsi :
+      //   L21: | 1 | SUPERVISION | Superviseur chantier / Instrumentiste | 0% | H | 96 | 6 500 | 624 000
+      //   L22:   senior – Coordination, sécurité, gestion de
+      //   L23:   la coactivité, interface SLN (EGR, DETI,
+      //   L24:   FeNi), pilotage des essais avec
+      //   ...etc (jusqu'à 8 lignes suivantes pour SUPERVISION)
+      //   L30: | 2 | CHAUDRON.-INST | Technicien chaudronnier / instrumentiste – | ...
+      //
+      // Avant : on gardait UNIQUEMENT la 1ère ligne ("Superviseur chantier / Instrumentiste")
+      //          → perte massive de contexte dans le devis stocké en DB
+      //          → l'export PDF GRC réimprimait une désignation tronquée
+      // Maintenant : on collecte tous les descriptifs ENTRE cet item et le prochain item/header
+      //              et on les concatène pour obtenir la désignation complète.
+      var contWrap=[];
+      for(var cwi=ki+1;cwi<classifiedV1.length;cwi++){
+        var cw=classifiedV1[cwi];
+        if(cw.type==='header')break;
+        if(cw.type==='item')break; // s'arrête au prochain item (même item-bare)
+        // FIX : arrêter aussi sur les sentinelles "meta" (Sous-total, Total, IBAN, Le Client,
+        // Signature, Montant à payer, Banque, etc.). Sans ça, le dernier item du document
+        // continuait de ramasser tout le footer (IBAN, conditions, signature...) puisqu'il
+        // n'y a plus de header/item après lui.
+        if(cw.type==='meta')break;
+        if(cw.type==='descriptive'){
+          contWrap.push(cw.text);
+        }
+        // 'empty' → on continue (saut de ligne)
+      }
+      if(contWrap.length){
+        finalDesignation = (finalDesignation + ' ' + contWrap.join(' ')).replace(/\s+/g,' ').trim();
+      }
     }
 
     if(finalDesignation){
