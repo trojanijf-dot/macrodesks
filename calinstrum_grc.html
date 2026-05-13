@@ -12592,8 +12592,21 @@ function renderSuiviPro(){
 
   var fy=typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear();
   var src=(typeof getSuiviSource==='function')?getSuiviSource():(invoices||[]);
-  // Filtrer par année fiscale
-  var srcFy=src.filter(function(f){return (f.date||'').substring(0,4)==String(fy);});
+
+  // ⚠ BUG FIX : les objets renvoyés par getSuiviSource() n'ont PAS de champ `date` :
+  //   - Pour les factures GRC (DB.factures), la date d'émission est mappée vers `dateEnvoi`
+  //     (cf ligne 3676 : `dateEnvoi: viewDateEnvoi` qui vient de f.date si phase billed).
+  //   - Pour les invoices Suivi natives (DB.invoices), seul `dateEnvoi` existe (jamais `date`).
+  // Donc filtrer/calculer sur `f.date` faisait tomber 100% des invoices et le dashboard
+  // affichait des KPIs à zéro alors qu'il y avait 16 factures émises sur 2026 dans la base.
+  // On utilise un helper qui priorise `dateEnvoi` (le bon champ pour la date d'émission au
+  // client, qui définit l'année fiscale d'imputation) puis fallback `date` (compat factures
+  // GRC pures, jamais transitées par le miroir Suivi).
+  function getEffectiveDate(f){ return f.dateEnvoi || f.date || ''; }
+  function effYearMatches(f){ return getEffectiveDate(f).substring(0,4) === String(fy); }
+
+  // Filtrer par année fiscale (sur dateEnvoi en priorité, cf commentaire ci-dessus)
+  var srcFy=src.filter(effYearMatches);
 
   function getMt(f){return Number(f.montant||f.ttc||0);}
   function isPaid(f){
@@ -12639,11 +12652,17 @@ function renderSuiviPro(){
   var tresoNette=totalEnc-totalCoutPaye;
 
   // Sparklines monthly
-  var emisM=getMonthlyTotals(srcFy.filter(function(f){return !isPrebilled(f);}),getMt);
+  // ⚠ Idem fix ci-dessus : getMonthlyTotals default sur le champ 'date' qui n'existe
+  // pas sur les objets Suivi. On passe explicitement 'dateEnvoi' pour la chronologie
+  // d'émission (avec fallback interne sur 'date' déjà géré par getMonthlyTotals).
+  var emisM=getMonthlyTotals(srcFy.filter(function(f){return !isPrebilled(f);}),getMt,'dateEnvoi');
   var encM=new Array(12).fill(0);
   srcFy.forEach(function(f){
     if(isPrebilled(f))return;
-    var ds=f.dateEncaissement||(isPaid(f)?f.date:'');
+    // Pour la chronologie d'encaissement : priorité à dateEncaissement (date virement
+    // réel), sinon dateEnvoi (la facture a été émise et payée à cette date) si payée.
+    // Avant le fix, on lisait f.date qui n'existe pas → encM restait à 0.
+    var ds=f.dateEncaissement||(isPaid(f)?(f.dateEnvoi||f.date):'');
     if(!ds)return;
     var m=parseInt(ds.substring(5,7),10);
     if(m>=1&&m<=12) encM[m-1]+=getMt(f);
