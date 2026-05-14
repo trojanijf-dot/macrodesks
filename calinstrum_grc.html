@@ -30890,63 +30890,6 @@ function bDV(d){
   var isExo=isClientExo(d.client);
   var clientDetail=getClientDetail(d.client);
   var secNames={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
-  // Libellés pour les sous-totaux de section (affichés en pied de chaque section dans la table)
-  var secSubtotalLabels={
-    service:"Sous-total (Main d'œuvre)",
-    fourniture:"Sous-total (Fournitures)",
-    fret:"Sous-total (Frais annexes)"
-  };
-  // Pré-calcul du sous-total HT brut de chaque section.
-  // Règles cohérentes avec cDVtot :
-  //   - header : ignoré
-  //   - TASK main : la porteuse n'a pas de prix mais ses subLines sont sommées
-  //   - autres (normal, KIT main) : qte * pu
-  function calcSectionSubtotal(secKey){
-    var arr=(d.lines&&d.lines[secKey])||[];
-    var st=0;
-    arr.forEach(function(l,idx){
-      if(!l || l.type==='header') return;
-      // Détection TASK main : remonte vers le header le plus proche
-      var isTaskMain=false;
-      for(var k=idx-1;k>=0;k--){
-        if(arr[k] && arr[k].type==='header'){
-          isTaskMain=(arr[k].mode==='task');
-          break;
-        }
-      }
-      // Fallback : flag _isTaskMain + présence de subLines
-      if(!isTaskMain && l._isTaskMain && Array.isArray(l.subLines)) isTaskMain=true;
-      if(isTaskMain && Array.isArray(l.subLines)){
-        l.subLines.forEach(function(sub){
-          st+=(Number(sub.qte)||0)*(Number(sub.pu)||0);
-        });
-        return;
-      }
-      st+=(Number(l.qte)||0)*(Number(l.pu)||0);
-    });
-    return st;
-  }
-  var sectionSubtotals={
-    service:calcSectionSubtotal('service'),
-    fourniture:calcSectionSubtotal('fourniture'),
-    fret:calcSectionSubtotal('fret')
-  };
-  // Mapping nom section affiché → clé sectionSubtotals (pour insertion dans la boucle)
-  var secNameToKey={};
-  Object.keys(secNames).forEach(function(k){ secNameToKey[secNames[k]]=k; });
-
-  // Helper : produit le <tr> sous-total pour une section
-  function buildSubtotalTr(secKey){
-    if(!secKey || !sectionSubtotals[secKey]) return '';
-    var label=secSubtotalLabels[secKey]||'Sous-total';
-    var amount=sectionSubtotals[secKey];
-    var formatted=fN(amount);
-    // colspan=7 pour les 7 premières colonnes, dernière cellule pour le montant
-    return '<tr class="doc-sec-subtotal" style="page-break-inside:avoid">'+
-      '<td colspan="7" style="text-align:right;padding:8px 10px;font-weight:700;color:#1e3a5f;border-top:2px solid #1e3a5f;background:#f8fafc;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+esc(label)+' (XPF)</td>'+
-      '<td style="text-align:right;padding:8px 10px;font-weight:700;color:#1e3a5f;border-top:2px solid #1e3a5f;background:#f8fafc;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+formatted+'</td>'+
-    '</tr>';
-  }
 
   // Construit la liste plate avec marqueurs de section pour itération.
   // Chaque entrée garde son type (header/normal/kit-main avec subLines).
@@ -30961,13 +30904,6 @@ function bDV(d){
   allL.forEach(function(l,i){
     // Bandeau de section principale (FOURNITURE, MAIN D'OEUVRE, FRET) si on change
     if(l._sec!==lastS){
-      // === SOUS-TOTAL DE LA SECTION PRÉCÉDENTE (si on change de section et qu'il y avait une section avant)
-      if(lastS){
-        var prevKey=secNameToKey[lastS];
-        if(prevKey && sectionSubtotals[prevKey]>0){
-          rows+=buildSubtotalTr(prevKey);
-        }
-      }
       rows+='<tr><td colspan="8" class="doc-sec-head">'+l._sec+'</td></tr>';
       lastS=l._sec;
     }
@@ -31067,13 +31003,6 @@ function bDV(d){
       });
     }
   });
-  // === SOUS-TOTAL DE LA DERNIÈRE SECTION (après la boucle, avant fermeture du tableau)
-  if(lastS){
-    var lastKey=secNameToKey[lastS];
-    if(lastKey && sectionSubtotals[lastKey]>0){
-      rows+=buildSubtotalTr(lastKey);
-    }
-  }
   var adr=(d.adresse||'').trim().replace(/\n{2,}/g,'\n').replace(/\n/g,'<br>');
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   var mention=getMention(isExo?d.tgcM:'tgc');
@@ -31091,15 +31020,15 @@ function bDV(d){
       '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
       '<div style="width:50%;text-align:right"><div class="doc-title">DEVIS N° '+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</div><div class="doc-meta">Le : '+fD(d.date)+'</div></div>'+
     '</div>'+
-    '<div class="doc-parties">'+
-      '<div class="doc-party"><h4>CALINSTRUM SARL</h4><p>RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+' / '+CI.tel2+'<br>'+CI.email+'</p></div>'+
-      '<div class="doc-party"><h4>CLIENT</h4><p>À M. <strong>'+esc(d.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
-    '</div>'+
     '<div class="doc-info-bar">'+
       '<div><span class="dlbl">Devis N°</span><strong>'+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</strong></div>'+
       '<div><span class="dlbl">Type</span>'+esc(d.type||'')+'</div>'+
       '<div><span class="dlbl">Shipping</span>'+esc(d.incoterms||'—')+'</div>'+
       '<div><span class="dlbl">Freight</span>'+esc(d.freight||'—')+'</div>'+
+    '</div>'+
+    '<div class="doc-parties">'+
+      '<div class="doc-party"><h4>CALINSTRUM SARL</h4><p>RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+' / '+CI.tel2+'<br>'+CI.email+'</p></div>'+
+      '<div class="doc-party"><h4>CLIENT</h4><p>À M. <strong>'+esc(d.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
     '</div>'+
     '<p style="font-size:13px;margin-bottom:8px"><strong>Objet :</strong> '+esc(d.objet||'')+'</p>'+
     '<table class="doc-tbl" style="page-break-inside:auto">'+
@@ -32040,16 +31969,16 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       '</div>';
     if(!isFirstPage)return logoBlock;
     return logoBlock+
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px">'+
-        '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CALINSTRUM SARL</h4><p style="font-size:13px;line-height:1.6;color:#333;margin:0">RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+' / '+CI.tel2+'<br>'+CI.email+'</p></div>'+
-        '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CLIENT</h4>'+
-          '<p style="font-size:13px;line-height:1.6;color:#333;margin:0">À M. <strong>'+esc(d.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
-      '</div>'+
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Devis N\u00b0</span><strong>'+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</strong></div>'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Type</span>'+esc(d.type||'')+'</div>'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Shipping</span>'+esc(d.incoterms||'\u2014')+'</div>'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Freight</span>'+esc(d.freight||'\u2014')+'</div>'+
+      '</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px">'+
+        '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CALINSTRUM SARL</h4><p style="font-size:13px;line-height:1.6;color:#333;margin:0">RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+' / '+CI.tel2+'<br>'+CI.email+'</p></div>'+
+        '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CLIENT</h4>'+
+          '<p style="font-size:13px;line-height:1.6;color:#333;margin:0">À M. <strong>'+esc(d.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
       '</div>'+
       '<p style="font-size:13px;margin-bottom:8px;margin-top:0"><strong>Objet :</strong> '+esc(d.objet||'')+'</p>';
   }
@@ -32146,6 +32075,19 @@ var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;p
 function printPreviewBC(){
   var src=document.getElementById('prvBody');
   if(!src){alert('Aucun aperçu à imprimer.');return;}
+
+  // === DEVIS : déléguer à doPrint() qui utilise buildPaginatedDV ===
+  // Pourquoi : buildPaginatedDV calcule la pagination manuellement et insère
+  // un "Sous-total HT (XPF) — Report page suivante" en bas de chaque page
+  // sauf la dernière (somme cumulée des HT de toutes les lignes vues jusqu'ici).
+  // C'est le rendu validé sur SLN-DV163. printPreviewBC ci-dessous ne sait
+  // pas faire de pagination manuelle — il laisse Chrome découper librement,
+  // ce qui ne permet PAS d'avoir un sous-total par page.
+  var titleElEarly=document.getElementById('prvTitle');
+  var docTitleEarly=titleElEarly?titleElEarly.textContent:'';
+  if(/^Devis\s/i.test(docTitleEarly)){
+    return doPrint();
+  }
 
   // Récupérer tous les <style> et <link rel="stylesheet"> de l'app pour cohérence visuelle
   var stylesHtml='';
