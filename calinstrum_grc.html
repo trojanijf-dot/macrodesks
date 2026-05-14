@@ -15176,6 +15176,19 @@ function getDV(){
     lines:JSON.parse(JSON.stringify(dvL)),ht:t.ht,t11:t.t11,t22:t.t22,t6:t.t6,fr:t.fr,ttc:t.ttc};
   // Réinjecter les flags préservés
   Object.assign(result,preservedFlags);
+  // === GARDE-FOU : préserver tous les champs annexes de existing non écrasés ===
+  // Le bloc result ci-dessus reconstruit explicitement ~40 champs depuis l'UI.
+  // Tout champ présent dans existing mais ABSENT de result risque d'être perdu
+  // au re-save. Ça a causé des bugs où la facture liée disparaissait après une
+  // simple modification (ex: marchandise dangereuse Non→Oui), car des champs
+  // comme grcFactureId, _factureId, _suiviId, dvlie, etc. n'étaient pas portés.
+  // On merge donc tous les champs de existing qui ne sont pas déjà dans result,
+  // SAUF ceux qui doivent rester contrôlés par l'UI (lines, totaux, etc.).
+  if(existing){
+    Object.keys(existing).forEach(function(k){
+      if(result[k]===undefined) result[k]=existing[k];
+    });
+  }
   return result;
 }
 
