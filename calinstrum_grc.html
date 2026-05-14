@@ -32441,11 +32441,12 @@ function printPreviewBC(){
       // 8mm au-dessus du bord (juste au-dessus du n° de page qui est en @bottom-right).
       // Le contenu paginé s'arrête à la marge basse (22mm), donc aucun chevauchement.
       '.doc-fixed-footer{position:fixed!important;bottom:8mm!important;left:0!important;right:0!important;display:flex!important;flex-direction:column!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
-      // Phrase rouge en PREMIER (au-dessus du bandeau bleu) — order:1 garantit l'ordre
-      // visuel indépendamment de l'ordre HTML, en cas où Chrome aurait inversé.
-      '.doc-fixed-footer .doc-legal{order:1!important;margin:0 0 3px 0!important;padding:0 10mm!important;font-size:9.5px!important;color:#cc2200!important;font-style:italic!important;text-align:center!important;}'+
-      // Bandeau bleu en DERNIER (tout en bas, juste au-dessus du n° de page Chrome)
-      '.doc-fixed-footer .doc-footer-bar{order:2!important;margin:0!important;background:#1e3a5f!important;color:#fff!important;text-align:center!important;padding:5px 10mm!important;font-size:9px!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
+      // Référence SLN-DV163 : bandeau bleu CALINSTRUM SARL EN PREMIER (order:1),
+      // puis phrase rouge EN DESSOUS (order:2), puis n° de page Chrome en @bottom-right.
+      // Bandeau bleu en HAUT du footer fixed
+      '.doc-fixed-footer .doc-footer-bar{order:1!important;margin:0!important;background:#1e3a5f!important;color:#fff!important;text-align:center!important;padding:5px 10mm!important;font-size:9px!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
+      // Phrase rouge légale EN DESSOUS du bandeau bleu
+      '.doc-fixed-footer .doc-legal{order:2!important;margin:3px 0 0 0!important;padding:0 10mm!important;font-size:9.5px!important;color:#cc2200!important;font-style:italic!important;text-align:center!important;}'+
       '.print-wrapper>thead>tr>td,.print-wrapper>tbody>tr>td{padding:0!important;margin:0!important;border:0!important;vertical-align:top!important;}'+
       '.print-wrapper>thead>tr>td{padding-bottom:6mm!important;}'+
       '.bc-prop-block{page-break-inside:auto;break-inside:auto;}'+
@@ -33129,44 +33130,17 @@ function printPreviewBC(){
   w.focus();
 
   function doPrint(){
-    // Pour les devis : attendre le flag window.__pgw_done de la fenêtre print
-    // (signal que le script de pagination a terminé sa restructuration DOM).
-    // Pour les BC : juste un délai standard pour fonts/images.
-    if(isDevisPrint){
-      var maxWait=15000;var elapsed=0;var poll=200;
-      var waitFn=function(){
-        try{
-          if(w.__pgw_done===true||elapsed>=maxWait){
-            // Pagination terminée OU timeout → on lance le print
-            try{
-              w.print();
-              setTimeout(function(){try{w.close();}catch(e){}},500);
-            }catch(err){
-              console.error('Erreur impression :',err);
-              alert('Impossible de lancer l\'impression. Détail : '+err.message);
-            }
-          } else {
-            elapsed+=poll;
-            setTimeout(waitFn,poll);
-          }
-        }catch(e){
-          // La fenêtre est peut-être fermée par l'utilisateur
-          console.warn('Fenêtre print inaccessible:',e);
-        }
-      };
-      // Démarrer après un petit délai pour laisser le script se charger
-      setTimeout(waitFn,300);
-    } else {
-      setTimeout(function(){
-        try{
-          w.print();
-          setTimeout(function(){try{w.close();}catch(e){}},500);
-        }catch(err){
-          console.error('Erreur impression :',err);
-          alert('Impossible de lancer l\'impression. Détail : '+err.message);
-        }
-      },300);
-    }
+    // PGW désactivé pour les devis → plus besoin d'attendre __pgw_done.
+    // Pour TOUS les types (devis, BC, facture, BL) : délai standard pour fonts/images.
+    setTimeout(function(){
+      try{
+        w.print();
+        setTimeout(function(){try{w.close();}catch(e){}},500);
+      }catch(err){
+        console.error('Erreur impression :',err);
+        alert('Impossible de lancer l\'impression. Détail : '+err.message);
+      }
+    },300);
   }
 
   // Attendre que toutes les images de la fenêtre soient chargées avant print
