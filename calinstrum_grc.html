@@ -26412,7 +26412,7 @@ function _processDevisPdfFile(f, kind){
         if(typeof showBCSaveToast==='function'){
           showBCSaveToast('✓ PDF '+rmap.label+' attaché ('+(res.replaced?'remplacé':'ajouté')+')');
         }
-        // Auto-fill activé pour les 3 kinds : emerson, act et po_cali
+        // Auto-fill activé pour les 5 kinds : emerson, act, po_cali, bc_client, quote_emerson
         return _autoFillFromAttachedPdf(bytes,kind);
       });
     }).catch(function(err){
@@ -26491,15 +26491,67 @@ function _initDevisPdfDropZones(){
 }
 
 // =============================================================================
+// extractBCClientPdf — extracteur pour PDF BC Client (SLN/PRNC)
+// =============================================================================
+// Réutilise parseBCClientPdfItems déjà codé pour l'import BL depuis BC client.
+// Différence avec les autres extracteurs : parseBCClientPdfItems prend des items
+// {str,x,y,page} en entrée (avec coordonnées) au lieu d'un texte brut, car les BC
+// SLN/PRNC ont des tables paginées dont le parsing nécessite les positions X/Y.
+// On reformate ici la sortie en {header:{num, date, devisRef, client}} pour rester
+// compatible avec _autoFillFromAttachedPdf.
+function extractBCClientPdf(uint8arr){
+  if(typeof pdfjsLib==='undefined') return Promise.reject(new Error('pdf.js non chargé'));
+  return pdfjsLib.getDocument({data:uint8arr}).promise.then(function(pdf){
+    var tasks=[];
+    for(var i=1;i<=pdf.numPages;i++){
+      (function(pNum){
+        tasks.push(pdf.getPage(pNum).then(function(page){
+          return page.getTextContent().then(function(tc){
+            return tc.items.filter(function(it){return it.str && it.str.trim();}).map(function(it){
+              return { str:it.str, x:it.transform[4], y:it.transform[5], page:pNum };
+            });
+          });
+        }));
+      })(i);
+    }
+    return Promise.all(tasks).then(function(pages){
+      var allItems=[];
+      pages.forEach(function(p){ p.forEach(function(it){ allItems.push(it); }); });
+      var parsed=(typeof parseBCClientPdfItems==='function') ? parseBCClientPdfItems(allItems) : null;
+      // Reformater en {header:...} pour cohérence avec _autoFillFromAttachedPdf
+      if(parsed){
+        return {
+          header:{
+            num:parsed.num||'',         // ex: "00730482-05-43" (SLN) ou "L72923 / 0001" (PRNC)
+            date:parsed.date||'',       // déjà ISO YYYY-MM-DD
+            devisRef:parsed.devisRef||'',
+            client:parsed.client||'',
+            format:parsed.format||'?'
+          },
+          parsed:parsed
+        };
+      }
+      return null;
+    });
+  });
+}
+
+// =============================================================================
 // _autoFillFromAttachedPdf(bytes, kind) — Mode B : remplit les champs Réf / Date
 // uniquement s'ils sont VIDES (jamais d'écrasement). Async, non bloquant.
 // =============================================================================
-// - Emerson : extrait via parseEmersonQuoteText (existant). header.num + header.ver
-//             → "NUM Ver V" (format CALINSTRUM). header.date format "17-Nov-25"
-//             → convertit en ISO "YYYY-MM-DD" pour l'input type=date.
-// - ACT     : extrait via parseACTQuoteText. header.refFull + header.date (déjà ISO).
-// - Si le parser échoue (PDF illisible, format non reconnu) → silencieux, juste un
-//   console.warn. Le PDF reste joint, juste pas d'auto-fill.
+// 5 kinds supportés, tous via le même mécanisme :
+// - emerson       : extractEmersonPdf → header.num + Ver (format "NUM Ver V") + date ISO
+// - act           : extractACTPdf → header.refFull + date ISO
+// - po_cali       : extractPOCalinstrumPdf → parsed.num ("07052026/042") + date ISO
+// - bc_client     : extractBCClientPdf (SLN ou PRNC auto-détecté) → header.num + date ISO
+//                   Ex SLN : "00730482-05-43" / Ex PRNC : "L72923 / 0001"
+// - quote_emerson : extractEmersonPdf (réutilisé, même format Emerson) → header.num + Ver
+//
+// Si le parser échoue (PDF illisible, format non reconnu) → silencieux, juste un
+// console.warn. Le PDF reste joint, juste pas d'auto-fill.
+//
+// Mode B = on remplit UNIQUEMENT si le champ est vide. Pas d'écrasement.
 // =============================================================================
 function _autoFillFromAttachedPdf(bytes,kind){
   if(typeof pdfjsLib==='undefined') return Promise.resolve();
@@ -26507,10 +26559,14 @@ function _autoFillFromAttachedPdf(bytes,kind){
   if(kind==='emerson') extractor=(typeof extractEmersonPdf==='function')?extractEmersonPdf:null;
   else if(kind==='act') extractor=(typeof extractACTPdf==='function')?extractACTPdf:null;
   else if(kind==='po_cali') extractor=(typeof extractPOCalinstrumPdf==='function')?extractPOCalinstrumPdf:null;
+  // NEW : bc_client réutilise parseBCClientPdfItems (SLN ou PRNC, détection auto du format)
+  else if(kind==='bc_client') extractor=(typeof extractBCClientPdf==='function')?extractBCClientPdf:null;
+  // NEW : quote_emerson partage le même format que les Emerson devis (parseEmersonQuoteText)
+  else if(kind==='quote_emerson') extractor=(typeof extractEmersonPdf==='function')?extractEmersonPdf:null;
   if(!extractor) return Promise.resolve();
   return extractor(bytes).then(function(result){
     if(!result) return;
-    // Les parsers renvoient soit {header, ...} (ACT, Emerson récent),
+    // Les parsers renvoient soit {header, ...} (ACT, Emerson, BC Client, Quote Emerson),
     // soit {parsed, ...} (PO Calinstrum), soit directement le header (Emerson ancien).
     var h=result.header||result.parsed||result;
     if(!h) return;
@@ -26530,13 +26586,27 @@ function _autoFillFromAttachedPdf(bytes,kind){
       // parsePOCalinstrumText renvoie : {num:"07052026/042", date:"2026-05-07", ...}
       refValue=h.num||'';
       refDate=h.date||''; // déjà ISO depuis parsePOCalinstrumText
+    } else if(kind==='bc_client'){
+      // parseBCClientPdfItems renvoie : {num, date (ISO), devisRef, client, format}
+      // num = "00730482-05-43" (SLN) ou "L72923 / 0001" (PRNC)
+      refValue=h.num||'';
+      refDate=h.date||''; // déjà ISO depuis parseBCClientPdfItems
+    } else if(kind==='quote_emerson'){
+      // Même structure qu'Emerson (parseEmersonQuoteText) car c'est le même format de PDF
+      // Pour la Quote, on a "NUM Ver V" comme l'Emerson devis
+      if(h.num){
+        refValue=h.num+(h.ver?(' Ver '+h.ver):'');
+      }
+      refDate=_isoFromEmersonDate(h.date||'');
     }
 
     // Mode B : remplir uniquement si vide
     var refInputMap={
       'emerson':{ref:'dv-ref-emerson',date:'dv-ref-emerson-date'},
       'act':{ref:'dv-ref-act',date:'dv-ref-act-date'},
-      'po_cali':{ref:'dv-po-calinstrum',date:'dv-po-calinstrum-date'}
+      'po_cali':{ref:'dv-po-calinstrum',date:'dv-po-calinstrum-date'},
+      'bc_client':{ref:'dv-bc-client-ref',date:'dv-bc-client-date'},
+      'quote_emerson':{ref:'dv-quote-emerson-ref',date:'dv-quote-emerson-date'}
     };
     var ids=refInputMap[kind];
     if(!ids) return;
@@ -32410,13 +32480,18 @@ function printPreviewBC(){
       // .pgw-content-flex prend l'espace restant (flex:1), .pgw-footer-flex
       // se colle en bas naturellement (margin-top:auto via flex). Pas de table,
       // pas de hauteur fixe interne, comportement IDENTIQUE écran/PDF.
-      // overflow:hidden sur content-flex (PAS sur .pgw-page) : si le calcul de
-      // pagination sous-estime, on clippe les rows débordantes plutôt que les laisser
-      // chevaucher visuellement. Le footer (bandeau bleu) reste visible parce qu'il
-      // est dans .pgw-footer-flex (séparé du content-flex).
-      '.pgw-page{height:268mm;page-break-after:always!important;break-after:page!important;display:flex!important;flex-direction:column!important;box-sizing:border-box;overflow:hidden!important;}'+
+      //
+      // CHOIX CRITIQUE : min-height:268mm au lieu de height:268mm.
+      // Pourquoi : si la mesure rowHeights faite au rendu écran sous-estime la hauteur
+      // réelle en print A4 (largeur différente → wrap différent), avec height fixe Chrome
+      // CLIPPE les items qui débordent (bug observé SLN-DV167 : items 5-9 manquants).
+      // Avec min-height, Chrome continue la pagination naturellement vers la page suivante
+      // si une .pgw-page est plus haute que prévu. Les items ne disparaissent JAMAIS.
+      // Le compromis : un sous-total peut apparaître au milieu d'une page si débordement,
+      // mais c'est moins grave que de perdre des items du devis.
+      '.pgw-page{min-height:268mm;page-break-after:always!important;break-after:page!important;display:flex!important;flex-direction:column!important;box-sizing:border-box;}'+
       '.pgw-page:last-of-type{page-break-after:auto!important;break-after:auto!important;}'+
-      '.pgw-content-flex{flex:1 1 auto;min-height:0;overflow:hidden;}'+
+      '.pgw-content-flex{flex:1 1 auto;}'+
       '.pgw-footer-flex{flex:0 0 auto;margin-top:auto;page-break-inside:avoid!important;break-inside:avoid!important;}'+
       '.pgw-footer-flex .doc-footer-bar{margin:0!important;}'+
       '.pgw-footer-flex .doc-legal{margin-top:3px!important;}'+
@@ -32608,15 +32683,16 @@ function printPreviewBC(){
       'var hFinalBlock=measureDiv.getBoundingClientRect().height;'+
       // Cleanup
       'document.body.removeChild(measureDiv);'+
-      // Marges sécurité (calibrées sur tests d'impression réels Chrome) :
-      //   - fixedPage1 : +150px (~40mm) — agressive : préfère 1 page de plus à un débordement
-      //   - fixedPageN : +150px (~40mm) — pareil pour pages intermédiaires
-      //   - fixedPageLast : +120px (~32mm) — bloc final ne déborde jamais avec cette marge
-      // Conséquence : le devis peut faire 1 page de plus que strictement nécessaire,
-      // mais on n\'aura JAMAIS de chevauchement (priorité absolue à la qualité visuelle).
-      'var fixedPage1=hLogo+hInfoBar+hBeforeTbl+hTblHead+hSubtotal+hFooter+150;'+
-      'var fixedPageN=hLogo+hInfoBar+hTblHead+hSubtotal+hFooter+150;'+
-      'var fixedPageLast=hLogo+hInfoBar+hTblHead+hFinalBlock+hFooter+120;'+
+      // Marges sécurité ÉQUILIBRÉES — calibrées sur tests d'impression réels Chrome.
+      // Le calcul par hauteur cumulée RÉELLE de chaque <tr> protège déjà contre l\'erreur
+      // d\'estimation. Les +N px sont une marge supplémentaire pour absorber le différentiel
+      // pixel→mm de Chrome en print.
+      //   - fixedPage1 : +80px (~21mm)
+      //   - fixedPageN : +80px (~21mm)
+      //   - fixedPageLast : +100px (~26mm) — bloc final un peu plus, par prudence
+      'var fixedPage1=hLogo+hInfoBar+hBeforeTbl+hTblHead+hSubtotal+hFooter+80;'+
+      'var fixedPageN=hLogo+hInfoBar+hTblHead+hSubtotal+hFooter+80;'+
+      'var fixedPageLast=hLogo+hInfoBar+hTblHead+hFinalBlock+hFooter+100;'+
       'var capPage1=Math.max(1,Math.floor((PAGE_HEIGHT_PX-fixedPage1)/rowH));'+
       'var capPageN=Math.max(1,Math.floor((PAGE_HEIGHT_PX-fixedPageN)/rowH));'+
       'var capPageLast=Math.max(0,Math.floor((PAGE_HEIGHT_PX-fixedPageLast)/rowH));'+
@@ -32719,7 +32795,14 @@ function printPreviewBC(){
       // ============================================================================
       // Reconstruction du HTML : remplacer le contenu de .doc par les pages séparées
       // ============================================================================
-      'var newHtml="";var cumulHt=0;'+
+      // SOUS-TOTAUX : chaque page tableau affiche le SOUS-TOTAL LOCAL de cette page
+      // (somme des amt des rd de cette page uniquement), PAS un cumul global.
+      // Comportement attendu (cf. PDF SLN-DV167) :
+      //   - Page 1 (items 1-N)         → "Sous-total HT — Report page suivante : <somme items 1-N>"
+      //   - Page 2 (items N+1-M)       → "Sous-total HT — Report page suivante : <somme items N+1-M>"
+      //   - Page finalOnly             → bloc final avec Total HT = somme TOUTES les pages
+      // Comme ça l'utilisateur voit le total par page + le cumul total sur la dernière.
+      'var newHtml="";'+
       'pages.forEach(function(p,pi){'+
         'var pageHtml="<div class=\\"pgw-page\\">";'+
         // === Conteneur flex content (prend l'espace disponible) ===
@@ -32754,16 +32837,21 @@ function printPreviewBC(){
           '} else {'+
             'pageHtml+=tblOuter;'+
           '}'+
-          // Soit sous-total (pages intermédiaires), soit bloc final (page dernière)
+          // === SOUS-TOTAL LOCAL DE LA PAGE ===
+          // Soit sous-total (pages intermédiaires + lastWithRows si fusion), soit bloc final.
+          // ATTENTION : sous-total = somme des amt des items de CETTE page UNIQUEMENT (local),
+          // pas un cumul global. Le total global est dans le bloc final (page finalOnly).
           'if(p.isLast){'+
             // Dernière page (keepAllInOne ou lastWithRows) : ajouter le bloc final
+            // (qui contient le Total HT global)
             'nodesAfterTbl.forEach(function(nd){'+
               'pageHtml+=(nd.outerHTML!==undefined?nd.outerHTML:(nd.nodeType===3?nd.textContent:""));'+
             '});'+
           '} else {'+
-            // Pages intermédiaires : sous-total HT cumulé
-            'p.rows.forEach(function(rd){cumulHt+=rd.amt;});'+
-            'var formatted=cumulHt.toLocaleString("fr-FR").replace(/,/g," ");'+
+            // Pages intermédiaires : sous-total HT LOCAL = somme des amt de p.rows
+            'var subTotalLocal=0;'+
+            'p.rows.forEach(function(rd){subTotalLocal+=(rd.amt||0);});'+
+            'var formatted=subTotalLocal.toLocaleString("fr-FR").replace(/,/g," ");'+
             'pageHtml+="<div class=\\"pgw-subtotal\\"><span class=\\"pgw-st-label\\">Sous-total HT (XPF) — Report page suivante</span><span class=\\"pgw-st-amount\\">"+formatted+"</span></div>";'+
           '}'+
         '}'+
