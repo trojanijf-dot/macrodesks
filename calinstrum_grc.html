@@ -1651,6 +1651,38 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         <!-- Carte fichier PDF PO Calinstrum (si attaché) -->
         <div id="dv-po-cali-pdf-card" style="display:none;margin-top:6px"></div>
         </div>
+        <!-- BC Client (SLN/PRNC) + date — wrapper drop zone -->
+        <div class="pdf-drop-zone" data-drop-kind="bc_client" style="position:relative;border-radius:8px;padding:6px;margin:8px -6px -6px -6px;transition:all .15s">
+        <div class="form-row">
+          <div class="form-group" style="margin:0"><label><i class="ti ti-file-invoice" style="font-size:12px;color:#10b981"></i> BC Client <span style="color:var(--muted);font-weight:400;font-size:10px">(commande SLN/PRNC du client)</span>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(16,185,129,.4);color:#10b981" onclick="triggerDevisPdfUpload('bc_client')" title="Joindre le PDF du Bon de Commande émis par le client (SLN ou PRNC). Apparaîtra ensuite comme badge cliquable sur les BC, BL et factures liés à ce devis. Tu peux aussi glisser un PDF sur cette zone.">📎 Joindre</button>
+            <input type="file" id="dv-bc-client-pdf-attach-input" accept=".pdf,application/pdf" style="display:none" onchange="handleDevisPdfSelected(event,'bc_client')">
+          </label>
+            <input class="form-input" id="dv-bc-client-ref" placeholder="ex: 00730482-05-43 ou L72923 / 0001">
+          </div>
+          <div class="form-group" style="margin:0"><label>Date émission BC Client</label>
+            <input type="date" class="form-input" id="dv-bc-client-date">
+          </div>
+        </div>
+        <!-- Carte fichier PDF BC Client (si attaché) -->
+        <div id="dv-bc-client-pdf-card" style="display:none;margin-top:6px"></div>
+        </div>
+        <!-- Quote Emerson + date — wrapper drop zone -->
+        <div class="pdf-drop-zone" data-drop-kind="quote_emerson" style="position:relative;border-radius:8px;padding:6px;margin:8px -6px -6px -6px;transition:all .15s">
+        <div class="form-row">
+          <div class="form-group" style="margin:0"><label><i class="ti ti-world" style="font-size:12px;color:#06b6d4"></i> Quote Emerson <span style="color:var(--muted);font-weight:400;font-size:10px">(proposition commerciale Emerson)</span>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;margin-left:8px;border-color:rgba(6,182,212,.4);color:#06b6d4" onclick="triggerDevisPdfUpload('quote_emerson')" title="Joindre le PDF de la Quote Emerson (offre commerciale en AUD/USD). Apparaîtra ensuite comme badge cliquable sur les BC, BL et factures liés à ce devis. Tu peux aussi glisser un PDF sur cette zone.">📎 Joindre</button>
+            <input type="file" id="dv-quote-emerson-pdf-attach-input" accept=".pdf,application/pdf" style="display:none" onchange="handleDevisPdfSelected(event,'quote_emerson')">
+          </label>
+            <input class="form-input" id="dv-quote-emerson-ref" placeholder="ex: Q-12345-001">
+          </div>
+          <div class="form-group" style="margin:0"><label>Date Quote Emerson</label>
+            <input type="date" class="form-input" id="dv-quote-emerson-date">
+          </div>
+        </div>
+        <!-- Carte fichier PDF Quote Emerson (si attaché) -->
+        <div id="dv-quote-emerson-pdf-card" style="display:none;margin-top:6px"></div>
+        </div>
       </div>
     </div>
     <div class="tab-pane" id="dvt-lignes">
@@ -9506,14 +9538,16 @@ function _renderTraca(d){
     if(opts.pdfDevisId && opts.pdfKind){
       var setRef=opts.pdfKind==='emerson'?window.devisIdsWithEmersonPdf:
                  opts.pdfKind==='act'?window.devisIdsWithACTPdf:
-                 opts.pdfKind==='po_cali'?window.devisIdsWithPoCaliPdf:null;
+                 opts.pdfKind==='po_cali'?window.devisIdsWithPoCaliPdf:
+                 opts.pdfKind==='bc_client'?window.devisIdsWithBCClientPdf:
+                 opts.pdfKind==='quote_emerson'?window.devisIdsWithQuoteEmersonPdf:null;
       if(setRef && setRef.has(String(opts.pdfDevisId))) hasPdf=true;
     }
     var titleBase=(opts.label||'')+(hasVal?(' : '+(opts.fullValue||opts.value)):' : non renseigné')+(opts.date?(' ('+opts.date+')'):'');
     var title=esc(titleBase+(hasPdf?' — 📎 PDF stocké, cliquer 👁 pour ouvrir':''));
     var pdfBtn='';
     if(hasPdf){
-      var pdfKindLabels={emerson:'Emerson',act:'ACT',po_cali:'PO Calinstrum'};
+      var pdfKindLabels={emerson:'Emerson',act:'ACT',po_cali:'PO Calinstrum',bc_client:'BC Client',quote_emerson:'Quote Emerson'};
       pdfBtn=' <span class="traca-pill-pdf" '+
         'onclick="event.stopPropagation();openDevisPdf(\''+esc(String(opts.pdfDevisId))+'\',\''+opts.pdfKind+'\');" '+
         'title="Ouvrir le PDF '+(pdfKindLabels[opts.pdfKind]||opts.pdfKind)+' stocké" '+
@@ -13993,11 +14027,16 @@ function openDV(id){
       gv('dv-ref-emerson',d.refEmerson||'');gv('dv-ref-emerson-date',d.refEmersonDate||'');
       gv('dv-ref-act',d.refACT||'');gv('dv-ref-act-date',d.refACTDate||'');
       gv('dv-po-calinstrum',d.poCalinstrum||'');gv('dv-po-calinstrum-date',d.poCalinstrumDate||'');
-      // Render des cartes PDF attachés (Emerson + ACT + PO Calinstrum) si présents
+      // Nouveaux : BC Client (SLN/PRNC) et Quote Emerson
+      gv('dv-bc-client-ref',d.bcClientRef||'');gv('dv-bc-client-date',d.bcClientDate||'');
+      gv('dv-quote-emerson-ref',d.quoteEmersonRef||'');gv('dv-quote-emerson-date',d.quoteEmersonDate||'');
+      // Render des cartes PDF attachés (Emerson + ACT + PO Calinstrum + BC Client + Quote Emerson) si présents
       if(typeof renderDevisPdfCard==='function'){
         renderDevisPdfCard(d.id,'emerson');
         renderDevisPdfCard(d.id,'act');
         renderDevisPdfCard(d.id,'po_cali');
+        renderDevisPdfCard(d.id,'bc_client');
+        renderDevisPdfCard(d.id,'quote_emerson');
       }
       // Initialise l'historique éditable de phases — lazy migration si manquant
       if(Array.isArray(d.phaseHistory) && d.phaseHistory.length>0){
@@ -15130,6 +15169,8 @@ function getDV(){
     refEmerson:gvg('dv-ref-emerson'),refEmersonDate:gvg('dv-ref-emerson-date'),
     refACT:gvg('dv-ref-act'),refACTDate:gvg('dv-ref-act-date'),
     poCalinstrum:gvg('dv-po-calinstrum'),poCalinstrumDate:gvg('dv-po-calinstrum-date'),
+    bcClientRef:gvg('dv-bc-client-ref'),bcClientDate:gvg('dv-bc-client-date'),
+    quoteEmersonRef:gvg('dv-quote-emerson-ref'),quoteEmersonDate:gvg('dv-quote-emerson-date'),
     linkFactureId:existing?existing.linkFactureId:undefined, // préserver si déjà créée
     linkEmerson:gvg('dv-link-emerson'),linkBC:gvg('dv-link-bc'),linkPO:gvg('dv-link-po'),linkOther:gvg('dv-link-other'),
     lines:JSON.parse(JSON.stringify(dvL)),ht:t.ht,t11:t.t11,t22:t.t22,t6:t.t6,fr:t.fr,ttc:t.ttc};
@@ -23156,9 +23197,25 @@ function renderFA(){
     var delBtn=grcId
       ? '<button class="btn btn-red btn-sm" onclick="delDoc(\'factures\','+grcId+')">🗑</button>'
       : '<button class="btn btn-red btn-sm" onclick="delInv('+i.id+')">🗑</button>';
+    // === Résolution devisId pour les badges PDF ===
+    // Une facture peut être liée à un devis directement (linkedDevisId)
+    // OU indirectement via ses linkedBCs[] (chaque BC pointe vers ses devisLieIds).
+    // On retourne le 1er devisId trouvé via cette chaîne pour afficher les badges.
+    var faDevisId = i.linkedDevisId || null;
+    if(!faDevisId && Array.isArray(i.linkedBCs) && typeof getBCsDevisIds === 'function'){
+      for(var bci=0; bci<i.linkedBCs.length; bci++){
+        var bcRef = (DB.bcs||[]).find(function(b){return b.id === i.linkedBCs[bci];});
+        if(bcRef){
+          var devIds = getBCsDevisIds(bcRef);
+          if(devIds.length > 0){ faDevisId = devIds[0]; break; }
+        }
+      }
+    }
+    var faPdfBadges = faDevisId ? buildDevisPdfBadges(faDevisId, {size:'xs'}) : '';
+
     return '<tr class="hgr-data-row" style="'+rs+'">'+
       '<td><span style="font-weight:700;color:var(--teal)">'+esc(i.num||'')+'</span>'+grcBadge+'</td>'+
-      '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(i.intitule||'')+'">'+esc(i.intitule||'')+'</td>'+
+      '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(i.intitule||'')+'">'+esc(i.intitule||'')+(faPdfBadges?' '+faPdfBadges:'')+'</td>'+
       typCell+
       '<td style="font-weight:700">'+fN(i.montant)+' XPF</td>'+
       '<td style="white-space:nowrap">'+phaseCell+'</td>'+
@@ -26076,8 +26133,14 @@ function openAttachDB(){
 function storeDevisPdf(att){
   if(!att||!att.devisId||!att.kind||!att.bytes)
     return Promise.reject(new Error('storeDevisPdf: paramètres incomplets'));
-  if(att.kind!=='emerson' && att.kind!=='act' && att.kind!=='po_cali')
-    return Promise.reject(new Error('storeDevisPdf: kind doit être emerson, act ou po_cali'));
+  // 5 kinds supportés :
+  //   emerson      : PDF devis Emerson source (AUD → XPF avec marge)
+  //   act          : PDF cotation transitaire ACT
+  //   po_cali      : PDF PO Calinstrum (BC interne envoyé à Emerson)
+  //   bc_client    : PDF BC Client (SLN/PRNC) reçu du client
+  //   quote_emerson: PDF Quote Emerson (proposition commerciale Emerson)
+  if(att.kind!=='emerson' && att.kind!=='act' && att.kind!=='po_cali' && att.kind!=='bc_client' && att.kind!=='quote_emerson')
+    return Promise.reject(new Error('storeDevisPdf: kind invalide ('+att.kind+')'));
   return openAttachDB().then(function(db){
     return new Promise(function(resolve,reject){
       var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
@@ -26179,23 +26242,87 @@ function deleteDevisPdf(devisId,kind){
 window.devisIdsWithEmersonPdf=new Set();
 window.devisIdsWithACTPdf=new Set();
 window.devisIdsWithPoCaliPdf=new Set();
+window.devisIdsWithBCClientPdf=new Set();
+window.devisIdsWithQuoteEmersonPdf=new Set();
 function refreshDevisPdfCache(){
   return listAllDevisPdfMeta().then(function(metas){
-    var setE=new Set(),setA=new Set(),setP=new Set();
+    var setE=new Set(),setA=new Set(),setP=new Set(),setBC=new Set(),setQE=new Set();
     for(var i=0;i<metas.length;i++){
       var m=metas[i];
       if(m.kind==='emerson') setE.add(m.devisId);
       else if(m.kind==='act') setA.add(m.devisId);
       else if(m.kind==='po_cali') setP.add(m.devisId);
+      else if(m.kind==='bc_client') setBC.add(m.devisId);
+      else if(m.kind==='quote_emerson') setQE.add(m.devisId);
     }
     window.devisIdsWithEmersonPdf=setE;
     window.devisIdsWithACTPdf=setA;
     window.devisIdsWithPoCaliPdf=setP;
-    return {emerson:setE.size,act:setA.size,po_cali:setP.size};
+    window.devisIdsWithBCClientPdf=setBC;
+    window.devisIdsWithQuoteEmersonPdf=setQE;
+    return {emerson:setE.size,act:setA.size,po_cali:setP.size,bc_client:setBC.size,quote_emerson:setQE.size};
   }).catch(function(err){
     console.warn('refreshDevisPdfCache failed:',err);
-    return {emerson:0,act:0,po_cali:0};
+    return {emerson:0,act:0,po_cali:0,bc_client:0,quote_emerson:0};
   });
+}
+
+// =============================================================================
+// HELPER : buildDevisPdfBadges(devisId, opts)
+// =============================================================================
+// Génère un cluster HTML de mini-badges cliquables pour ouvrir directement les
+// PDFs attachés à un devis depuis n'importe quelle vue (BC, BL, facture).
+//
+// Synchrone : lit les Sets cache window.devisIdsWith*Pdf (peuplés par
+// refreshDevisPdfCache au boot et après chaque mutation).
+//
+// Args :
+//   devisId : ID interne du devis (number ou string)
+//   opts (optionnel) :
+//     - kinds : tableau des kinds à afficher (défaut : tous les 5)
+//     - size  : 'sm' (défaut) | 'xs' (compact)
+//     - showLabel : si true, ajoute le label texte ("BC Client") à côté de l'icône
+//
+// Retourne : chaîne HTML (vide si aucun PDF attaché)
+//
+// Usage :
+//   var badgesHtml = buildDevisPdfBadges(devisId);
+//   // → '<span class="dv-pdf-badge" ...>📋</span> <span ...>🌐</span>'
+//
+// Tous les badges déclenchent openDevisPdf au click.
+// =============================================================================
+function buildDevisPdfBadges(devisId, opts){
+  if(!devisId) return '';
+  opts = opts || {};
+  var kinds = opts.kinds || ['emerson','act','po_cali','bc_client','quote_emerson'];
+  var idStr = String(devisId);
+  // Mapping kind → metadata pour le badge
+  var kindMeta = {
+    emerson:       {emoji:'💼', label:'Devis Emerson',  color:'#22d3ee', set:window.devisIdsWithEmersonPdf},
+    act:           {emoji:'🚚', label:'Cotation ACT',   color:'#fbbf24', set:window.devisIdsWithACTPdf},
+    po_cali:       {emoji:'📦', label:'PO Calinstrum',  color:'#a78bfa', set:window.devisIdsWithPoCaliPdf},
+    bc_client:     {emoji:'📋', label:'BC Client',      color:'#10b981', set:window.devisIdsWithBCClientPdf},
+    quote_emerson: {emoji:'🌐', label:'Quote Emerson',  color:'#06b6d4', set:window.devisIdsWithQuoteEmersonPdf}
+  };
+  var badges = [];
+  kinds.forEach(function(k){
+    var m = kindMeta[k];
+    if(!m || !m.set || !m.set.has(idStr)) return; // pas de PDF de ce kind pour ce devis
+    var pad = opts.size === 'xs' ? '0 5px' : '2px 7px';
+    var fs = opts.size === 'xs' ? '10px' : '11px';
+    var lbl = opts.showLabel ? ' <span style="font-size:9px;color:'+m.color+';font-weight:600">'+esc(m.label)+'</span>' : '';
+    badges.push(
+      '<span class="dv-pdf-badge" '+
+        'onclick="event.stopPropagation();openDevisPdf(\''+idStr+'\',\''+k+'\');" '+
+        'title="Ouvrir '+esc(m.label)+' (PDF attaché au devis lié)" '+
+        'style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;padding:'+pad+';border-radius:6px;'+
+        'background:'+m.color+'18;border:0.5px solid '+m.color+'50;font-size:'+fs+';line-height:1.2;color:'+m.color+';'+
+        'margin-right:3px;transition:background .12s">'+
+        m.emoji+lbl+
+      '</span>'
+    );
+  });
+  return badges.join('');
 }
 
 // =============================================================================
@@ -26225,7 +26352,9 @@ function triggerDevisPdfUpload(kind){
   var inputMap={
     'emerson':'dv-emerson-pdf-input',
     'act':'dv-act-pdf-attach-input',
-    'po_cali':'dv-po-cali-pdf-attach-input'
+    'po_cali':'dv-po-cali-pdf-attach-input',
+    'bc_client':'dv-bc-client-pdf-attach-input',
+    'quote_emerson':'dv-quote-emerson-pdf-attach-input'
   };
   var inputId=inputMap[kind];
   if(!inputId) return;
@@ -26266,7 +26395,9 @@ function _processDevisPdfFile(f, kind){
     var refMap={
       'emerson':{ref:'dv-ref-emerson',date:'dv-ref-emerson-date',label:'Emerson'},
       'act':{ref:'dv-ref-act',date:'dv-ref-act-date',label:'ACT'},
-      'po_cali':{ref:'dv-po-calinstrum',date:'dv-po-calinstrum-date',label:'PO Calinstrum'}
+      'po_cali':{ref:'dv-po-calinstrum',date:'dv-po-calinstrum-date',label:'PO Calinstrum'},
+      'bc_client':{ref:'dv-bc-client-ref',date:'dv-bc-client-date',label:'BC Client'},
+      'quote_emerson':{ref:'dv-quote-emerson-ref',date:'dv-quote-emerson-date',label:'Quote Emerson'}
     };
     var rmap=refMap[kind]||refMap.emerson;
     var refValue=gvg(rmap.ref)||'';
@@ -26309,7 +26440,7 @@ function _initDevisPdfDropZones(){
     if(zone.dataset.dndBound==='1') return; // déjà bindé
     zone.dataset.dndBound='1';
     var kind=zone.dataset.dropKind;
-    var kindLabels={emerson:'Devis Emerson',act:'Cotation ACT',po_cali:'PO Calinstrum'};
+    var kindLabels={emerson:'Devis Emerson',act:'Cotation ACT',po_cali:'PO Calinstrum',bc_client:'BC Client',quote_emerson:'Quote Emerson'};
     var kindLabel=kindLabels[kind]||'PDF';
 
     // Ajouter l'overlay visuel (créé une seule fois)
@@ -26452,7 +26583,9 @@ function renderDevisPdfCard(devisId,kind){
   var cardMap={
     'emerson':{cardId:'dv-emerson-pdf-card',color:'#22d3ee',icon:'circuit-bulb',label:'Emerson'},
     'act':{cardId:'dv-act-pdf-card',color:'#fbbf24',icon:'building-warehouse',label:'ACT'},
-    'po_cali':{cardId:'dv-po-cali-pdf-card',color:'#a78bfa',icon:'shopping-cart',label:'PO Calinstrum'}
+    'po_cali':{cardId:'dv-po-cali-pdf-card',color:'#a78bfa',icon:'shopping-cart',label:'PO Calinstrum'},
+    'bc_client':{cardId:'dv-bc-client-pdf-card',color:'#10b981',icon:'file-invoice',label:'BC Client'},
+    'quote_emerson':{cardId:'dv-quote-emerson-pdf-card',color:'#06b6d4',icon:'world',label:'Quote Emerson'}
   };
   var meta=cardMap[kind];
   if(!meta) return;
@@ -27092,13 +27225,18 @@ function renderBC(){
     var firstDevisId = devisIds.length > 0 ? devisIds[0] : null;
     var bcClientStr = (x.linkBCclient||'').trim();
     if(!bcClientStr) bcClientStr = _consolidateBCClientFromDevisIds(devisIds);
+    // Badges PDFs du devis lié (BC Client, Quote Emerson, etc.) — accès rapide depuis la liste BC
+    var pdfBadges = firstDevisId ? buildDevisPdfBadges(firstDevisId, {size:'xs'}) : '';
     var bcClientCell;
     if(bcClientStr){
       var multiBadge = devisIds.length > 1
         ? ' <span style="background:rgba(167,139,250,.2);color:#a78bfa;padding:1px 5px;border-radius:8px;font-size:9px;font-weight:700;margin-left:4px" title="'+esc(devisIds.length+' devis liés (groupage)')+'">+'+(devisIds.length-1)+' devis</span>'
         : '';
       var clickAction = firstDevisId ? 'onclick="event.stopPropagation();openDV('+firstDevisId+')" style="color:#fbbf24;font-family:monospace;cursor:pointer;text-decoration:underline" title="Cliquer pour ouvrir le devis lié"' : 'style="color:var(--muted);font-family:monospace"';
-      bcClientCell = '<td style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span '+clickAction+'>'+esc(bcClientStr)+'</span>'+multiBadge+'</td>';
+      bcClientCell = '<td style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span '+clickAction+'>'+esc(bcClientStr)+'</span>'+multiBadge+(pdfBadges?' '+pdfBadges:'')+'</td>';
+    } else if(pdfBadges){
+      // Pas de N° BC client mais des PDFs disponibles → afficher quand même les badges
+      bcClientCell = '<td style="color:var(--muted);font-style:italic;font-size:10px">— '+pdfBadges+'</td>';
     } else {
       bcClientCell = '<td style="color:var(--muted);font-style:italic;font-size:10px">— non renseigné —</td>';
     }
@@ -29723,8 +29861,43 @@ function renderBL(){
   var sm={'En préparation':'b-pending',Livré:'b-delivered',Annulé:'b-refused'};
   var tb=document.getElementById('tbBL');if(!tb)return;
   function renderBLRow(x){
+    // Badges PDF des devis source (BC Client, Quote Emerson, etc.)
+    // Le BL référence ses devis source via _sourceDevisIds[] (peuplé par "Créer BL depuis devis")
+    var sourceIds = Array.isArray(x._sourceDevisIds) ? x._sourceDevisIds : [];
+    var pdfBadgesHtml = '';
+    if(sourceIds.length > 0){
+      // Collecter les badges uniques de tous les devis source (un kind = 1 seul badge même si plusieurs devis l'ont)
+      var seenKinds = {};
+      sourceIds.forEach(function(devId){
+        ['emerson','act','po_cali','bc_client','quote_emerson'].forEach(function(k){
+          if(seenKinds[k]) return;
+          var setRef = k==='emerson'?window.devisIdsWithEmersonPdf:
+                       k==='act'?window.devisIdsWithACTPdf:
+                       k==='po_cali'?window.devisIdsWithPoCaliPdf:
+                       k==='bc_client'?window.devisIdsWithBCClientPdf:
+                       k==='quote_emerson'?window.devisIdsWithQuoteEmersonPdf:null;
+          if(setRef && setRef.has(String(devId))) seenKinds[k] = devId;
+        });
+      });
+      var kindsAvail = Object.keys(seenKinds);
+      if(kindsAvail.length > 0){
+        // Utiliser buildDevisPdfBadges avec le 1er devisId trouvé pour chaque kind
+        // Comme buildDevisPdfBadges prend 1 devisId, on appelle séparément si différents
+        var byDevis = {};
+        kindsAvail.forEach(function(k){
+          var d = seenKinds[k];
+          if(!byDevis[d]) byDevis[d] = [];
+          byDevis[d].push(k);
+        });
+        Object.keys(byDevis).forEach(function(devId){
+          pdfBadgesHtml += buildDevisPdfBadges(devId, {kinds:byDevis[devId], size:'xs'});
+        });
+      }
+    }
+    var clientCell = '<td>'+esc(x.client||'')+(pdfBadgesHtml?' '+pdfBadgesHtml:'')+'</td>';
     return'<tr class="hgr-data-row">'+
-      '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td><td>'+esc(x.client||'')+'</td>'+
+      '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td>'+
+      clientCell+
       '<td>'+esc(x.lieu||'—')+'</td><td>'+esc(x.contact||'—')+'</td>'+
       '<td style="font-weight:700;color:var(--teal)">'+fN(x.total)+' XPF</td>'+
       '<td><span class="badge '+(sm[x.status]||'b-pending')+'">'+esc(x.status||'')+'</span></td>'+
