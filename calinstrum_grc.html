@@ -1373,6 +1373,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <div></div>
     <div style="display:flex;gap:8px;align-items:center">
       <button class="btn btn-ghost no-print" onclick="openBLFromDVPicker()" title="Créer un BL à partir d'un ou plusieurs devis acceptés ou facturés. Gère les livraisons partielles : si une ligne a déjà été partiellement livrée par un autre BL, le restant à livrer s'affiche. Supporte le groupage de plusieurs devis dans un même BL." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📦 Créer BL depuis devis</button>
+      <button class="btn btn-ghost no-print" onclick="uploadBCClientPdf()" title="Importer un PDF de BC Client (SLN ou PRNC) pour créer un BL pré-rempli. Détecte automatiquement le format SLN (00XXXXXX-XX-XX) ou PRNC (LXXXXX / XXXX), extrait N° BC, client, date, lignes (ref + désignation + quantité + PU), total et lien devis. Idéal pour livrer une commande client en duplicant exactement ses références." style="border-color:rgba(251,191,36,.4);color:#fbbf24">📋 BL depuis BC Client</button>
       <button class="btn btn-ghost no-print" onclick="uploadBLPdf()" title="Importer un ou plusieurs PDFs de Bon de Livraison Calinstrum existants (anciens BL faits hors GRC). Détecte automatiquement N° BL, date, lieu, PO, contact, client et lignes. Anti-doublon strict sur le N° BL." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Importer BL PDF</button>
       <button class="btn btn-teal no-print" onclick="openBL()">+ Nouveau bon de livraison</button>
     </div>
@@ -28431,8 +28432,683 @@ function commitBLImport(){
 }
 
 // =============================================================================
-// ===== CRÉER BL DEPUIS DEVIS (avec suivi livraisons partielles) =====
+// ===== IMPORT BL DEPUIS BC CLIENT (SLN / PRNC) =====
 // =============================================================================
+// Objectif métier : recevoir un BC d'un client (SLN ou PRNC) sous PDF, le parser,
+// et ouvrir directement un nouveau BL pré-rempli avec :
+//   - Les RÉFÉRENCES exactes du BC (que le client veut retrouver sur le BL)
+//   - Les DÉSIGNATIONS exactes du BC
+//   - Les QUANTITÉS et PRIX UNITAIRES
+//   - Le N° BC client dans le champ PO
+//   - Le devis lié si détecté ('DEVIS N° SLN-DVxxx' / 'devis n° PRNC-DVxxx')
+//   - Le client (déduit du format du BC)
+//
+// Workflow :
+//   1. uploadBCClientPdf()              → file picker (1 fichier à la fois)
+//   2. _parseBCClientPdfFile(file)      → pdf.js → items {str,x,y}
+//   3. parseBCClientPdfItems(items)     → {format,num,date,client,devisRef,lines,total}
+//   4. _previewBCImport(parsed)         → modale preview éditable
+//   5. _confirmBCImport()               → openBL(null, {prefillLines:..., client:..., po:...})
+//
+// 2 formats supportés :
+//   - SLN : N° "00XXXXXXXX-XX-XX", date FR JJ/MM/AAAA, montants FR "X XXX,XX",
+//     lignes sur N pages (la table peut être paginée), total = "Total\n<montant>"
+//   - PRNC : N° "LXXXXX / XXXX", date "JJ/MM/AA", montants US "X,XXX,XXX.XX",
+//     lignes plus compactes, total = "TOTAL XPF  <montant>"
+//
+// Note métier : pour les lignes PRNC à qte=0.00 (forfaits sans quantité),
+// on force qte=1 unite='Lot' pu=total (selon préférence utilisateur).
+//
+function uploadBCClientPdf(){
+  // Picker fichier unique
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/pdf,.pdf';
+  input.style.display = 'none';
+  input.onchange = function(){
+    if(!input.files || !input.files[0]) return;
+    _parseBCClientPdfFile(input.files[0]).then(function(res){
+      if(!res.parsed){
+        alert('⚠ Impossible de parser ce PDF : '+(res.error||'format non reconnu')+'\n\nLes formats supportés sont :\n• BC SLN (N° 00XXXXXXXX-XX-XX)\n• BC PRNC (N° LXXXXX / XXXX)');
+        return;
+      }
+      _previewBCClientImport(res.parsed, res.fileName);
+    });
+  };
+  document.body.appendChild(input);
+  input.click();
+  setTimeout(function(){ if(input.parentNode) input.parentNode.removeChild(input); }, 1000);
+}
+
+// Pipeline pdf.js standard : fichier → items {str,x,y}
+// Réutilise la même approche que _parseBLPdfFile pour bénéficier des coordonnées.
+function _parseBCClientPdfFile(file){
+  return new Promise(function(resolve){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      try{
+        var typedArray = new Uint8Array(e.target.result);
+        pdfjsLib.getDocument({data:typedArray}).promise.then(function(pdf){
+          var pagePromises = [];
+          for(var p=1;p<=pdf.numPages;p++){
+            (function(pNum){
+              pagePromises.push(pdf.getPage(pNum).then(function(page){
+                return page.getTextContent().then(function(tc){
+                  return tc.items.filter(function(it){return it.str && it.str.trim();}).map(function(it){
+                    return { str: it.str, x: it.transform[4], y: it.transform[5], page: pNum };
+                  });
+                });
+              }));
+            })(p);
+          }
+          Promise.all(pagePromises).then(function(pages){
+            var allItems = [];
+            pages.forEach(function(p){ p.forEach(function(it){ allItems.push(it); }); });
+            try{
+              var parsed = parseBCClientPdfItems(allItems);
+              resolve({fileName: file.name, parsed: parsed});
+            } catch(err){
+              resolve({fileName: file.name, parsed: null, error: 'Parse: '+err.message});
+            }
+          });
+        }).catch(function(err){
+          resolve({fileName: file.name, parsed: null, error: 'PDF: '+err.message});
+        });
+      } catch(err){
+        resolve({fileName: file.name, parsed: null, error: 'Lecture: '+err.message});
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// ============================================================================
+// PARSER UNIFIÉ : items pdf.js → objet BC structuré
+// ============================================================================
+// Détecte automatiquement le format (SLN vs PRNC) via patterns d'en-tête,
+// puis dispatche au sous-parser approprié. Retourne TOUJOURS la même forme :
+//   { format:'SLN'|'PRNC'|'?', num, date, client, devisRef, lines:[{ref,desc,qte,unite,pu,total}], total, _errors:[] }
+function parseBCClientPdfItems(items){
+  // ====== ÉTAPE 1 : regrouper par Y (lignes logiques), par PAGE ======
+  // Important de garder le contexte page car la table SLN est paginée — le tri global Y descendant
+  // mélangerait les pages. On groupe page par page puis on concatène.
+  var TOL_Y = 3;
+  function groupByY(pageItems){
+    var groups = [];
+    pageItems.forEach(function(it){
+      var found = false;
+      for(var i=0;i<groups.length;i++){
+        if(Math.abs(groups[i].yAvg - it.y) <= TOL_Y){
+          groups[i].items.push(it);
+          var sum=0; groups[i].items.forEach(function(x){sum+=x.y;});
+          groups[i].yAvg = sum/groups[i].items.length;
+          found = true; break;
+        }
+      }
+      if(!found) groups.push({yAvg:it.y, items:[it], page:it.page});
+    });
+    groups.sort(function(a,b){return b.yAvg - a.yAvg;}); // top→bottom dans la page
+    groups.forEach(function(g){g.items.sort(function(a,b){return a.x - b.x;});});
+    return groups;
+  }
+  // Partitionner items par page, grouper Y dans chaque page, concaténer
+  var byPage = {};
+  items.forEach(function(it){
+    var p = it.page||1;
+    if(!byPage[p]) byPage[p]=[];
+    byPage[p].push(it);
+  });
+  var lineGroups = [];
+  Object.keys(byPage).sort(function(a,b){return parseInt(a)-parseInt(b);}).forEach(function(p){
+    var groups = groupByY(byPage[p]);
+    groups.forEach(function(g){ lineGroups.push(g); });
+  });
+  // Helper : texte d'une ligne (séparé par espaces)
+  function lineText(g){ return g.items.map(function(it){return it.str;}).join(' ').replace(/\s+/g,' ').trim(); }
+  // Tableau plat des textes pour matchs globaux
+  var rawLines = lineGroups.map(lineText);
+  var fullText = rawLines.join('\n');
+
+  // ====== ÉTAPE 2 : détecter format ======
+  // SLN : header "LE NICKEL", "COMMANDE / PURCHASE ORDER", "ERAMET - SLN", N° "00\d{6,8}-\d{2}-"
+  // PRNC : header "Prony Resources", "PRONY RESOURCES", N° "L\d{5,6} / \d{4}"
+  var format = '?';
+  if(/Prony\s+Resources|PRONY\s+RESOURCES/i.test(fullText)) format = 'PRNC';
+  else if(/LE\s*NICKEL|ERAMET\s*[-–]\s*SLN|N°\s*de\s*BC[\s\S]{0,200}\b00\d{6,8}-\d{2}/i.test(fullText)) format = 'SLN';
+
+  var result = {
+    format: format,
+    num: '',
+    date: '',
+    client: '',
+    devisRef: '',
+    lines: [],
+    total: 0,
+    _errors: []
+  };
+
+  if(format === 'SLN') return _parseBCSLN(rawLines, lineGroups, fullText, result);
+  if(format === 'PRNC') return _parseBCPRNC(rawLines, lineGroups, fullText, result);
+
+  result._errors.push('Format de BC non reconnu (ni SLN ni PRNC)');
+  return result;
+}
+
+// ===========================================================================
+// PARSER SLN
+// ===========================================================================
+// Caractéristiques de ce format :
+//   • Tableau d'items à colonnes fixes : POSTE | CODE_SLN | DÉSIGNATION | IMPUT | DÉLAI | QTÉ | UNITÉ | PU | MONTANT
+//   • Désignation peut s'étaler sur plusieurs lignes (wrap pdf.js)
+//   • La table peut être paginée : chaque page commence par un header répété (logo, infos BC...).
+//     Les lignes-items sont identifiables par leur structure : commence par un n° de poste 1-99,
+//     suivi (optionnel) d'un code SLN numérique 7 chiffres, puis désignation, puis date JJ/MM/AAAA,
+//     puis chiffres (qte, pu, montant). Le n° de poste + date permettent un détecteur fiable.
+//   • Total = ligne 'Total' suivie d'une ligne avec montant FR seul (ex "521 380,00")
+//   • N° BC = ligne sous 'N° de BC' (cellule en haut à droite du header)
+//   • Date d'émission = sous 'Date d'émission' (header)
+//   • Devis lié : 'DEVIS N°SLN-DVxxx' ou 'VOTRE DEVIS N°SLN-DVxxx' dans le corps
+function _parseBCSLN(rawLines, lineGroups, fullText, result){
+  result.client = 'SOCIETE LE NICKEL - SLN';
+
+  // --- N° BC : pattern "00XXXXXX-XX-XX" (les BC SLN ont ce format strict) ---
+  // Trois variantes : 00728195-01- (trailing dash), 00730482-05-43, 00740704-05-37
+  var mNum = fullText.match(/\b(00\d{6,8}-\d{2}-?\d*)\b/);
+  if(mNum) result.num = mNum[1].replace(/-$/,'');
+  else result._errors.push('N° BC SLN non détecté');
+
+  // --- Date d'émission : sous 'Date d'émission', format JJ/MM/AAAA ---
+  // Chercher la 1re occurrence d'une date valide après 'Date d\'émission'
+  var idxDate = fullText.search(/Date\s+d['\u2019]?\s*[ée]mission/i);
+  if(idxDate >= 0){
+    var after = fullText.substring(idxDate, idxDate+500);
+    var mDate = after.match(/(\d{2}\/\d{2}\/\d{4})/);
+    if(mDate){
+      // Convertir JJ/MM/AAAA → YYYY-MM-DD
+      var parts = mDate[1].split('/');
+      result.date = parts[2]+'-'+parts[1]+'-'+parts[0];
+    }
+  }
+  if(!result.date) result._errors.push('Date d\'émission non détectée');
+
+  // --- Devis référencé : 'DEVIS N°SLN-DVxxx', 'DEVIS: SLN-DVxxx', 'VOTRE DEVIS N°SLN-DVxxx' ---
+  // Pattern souple : tolère espaces/no espaces autour du N°
+  var mDV = fullText.match(/DEVIS\s*(?:N°|:|N°\s*)?\s*(SLN-DV\d+[A-Z]*)/i);
+  if(mDV) result.devisRef = mDV[1].toUpperCase();
+
+  // --- Lignes d'items ---
+  // Stratégie : passer toutes les lignes, identifier les "lignes-items" par leur structure :
+  //   • Commence par n° poste 1-99 (souvent suivi de marqueurs ':' ou '!')
+  //   • Contient un code SLN à 6-7 chiffres OU sinon directement la désignation
+  //   • Contient une date JJ/MM/AAAA (date de livraison)
+  //   • Contient des montants FR (format "X XXX,XX" ou "X XXX XXX,XX")
+  //
+  // Approche : on parse chaque rawLine. Si elle matche le pattern item → on extrait.
+  // Les lignes suivantes (sans poste) jusqu'à la prochaine ligne-item ou un séparateur
+  // sont des wraps de désignation à concaténer.
+  //
+  // Pattern principal de ligne-item SLN :
+  //   /^(\d{1,2})\s+(?:(\d{6,7})\s+)?(.+?)\s+(\d{6}\.{3}|\d{6,9}(?:\s*\.\.\.)?)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d+)\s+((?:Forfait|Lot\s+de\s+pi[èe]ces|U|Ft|Kg|m|kg)\s+)?([\d\s]+,\d{2})\s+([\d\s]+,\d{2})$/
+  // En pratique pdf.js mélange parfois les espaces, donc on est tolérant.
+
+  // Détecter zone de table : début après "Désignation" header, fin avant "Total" + montant
+  // Plus simple : on scanne TOUTES les rawLines et on filtre celles qui matchent.
+
+  // Helper : parse un montant FR "X XXX XXX,XX" → number (en XPF on a souvent ",00")
+  function parseFR(s){
+    if(!s) return 0;
+    return parseFloat(String(s).replace(/\s/g,'').replace(',','.')) || 0;
+  }
+
+  // Pattern global pour une ligne-item SLN complète (sur 1 ligne pdf.js) :
+  //   N°poste [CODE_SLN] DÉSIGNATION IMPUT(923631...) DATE(JJ/MM/AAAA) QTE [UNITÉ] PU MONTANT
+  // Comme pdf.js peut tronquer/wrap la désignation, on identifie d'abord la DATE
+  // et on travaille en arrière. Toute ligne qui contient une date JJ/MM/AAAA et qui suit
+  // une ligne avec un n° de poste de 1-99 est candidate.
+  //
+  // Approche définitive (robuste) :
+  //   1. Pour chaque rawLine, tester si elle correspond à un n° de poste seul OU bien
+  //      à un n° de poste suivi de "tout" (ligne compacte).
+  //   2. Si compact : extraire poste, code, désignation, qte, unite, pu, montant.
+  //   3. Si poste seul : ligne suivante = désignation (et lignes suivantes = wraps).
+  //      Chercher ensuite la date + qte/pu/montant.
+  //
+  // En pratique, sur les exemples SLN, pdf.js retourne les items INLINE sur la même ligne Y.
+  // Donc on attaque le cas compact d'abord :
+  var items = [];
+  for(var i=0; i<rawLines.length; i++){
+    var line = rawLines[i];
+    var norm = line.replace(/\s[:!]\s/g,' ').replace(/\s+/g,' ').trim();
+    // Variante B (à tester EN PREMIER si unité explicite suit la qte) :
+    //   poste DESC IMPUT QTE UNITE DATE PU MONTANT
+    // Ex : "4 ONSITE ENGINEERING SERVICES (10HOURS) 924602... 1 Lot de pièces 05/06/2026 243 600,00 243 600,00"
+    // Ex : "5 TRAVEL AND LIVING EXPENSES 924602... 1 Forfait 140 000,00 140 000,00" → ATTENTION pas de date
+    //   ↑ ce cas n'est PAS variante B (pas de date entre unité et pu) — c'est variante A avec unité présente.
+    // En fait sur le PDF 740704, l'ordre dépend de la cellule pdf.js : si la date+qte+unité+pu+total
+    // sont sur la même ligne Y, l'ordre peut varier. Le pattern B avec date au milieu doit donc être strict.
+    var mCompact = norm.match(/^(\d{1,2})\s+(.+?)\s+(\d+)\s+(Forfait|Lot\s+de\s+pi[èe]ces|Lot|U|Ft|Kg|kg|m|H|jour)\s+(\d{2}\/\d{2}\/\d{4})\s+([\d\s]+,\d{2})\s+([\d\s]+,\d{2})$/i);
+    if(mCompact){
+      // Mapping variante B : [_, poste, middle, qte, unite, date, pu, mont]
+      // On remap dans la structure variante A : [_, poste, middle, date, qte, unite_, pu, mont]
+      mCompact = [mCompact[0], mCompact[1], mCompact[2], mCompact[5], mCompact[3], mCompact[4]+' ', mCompact[6], mCompact[7]];
+    } else {
+      // Variante A (cas standard) :
+      //   poste DESC IMPUT DATE QTE [UNITE] PU MONTANT
+      mCompact = norm.match(/^(\d{1,2})\s+(.+?)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d+)\s+((?:Forfait|Lot\s+de\s+pi[èe]ces|Lot|U|Ft|Kg|kg|m|H|jour)\s+)?([\d\s]+,\d{2})\s+([\d\s]+,\d{2})$/i);
+    }
+    if(mCompact){
+      var poste = parseInt(mCompact[1], 10);
+      var middle = mCompact[2]; // contient code SLN éventuel + désignation + IMPUT
+      var dateLivr = mCompact[3];
+      var qte = parseInt(mCompact[4], 10);
+      var unite = (mCompact[5]||'').trim();
+      var pu = parseFR(mCompact[6]);
+      var mont = parseFR(mCompact[7]);
+      // Extraire code SLN (6-7 chiffres) en tête de middle si présent
+      var ref = '';
+      var desc = middle;
+      var mCode = middle.match(/^(\d{6,7})\s+(.+)$/);
+      if(mCode){ ref = mCode[1]; desc = mCode[2]; }
+      // Enlever IMPUT en queue (format "924631..." 6 chiffres + 3 points) — c'est un n° comptable interne SLN
+      desc = desc.replace(/\s+\d{6}\.{2,}$/,'').trim();
+      // Sécurité : poste doit être plausible (1-99) et qte > 0
+      if(poste>=1 && poste<=99 && qte>=1 && mont>0){
+        items.push({
+          ref: ref,
+          desc: desc,
+          qte: qte,
+          unite: unite || 'U',
+          pu: pu,
+          total: mont,
+          _poste: poste
+        });
+        continue;
+      }
+    }
+    // Test 2 : ligne suivante contient continuation de désignation
+    // (gérée par concat aval — voir plus bas)
+  }
+
+  // ========== Passe 2 : concaténer les wraps de désignation ==========
+  // Les lignes entre 2 items consécutifs (poste N et poste N+1) qui ne sont pas un item
+  // sont probablement des wraps de désignation du poste N. On les détecte par leur position
+  // dans rawLines (entre la ligne-item N et la ligne-item N+1).
+  // Cela permet de récupérer "BANKSMEADOW SYDNEY..." continuation de "TRANSPORT DE BAYSWATER PERTH VERS...".
+  if(items.length > 0){
+    // Localiser chaque item-ligne par index dans rawLines (1ère occurrence)
+    items.forEach(function(it, idx){
+      var nextItemPoste = (idx+1 < items.length) ? items[idx+1]._poste : 999;
+      // Trouver l'index de cette ligne-item dans rawLines
+      var lineIdx = -1;
+      for(var li=0; li<rawLines.length; li++){
+        if(rawLines[li].match(new RegExp('^'+it._poste+'\\s+'))){ lineIdx = li; break; }
+      }
+      if(lineIdx < 0) return;
+      // Avancer ligne par ligne. Stop sur :
+      //   • début d'un item suivant ("N° poste suivant + espace")
+      //   • mot-clé footer ("Total", "MERCI", "La présente", "Sous-total")
+      //   • ligne avec une date JJ/MM/AAAA (= autre item probable)
+      var wraps = [];
+      for(var ln=lineIdx+1; ln<rawLines.length; ln++){
+        var lt = rawLines[ln];
+        if(!lt) continue;
+        // Stop sur prochain item
+        if(new RegExp('^'+nextItemPoste+'\\s').test(lt)) break;
+        // Stop sur footer
+        if(/^(Total|TOTAL\s+XPF|MERCI|La\s+présente|Sous-?total|This\s+purchase|N°\s+de\s+BC|Page\s+\d)/i.test(lt)) break;
+        // Stop sur date isolée (probable autre item)
+        if(/^\d{2}\/\d{2}\/\d{4}/.test(lt)) break;
+        // Stop si la ligne commence par un n° de poste 1-2 digits + espace (autre item potentiel)
+        if(/^\d{1,2}\s+[A-ZÉ]/.test(lt) && /\d{2}\/\d{2}\/\d{4}/.test(lt)) break;
+        // Sinon, c'est un wrap → ajouter
+        // Nettoyer : enlever préfixe IMPUT-comptable seul ("924631...") si présent
+        var clean = lt.replace(/^\d{6}\.{2,}\s*/,'').replace(/\s+\d{6}\.{2,}\s*$/,'').trim();
+        if(clean && clean.length > 2) wraps.push(clean);
+      }
+      if(wraps.length){
+        it.desc = (it.desc + ' ' + wraps.join(' ')).replace(/\s+/g,' ').trim();
+      }
+    });
+  }
+
+  // Nettoyer les champs internes (_poste)
+  items.forEach(function(it){ delete it._poste; });
+  result.lines = items;
+
+  // --- Total : 'Total' suivi du montant sur ligne suivante OU même ligne ---
+  // Pattern 1 : ligne "Total" + ligne "521 380,00"
+  // Pattern 2 : ligne "Total\n521 380,00" (pdf.js peut fusionner si Y voisin)
+  for(var ti=0; ti<rawLines.length; ti++){
+    if(/^Total$/i.test(rawLines[ti].trim())){
+      // Chercher dans les 3 lignes suivantes un montant seul
+      for(var tj=ti+1; tj<Math.min(ti+4, rawLines.length); tj++){
+        var mTot = rawLines[tj].match(/^([\d\s]+,\d{2})$/);
+        if(mTot){
+          result.total = parseFR(mTot[1]);
+          break;
+        }
+      }
+      if(result.total>0) break;
+    }
+  }
+  if(!result.total){
+    // Fallback : somme des lignes
+    result.total = items.reduce(function(s,it){return s+(it.total||0);}, 0);
+    if(result.total>0) result._errors.push('Total non détecté en footer — utilisation somme des lignes');
+  }
+
+  if(items.length === 0) result._errors.push('Aucune ligne d\'item détectée');
+
+  return result;
+}
+
+// ===========================================================================
+// PARSER PRNC
+// ===========================================================================
+// Caractéristiques de ce format :
+//   • Tableau d'items : ITEM | DESCRIPTION | QTÉ | U/M | PU | DISC% | DUE DATE | TOTAL
+//   • Lignes-items identifiables par N° "001", "002"... (3 digits, leading zeros)
+//   • Quantité parfois = 0.00 (pour les forfaits / contrats avec montant global)
+//     → règle utilisateur : forcer qte=1, unite='Lot', pu=total
+//   • Total = "TOTAL XPF  <montant US>" (format anglais avec virgules milliers)
+//   • N° BC = "LXXXXX / XXXX" (ex "L72923 / 0001")
+//   • Date format JJ/MM/AA (sans siècle)
+//   • Devis lié : "Selon devis n° PRNC-DVxxx" ou "Devis PRNC-DVxxx" dans la description
+function _parseBCPRNC(rawLines, lineGroups, fullText, result){
+  result.client = 'PRNC - Prony Resources';
+
+  // --- N° BC : "LXXXXX / XXXX" ---
+  var mNum = fullText.match(/\b(L\d{5,6})\s*\/\s*(\d{4})\b/);
+  if(mNum) result.num = mNum[1]+' / '+mNum[2];
+  else result._errors.push('N° BC PRNC non détecté');
+
+  // --- Date d'émission : header "DAY/MON/YR" avec valeur "JJ / MM / AA" ---
+  // Pattern observé : "08 / 11 / 25" ou "08/11/25"
+  // Chercher après le label "Date" du header
+  var idxDate = fullText.search(/Date\s*\n?\s*DAY\/MON\/YR/i);
+  if(idxDate >= 0){
+    var after = fullText.substring(idxDate, idxDate+200);
+    var mDate = after.match(/(\d{2})\s*\/\s*(\d{2})\s*\/\s*(\d{2})/);
+    if(mDate){
+      // JJ/MM/AA → 20AA-MM-JJ (on est dans les années 20xx)
+      result.date = '20'+mDate[3]+'-'+mDate[2]+'-'+mDate[1];
+    }
+  }
+  if(!result.date){
+    // Fallback : chercher première date JJ/MM/AA dans le PDF
+    var mFallback = fullText.match(/(\d{2})\s*\/\s*(\d{2})\s*\/\s*(\d{2})\b/);
+    if(mFallback && parseInt(mFallback[3])<=99 && parseInt(mFallback[3])>=20){
+      result.date = '20'+mFallback[3]+'-'+mFallback[2]+'-'+mFallback[1];
+    }
+  }
+  if(!result.date) result._errors.push('Date d\'émission non détectée');
+
+  // --- Devis référencé : "Selon devis n° PRNC-DVxxx", "Devis PRNC-DVxxx", "devis n° PRNC-..." ---
+  var mDV = fullText.match(/(?:Selon\s+devis\s*n°?|Devis\s*:?|devis\s*n°)\s*(PRNC-DV\d+[A-Z0-9]*)/i);
+  if(mDV) result.devisRef = mDV[1].toUpperCase();
+
+  // --- Lignes d'items ---
+  // Helper : parse montant US "X,XXX,XXX.XX" ou "XXX.XX" → number
+  function parseUS(s){
+    if(!s) return 0;
+    return parseFloat(String(s).replace(/,/g,'').replace(/\s/g,'')) || 0;
+  }
+
+  // Pattern PRNC item : N°(3 digits) DESCRIPTION QTÉ U/M(opt) PU DISC% DATE TOTAL
+  // Sur 1 ligne pdf.js, la description peut être courte (cas L78440 sur 1 ligne) ou
+  // étalée sur plusieurs lignes (cas L72923 où la description courte tient sur 1 ligne).
+  //
+  // Patterns observés :
+  //   "001 AMS Wireless Vibration Monitor Kit ... 0.00 10,705,827.00 0.00 08/11/25 10,705,827.00"
+  //   "001 TRANSMITTER SCALABLE ULTRA IN-LINE GAGE PRESSURE,... 1.00 U 399,260.00 0.00 25/06/26 399,260.00"
+  //
+  // Approche : matcher une ligne-item par sa fin caractéristique :
+  //   ...QTE(\d+\.\d{2})\s+(U|U/M|Lot|Lot de pièces|Forfait)?\s+PU(montant US)\s+0\.00\s+DATE(JJ/MM/AA)\s+TOTAL(montant US)
+  //
+  // Mais les exemples montrent que le n° de poste 001/002 peut être seul sur une ligne pdf.js (sans la suite)
+  // et la suite vient sur la ligne suivante. Stratégie plus robuste : scan global fullText avec regex multilignes,
+  // OU bien analyse par X (colonnes) si on observe que items.x sont à des positions stables.
+  //
+  // Approche pragmatique : on scanne rawLines pour chercher les blocs commençant par /^00\d\s/ et
+  // on parse récursivement jusqu'au prochain "00X" ou footer.
+  var items = [];
+  var i = 0;
+  while(i < rawLines.length){
+    var line = rawLines[i].trim();
+    // Détecter début d'item : ligne commençant par 00X (item number 3 digits, zero-padded)
+    var mStart = line.match(/^(00\d)\s+(.+)$/);
+    if(mStart){
+      var itemNum = mStart[1];
+      var rest = mStart[2];
+      // Accumuler les lignes suivantes jusqu'au prochain item ou footer
+      var blockEnd = i+1;
+      while(blockEnd < rawLines.length){
+        var nl = rawLines[blockEnd].trim();
+        if(/^00\d\s/.test(nl)) break; // prochain item
+        if(/^(Stock\s+Code|Contract|Total|TOTAL\s+XPF|ATTESTATION|ATTENTION|Manufacturer)/i.test(nl)) break;
+        rest = rest + ' ' + nl;
+        blockEnd++;
+      }
+      rest = rest.replace(/\s+/g,' ').trim();
+      // Maintenant rest contient : DESCRIPTION QTÉ [U/M] PU DISC% DATE TOTAL
+      // Mais souvent rest contient AUSSI "Stock Code / Req. No:..." en suffixe — à dégager.
+      // On retire la queue à partir de "Stock Code"
+      rest = rest.replace(/\s*Stock\s+Code.*$/i, '').trim();
+      rest = rest.replace(/\s*Contract\s*n°.*$/i, '').trim();
+      rest = rest.replace(/\s*Manufacturer\s*\/.*$/i, '').trim();
+      rest = rest.replace(/\s*ORACLE.*\*A\d+.*$/i, '').trim();
+
+      // Pattern fin de ligne : QTE U/M PU DISC% DATE TOTAL
+      //   QTE         = X.00 (ex 0.00, 1.00, 16.00) OU entier
+      //   U/M (opt)   = U | Lot | Forfait | "Lot de pièces" (rare en PRNC, plus en SLN)
+      //   PU          = X,XXX,XXX.XX
+      //   DISC%       = 0.00 (toujours sur les exemples)
+      //   DATE        = JJ/MM/AA
+      //   TOTAL       = X,XXX,XXX.XX
+      // Regex stricte :
+      var mTail = rest.match(/^(.*?)\s+(\d+\.\d{2})\s+([A-Za-z][A-Za-z\s\/]*)?\s*([\d,]+\.\d{2})\s+(\d+\.\d{2})\s+(\d{2}\/\d{2}\/\d{2})\s+([\d,]+\.\d{2})$/);
+      if(mTail){
+        var desc = mTail[1].trim();
+        var qte = parseFloat(mTail[2]) || 0;
+        var unite = (mTail[3]||'').trim() || 'U';
+        var pu = parseUS(mTail[4]);
+        // disc = mTail[5]; date = mTail[6]
+        var total = parseUS(mTail[7]);
+        // Règle métier : qte = 0 → forfait → forcer qte=1, unite='Lot', pu=total
+        if(qte === 0){
+          qte = 1;
+          unite = 'Lot';
+          pu = total;
+        }
+        items.push({
+          ref: itemNum, // PRNC n'a pas de code séparé, on met le n° item comme ref
+          desc: desc,
+          qte: qte,
+          unite: unite,
+          pu: pu,
+          total: total
+        });
+      } else {
+        result._errors.push('Item '+itemNum+' : parsing tail échoué (rest="'+rest.substring(0,80)+'...")');
+      }
+      i = blockEnd;
+    } else {
+      i++;
+    }
+  }
+
+  result.lines = items;
+
+  // --- Total : "TOTAL XPF" suivi du montant ---
+  // Sur 1 ligne ou 2 lignes selon le rendu pdf.js. Pattern strict.
+  var mTotal = fullText.match(/TOTAL\s+XPF[\s\n]+([\d,]+\.\d{2})/i);
+  if(mTotal){
+    result.total = parseUS(mTotal[1]);
+  } else {
+    result.total = items.reduce(function(s,it){return s+(it.total||0);}, 0);
+    if(result.total>0) result._errors.push('Total non détecté en footer — utilisation somme des lignes');
+  }
+
+  if(items.length === 0) result._errors.push('Aucune ligne d\'item détectée');
+
+  return result;
+}
+
+// ===========================================================================
+// PREVIEW : modale éditable avant création BL
+// ===========================================================================
+function _previewBCClientImport(parsed, fileName){
+  // Stocker en variable globale pour _confirmBCClientImport
+  window._bcImportPreview = parsed;
+
+  // Construire HTML modale
+  var existing = document.getElementById('mBCImport');
+  if(existing) existing.remove();
+
+  var fmtBadge = parsed.format === 'SLN'
+    ? '<span style="background:rgba(45,212,191,.15);color:#2dd4bf;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.05em">SLN</span>'
+    : (parsed.format === 'PRNC'
+      ? '<span style="background:rgba(167,139,250,.15);color:#a78bfa;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.05em">PRNC</span>'
+      : '<span style="background:rgba(244,63,94,.15);color:#f43f5e;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">?</span>');
+
+  var errorsHtml = '';
+  if(parsed._errors && parsed._errors.length){
+    errorsHtml = '<div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:var(--amber)">⚠ '+parsed._errors.map(esc).join(' · ')+'</div>';
+  }
+
+  // Lignes éditables
+  var linesHtml = '';
+  parsed.lines.forEach(function(l, idx){
+    linesHtml +=
+      '<tr style="border-bottom:1px solid rgba(255,255,255,0.05)">'+
+        '<td style="padding:4px 6px"><input id="bcimp-ref-'+idx+'" value="'+esc(l.ref||'')+'" style="width:90px;background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:11px"></td>'+
+        '<td style="padding:4px 6px"><input id="bcimp-desc-'+idx+'" value="'+esc(l.desc||'')+'" style="width:100%;min-width:240px;background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:11px"></td>'+
+        '<td style="padding:4px 6px"><input type="number" id="bcimp-qte-'+idx+'" value="'+(l.qte||1)+'" style="width:55px;background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:11px"></td>'+
+        '<td style="padding:4px 6px"><input id="bcimp-unite-'+idx+'" value="'+esc(l.unite||'U')+'" style="width:65px;background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:11px"></td>'+
+        '<td style="padding:4px 6px"><input type="number" id="bcimp-pu-'+idx+'" value="'+(l.pu||0)+'" style="width:100px;background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-size:11px"></td>'+
+        '<td style="padding:4px 6px;text-align:right;color:var(--muted);font-family:JetBrains Mono,monospace;font-size:10.5px">'+fN(l.total||0)+'</td>'+
+      '</tr>';
+  });
+
+  if(!linesHtml){
+    linesHtml = '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--muted);font-style:italic">Aucune ligne extraite. Le format du PDF n\'a peut-être pas été reconnu correctement.</td></tr>';
+  }
+
+  var modal = document.createElement('div');
+  modal.id = 'mBCImport';
+  modal.className = 'modal';
+  modal.style.display = 'flex';
+  modal.innerHTML =
+    '<div class="modal-content" style="max-width:1000px;width:95%">'+
+      '<div class="modal-header">'+
+        '<h3 style="display:flex;align-items:center;gap:10px">📋 Import BL depuis BC Client '+fmtBadge+'</h3>'+
+        '<button class="modal-close" onclick="cm(\'mBCImport\')">✕</button>'+
+      '</div>'+
+      '<div class="modal-body">'+
+        errorsHtml+
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;padding:10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:6px">'+
+          '<div><div style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:3px">N° BC Client</div><input id="bcimp-num" value="'+esc(parsed.num||'')+'" style="width:100%;background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:5px 8px;color:var(--text);font-size:11.5px;font-family:JetBrains Mono,monospace;font-weight:700"></div>'+
+          '<div><div style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:3px">Date émission</div><input type="date" id="bcimp-date" value="'+esc(parsed.date||'')+'" style="width:100%;background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:5px 8px;color:var(--text);font-size:11.5px"></div>'+
+          '<div><div style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:3px">Devis lié (détecté)</div><input id="bcimp-devis" value="'+esc(parsed.devisRef||'')+'" placeholder="Aucun" style="width:100%;background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:5px 8px;color:var(--text);font-size:11.5px;font-family:JetBrains Mono,monospace"></div>'+
+          '<div><div style="font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:3px">Total détecté</div><div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:4px;padding:5px 8px;color:var(--teal);font-size:13px;font-family:JetBrains Mono,monospace;font-weight:700;text-align:right">'+fN(parsed.total||0)+' XPF</div></div>'+
+        '</div>'+
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:6px"><b>Client :</b> '+esc(parsed.client||'?')+' · <b>'+parsed.lines.length+' ligne'+(parsed.lines.length>1?'s':'')+'</b> · Vous pouvez éditer chaque champ avant import.</div>'+
+        '<div style="max-height:50vh;overflow:auto;border:1px solid rgba(255,255,255,0.06);border-radius:6px">'+
+          '<table style="width:100%;border-collapse:collapse;font-size:11px">'+
+            '<thead style="position:sticky;top:0;background:var(--bg);z-index:1">'+
+              '<tr style="border-bottom:1px solid rgba(255,255,255,0.1)">'+
+                '<th style="text-align:left;padding:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Réf.</th>'+
+                '<th style="text-align:left;padding:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Désignation</th>'+
+                '<th style="text-align:left;padding:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Qté</th>'+
+                '<th style="text-align:left;padding:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Unité</th>'+
+                '<th style="text-align:left;padding:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">PU</th>'+
+                '<th style="text-align:right;padding:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Total</th>'+
+              '</tr>'+
+            '</thead>'+
+            '<tbody>'+linesHtml+'</tbody>'+
+          '</table>'+
+        '</div>'+
+      '</div>'+
+      '<div class="modal-footer">'+
+        '<button class="btn btn-ghost" onclick="cm(\'mBCImport\')">Annuler</button>'+
+        '<button class="btn btn-teal" onclick="_confirmBCClientImport()">✓ Créer le BL pré-rempli</button>'+
+      '</div>'+
+    '</div>';
+
+  document.body.appendChild(modal);
+}
+
+// Lit les inputs édités, ferme la modale, ouvre la modale BL pré-remplie.
+function _confirmBCClientImport(){
+  var parsed = window._bcImportPreview;
+  if(!parsed) return;
+
+  // Récupérer les valeurs des inputs éditables
+  var num = (document.getElementById('bcimp-num')||{}).value || parsed.num;
+  var date = (document.getElementById('bcimp-date')||{}).value || parsed.date;
+  var devisRef = (document.getElementById('bcimp-devis')||{}).value || '';
+
+  var lines = parsed.lines.map(function(l, idx){
+    return {
+      ref: (document.getElementById('bcimp-ref-'+idx)||{}).value || l.ref || '',
+      desc: (document.getElementById('bcimp-desc-'+idx)||{}).value || l.desc || '',
+      qte: parseFloat((document.getElementById('bcimp-qte-'+idx)||{}).value) || l.qte || 1,
+      pu: parseFloat((document.getElementById('bcimp-pu-'+idx)||{}).value) || l.pu || 0
+    };
+  });
+
+  // Tenter de retrouver l'ID interne du devis si devisRef matche un devis en DB
+  var fromDevisIds = [];
+  var dvliesNumStr = '';
+  if(devisRef){
+    var matchedDV = (DB.devis||[]).find(function(d){
+      return d.num && d.num.toUpperCase() === devisRef.toUpperCase();
+    });
+    if(matchedDV){
+      fromDevisIds = [matchedDV.id];
+      dvliesNumStr = matchedDV.num;
+    } else {
+      // Pas trouvé en DB : garder le N° comme texte libre
+      dvliesNumStr = devisRef;
+    }
+  }
+
+  // Déterminer le client (peut matcher un client existant en DB par préfixe)
+  var clientStr = parsed.client || '';
+  // Chercher un client existant qui correspond (SLN ou PRNC)
+  var matchedClient = (DB.clients||[]).find(function(c){
+    var n = (c.nom||'').toLowerCase();
+    if(parsed.format === 'SLN') return n.indexOf('sln') >= 0 || n.indexOf('nickel') >= 0;
+    if(parsed.format === 'PRNC') return n.indexOf('prnc') >= 0 || n.indexOf('prony') >= 0;
+    return false;
+  });
+  if(matchedClient) clientStr = matchedClient.nom;
+
+  // Fermer la modale preview
+  cm('mBCImport');
+
+  // Ouvrir openBL avec opts pré-remplies
+  // On NE passe PAS fromDevisIds parce que cela activerait le mode "création depuis devis"
+  // qui pourrait altérer la logique de livraisons partielles. À la place on passe les valeurs
+  // directement et on laisse openBL gérer comme un BL "neuf custom".
+  openBL(null, {
+    fromDevisIds: fromDevisIds, // [] ou [id] — peuplé seulement si le devis matche
+    client: clientStr,
+    contact: matchedClient ? (matchedClient.contact||'') : '',
+    adrdest: matchedClient ? (matchedClient.adresse||'') : '',
+    poConsolide: num,           // ← le N° BC client va dans le champ PO
+    dvliesNumStr: dvliesNumStr,
+    prefillLines: lines
+  });
+
+  // Override : la date du BL = date d'émission BC (par défaut openBL met aujourd'hui)
+  if(date){
+    var dt = document.getElementById('bl-date');
+    if(dt) dt.value = date;
+  }
+}
+
+
 // Objectif métier : transformer un (ou plusieurs) devis Fourniture accepté(s) en BL,
 // en gérant les 3 cas de figure :
 //   - CAS A : 1 devis → 1 BL (livraison unique, simple)
@@ -31117,7 +31793,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
 }
 
 
-var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;padding:10px;font-size:9px;color:#111}.doc{max-width:760px;margin:0 auto}.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:7px;border-bottom:2.5px solid #1e3a5f}.doc-title{font-size:18px;font-weight:900;color:#1e3a5f;text-align:right}.doc-meta{text-align:right;font-size:10px;color:#555}.doc-parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px}.doc-party h4{font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px}.doc-party p{font-size:13px;line-height:1.6;color:#333}.doc-info-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact;word-break:break-word}.bc-info-bar{background:#dbeafe!important;border-bottom:2px solid #1e3a5f!important;border-radius:3px 3px 0 0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.bc-info-bar-5col{grid-template-columns:repeat(5,1fr) !important;gap:8px;font-size:11px}.bc-info-bar-5col .dlbl{font-size:9.5px}.dlbl{font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block}.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px;table-layout:fixed}.doc-tbl col.c-num{width:28px}.doc-tbl col.c-ref{width:130px}.doc-tbl col.c-des{width:auto}.doc-tbl col.c-tgc{width:38px}.doc-tbl col.c-ute{width:32px}.doc-tbl col.c-qte{width:32px}.doc-tbl col.c-pu{width:78px}.doc-tbl col.c-ttc{width:82px}.doc-tbl thead th{background:#1e3a5f;color:#fff;padding:6px 5px;text-align:left;font-size:11.5px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact;overflow:hidden}.doc-tbl thead th:nth-child(1){text-align:center}.doc-tbl thead th:nth-child(n+4){text-align:center}.doc-tbl thead th:nth-child(7),.doc-tbl thead th:nth-child(8){text-align:right}.doc-tbl tbody td{padding:6px 5px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word;font-size:13px;overflow:hidden}.doc-tbl tbody td:nth-child(1){text-align:center}.doc-tbl tbody td:nth-child(4),.doc-tbl tbody td:nth-child(5),.doc-tbl tbody td:nth-child(6){text-align:center;white-space:nowrap}.doc-tbl tbody td:nth-child(7),.doc-tbl tbody td:nth-child(8){text-align:right;white-space:nowrap;font-weight:600}.doc-tbl tfoot td{padding:5px 5px;font-weight:800;font-size:12.5px;color:#1e3a5f;border-top:2px solid #1e3a5f}.doc-tbl tfoot td:last-child{text-align:right}.doc-totals{margin-left:auto;width:270px;border-collapse:collapse;font-size:10.5px}.doc-totals td{padding:2px 6px}.doc-totals td:last-child{text-align:right;font-weight:600}.dtf td{font-size:12px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:8px 11px;font-size:13px;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank{background:#eef2f7;padding:7px 10px;border-radius:3px;margin-bottom:10px;font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px}.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:14px;padding-top:9px;border-top:1px solid #ddd;align-items:stretch}.doc-sign-box{text-align:center;font-size:11px;display:flex;flex-direction:column;min-height:195px}.doc-sign-box .dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f;flex-shrink:0}.doc-sign-box .ds-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:stretch}.doc-sign-box .ds-siglot{height:115px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:2px}.doc-sign-box .ds-siglot img{max-height:110px;max-width:260px;display:block;margin:0 auto}.doc-sign-box .dsline{height:0;border-bottom:1px solid #999;margin:0 0 3px 0}.doc-sign-box p{margin:0;line-height:1.3}.dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f}.dsline{height:0;border-bottom:1px solid #999;margin-bottom:2px}.doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:5px;font-size:9px;margin-top:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-legal{font-size:11px;color:#cc2200;font-style:italic;text-align:center;margin-top:4px}.doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-tbl{page-break-inside:auto}.doc-tbl tr{page-break-inside:avoid;page-break-after:auto}.doc-sec-head{page-break-after:avoid}.doc-totals-wrap{page-break-inside:avoid}.doc-repeat-header{display:none}.tbl-subtotal{display:none}.thead-repeat-header{display:none}@media print{.doc-repeat-header{display:block}.tbl-subtotal{display:table-row}.thead-repeat-header{display:table-row}}';
+var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;padding:10px;font-size:9px;color:#111}.doc{max-width:760px;margin:0 auto}.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:7px;border-bottom:2.5px solid #1e3a5f}.doc-title{font-size:18px;font-weight:900;color:#1e3a5f;text-align:right}.doc-meta{text-align:right;font-size:10px;color:#555}.doc-parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px}.doc-party h4{font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px}.doc-party p{font-size:13px;line-height:1.6;color:#333}.doc-info-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact;word-break:break-word}.bc-info-bar{background:#dbeafe!important;border-bottom:2px solid #1e3a5f!important;border-radius:3px 3px 0 0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.bc-info-bar-5col{grid-template-columns:repeat(5,1fr) !important;gap:8px;font-size:11px}.bc-info-bar-5col .dlbl{font-size:9.5px}.dlbl{font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block}.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px;table-layout:fixed}.doc-tbl col.c-num{width:28px}.doc-tbl col.c-ref{width:130px}.doc-tbl col.c-des{width:auto}.doc-tbl col.c-tgc{width:38px}.doc-tbl col.c-ute{width:32px}.doc-tbl col.c-qte{width:32px}.doc-tbl col.c-pu{width:78px}.doc-tbl col.c-ttc{width:82px}.doc-tbl thead th{background:#1e3a5f;color:#fff;padding:6px 5px;text-align:left;font-size:11.5px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact;overflow:hidden}.doc-tbl thead th:nth-child(1){text-align:center}.doc-tbl thead th:nth-child(n+4){text-align:center}.doc-tbl thead th:nth-child(7),.doc-tbl thead th:nth-child(8){text-align:right}.doc-tbl tbody td{padding:6px 5px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word;font-size:13px;overflow:hidden}.doc-tbl tbody td:nth-child(1){text-align:center}.doc-tbl tbody td:nth-child(2){word-break:keep-all;overflow-wrap:normal}.doc-tbl tbody td:nth-child(4),.doc-tbl tbody td:nth-child(5),.doc-tbl tbody td:nth-child(6){text-align:center;white-space:nowrap}.doc-tbl tbody td:nth-child(7),.doc-tbl tbody td:nth-child(8){text-align:right;white-space:nowrap;font-weight:600}.doc-tbl tfoot td{padding:5px 5px;font-weight:800;font-size:12.5px;color:#1e3a5f;border-top:2px solid #1e3a5f}.doc-tbl tfoot td:last-child{text-align:right}.doc-totals{margin-left:auto;width:270px;border-collapse:collapse;font-size:10.5px}.doc-totals td{padding:2px 6px}.doc-totals td:last-child{text-align:right;font-weight:600}.dtf td{font-size:12px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:8px 11px;font-size:13px;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank{background:#eef2f7;padding:7px 10px;border-radius:3px;margin-bottom:10px;font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px}.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:14px;padding-top:9px;border-top:1px solid #ddd;align-items:stretch}.doc-sign-box{text-align:center;font-size:11px;display:flex;flex-direction:column;min-height:195px}.doc-sign-box .dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f;flex-shrink:0}.doc-sign-box .ds-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:stretch}.doc-sign-box .ds-siglot{height:115px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:2px}.doc-sign-box .ds-siglot img{max-height:110px;max-width:260px;display:block;margin:0 auto}.doc-sign-box .dsline{height:0;border-bottom:1px solid #999;margin:0 0 3px 0}.doc-sign-box p{margin:0;line-height:1.3}.dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f}.dsline{height:0;border-bottom:1px solid #999;margin-bottom:2px}.doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:5px;font-size:9px;margin-top:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-legal{font-size:11px;color:#cc2200;font-style:italic;text-align:center;margin-top:4px}.doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-tbl{page-break-inside:auto}.doc-tbl tr{page-break-inside:avoid;page-break-after:auto}.doc-sec-head{page-break-after:avoid}.doc-totals-wrap{page-break-inside:avoid}.doc-repeat-header{display:none}.tbl-subtotal{display:none}.thead-repeat-header{display:none}@media print{.doc-repeat-header{display:block}.tbl-subtotal{display:table-row}.thead-repeat-header{display:table-row}}';
 
 // ========================================================================
 // TÉLÉCHARGEMENT PDF HAUTE DÉFINITION
@@ -31719,9 +32395,14 @@ function printPreviewBC(){
       'var rowHeights=rows.map(function(r){return r.getBoundingClientRect().height;});'+
       'var avgRowH=rowHeights.reduce(function(a,b){return a+b;},0)/rowHeights.length;'+
       'var maxRowH=Math.max.apply(null,rowHeights);'+
-      // On utilise la hauteur MAX (sécurité contre les lignes qui wrappent sur 2 lignes de texte)
-      // mais on plafonne à avgRowH * 1.5 pour ne pas surestimer
-      'var rowH=Math.min(maxRowH,avgRowH*1.5);'+
+      // CHOIX SÉCURITAIRE — UTILISER LE MAX ROWH
+      // Auparavant : Math.min(maxRowH, avgRowH*1.5) qui plafonnait pour ne pas "gaspiller"
+      // de place. Mais avec les désignations longues (300+ chars wrappant sur 6+ lignes),
+      // ce plafond sous-estime → trop de lignes par page → chevauchement + débordement.
+      // Maintenant : on utilise directement maxRowH, qui surestime sécuritairement.
+      // Conséquence : 1-2 lignes de moins par page en moyenne. Acceptable contre les bugs
+      // visuels critiques (items superposés, total chevauchant footer).
+      'var rowH=maxRowH;'+
       // Mesurer la hauteur des éléments fixes via une div invisible
       'var measureDiv=document.createElement("div");'+
       'measureDiv.style.cssText="position:absolute;left:-9999px;top:0;width:"+tbodyCell.getBoundingClientRect().width+"px;visibility:hidden;";'+
@@ -31781,11 +32462,24 @@ function printPreviewBC(){
         'pages.push({rows:rowsData.slice(),isFirst:true,isLast:true});'+
         'idx=rowsData.length;'+
       '} else {'+
+        // === REMPLISSAGE PAR HAUTEUR CUMULÉE RÉELLE ===
+        // Au lieu d\'utiliser une capacité fixe pageMaxRows = floor(spaceLeft/rowH) qui
+        // suppose toutes les lignes égales, on accumule les hauteurs RÉELLES de chaque
+        // <tr> (rowHeights[i]) jusqu\'à dépasser l\'espace disponible. Cela fixe le bug
+        // observé sur SLN-DV167 où certaines désignations très longues (300+ chars)
+        // wrappent sur 7 lignes alors que d\'autres tiennent en 1 ligne — la capacité
+        // uniforme se trompait massivement et entassait trop de lignes par page.
+        // Fallback : si une ligne n\'a pas de hauteur mesurée (cas exotique), on utilise rowH.
         'while(idx<rowsData.length){'+
-        '   var pageMaxRows=isFirst?capPage1:capPageN;'+
+        '   var spaceLeft=PAGE_HEIGHT_PX-(isFirst?fixedPage1:fixedPageN);'+
         '   var page={rows:[],isFirst:isFirst,isLast:false};'+
-        '   while(idx<rowsData.length&&page.rows.length<pageMaxRows){'+
-        '     page.rows.push(rowsData[idx]);idx++;'+
+        '   var usedHt=0;'+
+        '   while(idx<rowsData.length){'+
+        '     var rH=(rowHeights[idx]!==undefined)?rowHeights[idx]:rowH;'+
+        '     if(page.rows.length>0 && usedHt+rH>spaceLeft) break;'+
+        '     page.rows.push(rowsData[idx]);'+
+        '     usedHt+=rH;'+
+        '     idx++;'+
         '   }'+
         // === Anti-orphelin : si la DERNIÈRE ligne de la page est un section-header ===
         '   while(page.rows.length>1&&page.rows[page.rows.length-1].isSec&&idx<rowsData.length){'+
@@ -31811,19 +32505,36 @@ function printPreviewBC(){
         '}'+
         // === Optimisation : fusion de la dernière page tableau avec le bloc final ===
         // Si la dernière page de tableau a assez peu de lignes pour que (lignes + bloc final)
-        // tienne sur 1 page, on la transforme en page "lastWithRows" au lieu d\'ajouter
-        // une page finalOnly séparée. Évite d\'avoir une page presque vide juste pour le bloc final.
-        // Seuil RÉDUIT de capPageLast à capPageLast-2 : marge supplémentaire pour éviter
-        // que le bloc final déborde physiquement de la page (cas où la mesure est trop optimiste).
-        // Si on est trop proche de la limite, on préfère une page finalOnly dédiée → page 1
-        // garde son sous-total + footer, page 2 dédiée au bloc final.
+        // tienne physiquement sur 1 page, on la transforme en page "lastWithRows" au lieu
+        // d\'ajouter une page finalOnly séparée. Évite d\'avoir une page presque vide juste
+        // pour le bloc final.
+        // FIX : calcul basé sur la hauteur cumulée RÉELLE des lignes (pas une capacité uniforme).
+        // Avec la marge fixedPageLast (qui inclut hLogo+hInfoBar+hTblHead+hFinalBlock+hFooter+80),
+        // on vérifie que la somme des rowHeights ne dépasse pas l\'espace disponible.
         'var lastP=pages[pages.length-1];'+
-        'if(lastP&&lastP.rows.length>0&&lastP.rows.length<=Math.max(1,capPageLast-2)){'+
-          'lastP.isLast=true;'+
-          'lastP.lastWithRows=true;'+
-          'plog("[PGW] Optimisation : fusion derni\u00e8re page tableau ("+lastP.rows.length+" lignes) avec le bloc final");'+
+        'if(lastP&&lastP.rows.length>0){'+
+          // Recalculer la hauteur réelle des lignes dans lastP (recherche par référence)
+          'var lastPHt=0;'+
+          'for(var lpi=0;lpi<lastP.rows.length;lpi++){'+
+            'var lpRow=lastP.rows[lpi];'+
+            // Trouver l\'index global de cette ligne dans rowsData pour récupérer sa hauteur
+            'var globIdx=rowsData.indexOf(lpRow);'+
+            'if(globIdx>=0&&rowHeights[globIdx]!==undefined){lastPHt+=rowHeights[globIdx];}else{lastPHt+=rowH;}'+
+          '}'+
+          'var lastPSpaceLeft=PAGE_HEIGHT_PX-fixedPageLast;'+
+          // Marge supplémentaire de 50px (~13mm) pour absorber les arrondis pixel→mm
+          // et le différentiel screen vs print de Chrome.
+          'if(lastPHt+50<=lastPSpaceLeft){'+
+            'lastP.isLast=true;'+
+            'lastP.lastWithRows=true;'+
+            'plog("[PGW] Fusion derni\u00e8re page tableau ("+lastP.rows.length+" lignes, "+Math.round(lastPHt)+"px) avec le bloc final (espace dispo "+Math.round(lastPSpaceLeft)+"px)");'+
+          '} else {'+
+            // Sinon on ajoute une page finale dédiée au bloc final
+            'pages.push({rows:[],isFirst:false,isLast:true,finalOnly:true});'+
+            'plog("[PGW] Page finale d\u00e9di\u00e9e (lignes "+Math.round(lastPHt)+"px + bloc final ne tiennent pas sur "+Math.round(lastPSpaceLeft)+"px)");'+
+          '}'+
         '} else {'+
-          // Sinon on ajoute une page finale dédiée au bloc final
+          // Pas de dernière page tableau → pas de fusion possible, on ajoute la page finale
           'pages.push({rows:[],isFirst:false,isLast:true,finalOnly:true});'+
         '}'+
       '}'+
