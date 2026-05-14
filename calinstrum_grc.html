@@ -32410,11 +32410,13 @@ function printPreviewBC(){
       // .pgw-content-flex prend l'espace restant (flex:1), .pgw-footer-flex
       // se colle en bas naturellement (margin-top:auto via flex). Pas de table,
       // pas de hauteur fixe interne, comportement IDENTIQUE écran/PDF.
-      // overflow:visible (pas hidden) : si débordement, on le voit (bug visible
-      // = bug corrigeable, plutôt qu'un footer silencieusement caché).
-      '.pgw-page{height:268mm;page-break-after:always!important;break-after:page!important;display:flex!important;flex-direction:column!important;box-sizing:border-box;}'+
+      // overflow:hidden sur content-flex (PAS sur .pgw-page) : si le calcul de
+      // pagination sous-estime, on clippe les rows débordantes plutôt que les laisser
+      // chevaucher visuellement. Le footer (bandeau bleu) reste visible parce qu'il
+      // est dans .pgw-footer-flex (séparé du content-flex).
+      '.pgw-page{height:268mm;page-break-after:always!important;break-after:page!important;display:flex!important;flex-direction:column!important;box-sizing:border-box;overflow:hidden!important;}'+
       '.pgw-page:last-of-type{page-break-after:auto!important;break-after:auto!important;}'+
-      '.pgw-content-flex{flex:1 1 auto;}'+
+      '.pgw-content-flex{flex:1 1 auto;min-height:0;overflow:hidden;}'+
       '.pgw-footer-flex{flex:0 0 auto;margin-top:auto;page-break-inside:avoid!important;break-inside:avoid!important;}'+
       '.pgw-footer-flex .doc-footer-bar{margin:0!important;}'+
       '.pgw-footer-flex .doc-legal{margin-top:3px!important;}'+
@@ -32607,16 +32609,14 @@ function printPreviewBC(){
       // Cleanup
       'document.body.removeChild(measureDiv);'+
       // Marges sécurité (calibrées sur tests d'impression réels Chrome) :
-      //   - fixedPage1 : +120px (~32mm) → force quelques lignes à basculer page 2.
-      //     Important : la mesure DOM est faite en pixels écran mais Chrome en print
-      //     ajoute padding/line-height supplémentaire → marge généreuse nécessaire pour
-      //     éviter que le sous-total + footer soient poussés sur une page intermédiaire vide.
-      //   - fixedPageN : +60px (~16mm) — pages intermédiaires moins critiques
-      //   - fixedPageLast : +80px (~21mm) — éviter débordement bloc final sur page suivante
-      'var fixedPage1=hLogo+hInfoBar+hBeforeTbl+hTblHead+hSubtotal+hFooter+120;'+
-      'var fixedPageN=hLogo+hInfoBar+hTblHead+hSubtotal+hFooter+60;'+
-      // Capacité d\'une page qui combine lignes + bloc final (pas de sous-total, mais bloc final à la place)
-      'var fixedPageLast=hLogo+hInfoBar+hTblHead+hFinalBlock+hFooter+80;'+
+      //   - fixedPage1 : +150px (~40mm) — agressive : préfère 1 page de plus à un débordement
+      //   - fixedPageN : +150px (~40mm) — pareil pour pages intermédiaires
+      //   - fixedPageLast : +120px (~32mm) — bloc final ne déborde jamais avec cette marge
+      // Conséquence : le devis peut faire 1 page de plus que strictement nécessaire,
+      // mais on n\'aura JAMAIS de chevauchement (priorité absolue à la qualité visuelle).
+      'var fixedPage1=hLogo+hInfoBar+hBeforeTbl+hTblHead+hSubtotal+hFooter+150;'+
+      'var fixedPageN=hLogo+hInfoBar+hTblHead+hSubtotal+hFooter+150;'+
+      'var fixedPageLast=hLogo+hInfoBar+hTblHead+hFinalBlock+hFooter+120;'+
       'var capPage1=Math.max(1,Math.floor((PAGE_HEIGHT_PX-fixedPage1)/rowH));'+
       'var capPageN=Math.max(1,Math.floor((PAGE_HEIGHT_PX-fixedPageN)/rowH));'+
       'var capPageLast=Math.max(0,Math.floor((PAGE_HEIGHT_PX-fixedPageLast)/rowH));'+
@@ -32636,15 +32636,41 @@ function printPreviewBC(){
         'idx=rowsData.length;'+
       '} else {'+
         // === REMPLISSAGE PAR HAUTEUR CUMULÉE RÉELLE ===
-        // Au lieu d\'utiliser une capacité fixe pageMaxRows = floor(spaceLeft/rowH) qui
-        // suppose toutes les lignes égales, on accumule les hauteurs RÉELLES de chaque
-        // <tr> (rowHeights[i]) jusqu\'à dépasser l\'espace disponible. Cela fixe le bug
-        // observé sur SLN-DV167 où certaines désignations très longues (300+ chars)
-        // wrappent sur 7 lignes alors que d\'autres tiennent en 1 ligne — la capacité
-        // uniforme se trompait massivement et entassait trop de lignes par page.
-        // Fallback : si une ligne n\'a pas de hauteur mesurée (cas exotique), on utilise rowH.
+        // PHILOSOPHIE : on accumule les hauteurs réelles de chaque <tr> jusqu'à dépasser
+        // l'espace disponible sur la page courante. spaceLeft varie selon le type de page :
+        //   - Page 1 (avec parties + objet)             → PAGE_HEIGHT_PX - fixedPage1
+        //   - Pages intermédiaires (avec sous-total)    → PAGE_HEIGHT_PX - fixedPageN
+        //   - Dernière page (avec bloc final fusionné)  → PAGE_HEIGHT_PX - fixedPageLast
+        //
+        // PROBLÈME RÉSOLU : avant ce fix, on utilisait toujours fixedPageN pour le calcul,
+        // y compris quand la page allait devenir "lastWithRows" (fusion lignes + bloc final).
+        // Le bloc final étant beaucoup plus haut que le sous-total, la page débordait silencieusement.
+        // (Bug observé sur SLN-DV167 page 2 : items 9-12 superposés + chevauchements totaux.)
+        //
+        // SOLUTION : on alloue spaceLeft = PAGE_HEIGHT_PX - fixedPageLast dès qu'on remplit
+        // la dernière page potentielle. Pour le déterminer, on simule à l'avance avec une
+        // capacité INTERMÉDIAIRE (fixedPageN) pour savoir combien de pages on aura, puis on
+        // recalcule la dernière avec fixedPageLast.
+        //
+        // ANTI-ORPHAN : ne s\'applique que si on ajoute encore des items APRÈS (sinon pas
+        // d\'orphelin). Désactivé sur la dernière page tableau (où on s'arrête).
+        // ANTI-TASK : pareil, ne déplace pas les sous-lignes si elles ne déborderont pas.
+
+        // SIMULATION : calculer le nombre de pages probable avec spaceLeft = fixedPageN
+        // pour estimer si la dernière page sera fusionnée.
+        'var spaceFirst=PAGE_HEIGHT_PX-fixedPage1;'+
+        'var spaceMid=PAGE_HEIGHT_PX-fixedPageN;'+
+        'var spaceLast=PAGE_HEIGHT_PX-fixedPageLast;'+
+        // === REMPLISSAGE EFFECTIF ===
+        // Stratégie en 2 passes :
+        // Pass 1 : remplir avec spaceMid (sauf page 1 qui utilise spaceFirst).
+        //          Cela produit N pages "intermédiaires" (avec sous-total en bas).
+        // Pass 2 : tenter de fusionner la dernière page tableau avec le bloc final.
+        //          Si la hauteur cumulée des rows de la dernière + bloc final <= PAGE_HEIGHT_PX,
+        //          on garde la fusion. Sinon, on retire des rows de la dernière vers une page
+        //          dédiée finale.
         'while(idx<rowsData.length){'+
-        '   var spaceLeft=PAGE_HEIGHT_PX-(isFirst?fixedPage1:fixedPageN);'+
+        '   var spaceLeft=isFirst?spaceFirst:spaceMid;'+
         '   var page={rows:[],isFirst:isFirst,isLast:false};'+
         '   var usedHt=0;'+
         '   while(idx<rowsData.length){'+
@@ -32654,62 +32680,40 @@ function printPreviewBC(){
         '     usedHt+=rH;'+
         '     idx++;'+
         '   }'+
-        // === Anti-orphelin : si la DERNIÈRE ligne de la page est un section-header ===
-        '   while(page.rows.length>1&&page.rows[page.rows.length-1].isSec&&idx<rowsData.length){'+
-        '     var orphan=page.rows.pop();idx--;'+
+        // ANTI-ORPHAN : si la DERNIÈRE ligne de la page est un section-header,
+        // ET qu\'il reste des items après (sinon pas d\'orphelin) → pop.
+        '   while(page.rows.length>1 && page.rows[page.rows.length-1].isSec && idx<rowsData.length){'+
+        '     page.rows.pop();idx--;'+
         '   }'+
-        // === Anti-split TASK : si la PROCHAINE ligne (qui irait sur la page suivante) est
-        // une sous-ligne TASK 2+ (taskOrphan=true), elle ne peut pas commencer une page seule
-        // car elle n\'a que 5 cellules → le rendu serait décalé. Solution : reculer toutes
-        // les sous-lignes TASK consécutives en fin de page courante jusqu\'à inclure leur
-        // 1ère sous-ligne (celle avec rowspan, 8 cellules). Cf bug SLN-DV163 page 2 décalée.
-        '   if(idx<rowsData.length&&rowsData[idx]&&rowsData[idx].taskOrphan){'+
-        '     while(page.rows.length>1&&rowsData[idx]&&rowsData[idx].taskOrphan){'+
-        '       var taskSub=page.rows.pop();idx--;'+
+        // ANTI-TASK : si la PROCHAINE ligne est une sous-ligne TASK 2+ (taskOrphan=true),
+        // reculer toutes les sous-lignes TASK consécutives en fin de page courante.
+        '   if(idx<rowsData.length && rowsData[idx] && rowsData[idx].taskOrphan){'+
+        '     while(page.rows.length>1 && rowsData[idx] && rowsData[idx].taskOrphan){'+
+        '       page.rows.pop();idx--;'+
         '     }'+
-        // Maintenant, page.rows[last] devrait être la 1ère sous-ligne TASK (8 cellules,
-        // pas taskOrphan). Si on l\'a aussi poppée par accident (cas où elle suivait un
-        // section-header), c\'est OK : elle redescendra avec ses sous-lignes sur la page suivante.
         '   }'+
-        // En mode multi-pages, AUCUNE page de tableau n\'est marquée isLast par défaut.
+        // Si malgré l\'anti-orphan/anti-task la page est vide, on force l'ajout d\'au moins 1 ligne
+        // pour éviter une boucle infinie.
+        '   if(page.rows.length===0 && idx<rowsData.length){'+
+        '     page.rows.push(rowsData[idx]);idx++;'+
+        '   }'+
         '   page.isLast=false;'+
         '   pages.push(page);'+
         '   isFirst=false;'+
         '}'+
-        // === Optimisation : fusion de la dernière page tableau avec le bloc final ===
-        // Si la dernière page de tableau a assez peu de lignes pour que (lignes + bloc final)
-        // tienne physiquement sur 1 page, on la transforme en page "lastWithRows" au lieu
-        // d\'ajouter une page finalOnly séparée. Évite d\'avoir une page presque vide juste
-        // pour le bloc final.
-        // FIX : calcul basé sur la hauteur cumulée RÉELLE des lignes (pas une capacité uniforme).
-        // Avec la marge fixedPageLast (qui inclut hLogo+hInfoBar+hTblHead+hFinalBlock+hFooter+80),
-        // on vérifie que la somme des rowHeights ne dépasse pas l\'espace disponible.
-        'var lastP=pages[pages.length-1];'+
-        'if(lastP&&lastP.rows.length>0){'+
-          // Recalculer la hauteur réelle des lignes dans lastP (recherche par référence)
-          'var lastPHt=0;'+
-          'for(var lpi=0;lpi<lastP.rows.length;lpi++){'+
-            'var lpRow=lastP.rows[lpi];'+
-            // Trouver l\'index global de cette ligne dans rowsData pour récupérer sa hauteur
-            'var globIdx=rowsData.indexOf(lpRow);'+
-            'if(globIdx>=0&&rowHeights[globIdx]!==undefined){lastPHt+=rowHeights[globIdx];}else{lastPHt+=rowH;}'+
-          '}'+
-          'var lastPSpaceLeft=PAGE_HEIGHT_PX-fixedPageLast;'+
-          // Marge supplémentaire de 50px (~13mm) pour absorber les arrondis pixel→mm
-          // et le différentiel screen vs print de Chrome.
-          'if(lastPHt+50<=lastPSpaceLeft){'+
-            'lastP.isLast=true;'+
-            'lastP.lastWithRows=true;'+
-            'plog("[PGW] Fusion derni\u00e8re page tableau ("+lastP.rows.length+" lignes, "+Math.round(lastPHt)+"px) avec le bloc final (espace dispo "+Math.round(lastPSpaceLeft)+"px)");'+
-          '} else {'+
-            // Sinon on ajoute une page finale dédiée au bloc final
-            'pages.push({rows:[],isFirst:false,isLast:true,finalOnly:true});'+
-            'plog("[PGW] Page finale d\u00e9di\u00e9e (lignes "+Math.round(lastPHt)+"px + bloc final ne tiennent pas sur "+Math.round(lastPSpaceLeft)+"px)");'+
-          '}'+
-        '} else {'+
-          // Pas de dernière page tableau → pas de fusion possible, on ajoute la page finale
-          'pages.push({rows:[],isFirst:false,isLast:true,finalOnly:true});'+
-        '}'+
+        // === DERNIÈRE PAGE : TOUJOURS DÉDIÉE AU BLOC FINAL ===
+        // STRATÉGIE CONSERVATRICE : on n'essaie JAMAIS de fusionner la dernière page
+        // tableau avec le bloc final. Le bloc final (Total HT + TGC + TTC + montant en lettres
+        // + paiement + virement + signatures) est trop variable en hauteur pour être prédit
+        // de manière fiable. La fusion produisait des chevauchements sur SLN-DV167.
+        //
+        // Conséquence : on peut avoir une dernière page presque vide juste pour le bloc final.
+        // C'est moins esthétique mais ABSOLUMENT FIABLE — pas de chevauchement possible.
+        //
+        // Si tu veux optimiser plus tard, il faudra mesurer le bloc final via clone réel
+        // dans la fenêtre print (et non via measureDiv) et ajouter une marge généreuse.
+        'pages.push({rows:[],isFirst:false,isLast:true,finalOnly:true});'+
+        'plog("[PGW] Page finale d\u00e9di\u00e9e au bloc final (strat\u00e9gie conservatrice)");'+
       '}'+
       'plog("[PGW] Découpe en "+pages.length+" pages");'+
       // ============================================================================
