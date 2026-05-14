@@ -33322,7 +33322,21 @@ function doPrint(){
   //   macOS / Linux : /
   // Sans cela, "28042026/097" cause des problèmes de sauvegarde sur Mac/Linux
   // (le / est interprété comme séparateur de dossier).
+  //
+  // FORMAT DEVIS : "DEVIS CALINSTRUM SLN-DV167 Lot 3 Modification de..."
+  //   = "DEVIS CALINSTRUM " + numDevis + " " + objet
+  // (Reproduction du format historique de printPreviewBC pour compatibilité.)
   var safeDocTitle=docTitle.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
+  if(isDevisDoc){
+    var dvNumForFile=docTitle.replace(/^Devis\s*[\u2014\-]\s*/i,'').trim();
+    var objetForFile='';
+    if(typeof DB!=='undefined' && Array.isArray(DB.devis)){
+      var dvRec=DB.devis.find(function(x){return (x.num||'')===dvNumForFile;});
+      if(dvRec && dvRec.objet) objetForFile=String(dvRec.objet).replace(/\s+/g,' ').trim();
+    }
+    var fileTitleRaw='DEVIS CALINSTRUM '+dvNumForFile+(objetForFile?' '+objetForFile:'');
+    safeDocTitle=fileTitleRaw.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
+  }
 
   // Pour les devis paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
   // Pour les autres docs, on garde des marges A4 standard
