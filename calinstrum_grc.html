@@ -31766,22 +31766,21 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   // PAGE1 : header complet ~260px + footer 45px = 305px → budget lignes ~700 → mais on doit aussi caser d'éventuels totals si c'est aussi la dernière → LAST_EXTRA
   // PAGE_N : header compact ~70px + footer 45px = 115px → budget lignes ~900
   // LAST_EXTRA : hauteur réservée pour totals+notes+bank+signatures
-  // CRITIQUE — alignement font-size : la mesure DOM (font-size:16px) DOIT correspondre
-  // à la taille d'impression (printCSS .doc-tbl tbody td font-size:16px). Sinon les
-  // hauteurs mesurées sous-estiment la hauteur réelle d'impression → débordement
-  // sur la page suivante (cause des "Total HT en page 2" et "page 2 vide" du devis 1-page).
+  // ALIGNEMENT MESURE / IMPRESSION :
+  // Le print CSS réel applique font-size:13px sur .doc-tbl tbody td. La mesure DOM
+  // utilise 14px (légère marge de sécurité au-dessus du 13px réel) pour éviter
+  // les débordements imprévus dus aux différences de métriques de police
+  // entre l'écran (rendu Calibri/Arial AA) et l'impression (rendu vectoriel).
+  // Avant : 16px → sur-estimation ~20% → items basculaient prématurément sur page 2.
   // LAST_EXTRA = hauteur réservée pour totals+notes+bank+signatures sur la dernière page.
-  // Mesuré à font-size:16px (cohérent avec measureRow). Détail :
-  //   doc-totals ~110px + doc-notes ~110px + doc-bank ~80px + doc-sign 195px
-  //   + gaps/borders ~30px + marge sécurité ~75px = 600px
-  // Ancienne valeur 420 sous-estimait → la dernière page débordait physiquement,
-  // poussant les totals/footer sur une 2e page CSS-cassée (cas SLN-DV163).
+  //   doc-totals ~95px + doc-notes ~95px + doc-bank ~70px + doc-sign 170px
+  //   + gaps/borders ~25px + marge sécurité ~75px = 530px → arrondi à 600 (cf historique)
   var PAGE1_BUDGET=700, PAGE_N_BUDGET=900, LAST_EXTRA=600, FOOTER_H=45;
   var measureDiv=document.createElement('div');
-  measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:16px;visibility:hidden';
+  measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:14px;visibility:hidden';
   document.body.appendChild(measureDiv);
   var colgroup='<colgroup><col style="width:28px"><col style="width:130px"><col><col style="width:38px"><col style="width:32px"><col style="width:32px"><col style="width:78px"><col style="width:82px"></colgroup>';
-  function measureRow(html){var t=document.createElement('table');t.style.cssText='width:703px;border-collapse:collapse;table-layout:fixed;font-size:16px;font-family:Calibri,Arial,sans-serif';t.innerHTML=colgroup+'<tbody>'+html+'</tbody>';measureDiv.appendChild(t);var h=t.getBoundingClientRect().height;measureDiv.removeChild(t);return h;}
+  function measureRow(html){var t=document.createElement('table');t.style.cssText='width:703px;border-collapse:collapse;table-layout:fixed;font-size:14px;font-family:Calibri,Arial,sans-serif';t.innerHTML=colgroup+'<tbody>'+html+'</tbody>';measureDiv.appendChild(t);var h=t.getBoundingClientRect().height;measureDiv.removeChild(t);return h;}
   var rowItems=[];
   lineData.forEach(function(item){
     if(item.isSec){
@@ -31961,7 +31960,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
     // Pas de "Page X/Y" dans le header — on utilise @page counter en bas à droite
     var logoBlock=
       '<div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:8px;border-bottom:2.5px solid #1e3a5f;margin-bottom:14px">'+
-        '<div><img src="'+logoSrc+'" style="height:50px;width:auto;display:block;margin-bottom:3px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px">CALINSTRUM</div></div>'+
+        '<div style="text-align:center"><img src="'+logoSrc+'" style="height:50px;width:auto;display:block;margin:0 auto 3px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px">CALINSTRUM</div></div>'+
         '<div style="text-align:right;padding-bottom:4px">'+
           '<div style="font-size:18px;font-weight:900;color:#1e3a5f">DEVIS N\u00b0 '+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</div>'+
           '<div style="font-size:10px;color:#555;margin-top:3px">Le : '+fD(d.date)+'</div>'+
@@ -31997,7 +31996,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       // Note : pour les clients exo TGC, HT=TTC ; pour les clients normaux, le montant
       // affiché est le cumul des r.tot (qui inclut la TGC ligne par ligne) — c'est cohérent
       // avec ce qui est imprimé dans la colonne "Total HT" du tableau.
-      var stLabel='Sous-total HT (XPF) — Report page suivante',stValue=fN(cumulSub);
+      var stLabel='Sous-total HT (XPF)',stValue=fN(cumulSub);
       subtotalRowHTML='<tfoot><tr>'+
         '<td colspan="6" style="text-align:left;font-weight:700;color:#1e3a5f;background:#dbeafe!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;border-top:2px solid #1e3a5f;padding:8px 12px;font-size:12px">'+stLabel+'</td>'+
         '<td colspan="2" style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f;background:#dbeafe!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;border-top:2px solid #1e3a5f;padding:8px 12px">'+stValue+'</td>'+
