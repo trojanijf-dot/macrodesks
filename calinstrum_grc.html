@@ -12434,7 +12434,7 @@ function _toCumul(arr){
 // le dashboard et la page suivi affichent chacun un chart sur la même page)
 var _chartIdCounter=0;
 
-function renderMonthlyChartPro(dvM, faM, encM){
+function renderMonthlyChartPro(dvM, faM, encM, inlineLegend){
   var chartId='mchart_'+(++_chartIdCounter);
   var w=560, h=220, padX=50, padY=24, padBottom=30;
   var months=['jan','fév','mar','avr','mai','juin','jui','aoû','sep','oct','nov','déc'];
@@ -12466,13 +12466,15 @@ function renderMonthlyChartPro(dvM, faM, encM){
   // Tooltip flottant (caché par défaut, repositionné au mousemove)
   html+='<div id="'+chartId+'_tooltip" class="mchart-tooltip" style="position:absolute;display:none;background:rgba(20,20,15,0.95);border:0.5px solid rgba(255,255,250,0.15);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--text);pointer-events:none;z-index:3;backdrop-filter:blur(8px);min-width:180px;box-shadow:0 4px 14px rgba(0,0,0,0.4)"></div>';
 
-  // Légende (statique sous le SVG)
-  html+='<div class="mchart-legend" style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--muted)">'+
-    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88aae0;margin-right:5px"></span>Devis émis</span>'+
-    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a3a39a;margin-right:5px"></span>Facturé</span>'+
-    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dcaa5;margin-right:5px"></span>Encaissé</span>'+
-    '<span style="margin-left:auto;color:var(--muted-soft);font-size:10px"><span style="display:inline-block;width:14px;height:1.5px;background:rgba(255,255,250,0.3);margin-right:5px;vertical-align:middle"></span>Moyenne mobile (3 mois)</span>'+
-    '</div>';
+  // Légende (statique sous le SVG) — sauf si inlineLegend=false (appelant gère la légende)
+  if(inlineLegend!==false){
+    html+='<div class="mchart-legend" style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--muted)">'+
+      '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88aae0;margin-right:5px"></span>Devis émis</span>'+
+      '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a3a39a;margin-right:5px"></span>Facturé</span>'+
+      '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dcaa5;margin-right:5px"></span>Encaissé</span>'+
+      '<span style="margin-left:auto;color:var(--muted-soft);font-size:10px"><span style="display:inline-block;width:14px;height:1.5px;background:rgba(255,255,250,0.3);margin-right:5px;vertical-align:middle"></span>Moyenne mobile (3 mois)</span>'+
+      '</div>';
+  }
   html+='</div>'; // /.mchart-wrap
 
   return html;
@@ -12664,6 +12666,75 @@ function _mountMonthlyCharts(root){
     });
 
     render();
+  });
+
+  // === MOUNT CROSSHAIR pour les sparklines trésorerie nette glissante ===
+  // Chaque .spark-treso-wrap a un data-points (JSON encodé). On attache un listener
+  // mousemove qui calcule l'index le plus proche de la souris, place le crosshair
+  // vertical, met à jour le cercle au point survolé, et affiche le tooltip
+  // (date + valeur cumulée). Sortie de zone → tout est caché.
+  var treSparkWraps=root.querySelectorAll('.spark-treso-wrap');
+  treSparkWraps.forEach(function(wrap){
+    if(wrap.dataset.mounted==='1') return;
+    wrap.dataset.mounted='1';
+    var pts;
+    try{ pts=JSON.parse(wrap.dataset.points.replace(/&quot;/g,'"')); }
+    catch(e){ return; }
+    if(!pts || !pts.length) return;
+    var svg=wrap.querySelector('svg');
+    var crosshair=wrap.querySelector('.spark-treso-crosshair');
+    var dot=wrap.querySelector('.spark-treso-dot');
+    var tooltip=wrap.querySelector('.spark-treso-tooltip');
+    if(!svg||!crosshair||!dot||!tooltip) return;
+    // viewBox interne 0..100 horizontal, 0..40 vertical
+    var spW=100, spH=40;
+    // Recalculer min/max identiques à la génération
+    var vals=pts.map(function(p){return p.v;});
+    var spMin=Math.min.apply(null,vals), spMax=Math.max.apply(null,vals);
+    if(spMin===spMax){spMin-=1;spMax+=1;}
+    var spRange=spMax-spMin;
+    function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+    function fmtDate(iso){if(!iso)return'';var p=iso.split('-');return p[2]+'/'+p[1]+'/'+p[0];}
+    function show(idx,clientX){
+      if(idx<0||idx>=pts.length)return;
+      var p=pts[idx];
+      var xVB=(pts.length>1?(idx/(pts.length-1))*spW:0);
+      var yVB=spH-((p.v-spMin)/spRange)*spH;
+      // Positionner crosshair et dot dans le viewBox
+      crosshair.setAttribute('x1',xVB);
+      crosshair.setAttribute('x2',xVB);
+      crosshair.style.display='block';
+      dot.setAttribute('cx',xVB);
+      dot.setAttribute('cy',yVB);
+      dot.style.display='block';
+      // Tooltip : montre date + valeur. Position relative au wrap.
+      var rect=wrap.getBoundingClientRect();
+      tooltip.style.display='block';
+      tooltip.innerHTML='<div style="color:var(--muted);font-size:9px;margin-bottom:2px;text-transform:uppercase;letter-spacing:.05em">'+fmtDate(p.d)+'</div>'+
+        '<div style="font-family:var(--mono);font-size:11.5px;color:#10b981;font-weight:700">'+fNloc(p.v)+' XPF</div>';
+      // Positionner le tooltip à proximité de la souris, sans déborder
+      var tipW=tooltip.offsetWidth||140;
+      var localX=clientX-rect.left;
+      var tipLeft=localX+10;
+      if(tipLeft+tipW>rect.width) tipLeft=localX-tipW-10;
+      if(tipLeft<0) tipLeft=2;
+      tooltip.style.left=tipLeft+'px';
+      tooltip.style.top='2px';
+    }
+    function hide(){
+      crosshair.style.display='none';
+      dot.style.display='none';
+      tooltip.style.display='none';
+    }
+    wrap.addEventListener('mousemove',function(e){
+      var rect=wrap.getBoundingClientRect();
+      var x=e.clientX-rect.left;
+      var ratio=Math.max(0,Math.min(1,x/rect.width));
+      var idx=Math.round(ratio*(pts.length-1));
+      show(idx,e.clientX);
+    });
+    wrap.addEventListener('mouseleave',hide);
+    wrap.style.cursor='crosshair';
   });
 }
 
@@ -13017,7 +13088,7 @@ function renderSuiviPro(){
   }
   html+='</div>'; // fin donut card
 
-  // 2) SPARKLINE "Trésorerie nette glissante 30j"
+  // 2) SPARKLINE "Trésorerie nette glissante 30j" — avec CROSSHAIR interactif
   html+='<div style="background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:12px">';
   html+='<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">';
   html+='<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Trésorerie nette · 30j glissants</div>';
@@ -13029,7 +13100,7 @@ function renderSuiviPro(){
   html+='<div style="font-size:10px;color:'+_sparkDeltaColor+';font-weight:700">'+_sparkDeltaSign+fNloc(_sparkDelta)+' XPF</div>';
   html+='</div>';
   // SVG sparkline
-  var _spW=100,_spH=40; // viewBox units (en %)
+  var _spW=100,_spH=40;
   var _spVals=_sparkSeries.map(function(p){return p.v;});
   var _spMin=Math.min.apply(null,_spVals),_spMax=Math.max.apply(null,_spVals);
   if(_spMin===_spMax){_spMin-=1;_spMax+=1;}
@@ -13039,15 +13110,23 @@ function renderSuiviPro(){
     var y=_spH-((p.v-_spMin)/_spRange)*_spH;
     return x.toFixed(2)+','+y.toFixed(2);
   }).join(' ');
-  // Zone remplie (area)
   var _spArea='0,'+_spH+' '+_spPts+' '+_spW+','+_spH;
+  // Encoder la série pour le JS du crosshair
+  var _sparkDataJson=JSON.stringify(_sparkSeries.map(function(p){return {d:p.d,v:p.v};})).replace(/"/g,'&quot;');
+  html+='<div class="spark-treso-wrap" data-points="'+_sparkDataJson+'" style="position:relative">';
   html+='<svg viewBox="0 0 '+_spW+' '+_spH+'" preserveAspectRatio="none" style="width:100%;height:64px;display:block">';
   html+='<defs><linearGradient id="spark-grad" x1="0" x2="0" y1="0" y2="1">';
   html+='<stop offset="0%" stop-color="#10b981" stop-opacity="0.35"/><stop offset="100%" stop-color="#10b981" stop-opacity="0"/>';
   html+='</linearGradient></defs>';
   html+='<polygon points="'+_spArea+'" fill="url(#spark-grad)"/>';
   html+='<polyline points="'+_spPts+'" fill="none" stroke="#10b981" stroke-width="1.5" vector-effect="non-scaling-stroke"/>';
+  // Crosshair (caché par défaut)
+  html+='<line class="spark-treso-crosshair" x1="0" y1="0" x2="0" y2="'+_spH+'" stroke="rgba(255,255,255,0.4)" stroke-width="0.5" stroke-dasharray="1 1" vector-effect="non-scaling-stroke" style="display:none;pointer-events:none"/>';
+  html+='<circle class="spark-treso-dot" cx="0" cy="0" r="2" fill="#10b981" stroke="var(--bg)" stroke-width="1" vector-effect="non-scaling-stroke" style="display:none;pointer-events:none"/>';
   html+='</svg>';
+  // Tooltip flottant
+  html+='<div class="spark-treso-tooltip" style="position:absolute;display:none;background:rgba(20,20,15,0.95);border:0.5px solid rgba(255,255,250,0.15);border-radius:6px;padding:6px 9px;font-size:10.5px;color:var(--text);pointer-events:none;z-index:4;backdrop-filter:blur(8px);min-width:130px;box-shadow:0 4px 14px rgba(0,0,0,0.4);line-height:1.5;white-space:nowrap"></div>';
+  html+='</div>';
   html+='<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted-soft);margin-top:4px">';
   html+='<span>'+fD(_sparkSeries[0].d)+'</span><span style="font-family:var(--mono);color:var(--text);font-weight:600">'+fNloc(_sparkLast)+' XPF</span><span>'+fD(_sparkSeries[_sparkSeries.length-1].d)+'</span>';
   html+='</div>';
@@ -13077,9 +13156,17 @@ function renderSuiviPro(){
   html+='</div>'; // fin colonne gauche
   // ─── COLONNE DROITE : LINE CHART INCHANGÉ ───────
   html+='<div>';
-  html+=renderMonthlyChartPro(emisM, emisM.map(function(v,i){return Math.max(0,v);}), encM);
+  html+=renderMonthlyChartPro(emisM, emisM.map(function(v,i){return Math.max(0,v);}), encM, false);
   html+='</div>';
   html+='</div>'; // fin grid 2 col
+
+  // Légende globale sous le grid (pleine largeur)
+  html+='<div class="mchart-legend" style="display:flex;gap:14px;margin-top:10px;font-size:11px;color:var(--muted);justify-content:center;flex-wrap:wrap">'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#88aae0;margin-right:5px"></span>Devis émis</span>'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a3a39a;margin-right:5px"></span>Facturé</span>'+
+    '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#5dcaa5;margin-right:5px"></span>Encaissé</span>'+
+    '<span style="color:var(--muted-soft);font-size:10px"><span style="display:inline-block;width:14px;height:1.5px;background:rgba(255,255,250,0.3);margin-right:5px;vertical-align:middle"></span>Moyenne mobile (3 mois)</span>'+
+    '</div>';
   html+='</div>';
 
   // Vue "affaires" si la fonction existe
