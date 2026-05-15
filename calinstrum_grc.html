@@ -429,7 +429,7 @@ body.theme-pro #yearFiscal{font-family:'JetBrains Mono',monospace}
 
 /* Sparkline SVG inline */
 .sparkline{display:block;width:100%;overflow:visible}
-.sparkline polyline{fill:none;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round}
+.sparkline polyline{fill:none;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 
 /* Pulsation pour l'étape courante d'un devis suivi dans le Cycle Moyen Fourniture */
 @keyframes cycleStepPulse {
@@ -11396,13 +11396,14 @@ function _interactiveSparkline(values, color, monthlyData, formatter, idSuffix){
   html+='<svg class="sparkline" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" style="display:block">';
   // Aire sous courbe (toute la période, en fond translucide)
   html+='<polyline points="'+ptsStr+' '+(w-pad)+','+(h-pad)+' '+pad+','+(h-pad)+'" class="sparkline-area" style="fill:'+color+';stroke:none"/>';
-  // Segment ACQUIS — trait plein, très fin
+  // Segment ACQUIS — trait plein, très fin (vector-effect:non-scaling-stroke empêche
+  // l'épaississement du trait causé par le scale horizontal du SVG preserveAspectRatio="none")
   if(ptsAcquis.length>=2){
-    html+='<polyline points="'+ptsAcquisStr+'" style="stroke:'+color+';fill:none;stroke-width:0.5;stroke-linejoin:round;stroke-linecap:round"/>';
+    html+='<polyline points="'+ptsAcquisStr+'" vector-effect="non-scaling-stroke" style="stroke:'+color+';fill:none;stroke-width:0.6;stroke-linejoin:round;stroke-linecap:round"/>';
   }
-  // Segment PRÉVISION — trait pointillé, très fin
+  // Segment PRÉVISION — trait pointillé, très fin (idem)
   if(ptsPrev.length>=2){
-    html+='<polyline points="'+ptsPrevStr+'" style="stroke:'+color+';fill:none;stroke-width:0.5;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:2 1.5;opacity:0.6"/>';
+    html+='<polyline points="'+ptsPrevStr+'" vector-effect="non-scaling-stroke" style="stroke:'+color+';fill:none;stroke-width:0.6;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:3 2;opacity:0.55"/>';
   }
   // Crosshair caché par défaut
   html+='<line id="'+idPrefix+'_ch" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" stroke="rgba(255,255,250,0.4)" stroke-width="0.3" stroke-dasharray="1.5 1.5" style="display:none;pointer-events:none"/>';
@@ -12996,6 +12997,39 @@ function renderSuiviPro(){
   var srcFy=src.filter(effYearMatches);
 
   function getMt(f){return Number(f.montant||f.ttc||0);}
+
+  // Helper inline pour rendre un mini-donut SVG dans une card KPI.
+  // parts = [{value, color}, ...] (somme à 100% conseillée, ou normalisée auto sinon)
+  // opts = { size:44, thickness:4, centerText:'', centerSize:9, centerColor:'#fff' }
+  function _miniDonut(parts, opts){
+    opts=opts||{};
+    var size=opts.size||44, t=opts.thickness||4;
+    var cx=21,cy=21,r=15.915; // circumference = ~100 ⇒ stroke-dasharray utilisable comme %
+    var total=parts.reduce(function(s,p){return s+(Number(p.value)||0);},0);
+    if(total<=0){
+      // Cercle vide
+      return '<svg viewBox="0 0 42 42" style="width:'+size+'px;height:'+size+'px;flex-shrink:0">'+
+        '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="'+t+'"/>'+
+        (opts.centerText?'<text x="'+cx+'" y="'+(cy+3)+'" text-anchor="middle" font-size="'+(opts.centerSize||9)+'" fill="'+(opts.centerColor||'var(--muted)')+'" font-weight="700" font-family="JetBrains Mono,monospace">'+opts.centerText+'</text>':'')+
+        '</svg>';
+    }
+    var svg='<svg viewBox="0 0 42 42" style="width:'+size+'px;height:'+size+'px;flex-shrink:0">';
+    svg+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="'+t+'"/>';
+    var off=0;
+    parts.forEach(function(p){
+      var v=Number(p.value)||0;
+      if(v<=0)return;
+      var pct=Math.max(0,Math.min(100, v/total*100));
+      svg+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+(p.color||'#5dcaa5')+'" stroke-width="'+t+'" stroke-dasharray="'+pct.toFixed(2)+' '+(100-pct).toFixed(2)+'" stroke-dashoffset="'+(-off).toFixed(2)+'" transform="rotate(-90 '+cx+' '+cy+')" style="transition:stroke-dasharray .3s"/>';
+      off+=pct;
+    });
+    if(opts.centerText){
+      svg+='<text x="'+cx+'" y="'+(cy+3)+'" text-anchor="middle" font-size="'+(opts.centerSize||9)+'" fill="'+(opts.centerColor||'var(--text)')+'" font-weight="700" font-family="JetBrains Mono,monospace">'+opts.centerText+'</text>';
+    }
+    svg+='</svg>';
+    return svg;
+  }
+
   function isPaid(f){
     var st=(f.status||f.statut||'').toLowerCase();
     return st.indexOf('payée')>=0||st==='paid';
@@ -13074,46 +13108,95 @@ function renderSuiviPro(){
     'Inclus :\n• Factures status Pending, Partiel ou Payée\n• Phase « livre » ou « recu » (= facture envoyée au client)\n\n'+
     'Exclus :\n• Factures pré-facturées (= backlog, pas encore envoyées au client)\n• Factures d\'autres années fiscales\n\n'+
     'C\'est ton chiffre d\'affaires émis de l\'année (peu importe si déjà payé ou non).';
+  // Sparkline Total Émis (interactive avec crosshair + tooltip)
+  var sparkEmisSuivi=(typeof _interactiveSparkline==='function')?
+    _interactiveSparkline(emisCum,'#88aae0',emisM,function(idx,monthlyV,cumV,months){
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Émis ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
+    },'suivi_emis'):
+    makeSparkline(emisCum,'#88aae0',true);
   html+='<div class="kpi-pro kpi-blue" style="position:relative">'+
     helpDot(emisHelp)+
     '<div class="kpi-label"><i class="ti ti-receipt-2"></i>Total émis '+fy+'</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalEmis)+'</div>'+
     '<div class="kpi-sub">XPF · '+nbEmis+' factures</div>'+
-    makeSparkline(emisCum,'#88aae0',true)+
+    sparkEmisSuivi+
     '</div>';
   // Encaissé
   var encHelp = 'ENCAISSÉ = somme de ce que les clients t\'ont réellement versé sur les factures émises '+fy+'.\n\n'+
     'Mode de calcul par facture :\n• Status « Payée » → 100% du montant\n• Status « Partiel » → montant × (pct/100)\n• Status « Pending » → 0\n\n'+
     'Ratio « % des émises » = Encaissé / Total Émis.\n'+
     'C\'est ton indicateur de recouvrement client (plus c\'est haut, mieux c\'est).';
+  // Sparkline Encaissé (interactive avec crosshair + tooltip)
+  var sparkEncSuivi=(typeof _interactiveSparkline==='function')?
+    _interactiveSparkline(encCum,'#5dcaa5',encM,function(idx,monthlyV,cumV,months){
+      var pctRec=emisCum[idx]>0?Math.round(cumV/emisCum[idx]*100):0;
+      return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Encaissé ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Taux recouvrement</span><span class="num" data-money>'+pctRec+'%</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
+    },'suivi_enc'):
+    makeSparkline(encCum,'#5dcaa5',true);
   html+='<div class="kpi-pro kpi-green" style="position:relative">'+
     helpDot(encHelp)+
     '<div class="kpi-label"><i class="ti ti-cash"></i>Encaissé</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalEnc)+'</div>'+
     '<div class="kpi-sub">'+(totalEmis>0?Math.round(totalEnc/totalEmis*100):0)+'% des émises</div>'+
-    makeSparkline(encCum,'#5dcaa5',true)+
+    sparkEncSuivi+
     '</div>';
   // Coût Emerson + frais
   var coutHelp = 'COÛT EMERSON + FRAIS = total des coûts liés à tes factures '+fy+'.\n\n'+
     'Détail :\n• Emerson = ce que tu DOIS à Emerson pour la marchandise (somme des BC Emerson liés aux factures '+fy+')\n• Frais = transit, douane, transport local, etc. (champ « frais » des BC)\n\n'+
     'Les BC Emerson sont DÉDUPLIQUÉS : un BC qui couvre 3 factures n\'est compté qu\'une fois.\n\n'+
     'C\'est ton coût de revient total de l\'année.';
+  // Donut Coût Emerson / Frais (parts du coût total)
+  var donutCout=_miniDonut(
+    [{value:totalCoutEm, color:'#fbbf24'}, {value:totalFrais, color:'#f87171'}],
+    {size:48, thickness:4}
+  );
+  var totalCout=totalCoutEm+totalFrais;
+  var pctEm=totalCout>0?Math.round(totalCoutEm/totalCout*100):0;
+  var pctFr=totalCout>0?Math.round(totalFrais/totalCout*100):0;
   html+='<div class="kpi-pro kpi-amber" style="position:relative">'+
     helpDot(coutHelp)+
     '<div class="kpi-label"><i class="ti ti-package"></i>Coût Emerson + frais</div>'+
-    '<div class="kpi-value" data-money>'+fNloc(totalCoutEm+totalFrais)+'</div>'+
-    '<div class="kpi-sub">Emerson '+fNloc(totalCoutEm)+' · Frais '+fNloc(totalFrais)+'</div>'+
+    '<div style="display:flex;align-items:flex-start;gap:10px">'+
+      '<div style="flex:1;min-width:0">'+
+        '<div class="kpi-value" data-money>'+fNloc(totalCout)+'</div>'+
+        '<div class="kpi-sub" style="line-height:1.5">'+
+          '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px"><span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#fbbf24;margin-right:4px;vertical-align:middle"></span>Emerson</span><span data-money>'+fNloc(totalCoutEm)+' ('+pctEm+'%)</span></div>'+
+          '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px"><span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#f87171;margin-right:4px;vertical-align:middle"></span>Frais</span><span data-money>'+fNloc(totalFrais)+' ('+pctFr+'%)</span></div>'+
+        '</div>'+
+      '</div>'+
+      donutCout+
+    '</div>'+
     '</div>';
   // Marge nette
   var margeHelp = 'MARGE NETTE = bénéfice réel après tous les coûts (vue comptable).\n\n'+
     'Formules :\n• Marge brute = Total Émis − Coût Emerson\n• Marge nette = Marge brute − Frais (= Total Émis − Coût Emerson − Frais)\n• % net = Marge nette / Total Émis\n\n'+
     'Vert = bénéfice / Rouge = perte.\n\n'+
     '⚠ Différence avec « Trésorerie nette » :\n• Marge = vue COMPTABLE (basée sur les factures émises, qu\'elles soient payées ou non)\n• Trésorerie = vue CASH (entrées et sorties réelles)';
+  // Donut Marge nette : ratio % de la marge dans le CA total émis
+  var pctMargeAbs=Math.max(0, Math.min(100, pctMargeNette||0));
+  var margeColor=margeNette>=0?'#10b981':'#ef4444';
+  var donutMarge=_miniDonut(
+    [{value:pctMargeAbs, color:margeColor}, {value:Math.max(0,100-pctMargeAbs), color:'rgba(255,255,255,0.06)'}],
+    {size:48, thickness:4, centerText:Math.round(pctMargeAbs)+'%', centerSize:8, centerColor:margeColor}
+  );
   html+='<div class="kpi-pro kpi-green" style="position:relative">'+
     helpDot(margeHelp)+
     '<div class="kpi-label"><i class="ti ti-chart-pie"></i>Marge nette</div>'+
-    '<div class="kpi-value" data-money style="color:'+(margeNette>=0?'var(--green)':'var(--red)')+'">'+fNloc(margeNette)+'</div>'+
-    '<div class="kpi-sub">'+pctMargeNette.toFixed(1)+'% net · brut '+fNloc(margeBrute)+'</div>'+
+    '<div style="display:flex;align-items:flex-start;gap:10px">'+
+      '<div style="flex:1;min-width:0">'+
+        '<div class="kpi-value" data-money style="color:'+(margeNette>=0?'var(--green)':'var(--red)')+'">'+fNloc(margeNette)+'</div>'+
+        '<div class="kpi-sub" style="line-height:1.5">'+
+          '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px"><span style="color:#5dcaa5">Brute</span><span data-money>'+fNloc(margeBrute)+'</span></div>'+
+          '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px"><span style="color:var(--muted)">− Frais</span><span data-money>'+fNloc(totalFrais)+'</span></div>'+
+        '</div>'+
+      '</div>'+
+      donutMarge+
+    '</div>'+
     '</div>';
   html+='</div>';
 
@@ -13125,22 +13208,91 @@ function renderSuiviPro(){
     'Rouge (−) = tu as plus payé Emerson que tu n\'as encaissé du client → cash flow tendu\n\n'+
     '⚠ Différence avec « Marge nette » :\n• Trésorerie = encaissements − décaissements EFFECTIFS\n• Marge = revenus émis − coûts THÉORIQUES (peu importe si payés)\n\n'+
     'Une marge positive peut coexister avec une trésorerie négative si tu as payé Emerson avant que les clients ne paient leur facture.';
+  // Mini-sparkline 12 derniers jours pour la card Trésorerie (calcul léger,
+  // indépendant de _sparkSeries plus bas qui fait 30j pour la card évolution mensuelle).
+  function _miniTresoSpark(){
+    var nDays=12;
+    var todayIso=td();
+    function addDaysISO(iso,n){
+      var p=iso.split('-'),dt=new Date(+p[0],+p[1]-1,+p[2]);
+      dt.setDate(dt.getDate()+n);
+      return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+    }
+    // Événements encaissé + payé
+    var encEv=[],payEv=[];
+    (DB.factures||[]).forEach(function(f){
+      if(isPrebilled(f))return;
+      if(!isPaid(f))return;
+      var ds=f.dateEncaissement||f.dateEnvoi||f.date;
+      if(ds) encEv.push({d:ds,v:getMt(f)});
+    });
+    Object.values(bcsLies).forEach(function(bc){
+      if(!bc.paidEmerson)return;
+      var ds=bc.datePaidEmerson||bc.dateEmerson||bc.date;
+      if(ds) payEv.push({d:ds,v:getBCCoutXPF(bc)});
+    });
+    var vals=[];
+    for(var i=nDays-1;i>=0;i--){
+      var day=addDaysISO(todayIso,-i);
+      var cE=0,cP=0;
+      encEv.forEach(function(e){if(e.d<=day)cE+=e.v;});
+      payEv.forEach(function(e){if(e.d<=day)cP+=e.v;});
+      vals.push(cE-cP);
+    }
+    if(vals.length<2) return '';
+    var w=100,h=36,pad=2;
+    var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals);
+    if(mn===mx){mn-=1;mx+=1;}
+    var pts=vals.map(function(v,i){
+      var x=pad+(w-2*pad)*(i/(vals.length-1));
+      var y=pad+(h-2*pad)*(1-(v-mn)/(mx-mn));
+      return x.toFixed(1)+','+y.toFixed(1);
+    }).join(' ');
+    var lineColor=tresoNette>=0?'#10b981':'#ef4444';
+    var gradId='spark-treso-card-'+Math.random().toString(36).substr(2,5);
+    var areaPts=pts+' '+(w-pad).toFixed(1)+','+(h-pad)+' '+pad+','+(h-pad);
+    return '<svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none" style="width:100%;height:36px;display:block;margin-top:4px">'+
+      '<defs><linearGradient id="'+gradId+'" x1="0" x2="0" y1="0" y2="1">'+
+        '<stop offset="0%" stop-color="'+lineColor+'" stop-opacity="0.35"/>'+
+        '<stop offset="100%" stop-color="'+lineColor+'" stop-opacity="0"/>'+
+      '</linearGradient></defs>'+
+      '<polygon points="'+areaPts+'" fill="url(#'+gradId+')"/>'+
+      '<polyline points="'+pts+'" fill="none" stroke="'+lineColor+'" stroke-width="0.6" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>'+
+      '</svg>';
+  }
+  var sparkTresoCard=_miniTresoSpark();
   html+='<div class="kpi-pro" style="position:relative;border-top:2px solid '+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+
     helpDot(tresoHelp)+
     '<div class="kpi-label"><i class="ti ti-wallet"></i>Trésorerie nette</div>'+
     '<div class="kpi-value" data-money style="color:'+(tresoNette>=0?'var(--green)':'var(--red)')+'">'+(tresoNette>=0?'+':'')+fNloc(tresoNette)+'</div>'+
     '<div class="kpi-sub">Encaissé '+fNloc(totalEnc)+' − Payé Emerson '+fNloc(totalCoutPaye)+'</div>'+
+    sparkTresoCard+
     '</div>';
   var restantHelp = 'RESTANT EMERSON = ce qu\'il te reste à payer à Emerson sur les BC liés aux factures '+fy+'.\n\n'+
     'Formule : Coût Emerson Total − Coût Emerson déjà payé\n'+
     '« déjà payé » = somme des BC marqués paidEmerson=true.\n\n'+
     'C\'est ta dette fournisseur courante.\n\n'+
     'Détail affiché :\n• X% non payé = Restant / Coût Total\n• N BC liés = nombre de BC Emerson concernés';
+  // Donut Restant Emerson : Payé / Restant sur coût Emerson total
+  var pctRestEm=totalCoutEm>0?Math.round(totalCoutRest/totalCoutEm*100):0;
+  var pctPayeEm=totalCoutEm>0?Math.round(totalCoutPaye/totalCoutEm*100):0;
+  var donutRest=_miniDonut(
+    [{value:totalCoutPaye, color:'#10b981'}, {value:totalCoutRest, color:'#ef4444'}],
+    {size:48, thickness:4, centerText:pctRestEm+'%', centerSize:8, centerColor:'#ef4444'}
+  );
   html+='<div class="kpi-pro kpi-red" style="position:relative">'+
     helpDot(restantHelp)+
     '<div class="kpi-label"><i class="ti ti-alert-triangle"></i>Restant Emerson</div>'+
-    '<div class="kpi-value" data-money>'+fNloc(totalCoutRest)+'</div>'+
-    '<div class="kpi-sub">'+(totalCoutEm>0?Math.round(totalCoutRest/totalCoutEm*100):0)+'% non payé · '+Object.keys(bcsLies).length+' BC liés</div>'+
+    '<div style="display:flex;align-items:flex-start;gap:10px">'+
+      '<div style="flex:1;min-width:0">'+
+        '<div class="kpi-value" data-money>'+fNloc(totalCoutRest)+'</div>'+
+        '<div class="kpi-sub" style="line-height:1.5">'+
+          '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px"><span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#10b981;margin-right:4px;vertical-align:middle"></span>Payé</span><span data-money>'+fNloc(totalCoutPaye)+' ('+pctPayeEm+'%)</span></div>'+
+          '<div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px"><span><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ef4444;margin-right:4px;vertical-align:middle"></span>Restant</span><span data-money>'+fNloc(totalCoutRest)+' · '+Object.keys(bcsLies).length+' BC</span></div>'+
+        '</div>'+
+      '</div>'+
+      donutRest+
+    '</div>'+
     '</div>';
   html+='</div>';
 
@@ -13389,6 +13541,8 @@ function renderSuiviPro(){
   }
   // Mount des graphiques mensuels interactifs
   if(typeof _mountMonthlyCharts==='function') _mountMonthlyCharts(pro);
+  // Mount des sparklines KPI interactives (crosshair + tooltip sur Total émis et Encaissé)
+  if(typeof _mountInteractiveSparklines==='function') _mountInteractiveSparklines(pro);
   // Rendu de la card cycle moyen Fourniture (timeline 9 étapes / 8 deltas)
   if(typeof _renderCycleMoyenFourniture==='function'){
     try{ _renderCycleMoyenFourniture(); }catch(e){ console.warn('Cycle moyen failed:',e); }
