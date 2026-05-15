@@ -1226,6 +1226,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <button class="tab" onclick="st('suiviTab','liste')"><span class="ico-classic">📋</span><i class="ti ti-list-details ico-pro"></i> Liste</button>
     <button class="tab" onclick="st('suiviTab','dossiers')"><span class="ico-classic">📁</span><i class="ti ti-folder ico-pro"></i> Dossiers</button>
     <button class="tab" onclick="st('suiviTab','alertes')"><span class="ico-classic">🚨</span><i class="ti ti-alert-octagon ico-pro"></i> Alertes</button>
+    <button class="tab" onclick="st('suiviTab','reconcil');renderReconcilTable()"><span class="ico-classic">🔁</span><i class="ti ti-arrows-right-left ico-pro"></i> Réconciliation</button>
   </div>
   <div class="tab-pane active" id="suiviTab-dash">
     <!-- ===== MODE PRO : container fintech qui s'affiche en mode 'theme-pro' ===== -->
@@ -1342,6 +1343,11 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   </div>
   <div class="tab-pane" id="suiviTab-alertes">
     <div id="alertes-list"></div>
+  </div>
+  <div class="tab-pane" id="suiviTab-reconcil">
+    <div id="reconcilContent" style="padding:8px 0">
+      <div style="text-align:center;color:var(--muted-soft);font-size:12px;padding:30px">Chargement de la réconciliation…</div>
+    </div>
   </div>
 </div>
 
@@ -10243,6 +10249,282 @@ function _findLinkedFactures(d){
 }
 
 // =============================================================================
+// _buildReconciliation(opts) — Vue de réconciliation devis ↔ factures
+// =============================================================================
+// Pour chaque devis avec status "Accepté" ou "Facturé" (= devis validé qui DOIT
+// avoir une facture), on calcule l'écart entre montant devis et montant facturé.
+//
+// opts.fiscalYear (optionnel) : restreindre au devis de l'année (par d.date)
+// opts.typeFilter (optionnel) : 'Fourniture' | 'Prestation de service' | 'Fourniture + Prestation'
+//
+// Retour : { rows, kpi:{nbDevis,nbMatch,nbMissing,nbEcart,nbOrphan} }
+//   rows = [
+//     { kind:'match'|'missing'|'ecart', devis, factures:[], totalFac, ecart },
+//     { kind:'orphan', facture, factureKind:'factures'|'invoices' }
+//   ]
+// =============================================================================
+function _buildReconciliation(opts){
+  opts=opts||{};
+  var rows=[];
+  var nbMatch=0, nbMissing=0, nbEcart=0, nbOrphan=0;
+  var dvAll=Array.isArray(DB.devis)?DB.devis:[];
+  var facAll=Array.isArray(DB.factures)?DB.factures:[];
+  var invAll=Array.isArray(DB.invoices)?DB.invoices:[];
+  // Set des IDs de factures déjà rattachées à un devis (pour détecter orphelines)
+  var seenFacIds={};
+  // 1) Devis Accepté/Facturé
+  var dvFiltered=dvAll.filter(function(d){
+    var s=d.status||'';
+    if(s!=='Accepté' && s!=='Facturé') return false;
+    if(opts.typeFilter && opts.typeFilter!=='all'){
+      var t=d.type||'Fourniture';
+      if(t!==opts.typeFilter) return false;
+    }
+    if(opts.fiscalYear){
+      var yr=String(d.date||'').substring(0,4);
+      if(yr!==String(opts.fiscalYear)) return false;
+    }
+    return true;
+  });
+  // 2) Pour chaque devis, lookup ses factures
+  dvFiltered.forEach(function(d){
+    var links=_findLinkedFactures(d);
+    var allLinked=(links.factures||[]).concat(links.invoices||[]);
+    allLinked.forEach(function(f){ seenFacIds[f.id]=1; });
+    var totalFac=allLinked.reduce(function(s,f){
+      return s+Number(f.ttc||f.montant||0);
+    },0);
+    var dvTTC=Number(d.ttc||0);
+    if(allLinked.length===0){
+      nbMissing++;
+      rows.push({kind:'missing', devis:d, factures:[], totalFac:0, ecart:-dvTTC});
+    } else {
+      var ecart=totalFac-dvTTC;
+      var absEcart=Math.abs(ecart);
+      // Tolérance : 1% du devis ou 1000 XPF mini (arrondis, écarts de TGC)
+      var tolerance=Math.max(1000, dvTTC*0.01);
+      if(absEcart<=tolerance){
+        nbMatch++;
+        rows.push({kind:'match', devis:d, factures:allLinked, totalFac:totalFac, ecart:ecart});
+      } else {
+        nbEcart++;
+        rows.push({kind:'ecart', devis:d, factures:allLinked, totalFac:totalFac, ecart:ecart});
+      }
+    }
+  });
+  // 3) Factures orphelines (pas rattachées à un devis Accepté/Facturé connu)
+  // On parcourt DB.factures et DB.invoices, on garde celles non vues
+  // Filtre fiscalYear (sur dateEnvoi ou date), filtre typeFilter (sur f.type)
+  function matchesYear(f){
+    if(!opts.fiscalYear) return true;
+    var ds=f.dateEnvoi||f.date||'';
+    return String(ds).substring(0,4)===String(opts.fiscalYear);
+  }
+  function matchesType(f){
+    if(!opts.typeFilter || opts.typeFilter==='all') return true;
+    return (f.type||'Fourniture')===opts.typeFilter;
+  }
+  facAll.forEach(function(f){
+    if(seenFacIds[f.id]) return;
+    if(!matchesYear(f) || !matchesType(f)) return;
+    nbOrphan++;
+    rows.push({kind:'orphan', facture:f, factureKind:'factures'});
+  });
+  invAll.forEach(function(i){
+    if(seenFacIds[i.id]) return;
+    // Skip les invoices qui sont des miroirs de DB.factures (déjà comptées)
+    if(i.grcFactureId || i._factureId) return;
+    if(!matchesYear(i) || !matchesType(i)) return;
+    nbOrphan++;
+    rows.push({kind:'orphan', facture:i, factureKind:'invoices'});
+  });
+  return {
+    rows:rows,
+    kpi:{
+      nbDevis:dvFiltered.length,
+      nbMatch:nbMatch,
+      nbMissing:nbMissing,
+      nbEcart:nbEcart,
+      nbOrphan:nbOrphan
+    }
+  };
+}
+
+// =============================================================================
+// RENDU UI : onglet "Réconciliation" dans Suivi Factures
+// =============================================================================
+// État de filtre persistant en session (kindFilter + typeFilter).
+window._reconcilKindFilter = window._reconcilKindFilter || 'all';
+window._reconcilTypeFilter = window._reconcilTypeFilter || 'all';
+
+function setReconcilKindFilter(k){ window._reconcilKindFilter=k; renderReconcilTable(); }
+function setReconcilTypeFilter(t){ window._reconcilTypeFilter=t; renderReconcilTable(); }
+
+function renderReconcilTable(){
+  var container=document.getElementById('reconcilContent');
+  if(!container) return;
+  var fy=typeof fiscalYear!=='undefined'?fiscalYear:new Date().getFullYear();
+  var rec=_buildReconciliation({
+    fiscalYear:fy,
+    typeFilter:window._reconcilTypeFilter
+  });
+  var kind=window._reconcilKindFilter;
+  var rows=rec.rows.filter(function(r){
+    if(kind==='all') return true;
+    if(kind==='match') return r.kind==='match';
+    if(kind==='missing') return r.kind==='missing';
+    if(kind==='ecart') return r.kind==='ecart';
+    if(kind==='orphan') return r.kind==='orphan';
+    return true;
+  });
+  // Helpers de formatage
+  function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  function pillKind(k){
+    var map={
+      'match':{label:'Match',bg:'rgba(16,185,129,.12)',col:'#10b981',br:'rgba(16,185,129,.3)'},
+      'missing':{label:'À facturer',bg:'rgba(251,191,36,.12)',col:'#fbbf24',br:'rgba(251,191,36,.3)'},
+      'ecart':{label:'Écart',bg:'rgba(251,191,36,.12)',col:'#fbbf24',br:'rgba(251,191,36,.3)'},
+      'orphan':{label:'Orpheline',bg:'rgba(239,68,68,.12)',col:'#ef4444',br:'rgba(239,68,68,.3)'}
+    };
+    var s=map[k]||map.match;
+    return '<span style="padding:1px 7px;border-radius:8px;font-size:9px;font-weight:700;background:'+s.bg+';color:'+s.col+';border:0.5px solid '+s.br+'">'+s.label+'</span>';
+  }
+  function bgKind(k){
+    if(k==='match') return 'rgba(16,185,129,.02)';
+    if(k==='missing') return 'rgba(251,191,36,.04)';
+    if(k==='ecart') return 'rgba(251,191,36,.04)';
+    if(k==='orphan') return 'rgba(239,68,68,.04)';
+    return '';
+  }
+  // ===== KPI cards =====
+  var html='';
+  html+='<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">';
+  html+='<div style="background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:10px 12px">'+
+    '<div style="font-size:9.5px;color:#888780;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Devis accept./fact.</div>'+
+    '<div style="font-size:22px;font-weight:600;font-family:var(--mono);color:var(--text)">'+rec.kpi.nbDevis+'</div>'+
+    '<div style="font-size:9.5px;color:var(--muted)">'+fy+'</div>'+
+    '</div>';
+  html+='<div style="background:rgba(16,185,129,.05);border:1px solid rgba(16,185,129,.15);border-radius:6px;padding:10px 12px">'+
+    '<div style="font-size:9.5px;color:#10b981;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px"><i class="ti ti-check" style="font-size:11px;vertical-align:-1px"></i> Match</div>'+
+    '<div style="font-size:22px;font-weight:600;font-family:var(--mono);color:#10b981">'+rec.kpi.nbMatch+'</div>'+
+    '<div style="font-size:9.5px;color:#10b981">'+(rec.kpi.nbDevis>0?Math.round(rec.kpi.nbMatch/rec.kpi.nbDevis*100):0)+'% cohérent</div>'+
+    '</div>';
+  html+='<div style="background:rgba(251,191,36,'+(rec.kpi.nbMissing>0?'.06':'.025')+');border:1px solid rgba(251,191,36,'+(rec.kpi.nbMissing>0?'.2':'.08')+');border-radius:6px;padding:10px 12px">'+
+    '<div style="font-size:9.5px;color:#fbbf24;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px"><i class="ti ti-alert-triangle" style="font-size:11px;vertical-align:-1px"></i> À facturer</div>'+
+    '<div style="font-size:22px;font-weight:600;font-family:var(--mono);color:'+(rec.kpi.nbMissing>0?'#fbbf24':'var(--muted)')+'">'+rec.kpi.nbMissing+'</div>'+
+    '<div style="font-size:9.5px;color:var(--muted)">devis sans facture</div>'+
+    '</div>';
+  html+='<div style="background:rgba(251,191,36,'+(rec.kpi.nbEcart>0?'.06':'.025')+');border:1px solid rgba(251,191,36,'+(rec.kpi.nbEcart>0?'.2':'.08')+');border-radius:6px;padding:10px 12px">'+
+    '<div style="font-size:9.5px;color:#fbbf24;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px"><i class="ti ti-equal-not" style="font-size:11px;vertical-align:-1px"></i> Écarts</div>'+
+    '<div style="font-size:22px;font-weight:600;font-family:var(--mono);color:'+(rec.kpi.nbEcart>0?'#fbbf24':'var(--muted)')+'">'+rec.kpi.nbEcart+'</div>'+
+    '<div style="font-size:9.5px;color:var(--muted)">montants ≠</div>'+
+    '</div>';
+  html+='<div style="background:rgba(239,68,68,'+(rec.kpi.nbOrphan>0?'.06':'.025')+');border:1px solid rgba(239,68,68,'+(rec.kpi.nbOrphan>0?'.2':'.08')+');border-radius:6px;padding:10px 12px">'+
+    '<div style="font-size:9.5px;color:#ef4444;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px"><i class="ti ti-link-off" style="font-size:11px;vertical-align:-1px"></i> Orphelines</div>'+
+    '<div style="font-size:22px;font-weight:600;font-family:var(--mono);color:'+(rec.kpi.nbOrphan>0?'#ef4444':'var(--muted)')+'">'+rec.kpi.nbOrphan+'</div>'+
+    '<div style="font-size:9.5px;color:var(--muted)">factures sans devis</div>'+
+    '</div>';
+  html+='</div>';
+  // ===== Filtres =====
+  function btn(active, k, label, count){
+    var cls=active?'filter-btn active':'filter-btn';
+    return '<button class="'+cls+'" onclick="setReconcilKindFilter(\''+k+'\')">'+label+' <span class="filter-count">'+count+'</span></button>';
+  }
+  function btnT(active, t, label){
+    var cls=active?'filter-btn-type active':'filter-btn-type';
+    return '<button class="'+cls+'" onclick="setReconcilTypeFilter(\''+t+'\')">'+label+'</button>';
+  }
+  html+='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px">';
+  html+=btn(kind==='all','all','Tous',rec.rows.length);
+  html+=btn(kind==='match','match','<i class="ti ti-check" style="font-size:11px;vertical-align:-1px"></i> Match',rec.kpi.nbMatch);
+  html+=btn(kind==='missing','missing','<i class="ti ti-alert-triangle" style="font-size:11px;vertical-align:-1px"></i> À facturer',rec.kpi.nbMissing);
+  html+=btn(kind==='ecart','ecart','<i class="ti ti-equal-not" style="font-size:11px;vertical-align:-1px"></i> Écarts',rec.kpi.nbEcart);
+  html+=btn(kind==='orphan','orphan','<i class="ti ti-link-off" style="font-size:11px;vertical-align:-1px"></i> Orphelines',rec.kpi.nbOrphan);
+  html+='<div style="flex:1"></div>';
+  var tFil=window._reconcilTypeFilter;
+  html+=btnT(tFil==='all','all','Tous types');
+  html+=btnT(tFil==='Fourniture','Fourniture','<i class="ti ti-package" style="font-size:11px;vertical-align:-1px"></i> Fourniture');
+  html+=btnT(tFil==='Prestation de service','Prestation de service','<i class="ti ti-tools" style="font-size:11px;vertical-align:-1px"></i> Prestation');
+  html+=btnT(tFil==='Fourniture + Prestation','Fourniture + Prestation','<i class="ti ti-link" style="font-size:11px;vertical-align:-1px"></i> Mixte');
+  html+='</div>';
+  // ===== Tableau =====
+  html+='<div class="tbl-wrap"><table style="font-size:11px"><thead><tr>'+
+    '<th>N° Devis</th>'+
+    '<th>Client</th>'+
+    '<th>Objet</th>'+
+    '<th style="text-align:right">Montant devis</th>'+
+    '<th>Factures liées</th>'+
+    '<th style="text-align:right">Montant facturé</th>'+
+    '<th style="text-align:right">Écart</th>'+
+    '<th>Statut</th>'+
+    '</tr></thead><tbody>';
+  if(rows.length===0){
+    html+='<tr><td colspan="8" style="text-align:center;color:var(--muted-soft);padding:30px;font-style:italic">Aucune ligne avec ces filtres</td></tr>';
+  } else {
+    rows.forEach(function(r){
+      var bg=bgKind(r.kind);
+      if(r.kind==='orphan'){
+        var f=r.facture;
+        var faNum=f.num||'?';
+        var faMt=Number(f.ttc||f.montant||0);
+        var faClient=f.client||f.clientFinal||'—';
+        var faObjet=f.objet||f.intitule||'';
+        var openFn = r.factureKind==='factures' ? 'openFA('+f.id+')' : 'openSUIVI('+f.id+')';
+        html+='<tr style="background:'+bg+';cursor:pointer" onclick="'+openFn+'">'+
+          '<td style="color:var(--muted);font-style:italic">— aucun devis —</td>'+
+          '<td>'+esc(faClient)+'</td>'+
+          '<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(faObjet)+'">'+esc(faObjet)+'</td>'+
+          '<td style="text-align:right;color:var(--muted)">—</td>'+
+          '<td><span style="display:inline-block;padding:1px 6px;background:rgba(239,68,68,.08);border:0.5px solid rgba(239,68,68,.25);border-radius:8px;font-size:9.5px;color:#ef4444;font-family:var(--mono);font-weight:600">'+esc(faNum)+'</span></td>'+
+          '<td style="text-align:right;font-family:var(--mono);font-weight:600">'+fNloc(faMt)+' XPF</td>'+
+          '<td style="text-align:right;font-family:var(--mono);color:#f87171">+'+fNloc(faMt)+'</td>'+
+          '<td>'+pillKind(r.kind)+'</td>'+
+          '</tr>';
+      } else {
+        var d=r.devis;
+        var dvNum=d.num||'';
+        var dvClient=d.client||'—';
+        var dvObjet=d.objet||'';
+        var dvTTC=Number(d.ttc||0);
+        var ecartStr;
+        if(r.ecart>0) ecartStr='<span style="color:#f87171">+'+fNloc(r.ecart)+'</span>';
+        else if(r.ecart<0) ecartStr='<span style="color:#fbbf24">'+fNloc(r.ecart)+'</span>';
+        else ecartStr='<span style="color:#5dcaa5">0</span>';
+        var facBadges='';
+        if(r.factures.length===0){
+          facBadges='<span style="display:inline-block;padding:1px 6px;background:rgba(248,113,113,.08);border:0.5px solid rgba(248,113,113,.25);border-radius:8px;font-size:9.5px;color:#f87171;font-style:italic">aucune</span>';
+        } else {
+          facBadges=r.factures.map(function(f){
+            var fn=f.num||'?';
+            var fid=f.id;
+            var openFn = (Array.isArray(DB.factures)&&DB.factures.find(function(x){return x.id===fid;})) ? 'openFA('+fid+')' : 'openSUIVI('+fid+')';
+            return '<span onclick="event.stopPropagation();'+openFn+'" style="cursor:pointer;display:inline-block;padding:1px 6px;background:rgba(93,202,165,.1);border:0.5px solid rgba(93,202,165,.25);border-radius:8px;font-size:9.5px;color:#5dcaa5;font-family:var(--mono);font-weight:600;margin-right:3px" title="Ouvrir '+esc(fn)+'">'+esc(fn)+'</span>';
+          }).join('');
+        }
+        html+='<tr style="background:'+bg+';cursor:pointer" onclick="openDV('+d.id+')">'+
+          '<td><span style="font-family:var(--mono);color:#5dcaa5;font-weight:600">'+esc(dvNum)+'</span></td>'+
+          '<td>'+esc(dvClient)+'</td>'+
+          '<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(dvObjet)+'">'+esc(dvObjet)+'</td>'+
+          '<td style="text-align:right;font-family:var(--mono);font-weight:600">'+fNloc(dvTTC)+' XPF</td>'+
+          '<td>'+facBadges+'</td>'+
+          '<td style="text-align:right;font-family:var(--mono);'+(r.totalFac>0?'font-weight:600':'color:var(--muted)')+'">'+(r.totalFac>0?fNloc(r.totalFac)+' XPF':'—')+'</td>'+
+          '<td style="text-align:right;font-family:var(--mono)">'+ecartStr+'</td>'+
+          '<td>'+pillKind(r.kind)+'</td>'+
+          '</tr>';
+      }
+    });
+  }
+  html+='</tbody></table></div>';
+  // Note explicative en bas
+  html+='<div style="margin-top:14px;font-size:10.5px;color:var(--muted-soft);line-height:1.6;padding:10px;background:rgba(255,255,255,.02);border-radius:6px">'+
+    '<strong style="color:var(--muted)"><i class="ti ti-info-circle" style="font-size:11px;vertical-align:-1px"></i> Logique de matching</strong> — '+
+    'Périmètre : devis status « Accepté » ou « Facturé » de l\'année '+fy+'. Pour chaque devis, on cherche les factures liées via <code style="background:rgba(255,255,255,.06);padding:1px 4px;border-radius:3px">linkFactureId</code>, <code style="background:rgba(255,255,255,.06);padding:1px 4px;border-radius:3px">dvlie</code>, ou présence du N° devis dans l\'objet/intitulé. Une tolérance de 1% (min 1000 XPF) absorbe les arrondis TGC. '+
+    'Clic sur une ligne ouvre le devis · clic sur un badge facture ouvre la facture.'+
+    '</div>';
+  container.innerHTML=html;
+}
+
+// =============================================================================
 // _normalizeFactureStatus(f) — Statut unifié pour facture GRC ou invoice Suivi
 // =============================================================================
 // Retourne {key, label, color} pour rendu cohérent dans la pill et popover.
@@ -13497,6 +13779,57 @@ function renderSuiviPro(){
   html+='</div>';
   html+='</div>'; // fin grid 2 col
   html+='</div>';
+
+  // ============================================================
+  // CARTE SYNTHÉTIQUE RÉCONCILIATION DEVIS ↔ FACTURES
+  // ============================================================
+  // Vue compacte : KPIs + bouton "voir détail" qui ouvre l'onglet Réconciliation.
+  // Périmètre : devis status Accepté/Facturé de l'année fiscale, tous types.
+  if(typeof _buildReconciliation==='function'){
+    var _rec=_buildReconciliation({fiscalYear:fy});
+    var _alertColor=(_rec.kpi.nbMissing>0||_rec.kpi.nbEcart>0||_rec.kpi.nbOrphan>0)?'#fbbf24':'#10b981';
+    var _alertText=(_rec.kpi.nbMissing+_rec.kpi.nbEcart+_rec.kpi.nbOrphan)===0?'Tout est cohérent':
+      ((_rec.kpi.nbMissing>0?_rec.kpi.nbMissing+' manquante'+(_rec.kpi.nbMissing>1?'s':'')+' · ':'')+
+       (_rec.kpi.nbEcart>0?_rec.kpi.nbEcart+' écart'+(_rec.kpi.nbEcart>1?'s':'')+' · ':'')+
+       (_rec.kpi.nbOrphan>0?_rec.kpi.nbOrphan+' orpheline'+(_rec.kpi.nbOrphan>1?'s':''):'')).replace(/ · $/,'');
+    var _pctMatch=_rec.kpi.nbDevis>0?Math.round(_rec.kpi.nbMatch/_rec.kpi.nbDevis*100):0;
+    html+='<div class="card-pro" style="border-left:3px solid '+_alertColor+';cursor:pointer" onclick="st(\'suiviTab\',\'reconcil\');renderReconcilTable()" title="Voir le détail dans l\'onglet Réconciliation">';
+    html+='<div class="card-pro-title" style="display:flex;align-items:center;gap:8px;justify-content:space-between">'+
+      '<div style="display:flex;align-items:center;gap:8px"><i class="ti ti-arrows-right-left"></i>'+
+        '<span>Réconciliation devis ↔ factures</span>'+
+        '<span style="color:'+_alertColor+';font-weight:400;font-size:11px;letter-spacing:0">'+_alertText+'</span>'+
+      '</div>'+
+      '<span style="color:var(--muted-soft);font-size:10.5px;font-weight:400;letter-spacing:0">Voir détail <i class="ti ti-arrow-right" style="font-size:11px;vertical-align:-1px"></i></span>'+
+      '</div>';
+    html+='<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px">';
+    html+='<div style="background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06);border-radius:6px;padding:8px 10px">'+
+      '<div style="font-size:9.5px;color:#888780;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Devis accept./fact.</div>'+
+      '<div style="font-size:20px;font-weight:600;font-family:var(--mono);color:var(--text)">'+_rec.kpi.nbDevis+'</div>'+
+      '<div style="font-size:9.5px;color:var(--muted)">'+fy+'</div>'+
+      '</div>';
+    html+='<div style="background:rgba(16,185,129,0.05);border:1px solid rgba(16,185,129,0.15);border-radius:6px;padding:8px 10px">'+
+      '<div style="font-size:9.5px;color:#10b981;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Match</div>'+
+      '<div style="font-size:20px;font-weight:600;font-family:var(--mono);color:#10b981">'+_rec.kpi.nbMatch+'</div>'+
+      '<div style="font-size:9.5px;color:#10b981">'+_pctMatch+'% cohérent</div>'+
+      '</div>';
+    html+='<div style="background:rgba(251,191,36,'+(_rec.kpi.nbMissing>0?'0.06':'0.025')+');border:1px solid rgba(251,191,36,'+(_rec.kpi.nbMissing>0?'0.2':'0.08')+');border-radius:6px;padding:8px 10px">'+
+      '<div style="font-size:9.5px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">À facturer</div>'+
+      '<div style="font-size:20px;font-weight:600;font-family:var(--mono);color:'+(_rec.kpi.nbMissing>0?'#fbbf24':'var(--muted)')+'">'+_rec.kpi.nbMissing+'</div>'+
+      '<div style="font-size:9.5px;color:var(--muted)">devis sans facture</div>'+
+      '</div>';
+    html+='<div style="background:rgba(251,191,36,'+(_rec.kpi.nbEcart>0?'0.06':'0.025')+');border:1px solid rgba(251,191,36,'+(_rec.kpi.nbEcart>0?'0.2':'0.08')+');border-radius:6px;padding:8px 10px">'+
+      '<div style="font-size:9.5px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Écarts</div>'+
+      '<div style="font-size:20px;font-weight:600;font-family:var(--mono);color:'+(_rec.kpi.nbEcart>0?'#fbbf24':'var(--muted)')+'">'+_rec.kpi.nbEcart+'</div>'+
+      '<div style="font-size:9.5px;color:var(--muted)">montants ≠</div>'+
+      '</div>';
+    html+='<div style="background:rgba(239,68,68,'+(_rec.kpi.nbOrphan>0?'0.06':'0.025')+');border:1px solid rgba(239,68,68,'+(_rec.kpi.nbOrphan>0?'0.2':'0.08')+');border-radius:6px;padding:8px 10px">'+
+      '<div style="font-size:9.5px;color:#ef4444;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">Orphelines</div>'+
+      '<div style="font-size:20px;font-weight:600;font-family:var(--mono);color:'+(_rec.kpi.nbOrphan>0?'#ef4444':'var(--muted)')+'">'+_rec.kpi.nbOrphan+'</div>'+
+      '<div style="font-size:9.5px;color:var(--muted)">factures sans devis</div>'+
+      '</div>';
+    html+='</div>';
+    html+='</div>';
+  }
 
   // Vue "affaires" si la fonction existe
   if(typeof buildDossiers==='function' && typeof getDealMargeData!=='undefined' || typeof renderDossiers==='function'){
