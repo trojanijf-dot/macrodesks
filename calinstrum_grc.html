@@ -1052,6 +1052,8 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     </div>
   </div>
   <div class="search-bar no-print">
+    <span style="display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.05em;margin-right:4px"><i class="ti ti-calendar" style="font-size:13px"></i>Année</span>
+    <span id="fyDVHost"></span>
     <input class="search-input" placeholder="Rechercher..." id="sDV" oninput="renderDV()">
     <select class="filter-sel" id="fDVcli" onchange="renderDV()" style="display:none"><option value="">Tous les clients</option></select>
     <select class="filter-sel" id="fDVst" onchange="renderDV()">
@@ -1236,6 +1238,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <!-- Onglets par client (Tous + 1 par client détecté). Filtre TOUT le dashboard :
          KPIs, graphiques, progression, urgentes. Détection auto des clients via extractClientGroup. -->
     <div id="suiviDashClientTabs" class="client-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
+    <div id="fySuiviClassicHost" style="display:flex;justify-content:flex-end;margin-bottom:10px"></div>
     <div class="g4" id="suivi-kpis"></div>
     <div class="g4" id="suivi-kpis-emerson" style="margin-top:8px"></div>
     <div class="g4">
@@ -3156,6 +3159,69 @@ function exportDBBackup(){
 }
 var DB=loadDB();
 var invoices=DB.invoices||[];
+
+// =============================================================================
+// ANNÉE FISCALE GLOBALE (filtre transverse Devis + Suivi Factures)
+// =============================================================================
+// Lue depuis localStorage._grcFiscalYear, fallback année courante.
+// Modifiée via setFiscalYear(y) qui persiste + re-render les pages affectées.
+// Le helper _getAvailableYears() scanne DB.devis + DB.factures pour produire
+// la liste des années à proposer dans le sélecteur.
+var fiscalYear = (function(){
+  try{
+    var stored=localStorage.getItem('_grcFiscalYear');
+    var n=parseInt(stored,10);
+    if(n>=2000 && n<=2100) return n;
+  }catch(e){}
+  return new Date().getFullYear();
+})();
+
+function _getAvailableYears(){
+  var years={};
+  (DB.devis||[]).forEach(function(d){
+    var y=parseInt(String(d.date||'').substring(0,4),10);
+    if(y>=2000 && y<=2100) years[y]=true;
+  });
+  (DB.factures||[]).forEach(function(f){
+    // Préférer dateEnvoi (date d'émission au client = imputation fiscale),
+    // fallback sur date (date facture côté GRC).
+    var ds=f.dateEnvoi||f.date||'';
+    var y=parseInt(String(ds).substring(0,4),10);
+    if(y>=2000 && y<=2100) years[y]=true;
+  });
+  // Toujours inclure l'année courante au cas où DB est vide
+  var cy=new Date().getFullYear();
+  years[cy]=true;
+  return Object.keys(years).map(Number).sort(function(a,b){return b-a;}); // desc
+}
+
+function setFiscalYear(y){
+  var n=parseInt(y,10);
+  if(!(n>=2000 && n<=2100)) return;
+  fiscalYear=n;
+  try{ localStorage.setItem('_grcFiscalYear', String(n)); }catch(e){}
+  // Re-render des pages affectées par l'année fiscale
+  if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
+  if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+  if(typeof rDash==='function'){try{rDash();}catch(e){}}
+  if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
+  if(typeof renderReconcilTable==='function'){try{renderReconcilTable();}catch(e){}}
+  // Mettre à jour tous les sélecteurs visibles avec la nouvelle valeur
+  document.querySelectorAll('select[data-fiscalyear-sel]').forEach(function(s){
+    s.value=String(n);
+  });
+}
+
+// Helper pour rendre un sélecteur d'année cohérent partout
+function _renderFiscalYearSelect(idSuffix){
+  var years=_getAvailableYears();
+  var html='<select data-fiscalyear-sel="1" id="fyear-'+(idSuffix||'global')+'" onchange="setFiscalYear(this.value)" title="Année fiscale affichée" style="background:var(--bg2);border:0.5px solid var(--border);border-radius:6px;padding:6px 26px 6px 10px;color:var(--text);font-size:11px;font-family:var(--mono);font-weight:600;cursor:pointer;letter-spacing:0.02em">';
+  years.forEach(function(y){
+    html+='<option value="'+y+'"'+(y===fiscalYear?' selected':'')+'>'+y+'</option>';
+  });
+  html+='</select>';
+  return html;
+}
 
 // =============================================================================
 // SYSTÈME DE THÈME (ancien teal/red ↔ nouveau pro fintech warm-dark)
@@ -6051,6 +6117,12 @@ function renderSuivi(){
   // Permet aux fonctions renderTable/renderSuviKPIs/renderCharts/etc. d'afficher
   // les bonnes données sans devoir les modifier (elles continuent de lire `invoices`).
   invoices=getSuiviSource();
+  // Monter le sélecteur d'année (mode classic - sera ignoré en mode pro car
+  // renderSuiviPro le rend ailleurs dans le DOM)
+  var fySuiviHost=document.getElementById('fySuiviClassicHost');
+  if(fySuiviHost && typeof _renderFiscalYearSelect==='function'){
+    fySuiviHost.innerHTML='<span style="display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.05em;margin-right:6px"><i class="ti ti-calendar" style="font-size:13px"></i>Année fiscale</span>'+_renderFiscalYearSelect('suivi-classic');
+  }
   // Onglets clients du Dashboard (Tous/SLN/PRNC/...). Détection auto via extractClientGroup.
   // Les onglets sont alimentés par TOUTES les invoices (avant filtrage), pour que les compteurs
   // reflètent le nombre total de factures par client.
@@ -6067,6 +6139,11 @@ function renderSuivi(){
   renderSuviDashByClient();
   renderTable();renderAlertes();updateMigrationButton();
   if(typeof renderDossiers==='function'){try{renderDossiers();}catch(e){}}
+  // ⭐ Réconciliation : re-render systématique pour que toute modif faite ailleurs
+  // (modale devis, modale facture, bascule phase, versement, etc.) soit reflétée
+  // dès qu'on revient sur l'onglet, sans F5. La fonction fait un early-return
+  // si #reconcilContent n'existe pas — donc safe à appeler partout.
+  if(typeof renderReconcilTable==='function'){try{renderReconcilTable();}catch(e){}}
 }
 
 // Filtre invoices selon l'onglet client actif du Dashboard, puis re-render KPIs/charts/progression/urgents.
@@ -6837,11 +6914,19 @@ function renderTable(){
   // Mettre à jour les compteurs des badges de filtres avec les valeurs actuelles
   updateFilterCounts();
   var search=(gvg('search-input')||'').toLowerCase();
+  // === ÉTAPE 0 : Filtre fiscalYear global (sélecteur d'année partagé) ===
+  // On filtre les invoices sur l'année courante via dateEnvoi (priorité) ou date.
+  var _curFy=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
+  var invoicesForYear=invoices.filter(function(i){
+    var ds=i.dateEnvoi||i.date||'';
+    var y=parseInt(String(ds).substring(0,4),10);
+    return y===_curFy;
+  });
   // === ÉTAPE 1 : Construire la source avec champ "client" garanti ===
   // Les anciennes invoices peuvent ne pas avoir de champ client → on le détecte via PO/intitulé.
   // C'est la source utilisée pour les compteurs d'onglets clients (avant filtre client mais
   // APRÈS filtres status/type/recherche, pour que les compteurs reflètent ce qu'on voit).
-  var sourceWithClient=invoices.map(function(i){
+  var sourceWithClient=invoicesForYear.map(function(i){
     if(!i.client){
       var c=(typeof detectClientFromInvoice==='function')?detectClientFromInvoice(i):'SLN';
       return Object.assign({},i,{client:c});
@@ -11687,12 +11772,15 @@ function _interactiveSparkline(values, color, monthlyData, formatter, idSuffix){
   if(ptsPrev.length>=2){
     html+='<polyline points="'+ptsPrevStr+'" vector-effect="non-scaling-stroke" style="stroke:'+color+';fill:none;stroke-width:0.6;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:3 2;opacity:0.55"/>';
   }
-  // Crosshair caché par défaut
-  html+='<line id="'+idPrefix+'_ch" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" stroke="rgba(255,255,250,0.4)" stroke-width="0.3" stroke-dasharray="1.5 1.5" style="display:none;pointer-events:none"/>';
-  html+='<circle id="'+idPrefix+'_dot" cx="0" cy="0" r="1.6" fill="'+color+'" stroke="var(--bg)" stroke-width="0.5" style="display:none;pointer-events:none"/>';
+  // Crosshair caché par défaut (vector-effect:non-scaling-stroke pour rester fin
+  // malgré le scale horizontal du SVG preserveAspectRatio="none")
+  html+='<line id="'+idPrefix+'_ch" x1="0" y1="'+pad+'" x2="0" y2="'+(h-pad)+'" stroke="rgba(255,255,250,0.4)" stroke-width="0.5" stroke-dasharray="1.5 1.5" vector-effect="non-scaling-stroke" style="display:none;pointer-events:none"/>';
   // Hit area
   html+='<rect class="ispark-hitarea" x="0" y="0" width="'+w+'" height="'+h+'" fill="transparent" style="cursor:crosshair"/>';
   html+='</svg>';
+  // Dot HTML (au lieu de SVG <circle>) — reste rond même avec preserveAspectRatio="none"
+  // Positionné absolument dans le wrap, mis à jour via JS au mousemove.
+  html+='<div id="'+idPrefix+'_dot" style="position:absolute;display:none;width:5px;height:5px;border-radius:50%;background:'+color+';border:1px solid var(--bg);pointer-events:none;transform:translate(-50%,-50%);z-index:4"></div>';
   // Tooltip
   html+='<div class="ispark-tooltip" id="'+idPrefix+'_tooltip" style="position:absolute;display:none;background:rgba(20,20,15,0.95);border:0.5px solid rgba(255,255,250,0.15);border-radius:6px;padding:6px 9px;font-size:10.5px;color:var(--text);pointer-events:none;z-index:5;backdrop-filter:blur(8px);min-width:130px;box-shadow:0 4px 14px rgba(0,0,0,0.4);line-height:1.5"></div>';
   html+='</div>';
@@ -11732,8 +11820,14 @@ function _mountInteractiveSparklines(root){
       ch.setAttribute('x1',pt[0].toFixed(1));
       ch.setAttribute('x2',pt[0].toFixed(1));
       ch.style.display='block';
-      dot.setAttribute('cx',pt[0].toFixed(1));
-      dot.setAttribute('cy',pt[1].toFixed(1));
+      // Dot HTML : positionnement en pourcentage du viewBox (w=140, h=30)
+      var svgVB=svg.getAttribute('viewBox').split(' ');
+      var vbW=parseFloat(svgVB[2])||140;
+      var vbH=parseFloat(svgVB[3])||30;
+      var leftPct=(pt[0]/vbW)*100;
+      var topPct=(pt[1]/vbH)*100;
+      dot.style.left=leftPct+'%';
+      dot.style.top=topPct+'%';
       dot.style.display='block';
       tooltip.innerHTML=fmtFn(idx,payload.monthly[idx],payload.values[idx],months);
       if(typeof _getPrivacyStored==='function'&&_getPrivacyStored()&&typeof _privacyWrapAmounts==='function') _privacyWrapAmounts(tooltip);
@@ -12345,8 +12439,15 @@ function renderDVPro(){
   }
 
   // === Liste des options dynamiques pour les selects ===
+  // IMPORTANT : on filtre par fiscalYear pour rester cohérent avec les KPIs.
+  // Les compteurs dans les selects (PRNC (8), SLN (39)...) doivent refléter
+  // les devis affichés, pas la base entière (toutes années confondues).
+  var _curFy=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
+  var dvAllForSelects=dvAll.filter(function(d){
+    return parseInt(String(d.date||'').substring(0,4),10)===_curFy;
+  });
   var prefixSet={},contactSet={},typeSet={};
-  dvAll.forEach(function(d){
+  dvAllForSelects.forEach(function(d){
     var p=extractPrefix(d); if(p) prefixSet[p]=(prefixSet[p]||0)+1;
     var c=extractContact(d); if(c) contactSet[c]=(contactSet[c]||0)+1;
     var t=normType(d.type); if(t) typeSet[t]=(typeSet[t]||0)+1;
@@ -12402,9 +12503,12 @@ function renderDVPro(){
 
   // ========== Toolbar (boutons d'import/création) ==========
   html+='<div class="dvpro-toolbar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">';
-  html+='<div style="font-size:13px;color:var(--muted);letter-spacing:0.04em" class="no-pm-blur">'+
-    '<span style="color:var(--text);font-weight:500" data-money>'+kpi.count+'</span> devis · '+
-    '<span class="num" style="color:var(--text)" data-money>'+fNloc(kpi.total)+' XPF</span> total émis cette année'+
+  html+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+    '<div style="font-size:13px;color:var(--muted);letter-spacing:0.04em" class="no-pm-blur">'+
+      '<span style="color:var(--text);font-weight:500" data-money>'+kpi.count+'</span> devis · '+
+      '<span class="num" style="color:var(--text)" data-money>'+fNloc(kpi.total)+' XPF</span> total émis'+
+    '</div>'+
+    '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:10.5px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.05em">Année</span>'+_renderFiscalYearSelect('dv')+'</div>'+
     '</div>';
   html+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
   html+='<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'dv-import-file\').click()" title="Importer un ancien devis PDF"><i class="ti ti-file-import" style="font-size:13px"></i> Import PDF</button>';
@@ -13384,7 +13488,13 @@ function renderSuiviPro(){
   var helpDot = function(txt){
     return '<span class="kpi-help" title="'+esc(txt)+'" style="position:absolute;top:8px;right:8px;width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.08);color:var(--muted);font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:help;font-family:monospace" aria-label="Aide">?</span>';
   };
-  var html='<div class="kpi-grid-pro">';
+  var html='';
+  // Bandeau année fiscale (sélecteur partagé Devis ↔ Suivi)
+  html+='<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:10px;padding:6px 10px;background:rgba(255,255,255,0.025);border:0.5px solid rgba(255,255,255,0.06);border-radius:6px">'+
+    '<span style="font-size:10.5px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.05em"><i class="ti ti-calendar" style="font-size:12px;vertical-align:-1px"></i> Année fiscale</span>'+
+    _renderFiscalYearSelect('suivi')+
+    '</div>';
+  html+='<div class="kpi-grid-pro">';
   // KPI émis
   var emisHelp = 'TOTAL ÉMIS '+fy+' = somme des montants TTC de toutes les factures émises en '+fy+'.\n\n'+
     'Inclus :\n• Factures status Pending, Partiel ou Payée\n• Phase « livre » ou « recu » (= facture envoyée au client)\n\n'+
@@ -21604,12 +21714,22 @@ function renderDV(){
     }
   }
   updFC('fDVcli',DB.devis);
+  // Monter le sélecteur d'année global (mode classic)
+  var fyDVHost=document.getElementById('fyDVHost');
+  if(fyDVHost && typeof _renderFiscalYearSelect==='function'){
+    fyDVHost.innerHTML=_renderFiscalYearSelect('dv-classic');
+  }
   var s=(gvg('sDV')||'').toLowerCase(),fc=gvg('fDVcli'),fs=gvg('fDVst');
-  // Onglets clients : on les construit à partir de TOUS les devis (avant filtrage)
-  // pour que l'utilisateur voie les compteurs corrects
-  renderClientTabs('dv',DB.devis,'dvClientTabs');
+  // Filtre fiscalYear global (sélecteur d'année partagé Devis ↔ Suivi)
+  var _curFy=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
+  var dvForYear=DB.devis.filter(function(d){
+    return parseInt(String(d.date||'').substring(0,4),10)===_curFy;
+  });
+  // Onglets clients : on les construit à partir des devis de l'année fiscale
+  // pour que l'utilisateur voie les bons compteurs cohérents avec le sélecteur d'année.
+  renderClientTabs('dv',dvForYear,'dvClientTabs');
   // Filtrer par : recherche + filtre client (legacy) + filtre statut + onglet client actif
-  var dataPre=DB.devis.filter(function(x){return(!fc||x.client===fc)&&(!fs||x.status===fs)&&(!s||(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)>=0);});
+  var dataPre=dvForYear.filter(function(x){return(!fc||x.client===fc)&&(!fs||x.status===fs)&&(!s||(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)>=0);});
   var data=filterByActiveClient(dataPre,'dv');
   var sm={Brouillon:'b-draft',Envoyé:'b-sent',Accepté:'b-ok',Refusé:'b-refused',Facturé:'b-invoiced','Cadre':'b-draft','Obsolète':'b-refused'};
   var tb=document.getElementById('tbDV');if(!tb)return;
@@ -31404,7 +31524,10 @@ function _doDelDoc(col,id){
   saveDB();
   if(col==='devis')renderDV();if(col==='factures')renderFA();if(col==='bcs')renderBC();if(col==='bls')renderBL();if(col==='articles')renderART();
   rDash();
-  if(col==='factures' && typeof renderSuivi==='function'){try{renderSuivi();}catch(e){console.warn('renderSuivi skipped:',e.message);}}
+  // Toujours appeler renderSuivi : la suppression d'un devis/BC/BL peut impacter
+  // la vue Réconciliation (Suivi Factures > onglet Réconciliation). renderSuivi
+  // est idempotent et déclenche en cascade renderReconcilTable.
+  if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){console.warn('renderSuivi skipped:',e.message);}}
 }
 // Texte standard CALINSTRUM des conditions commerciales (4 articles)
 var DV_DEFAULT_CONDITIONS=
