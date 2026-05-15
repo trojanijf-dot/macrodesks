@@ -12896,6 +12896,66 @@ function renderSuiviPro(){
   html+='</div>';
 
   // Gros graphique : émis vs encaissé mensuel
+  // ============================================================
+  // PRÉ-CALCUL DES MÉTRIQUES POUR LES 3 NOUVEAUX VISUS À GAUCHE :
+  // - Donut "Statut des factures émises" (Encaissé / En attente / En retard)
+  // - Sparkline "Trésorerie nette glissante 30j" (encaissé cumul - payé Emerson cumul jour par jour)
+  // - Gauge "Taux de recouvrement" (Encaissé / Émis)
+  // ============================================================
+  // Données: on travaille uniquement sur srcFy (factures de l'année), hors pré-facturées.
+  var _todayIso=td(); // 'YYYY-MM-DD'
+  var _stEnc=0,_stAtt=0,_stRet=0; // montants
+  var _cntEnc=0,_cntAtt=0,_cntRet=0; // compteurs
+  srcFy.forEach(function(f){
+    if(isPrebilled(f))return;
+    var amt=getMt(f);
+    if(isPaid(f)){
+      _stEnc+=amt; _cntEnc++;
+    } else if(f.dateButoir && f.dateButoir<_todayIso){
+      _stRet+=amt; _cntRet++;
+    } else {
+      _stAtt+=amt; _cntAtt++;
+    }
+  });
+  // Sparkline tréso glissante : 30 derniers jours, jour par jour
+  // Pour chaque jour D, on calcule (cumul encaissé jusqu'à D) - (cumul payé Emerson jusqu'à D).
+  var _sparkDays=30;
+  var _sparkSeries=[]; // [{d:'YYYY-MM-DD', v:nombre}]
+  // Pré-calcul des événements encaissé : dates + montants (utilise dateEncaissement si dispo sinon dateEnvoi si payée)
+  var _encEvents=[];
+  (DB.factures||[]).forEach(function(f){
+    if(isPrebilled(f))return;
+    if(!isPaid(f))return;
+    var ds=f.dateEncaissement||f.dateEnvoi||f.date;
+    if(!ds)return;
+    _encEvents.push({d:ds,v:getMt(f)});
+  });
+  // Pré-calcul des événements payés Emerson : dates de paiement BC + montants
+  var _payEvents=[];
+  Object.values(bcsLies).forEach(function(bc){
+    if(!bc.paidEmerson)return;
+    var ds=bc.datePaidEmerson||bc.dateEmerson||bc.date;
+    if(!ds)return;
+    _payEvents.push({d:ds,v:getBCCoutXPF(bc)});
+  });
+  // Construire la série glissante
+  function _addDaysToIso(iso,n){
+    var p=iso.split('-'),dt=new Date(+p[0],+p[1]-1,+p[2]);
+    dt.setDate(dt.getDate()+n);
+    var mm=String(dt.getMonth()+1).padStart(2,'0'),dd=String(dt.getDate()).padStart(2,'0');
+    return dt.getFullYear()+'-'+mm+'-'+dd;
+  }
+  for(var _di=_sparkDays-1;_di>=0;_di--){
+    var _dayIso=_addDaysToIso(_todayIso,-_di);
+    var _cumEnc=0,_cumPay=0;
+    _encEvents.forEach(function(e){if(e.d<=_dayIso)_cumEnc+=e.v;});
+    _payEvents.forEach(function(e){if(e.d<=_dayIso)_cumPay+=e.v;});
+    _sparkSeries.push({d:_dayIso, v:_cumEnc-_cumPay});
+  }
+  // Taux de recouvrement
+  var _pctRec=totalEmis>0?(totalEnc/totalEmis*100):0;
+  // ============================================================
+
   var chartHelp = 'ÉVOLUTION MENSUELLE = chronologie des flux sur 12 mois.\n\n'+
     'Courbes affichées :\n'+
     '• Bleu (Devis émis) = chiffre d\'affaires émis chaque mois\n'+
@@ -12910,7 +12970,116 @@ function renderSuiviPro(){
   html+='<div class="card-pro" style="position:relative">';
   html+=helpDot(chartHelp);
   html+='<div class="card-pro-title"><i class="ti ti-trending-up"></i>Évolution mensuelle '+fy+'</div>';
+  // ============================================================
+  // GRID 2 COLONNES : 3 visus à gauche (40%) + line chart à droite (60%)
+  // ============================================================
+  html+='<div style="display:grid;grid-template-columns:minmax(280px,40%) 1fr;gap:16px;align-items:start">';
+  // ─── COLONNE GAUCHE ───────────────────────────────
+  html+='<div style="display:flex;flex-direction:column;gap:14px">';
+
+  // 1) DONUT "Statut des factures émises"
+  var _stTot=_stEnc+_stAtt+_stRet;
+  var _stCntTot=_cntEnc+_cntAtt+_cntRet;
+  html+='<div style="background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:12px">';
+  html+='<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Statut des factures émises</div>';
+  if(_stTot===0){
+    html+='<div style="text-align:center;padding:24px;color:var(--muted-soft);font-size:11px">Aucune facture émise sur l\'année</div>';
+  } else {
+    var _r=50,_cx=60,_cy=60,_circ=2*Math.PI*_r;
+    var _pEnc=_stEnc/_stTot, _pAtt=_stAtt/_stTot, _pRet=_stRet/_stTot;
+    var _off1=0, _off2=_circ*_pEnc, _off3=_circ*(_pEnc+_pAtt);
+    html+='<div style="display:grid;grid-template-columns:120px 1fr;gap:12px;align-items:center">';
+    // Donut SVG
+    html+='<svg viewBox="0 0 120 120" style="width:120px;height:120px">';
+    html+='<circle cx="'+_cx+'" cy="'+_cy+'" r="'+_r+'" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="14"/>';
+    if(_pEnc>0) html+='<circle cx="'+_cx+'" cy="'+_cy+'" r="'+_r+'" fill="none" stroke="#10b981" stroke-width="14" stroke-dasharray="'+(_circ*_pEnc)+' '+_circ+'" stroke-dashoffset="'+(-_off1)+'" transform="rotate(-90 '+_cx+' '+_cy+')"/>';
+    if(_pAtt>0) html+='<circle cx="'+_cx+'" cy="'+_cy+'" r="'+_r+'" fill="none" stroke="#fbbf24" stroke-width="14" stroke-dasharray="'+(_circ*_pAtt)+' '+_circ+'" stroke-dashoffset="'+(-_off2)+'" transform="rotate(-90 '+_cx+' '+_cy+')"/>';
+    if(_pRet>0) html+='<circle cx="'+_cx+'" cy="'+_cy+'" r="'+_r+'" fill="none" stroke="#ef4444" stroke-width="14" stroke-dasharray="'+(_circ*_pRet)+' '+_circ+'" stroke-dashoffset="'+(-_off3)+'" transform="rotate(-90 '+_cx+' '+_cy+')"/>';
+    // Centre : nombre total de factures
+    html+='<text x="'+_cx+'" y="'+(_cy-2)+'" text-anchor="middle" fill="var(--text)" font-size="20" font-weight="700">'+_stCntTot+'</text>';
+    html+='<text x="'+_cx+'" y="'+(_cy+14)+'" text-anchor="middle" fill="var(--muted)" font-size="9" text-transform="uppercase">factures</text>';
+    html+='</svg>';
+    // Légende
+    html+='<div style="display:flex;flex-direction:column;gap:6px;font-size:11px">';
+    var _legItems=[
+      {color:'#10b981',label:'Encaissé',cnt:_cntEnc,amt:_stEnc,pct:_pEnc*100},
+      {color:'#fbbf24',label:'En attente',cnt:_cntAtt,amt:_stAtt,pct:_pAtt*100},
+      {color:'#ef4444',label:'En retard',cnt:_cntRet,amt:_stRet,pct:_pRet*100}
+    ];
+    _legItems.forEach(function(it){
+      if(it.cnt===0)return;
+      html+='<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">'+
+        '<div style="display:flex;align-items:center;gap:6px;min-width:0"><span style="width:8px;height:8px;background:'+it.color+';border-radius:50%;display:inline-block;flex-shrink:0"></span><span style="color:var(--text);font-weight:600">'+it.label+'</span><span style="color:var(--muted);font-size:10px">·'+it.cnt+'</span></div>'+
+        '<div style="text-align:right;font-family:var(--mono);color:'+it.color+';font-size:10.5px;font-weight:600">'+fNloc(it.amt)+'<span style="color:var(--muted);font-weight:400;margin-left:4px">'+it.pct.toFixed(0)+'%</span></div>'+
+      '</div>';
+    });
+    html+='</div></div>';
+  }
+  html+='</div>'; // fin donut card
+
+  // 2) SPARKLINE "Trésorerie nette glissante 30j"
+  html+='<div style="background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:12px">';
+  html+='<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">';
+  html+='<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Trésorerie nette · 30j glissants</div>';
+  var _sparkLast=_sparkSeries.length?_sparkSeries[_sparkSeries.length-1].v:0;
+  var _sparkFirst=_sparkSeries.length?_sparkSeries[0].v:0;
+  var _sparkDelta=_sparkLast-_sparkFirst;
+  var _sparkDeltaColor=_sparkDelta>=0?'#10b981':'#ef4444';
+  var _sparkDeltaSign=_sparkDelta>=0?'+':'';
+  html+='<div style="font-size:10px;color:'+_sparkDeltaColor+';font-weight:700">'+_sparkDeltaSign+fNloc(_sparkDelta)+' XPF</div>';
+  html+='</div>';
+  // SVG sparkline
+  var _spW=100,_spH=40; // viewBox units (en %)
+  var _spVals=_sparkSeries.map(function(p){return p.v;});
+  var _spMin=Math.min.apply(null,_spVals),_spMax=Math.max.apply(null,_spVals);
+  if(_spMin===_spMax){_spMin-=1;_spMax+=1;}
+  var _spRange=_spMax-_spMin;
+  var _spPts=_sparkSeries.map(function(p,i){
+    var x=(_sparkSeries.length>1?(i/(_sparkSeries.length-1))*_spW:0);
+    var y=_spH-((p.v-_spMin)/_spRange)*_spH;
+    return x.toFixed(2)+','+y.toFixed(2);
+  }).join(' ');
+  // Zone remplie (area)
+  var _spArea='0,'+_spH+' '+_spPts+' '+_spW+','+_spH;
+  html+='<svg viewBox="0 0 '+_spW+' '+_spH+'" preserveAspectRatio="none" style="width:100%;height:64px;display:block">';
+  html+='<defs><linearGradient id="spark-grad" x1="0" x2="0" y1="0" y2="1">';
+  html+='<stop offset="0%" stop-color="#10b981" stop-opacity="0.35"/><stop offset="100%" stop-color="#10b981" stop-opacity="0"/>';
+  html+='</linearGradient></defs>';
+  html+='<polygon points="'+_spArea+'" fill="url(#spark-grad)"/>';
+  html+='<polyline points="'+_spPts+'" fill="none" stroke="#10b981" stroke-width="1.5" vector-effect="non-scaling-stroke"/>';
+  html+='</svg>';
+  html+='<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted-soft);margin-top:4px">';
+  html+='<span>'+fD(_sparkSeries[0].d)+'</span><span style="font-family:var(--mono);color:var(--text);font-weight:600">'+fNloc(_sparkLast)+' XPF</span><span>'+fD(_sparkSeries[_sparkSeries.length-1].d)+'</span>';
+  html+='</div>';
+  html+='</div>'; // fin sparkline card
+
+  // 3) GAUGE "Taux de recouvrement"
+  html+='<div style="background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:8px;padding:12px">';
+  html+='<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">';
+  html+='<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Taux de recouvrement</div>';
+  // Cible 90% : couleur conditionnelle
+  var _gColor=_pctRec>=90?'#10b981':(_pctRec>=70?'#fbbf24':'#ef4444');
+  html+='<div style="font-family:var(--mono);font-size:14px;color:'+_gColor+';font-weight:700">'+_pctRec.toFixed(1)+'%</div>';
+  html+='</div>';
+  // Barre horizontale
+  var _gFill=Math.min(100,Math.max(0,_pctRec));
+  html+='<div style="position:relative;background:rgba(255,255,255,.06);border-radius:6px;height:14px;overflow:hidden">';
+  html+='<div style="height:100%;width:'+_gFill+'%;background:linear-gradient(90deg,'+_gColor+'aa,'+_gColor+');border-radius:6px;transition:width .3s ease"></div>';
+  // Repère cible 90%
+  html+='<div style="position:absolute;top:-2px;left:90%;height:18px;width:2px;background:rgba(255,255,255,.4);border-radius:1px" title="Cible 90%"></div>';
+  html+='</div>';
+  html+='<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted-soft);margin-top:6px">';
+  html+='<span>Encaissé: <span style="color:#10b981;font-family:var(--mono);font-weight:600">'+fNloc(totalEnc)+'</span></span>';
+  html+='<span>sur '+fNloc(totalEmis)+' émis</span>';
+  html+='</div>';
+  html+='</div>'; // fin gauge card
+
+  html+='</div>'; // fin colonne gauche
+  // ─── COLONNE DROITE : LINE CHART INCHANGÉ ───────
+  html+='<div>';
   html+=renderMonthlyChartPro(emisM, emisM.map(function(v,i){return Math.max(0,v);}), encM);
+  html+='</div>';
+  html+='</div>'; // fin grid 2 col
   html+='</div>';
 
   // Vue "affaires" si la fonction existe
