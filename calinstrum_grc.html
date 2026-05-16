@@ -1851,7 +1851,11 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         <div style="font-size:10px;color:var(--muted-soft);margin-top:3px;font-style:italic">Auto-généré pour Fourniture : <code style="background:rgba(255,255,255,0.05);padding:1px 4px;border-radius:3px;font-size:9.5px">Fourniture Matériel BC … / PO … / REF DEVIS …</code></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Devis lié</label><input class="form-input" id="fa-dvlie"></div>
+        <div class="form-group">
+          <label>Devis lié <span style="color:var(--muted);font-weight:400;font-size:10px">(autocomplétion : tapez ou choisissez dans la liste)</span></label>
+          <input class="form-input" id="fa-dvlie" list="fa-dvlie-datalist" placeholder="ex: SLN-DV143-CADRE-2026, SLN-DV170...">
+          <datalist id="fa-dvlie-datalist"></datalist>
+        </div>
         <div class="form-group"><label>Type</label>
           <select class="form-select" id="fa-type">
             <option>Fourniture</option>
@@ -10419,18 +10423,27 @@ function _buildReconciliation(opts){
       // Match exact d'abord
       var exact=dvAll.find(function(d){return String(d.num||'').toUpperCase()===dvlie;});
       if(exact) return exact;
-      // Match approximatif : dvlie peut contenir un suffixe REV/REV1 que le devis
-      // n'a pas, et inversement. On compare en strippant le suffixe REV[N].
-      var dvlieNoRev=dvlie.replace(/REV\d*$/i,'').trim();
+      // Normalisation forte : strip REV + tirets DV-/DV + zéros de tête.
+      //   "SLN-DV-0088"   → "SLN-DV88"
+      //   "SLN-DV088REV1" → "SLN-DV88"
+      //   "SLN-DV088"     → "SLN-DV88"
+      //   "PRNC-DV022"    → "PRNC-DV22"
+      // Permet de matcher les variantes orthographiques courantes.
+      function _normDvNum(s){
+        s=String(s||'').toUpperCase().trim().replace(/REV\d*$/i,'').trim();
+        return s.replace(/^([A-Z]+)-DV-?0*(\d+)/i,'$1-DV$2');
+      }
+      var dvlieNorm=_normDvNum(dvlie);
       var approx=dvAll.find(function(d){
-        var dn=String(d.num||'').toUpperCase().replace(/REV\d*$/i,'').trim();
-        return dn===dvlieNoRev;
+        return _normDvNum(d.num)===dvlieNorm;
       });
       if(approx) return approx;
       // Pass 2b : ranges du type "SLN-DV144-145" qui contiennent dvlie SLN-DV144
       // (devis qui regroupe plusieurs N° dans son num). On vérifie si un devis
       // existant contient le dvlie en tant que sous-séquence numérique.
-      var dvlieMatch=dvlie.match(/^(.+)-DV[-]?(\d+[A-Z]*)$/i);
+      // On strippe REV au préalable pour matcher "SLN-DV155REV1" → "SLN-DV155".
+      var dvlieForRange=dvlie.replace(/REV\d*$/i,'').trim();
+      var dvlieMatch=dvlieForRange.match(/^(.+)-DV[-]?(\d+[A-Z]*)$/i);
       if(dvlieMatch){
         var dvliePrefix=dvlieMatch[1]; // ex "SLN"
         var dvlieNum=dvlieMatch[2];    // ex "144"
@@ -13018,6 +13031,11 @@ function renderDVPro(){
   var fDVMonth=(typeof window._dvFilterByMonth==='string')?window._dvFilterByMonth:'';
 
   var dataPre=dvAll.filter(function(x){
+    // Filtre fiscalYear global (sélecteur d'année partagé Devis ↔ Suivi).
+    // Cohérence : si le sélecteur est sur 2026, les devis 2024/2025 ne sortent
+    // pas même via la recherche texte. Pour les voir, basculer le sélecteur.
+    var yr=parseInt(String(x.date||'').substring(0,4),10);
+    if(yr!==_curFy) return false;
     if(fc&&x.client!==fc) return false;
     if(fs&&x.status!==fs) return false;
     if(s&&(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)<0) return false;
@@ -13038,6 +13056,8 @@ function renderDVPro(){
   var dataForDVDonut=data;
   if(fDVMonth){
     var dataForDVDonutPre=dvAll.filter(function(x){
+      var yr=parseInt(String(x.date||'').substring(0,4),10);
+      if(yr!==_curFy) return false;
       if(fc&&x.client!==fc) return false;
       if(fs&&x.status!==fs) return false;
       if(s&&(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)<0) return false;
@@ -23098,9 +23118,77 @@ function onFaPctOfBCChange(){
   }
 }
 
+// =============================================================================
+// _populateFADvlieDatalist — Peuple le datalist du champ "Devis lié" dans la modale Facture
+// =============================================================================
+// Logique de filtrage des devis proposés :
+//   - Préfixe client cohérent (SLN/PRNC...) : si la facture est pour SLN, on ne propose
+//     que les devis SLN (ou Cadre SLN).
+//   - Statuts pertinents : Cadre, Accepté, Facturé, Envoyé (on exclut Brouillon/Refusé/Obsolète).
+//   - Devis Cadre toujours en TÊTE de liste (pour qu'ils soient suggérés en priorité
+//     dans les cas fourniture récurrente type SLN-DV143-CADRE-2026).
+//   - Tri secondaire : par date décroissante (devis récents d'abord).
+// Le datalist HTML5 propose automatiquement les options qui matchent ce que l'utilisateur tape.
+// =============================================================================
+function _populateFADvlieDatalist(){
+  var dl=document.getElementById('fa-dvlie-datalist');
+  if(!dl) return;
+  var faClient=(document.getElementById('fa-client')||{}).value||'';
+  var faType=(document.getElementById('fa-type')||{}).value||'';
+  // Préfixe client (SLN/PRNC...) extrait du libellé "SLN - Yannick PAKORO"
+  var clientPrefix=faClient.toUpperCase().split(/[\s-]/)[0]||'';
+  var dvAll=Array.isArray(DB.devis)?DB.devis:[];
+  // Statuts pertinents
+  var validStatus={'Cadre':1,'Accepté':1,'Facturé':1,'Envoyé':1};
+  var candidates=dvAll.filter(function(d){
+    if(!validStatus[d.status]) return false;
+    // Filtre préfixe client (si la facture a un préfixe identifié)
+    if(clientPrefix){
+      var dnClientPrefix=String(d.client||'').toUpperCase().split(/[\s-]/)[0]||'';
+      if(dnClientPrefix!==clientPrefix) return false;
+    }
+    return true;
+  });
+  // Tri : Cadre en premier, puis par date décroissante (récents d'abord)
+  candidates.sort(function(a,b){
+    var aCadre=a.status==='Cadre' || (a.num||'').toUpperCase().indexOf('CADRE')>=0;
+    var bCadre=b.status==='Cadre' || (b.num||'').toUpperCase().indexOf('CADRE')>=0;
+    if(aCadre!==bCadre) return aCadre?-1:1;
+    var aDate=String(a.date||'');
+    var bDate=String(b.date||'');
+    return bDate.localeCompare(aDate);
+  });
+  // Construire le datalist : value = num (saisi dans le champ), label = libellé enrichi
+  var html='';
+  candidates.forEach(function(d){
+    var isCadre=d.status==='Cadre' || (d.num||'').toUpperCase().indexOf('CADRE')>=0;
+    var labelParts=[];
+    if(isCadre) labelParts.push('CADRE');
+    if(d.objet) labelParts.push(String(d.objet).substring(0,50));
+    if(d.date) labelParts.push(d.date);
+    if(d.status && !isCadre) labelParts.push(d.status);
+    var label=labelParts.join(' · ');
+    // Échapper guillemets dans le label
+    label=label.replace(/"/g,'&quot;');
+    var num=String(d.num||'').replace(/"/g,'&quot;');
+    html+='<option value="'+num+'">'+label+'</option>';
+  });
+  dl.innerHTML=html;
+}
+
 function openFA(id,fromDV){
   eFAid=id||null;faL=[];faVersements=[];rebuildAllParamSelects();
   buildClientOptions('fa-client','');
+  // Peupler le datalist Devis lié et brancher les listeners pour le re-peupler
+  // si le client ou le type change pendant l'édition.
+  _populateFADvlieDatalist();
+  ['fa-client','fa-type'].forEach(function(elid){
+    var el=document.getElementById(elid);
+    if(el && !el._dvlieListenerAttached){
+      el.addEventListener('change', _populateFADvlieDatalist);
+      el._dvlieListenerAttached=true;
+    }
+  });
   if(id){
     var f=DB.factures.find(function(x){return x.id===id;});
     if(f){
