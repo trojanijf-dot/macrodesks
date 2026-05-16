@@ -10596,6 +10596,75 @@ function _buildReconciliation(opts){
     _processFacture(i,'invoices');
   });
 
+  // === PASS 7-PRE : DÉTECTION DES LIENS MANUELS N→1 ========================
+  // Si l'utilisateur a explicitement lié plusieurs devis à la même facture via
+  // d.linkFactureId, _processFacture n'a pris en compte que le PREMIER devis
+  // trouvé (Pass 1 dans _matchFactureToDevis). On corrige ici : pour chaque
+  // facture qui a >1 devis pointant vers elle, on convertit le groupe en
+  // groupe MULTI-devis (_isGroup=true) avec tous les devis liés.
+  //
+  // Détecté via le champ d.linkFactureId, qui est posé manuellement quand on
+  // associe un devis à une facture depuis la modale Devis.
+  // ========================================================================
+  (function _detectManualMultiLinks(){
+    var byFacId={}; // facId → [devis...]
+    dvAll.forEach(function(d){
+      if(!d.linkFactureId) return;
+      var fid=d.linkFactureId;
+      if(!byFacId[fid]) byFacId[fid]=[];
+      byFacId[fid].push(d);
+    });
+    // Aussi les liens legacy via _originalInvoiceId (facture migrée)
+    facAll.forEach(function(f){
+      if(!f._originalInvoiceId) return;
+      var legacyDevis=dvAll.filter(function(d){return d.linkFactureId===f._originalInvoiceId;});
+      if(legacyDevis.length>1){
+        // Cohérence : on regroupe sous l'id réel de la facture (f.id)
+        if(!byFacId[f.id]) byFacId[f.id]=[];
+        legacyDevis.forEach(function(d){
+          if(byFacId[f.id].indexOf(d)<0) byFacId[f.id].push(d);
+        });
+      }
+    });
+    Object.keys(byFacId).forEach(function(fid){
+      var devisList=byFacId[fid];
+      if(devisList.length<2) return; // pas multi → géré normalement par _processFacture
+      var f=facAll.find(function(x){return String(x.id)===fid;}) ||
+            invAll.find(function(x){return String(x.id)===fid;});
+      if(!f) return;
+      if(!inFiscalYearFA(f)) return;
+      if(!matchesType(f.type)) return;
+      // Démolir le groupe simple éventuellement créé par _processFacture sur le 1er devis
+      devisList.forEach(function(d){
+        var k=String(d.id);
+        if(groupes[k] && !groupes[k]._isGroup){
+          // Si ce groupe contient UNIQUEMENT cette facture, on le supprime
+          // (la facture sera replacée dans le groupe multi-devis ci-dessous)
+          var only=groupes[k].factures.length===1 && groupes[k].factures[0].id===f.id;
+          if(only) delete groupes[k];
+        }
+      });
+      // Construire le groupe multi-devis
+      var groupKey='GROUP:'+devisList.map(function(d){return d.id;}).sort().join(',');
+      var totalDvTTC=devisList.reduce(function(s,d){return s+Number(d.ttc||0);},0);
+      // Éviter doublon si déjà créé
+      if(!groupes[groupKey]){
+        groupes[groupKey]={
+          devisGroup:devisList,
+          devis:devisList[0], // pivot pour compat code existant
+          factures:[f],
+          totalFac:Number(f.ttc||f.montant||0),
+          _isGroup:true,
+          _totalDvTTC:totalDvTTC
+        };
+        devisList.forEach(function(d){ seenDvIds[String(d.id)]=1; });
+      }
+      // Retirer la facture des orphelines si elle y était
+      orphanFacs=orphanFacs.filter(function(o){return o.facture.id!==f.id;});
+    });
+  })();
+  // === FIN PASS 7-PRE =====================================================
+
   // === PASS 7 : DÉTECTION FACTURE GROUPÉE (N devis → 1 facture) ===========
   // Pour chaque facture restée orpheline, on cherche une combinaison de 2 à 4
   // devis Accepté/Facturé du même client (non déjà rattachés) dont la somme TTC
