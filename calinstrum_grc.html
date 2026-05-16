@@ -1107,7 +1107,14 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
 ============================================================================= -->
 <div class="page" id="page-factures">
   <div class="flex-between mb12">
-    <div></div>
+    <!-- Barre stats : compteur factures + total émis pour l'année sélectionnée.
+         Cohérent avec la barre Devis (renderDV). Année reflète fFAyear (filtre dans la barre de filtres).
+         Le sélecteur d'année est dans la barre de filtres ci-dessous (id="fFAyear"). -->
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div id="fa-stats-header" style="font-size:13px;color:var(--muted);letter-spacing:0.04em">
+        <!-- Rempli dynamiquement par renderFA() : "28 factures · 33 494 171 XPF total émis" -->
+      </div>
+    </div>
     <div style="display:flex;gap:8px">
       <!-- Import PDF : facture CALINSTRUM (F061/F071...) ou Emerson (Tax Invoice AUD) -->
       <input type="file" id="fa-import-pdf-file" accept=".pdf" style="display:none" onchange="importFacturePDF(this.files[0])">
@@ -25075,8 +25082,6 @@ function renderFA(){
   var source=getSuiviSource();
   // Construction des onglets clients (Tous + 1 par client) — utilise extractClientGroup
   // qui regroupe par préfixe ("SLN - Christopher" → "SLN")
-  // Note : on construit les onglets à partir de TOUTE la source (avant filtrage)
-  // pour avoir les bons compteurs.
   // On adapte temporairement pour que extractClientGroup voie un champ 'client'
   // (la source Suivi n'a pas de champ client distinct, on utilise SLN par défaut).
   var sourceWithClient=source.map(function(i){
@@ -25087,7 +25092,39 @@ function renderFA(){
     }
     return i;
   });
-  renderClientTabs('fa',sourceWithClient,'faClientTabs');
+
+  // ===== Filtre année AVANT renderClientTabs (pour que les compteurs Tous/SLN/PRNC
+  // se calent sur l'année sélectionnée). Avant ce fix les compteurs restaient sur
+  // la totalité quelle que soit l'année sélectionnée.
+  // On utilise fFAyear si présent, sinon le fiscalYear global pour cohérence avec Devis.
+  var fYearForTabs=gvg('fFAyear')||'';
+  var sourceForTabs=sourceWithClient;
+  if(fYearForTabs){
+    sourceForTabs=sourceWithClient.filter(function(f){
+      var ds=String(f.dateEnvoi||f.date||f.dateReceptionBC||'').substring(0,4);
+      return ds===String(fYearForTabs);
+    });
+  }
+  renderClientTabs('fa',sourceForTabs,'faClientTabs');
+
+  // ===== Stats globales pour la barre en haut (cohérent avec renderDV)
+  // On compte les factures de l'année sélectionnée (ou toutes années si fYear vide)
+  var statsYear=fYearForTabs||((typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear());
+  var faStatsList=sourceWithClient.filter(function(f){
+    var ds=String(f.dateEnvoi||f.date||f.dateReceptionBC||'').substring(0,4);
+    return ds===String(statsYear);
+  });
+  var faStatsCount=faStatsList.length;
+  var faStatsTotal=faStatsList.reduce(function(s,f){return s+Number(f.montant||f.ttc||0);},0);
+  // Injecter dans la barre stats en haut (élément #fa-stats-header)
+  var statsEl=document.getElementById('fa-stats-header');
+  if(statsEl){
+    var fNlocFA=(typeof fNloc==='function')?fNloc:function(v){return Number(v).toLocaleString('fr-FR').replace(/\u202f|\u00a0/g,' ');};
+    var yrLabel=fYearForTabs?String(fYearForTabs):'toutes années';
+    statsEl.innerHTML='<span style="color:var(--text);font-weight:500" data-money>'+faStatsCount+'</span> facture'+(faStatsCount>1?'s':'')+' · '+
+      '<span class="num" style="color:var(--text)" data-money>'+fNlocFA(faStatsTotal)+' XPF</span> total émis'+
+      (fYearForTabs?'':' <span style="color:var(--muted-soft)">(toutes années)</span>');
+  }
 
   // ===== Récupération de tous les filtres actifs =====
   var s=(gvg('sFA')||'').toLowerCase();
