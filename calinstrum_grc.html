@@ -1852,8 +1852,14 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label>Devis lié <span style="color:var(--muted);font-weight:400;font-size:10px">(autocomplétion : tapez ou choisissez dans la liste)</span></label>
-          <input class="form-input" id="fa-dvlie" list="fa-dvlie-datalist" placeholder="ex: SLN-DV143-CADRE-2026, SLN-DV170...">
+          <label>Devis liés <span style="color:var(--muted);font-weight:400;font-size:10px">(plusieurs possibles · Entrée pour ajouter · Backspace pour supprimer la dernière)</span></label>
+          <!-- Container chips qui ressemble à un input bordé -->
+          <div id="fa-dvlie-chips-wrap" class="form-input" style="display:flex;flex-wrap:wrap;gap:5px;padding:4px 6px;min-height:36px;cursor:text;align-items:center" onclick="(document.getElementById('fa-dvlie-input')||{}).focus&&document.getElementById('fa-dvlie-input').focus()">
+            <!-- Chips peuplés par JS au render -->
+            <input id="fa-dvlie-input" list="fa-dvlie-datalist" placeholder="ex: SLN-DV143-CADRE-2026" autocomplete="off" style="flex:1;min-width:140px;border:none;outline:none;background:transparent;color:var(--text);font-size:13px;padding:3px 2px;font-family:inherit">
+          </div>
+          <!-- Champ caché qui contient la valeur CSV finale, lu par getFA() -->
+          <input type="hidden" id="fa-dvlie">
           <datalist id="fa-dvlie-datalist"></datalist>
         </div>
         <div class="form-group"><label>Type</label>
@@ -10603,8 +10609,10 @@ function _buildReconciliation(opts){
   // facture qui a >1 devis pointant vers elle, on convertit le groupe en
   // groupe MULTI-devis (_isGroup=true) avec tous les devis liés.
   //
-  // Détecté via le champ d.linkFactureId, qui est posé manuellement quand on
-  // associe un devis à une facture depuis la modale Devis.
+  // Détecté via :
+  //   - d.linkFactureId (côté devis) — saisie manuelle dans la modale Devis
+  //   - d.linkFactureId === f._originalInvoiceId (legacy migration)
+  //   - f.dvlie CSV (côté facture) — saisie multi-puces "SLN-DV126, SLN-DV128"
   // ========================================================================
   (function _detectManualMultiLinks(){
     var byFacId={}; // facId → [devis...]
@@ -10619,13 +10627,53 @@ function _buildReconciliation(opts){
       if(!f._originalInvoiceId) return;
       var legacyDevis=dvAll.filter(function(d){return d.linkFactureId===f._originalInvoiceId;});
       if(legacyDevis.length>1){
-        // Cohérence : on regroupe sous l'id réel de la facture (f.id)
         if(!byFacId[f.id]) byFacId[f.id]=[];
         legacyDevis.forEach(function(d){
           if(byFacId[f.id].indexOf(d)<0) byFacId[f.id].push(d);
         });
       }
     });
+    // === NOUVEAU : Détection via f.dvlie CSV ===
+    // Si la facture a un dvlie avec virgule (ex: "SLN-DV126, SLN-DV128"),
+    // on splitte et on résout chaque token contre les devis existants.
+    function _findDevisByNum(num){
+      var up=String(num||'').toUpperCase().trim();
+      if(!up) return null;
+      // Match exact
+      var d=dvAll.find(function(x){return String(x.num||'').toUpperCase().trim()===up;});
+      if(d) return d;
+      // Normalisation (strip REV + tirets + zéros)
+      function norm(s){
+        s=String(s||'').toUpperCase().trim().replace(/REV\d*$/i,'').trim();
+        return s.replace(/^([A-Z]+)-DV-?0*(\d+)/i,'$1-DV$2');
+      }
+      var nu=norm(up);
+      d=dvAll.find(function(x){return norm(x.num)===nu;});
+      return d || null;
+    }
+    function _processDvlieCSV(f){
+      var dvlie=String(f.dvlie||'').trim();
+      if(!dvlie || dvlie.indexOf(',')<0) return; // pas de CSV
+      var tokens=dvlie.split(/\s*,\s*/).filter(function(s){return !!s.trim();});
+      if(tokens.length<2) return;
+      var resolved=[];
+      var seen={};
+      tokens.forEach(function(t){
+        var d=_findDevisByNum(t);
+        if(d && !seen[d.id]){
+          seen[d.id]=1;
+          resolved.push(d);
+        }
+      });
+      if(resolved.length<2) return; // pas assez résolus
+      if(!byFacId[f.id]) byFacId[f.id]=[];
+      resolved.forEach(function(d){
+        if(byFacId[f.id].indexOf(d)<0) byFacId[f.id].push(d);
+      });
+    }
+    facAll.forEach(_processDvlieCSV);
+    invAll.forEach(_processDvlieCSV);
+    // === Construction des groupes multi-devis ===
     Object.keys(byFacId).forEach(function(fid){
       var devisList=byFacId[fid];
       if(devisList.length<2) return; // pas multi → géré normalement par _processFacture
@@ -10638,8 +10686,6 @@ function _buildReconciliation(opts){
       devisList.forEach(function(d){
         var k=String(d.id);
         if(groupes[k] && !groupes[k]._isGroup){
-          // Si ce groupe contient UNIQUEMENT cette facture, on le supprime
-          // (la facture sera replacée dans le groupe multi-devis ci-dessous)
           var only=groupes[k].factures.length===1 && groupes[k].factures[0].id===f.id;
           if(only) delete groupes[k];
         }
@@ -10647,11 +10693,10 @@ function _buildReconciliation(opts){
       // Construire le groupe multi-devis
       var groupKey='GROUP:'+devisList.map(function(d){return d.id;}).sort().join(',');
       var totalDvTTC=devisList.reduce(function(s,d){return s+Number(d.ttc||0);},0);
-      // Éviter doublon si déjà créé
       if(!groupes[groupKey]){
         groupes[groupKey]={
           devisGroup:devisList,
-          devis:devisList[0], // pivot pour compat code existant
+          devis:devisList[0],
           factures:[f],
           totalFac:Number(f.ttc||f.montant||0),
           _isGroup:true,
@@ -23188,7 +23233,124 @@ function onFaPctOfBCChange(){
 }
 
 // =============================================================================
-// _populateFADvlieDatalist — Peuple le datalist du champ "Devis lié" dans la modale Facture
+// SYSTÈME DE CHIPS — Devis liés (multi-valeurs sur facture)
+// =============================================================================
+// Le champ "Devis liés" supporte plusieurs devis grâce à des chips visuels.
+// Stockage : string CSV dans f.dvlie (ex: "SLN-DV126, SLN-DV128") pour préserver
+// la compat avec le code existant qui lit f.dvlie comme une chaîne.
+// Toutes les passes de matching (_matchFactureToDevis) ont été adaptées pour
+// splitter dvlie par virgule et essayer chaque devis individuellement.
+// =============================================================================
+
+// Lit la valeur stockée (hidden input) et la transforme en array nettoyé.
+function _faDvlieGetArray(){
+  var hid=document.getElementById('fa-dvlie');
+  if(!hid) return [];
+  var raw=String(hid.value||'').trim();
+  if(!raw) return [];
+  return raw.split(/\s*,\s*/).map(function(s){return s.trim();}).filter(function(s){return !!s;});
+}
+
+// Écrit la valeur array → string CSV dans le hidden input + re-render des chips.
+function _faDvlieSetArray(arr){
+  var hid=document.getElementById('fa-dvlie');
+  if(!hid) return;
+  // Déduplication case-insensitive en gardant la casse de la première occurrence
+  var seen={};
+  var uniq=[];
+  (arr||[]).forEach(function(s){
+    var k=String(s||'').toUpperCase().trim();
+    if(!k || seen[k]) return;
+    seen[k]=1;
+    uniq.push(String(s).trim());
+  });
+  hid.value=uniq.join(', ');
+  _faDvlieRenderChips();
+}
+
+// Construit les chips à partir de l'array courant
+function _faDvlieRenderChips(){
+  var wrap=document.getElementById('fa-dvlie-chips-wrap');
+  var input=document.getElementById('fa-dvlie-input');
+  if(!wrap || !input) return;
+  // Retirer les anciens chips (tout sauf l'input)
+  Array.prototype.slice.call(wrap.querySelectorAll('.fa-dvlie-chip')).forEach(function(c){c.remove();});
+  var arr=_faDvlieGetArray();
+  arr.forEach(function(dvNum){
+    var chip=document.createElement('span');
+    chip.className='fa-dvlie-chip';
+    chip.dataset.dvnum=dvNum;
+    chip.style.cssText='display:inline-flex;align-items:center;gap:4px;padding:2px 4px 2px 8px;background:rgba(93,202,165,.12);border:0.5px solid rgba(93,202,165,.3);border-radius:10px;font-size:11px;color:#5dcaa5;font-family:var(--mono);font-weight:600;line-height:1.6';
+    chip.innerHTML=esc(dvNum)+'<button type="button" tabindex="-1" title="Retirer ce devis" style="border:none;background:transparent;color:#5dcaa5;cursor:pointer;padding:0 3px;font-size:14px;line-height:1;opacity:0.6" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.6">×</button>';
+    chip.querySelector('button').addEventListener('click',function(e){
+      e.stopPropagation();
+      _faDvlieRemove(dvNum);
+    });
+    wrap.insertBefore(chip, input);
+  });
+}
+
+// Ajout d'une valeur (depuis la saisie ou autocomplete)
+function _faDvlieAdd(dvNum){
+  dvNum=String(dvNum||'').trim();
+  if(!dvNum) return;
+  var arr=_faDvlieGetArray();
+  arr.push(dvNum);
+  _faDvlieSetArray(arr);
+  var input=document.getElementById('fa-dvlie-input');
+  if(input){ input.value=''; input.focus(); }
+}
+
+// Retrait d'une valeur
+function _faDvlieRemove(dvNum){
+  var k=String(dvNum||'').toUpperCase().trim();
+  var arr=_faDvlieGetArray().filter(function(s){return String(s||'').toUpperCase().trim()!==k;});
+  _faDvlieSetArray(arr);
+  var input=document.getElementById('fa-dvlie-input');
+  if(input) input.focus();
+}
+
+// Initialiser depuis une valeur existante (string CSV ou array)
+function _faDvlieInit(value){
+  var arr=[];
+  if(Array.isArray(value)) arr=value.slice();
+  else if(value) arr=String(value).split(/\s*,\s*/).filter(function(s){return !!s.trim();});
+  _faDvlieSetArray(arr);
+}
+
+// Branche les listeners sur l'input. Idempotent (skip si déjà branchés).
+function _faDvlieBindListeners(){
+  var input=document.getElementById('fa-dvlie-input');
+  if(!input || input._dvlieBound) return;
+  input._dvlieBound=true;
+  // Enter ou virgule pour valider l'entrée
+  input.addEventListener('keydown',function(e){
+    if(e.key==='Enter' || e.key===','){
+      e.preventDefault();
+      var v=input.value.trim().replace(/,$/,'').trim();
+      if(v) _faDvlieAdd(v);
+    } else if(e.key==='Backspace' && !input.value){
+      // Backspace dans champ vide : supprime la dernière puce
+      var arr=_faDvlieGetArray();
+      if(arr.length>0){
+        arr.pop();
+        _faDvlieSetArray(arr);
+      }
+    }
+  });
+  // Sélection via datalist autocomplete (event 'change' déclenché)
+  input.addEventListener('change',function(){
+    var v=input.value.trim();
+    if(v) _faDvlieAdd(v);
+  });
+  // Blur : si l'utilisateur sort du champ avec une valeur tapée mais non validée
+  input.addEventListener('blur',function(){
+    var v=input.value.trim();
+    if(v) _faDvlieAdd(v);
+  });
+}
+
+// =============================================================================
 // =============================================================================
 // Logique de filtrage des devis proposés :
 //   - Préfixe client cohérent (SLN/PRNC...) : si la facture est pour SLN, on ne propose
@@ -23251,6 +23413,8 @@ function openFA(id,fromDV){
   // Peupler le datalist Devis lié et brancher les listeners pour le re-peupler
   // si le client ou le type change pendant l'édition.
   _populateFADvlieDatalist();
+  // Brancher les listeners chips (Enter/Backspace/blur sur l'input de saisie)
+  if(typeof _faDvlieBindListeners==='function') _faDvlieBindListeners();
   ['fa-client','fa-type'].forEach(function(elid){
     var el=document.getElementById(elid);
     if(el && !el._dvlieListenerAttached){
@@ -23268,7 +23432,8 @@ function openFA(id,fromDV){
       // rebuildFaEmailOptions ajoutera l'email courant aux options s'il n'est pas dans la liste.
       rebuildFaEmailOptions(f.email||'');
       gv('fa-objet',f.objet||'');
-      gv('fa-dvlie',f.dvlie||'');gv('fa-type',f.type||'Fourniture');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
+      gv('fa-dvlie',f.dvlie||'');_faDvlieInit(f.dvlie||'');
+      gv('fa-type',f.type||'Fourniture');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
       gv('fa-notes',f.notes||'');
       // Date d'encaissement effective (à renseigner à réception avis de règlement)
@@ -23328,7 +23493,8 @@ function openFA(id,fromDV){
       defaultEmailFromDV=DB.factureBillingEmails[0];
     }
     rebuildFaEmailOptions(defaultEmailFromDV||'');
-    gv('fa-objet',fromDV.objet||'');gv('fa-dvlie',fromDV.num||'');gv('fa-type',fromDV.type||'Fourniture');gv('fa-status','En attente');
+    gv('fa-objet',fromDV.objet||'');gv('fa-dvlie',fromDV.num||'');_faDvlieInit(fromDV.num||'');
+    gv('fa-type',fromDV.type||'Fourniture');gv('fa-status','En attente');
     gv('fa-notes','');gv('fa-date-encaissement','');gv('fa-dateReceptionBC','');
     // N° PO : récupérer depuis le devis source (champ bcClientSLN)
     gv('fa-po', fromDV.bcClientSLN || '');
@@ -23344,7 +23510,7 @@ function openFA(id,fromDV){
     sv('mFAtitle','Facture depuis '+fromDV.num);
   } else {
     gv('fa-num',nxt('fa','SLN'));gv('fa-date',td());gv('fa-contact','');
-    gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');
+    gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');_faDvlieInit('');
     // Email vide → dropdown initialisé avec valeur courante = ''
     rebuildFaEmailOptions('');
     gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
@@ -23540,12 +23706,16 @@ function importFromDevis(devisId){
     faL=faL.concat(newLines);
   }
 
-  // Mettre à jour le champ "Devis lié" : si vide, prendre celui-ci ; sinon, concaténer
-  var dvlieCurrent=gvg('fa-dvlie')||'';
-  if(!dvlieCurrent.trim()){
-    gv('fa-dvlie',d.num||'');
-  } else if(dvlieCurrent.indexOf(d.num)<0 && d.num){
-    gv('fa-dvlie',dvlieCurrent+', '+d.num);
+  // Mettre à jour le champ "Devis liés" : ajouter celui-ci à la liste de chips
+  // (idempotent : _faDvlieAdd dédoublonne automatiquement)
+  if(d.num){
+    if(typeof _faDvlieAdd==='function') _faDvlieAdd(d.num);
+    else {
+      // Fallback si la fonction n'est pas chargée (cas edge)
+      var dvlieCurrent=gvg('fa-dvlie')||'';
+      if(!dvlieCurrent.trim()) gv('fa-dvlie',d.num);
+      else if(dvlieCurrent.indexOf(d.num)<0) gv('fa-dvlie',dvlieCurrent+', '+d.num);
+    }
   }
 
   // Si l'objet de la facture est vide, reprendre celui du devis
