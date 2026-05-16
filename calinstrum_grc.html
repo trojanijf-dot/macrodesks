@@ -10507,6 +10507,34 @@ function _buildReconciliation(opts){
         if(byPO) return byPO;
       }
     }
+    // Pass 6 : SIGNATURE (objet + montant + client). Dernier recours pour les
+    // factures legacy migrées qui n'ont gardé AUCUN lien explicite mais dont
+    // l'objet et le montant correspondent exactement à un devis Facturé.
+    // Conditions strictes pour éviter les faux positifs :
+    //   - facture marquée _migratedFromInvoice (provient de l'ancienne table)
+    //   - objet non vide
+    //   - exact match (case-insensitive, espaces normalisés) sur objet
+    //   - montant TTC identique (au centime)
+    //   - client compatible (préfixe SLN/PRNC identique)
+    //   - devis avec status Facturé (sinon ce serait un autre devis non lié)
+    if(f._migratedFromInvoice && f.objet){
+      var facObjet=String(f.objet||'').toUpperCase().replace(/\s+/g,' ').trim();
+      var facTTC=Number(f.ttc||f.montant||0);
+      var facClientPrefix=String(f.client||'').toUpperCase().split(/[\s-]/)[0];
+      if(facObjet && facTTC>0 && facClientPrefix){
+        var bySignature=dvAll.find(function(d){
+          if(d.status!=='Facturé') return false;
+          var dnObj=String(d.objet||'').toUpperCase().replace(/\s+/g,' ').trim();
+          if(dnObj!==facObjet) return false;
+          var dnTTC=Number(d.ttc||0);
+          if(Math.abs(dnTTC-facTTC)>0.5) return false;
+          var dnClientPrefix=String(d.client||'').toUpperCase().split(/[\s-]/)[0];
+          if(dnClientPrefix!==facClientPrefix) return false;
+          return true;
+        });
+        if(bySignature) return bySignature;
+      }
+    }
     return null;
   }
 
@@ -10535,24 +10563,238 @@ function _buildReconciliation(opts){
     _processFacture(i,'invoices');
   });
 
+  // === PASS 7 : DÉTECTION FACTURE GROUPÉE (N devis → 1 facture) ===========
+  // Pour chaque facture restée orpheline, on cherche une combinaison de 2 à 4
+  // devis Accepté/Facturé du même client (non déjà rattachés) dont la somme TTC
+  // = TTC de la facture (tolérance 1% min 1000 XPF).
+  // SÉCURITÉ ANTI-FAUX-POSITIF : la combinaison doit être UNIQUE. Si plusieurs
+  // groupements arithmétiques sont possibles, on laisse la facture orpheline
+  // (l'utilisateur résoudra manuellement plus tard).
+  //
+  // Complexité : O(N^4) sur les devis "disponibles" (filtrés par client) →
+  // typiquement <50 devis par client, donc ~6M ops max, OK pour rendu temps réel.
+  // =========================================================================
+  function _clientPrefix(s){
+    return String(s||'').toUpperCase().split(/[\s-]/)[0];
+  }
+  function _findUniqueDevisCombination(facture, availableDvs){
+    var facTTC=Number(facture.ttc||facture.montant||0);
+    if(facTTC<=0) return null;
+    // Tolérance plus stricte pour le groupage (0.5% au lieu de 1%) car la
+    // détection multi-devis est plus risquée pour les faux positifs arithmétiques.
+    var tolerance=Math.max(500, facTTC*0.005);
+    var facClientPrefix=_clientPrefix(facture.client);
+
+    // Préparer les mots-clés de l'objet facture pour le filtre similarité.
+    // 1. Normaliser les accents (MATÉRIEL → MATERIEL) pour cohérence avec stopwords
+    // 2. Garder les mots ≥6 caractères alphabétiques pour éviter les fragments
+    //    qui matchent par hasard (ex: "RIEL" tronqué match "semestRIEL")
+    function _normAccents(s){
+      return String(s||'').toUpperCase()
+        .replace(/[ÉÈÊË]/g,'E').replace(/[ÀÂÄ]/g,'A').replace(/[ÎÏ]/g,'I')
+        .replace(/[ÔÖ]/g,'O').replace(/[ÙÛÜ]/g,'U').replace(/Ç/g,'C');
+    }
+    var facObjet=_normAccents(facture.objet||facture.intitule||'');
+    // Garder seulement les mots ALPHABÉTIQUES ≥6 caractères (les nombres et
+    // les codes courts ne sont pas discriminants pour le contenu métier)
+    var facKeywords=facObjet.match(/[A-Z]{6,}/g) || [];
+    // Mots-stop génériques : ne disent rien sur le contenu
+    var stopWords=['EMERSON','SELON','DEVIS','FOURNITURE','PRESTATION','SERVICE',
+                   'MATERIEL','CALINSTRUM','SARL','CLIENT','POUR','AVEC','SANS',
+                   'NOUVEAU','NOUVELLE','TRAVAUX','REMPLACEMENT','INSTALLATION',
+                   'CONTROLE','MAINTENANCE','REPARATION','REVISION','ATELIER',
+                   'TRIMESTRIEL','SEMESTRIEL','MENSUEL','ANNUEL','CONTRACT',
+                   'INTERVENTION','OPERATION'];
+    facKeywords=facKeywords.filter(function(w){return stopWords.indexOf(w)<0;});
+
+    function _hasObjetOverlap(dvs){
+      // Au moins un mot-clé non-trivial doit être commun entre la facture et
+      // l'objet d'au moins un devis du groupe.
+      // SÉCURITÉ : si la facture n'a aucun mot discriminant (objet entièrement
+      // composé de mots-stop comme "Fourniture matériel BC 12345"), on REFUSE
+      // le groupage automatique pour éviter les faux positifs arithmétiques.
+      if(facKeywords.length===0) return false;
+      // Pour les groupes à 3+ devis, on durcit : chaque devis du groupe doit
+      // avoir au moins un mot-clé en commun avec la facture (pas seulement
+      // l'un d'entre eux). Sinon on aurait des faux positifs où 1 devis "porte"
+      // l'overlap pour les autres qui n'ont rien à voir.
+      var requireAll=dvs.length>=3;
+      var matchCount=0;
+      for(var i=0;i<dvs.length;i++){
+        var dvObjet=_normAccents(dvs[i].objet||'');
+        var found=false;
+        for(var j=0;j<facKeywords.length;j++){
+          if(dvObjet.indexOf(facKeywords[j])>=0){ found=true; break; }
+        }
+        if(found) matchCount++;
+        else if(requireAll) return false; // un devis du groupe sans overlap → fail
+      }
+      // Pour N=2 il suffit qu'au moins 1 devis ait l'overlap
+      return matchCount>0;
+    }
+
+    // Restreindre aux devis du même préfixe client, status Accepté/Facturé,
+    // disponibles (pas déjà groupés via Pass 1-6), et avec un TTC non nul.
+    var pool=availableDvs.filter(function(d){
+      if(d.status!=='Accepté' && d.status!=='Facturé') return false;
+      var dvTTC=Number(d.ttc||0);
+      if(dvTTC<=0) return false;
+      // Skip ceux déjà groupés (rattachés à une autre facture)
+      if(seenDvIds[String(d.id)]) return false;
+      // Match du préfixe client (SLN/PRNC/...)
+      if(facClientPrefix && _clientPrefix(d.client)!==facClientPrefix) return false;
+      // Skip si le devis seul match déjà la facture (cas Pass 6 raté pour autre raison)
+      if(Math.abs(dvTTC-facTTC)<=tolerance) return false;
+      // Skip si le devis dépasse seul le total (impossible dans une somme positive)
+      if(dvTTC>=facTTC+tolerance) return false;
+      return true;
+    });
+    if(pool.length<2) return null;
+
+    var matches=[];
+    var rejected={};  // Combos arithmétiques mais sans overlap objet (debug)
+    function _push(combo){
+      // Combo unique : on stocke par signature (set des ids triés)
+      var sig=combo.map(function(d){return d.id;}).sort().join('|');
+      if(matches.some(function(m){return m._sig===sig;})) return;
+      if(rejected[sig]) return;
+      // Filtre anti-faux-positif : au moins un overlap d'objet entre facture
+      // et un des devis du groupe (sauf si facture n'a aucun mot discriminant)
+      if(!_hasObjetOverlap(combo)){
+        rejected[sig]=1;
+        return;
+      }
+      matches.push({_sig:sig, devis:combo.slice()});
+    }
+    // Limite de coupure : on cherche jusqu'à 3 matches valides max pour
+    // détecter l'ambiguïté. Si une combo échoue à _hasObjetOverlap, elle ne
+    // compte pas et on continue à chercher.
+    function _shouldStop(){ return matches.length>=2; }
+
+    // Combinaisons à 2
+    for(var i=0;i<pool.length && !_shouldStop();i++){
+      for(var j=i+1;j<pool.length && !_shouldStop();j++){
+        var sum2=Number(pool[i].ttc)+Number(pool[j].ttc);
+        if(Math.abs(sum2-facTTC)<=tolerance){
+          _push([pool[i], pool[j]]);
+        }
+      }
+    }
+    // Combinaisons à 3 (seulement si pas déjà ambigu)
+    if(!_shouldStop()){
+      for(var a=0;a<pool.length && !_shouldStop();a++){
+        for(var b=a+1;b<pool.length && !_shouldStop();b++){
+          var ab=Number(pool[a].ttc)+Number(pool[b].ttc);
+          if(ab>=facTTC+tolerance) continue;
+          for(var c=b+1;c<pool.length && !_shouldStop();c++){
+            var sum3=ab+Number(pool[c].ttc);
+            if(Math.abs(sum3-facTTC)<=tolerance){
+              _push([pool[a], pool[b], pool[c]]);
+            }
+          }
+        }
+      }
+    }
+    // Combinaisons à 4
+    if(!_shouldStop()){
+      for(var w=0;w<pool.length && !_shouldStop();w++){
+        for(var x=w+1;x<pool.length && !_shouldStop();x++){
+          var wx=Number(pool[w].ttc)+Number(pool[x].ttc);
+          if(wx>=facTTC+tolerance) continue;
+          for(var y=x+1;y<pool.length && !_shouldStop();y++){
+            var wxy=wx+Number(pool[y].ttc);
+            if(wxy>=facTTC+tolerance) continue;
+            for(var z=y+1;z<pool.length && !_shouldStop();z++){
+              var sum4=wxy+Number(pool[z].ttc);
+              if(Math.abs(sum4-facTTC)<=tolerance){
+                _push([pool[w], pool[x], pool[y], pool[z]]);
+              }
+            }
+          }
+        }
+      }
+    }
+    if(matches.length===0) return null;
+    if(matches.length===1) return matches[0].devis;
+    // Plusieurs candidats : on prend le meilleur selon 2 critères :
+    //   1. Plus petite taille de groupe (Occam : 2 devis plutôt que 3+)
+    //   2. À taille égale : plus petit écart absolu
+    // Cela évite le piège "AB matche ET ABC matche avec C très petit".
+    matches.sort(function(a,b){
+      if(a.devis.length!==b.devis.length) return a.devis.length-b.devis.length;
+      var sumA=a.devis.reduce(function(s,d){return s+Number(d.ttc||0);},0);
+      var sumB=b.devis.reduce(function(s,d){return s+Number(d.ttc||0);},0);
+      return Math.abs(sumA-facTTC)-Math.abs(sumB-facTTC);
+    });
+    // Sécurité : si le best et le 2e ont la MÊME taille ET un écart comparable
+    // (différence < 10% de la tolérance), c'est vraiment ambigu, on refuse.
+    var best=matches[0];
+    var second=matches[1];
+    if(best.devis.length===second.devis.length){
+      var sumBest=best.devis.reduce(function(s,d){return s+Number(d.ttc||0);},0);
+      var sumSecond=second.devis.reduce(function(s,d){return s+Number(d.ttc||0);},0);
+      var dB=Math.abs(sumBest-facTTC), dS=Math.abs(sumSecond-facTTC);
+      // Si écart presque identique → ambiguïté, on refuse
+      if(Math.abs(dB-dS) < tolerance*0.1) return null;
+    }
+    return best.devis;
+  }
+
+  // Tenter le matching groupé sur chaque orpheline
+  var stillOrphan=[];
+  orphanFacs.forEach(function(o){
+    var combo=_findUniqueDevisCombination(o.facture, dvAll);
+    if(combo){
+      // Match groupé trouvé : on l'ajoute aux groupes sous une clé spéciale
+      // (préfixée par "GROUP:" pour éviter collision avec les ids de devis)
+      var groupKey='GROUP:'+combo.map(function(d){return d.id;}).join(',');
+      var totalDvTTC=combo.reduce(function(s,d){return s+Number(d.ttc||0);},0);
+      groupes[groupKey]={
+        devisGroup:combo,
+        devis:combo[0], // pivot pour compatibilité avec le code existant
+        factures:[o.facture],
+        totalFac:Number(o.facture.ttc||o.facture.montant||0),
+        _isGroup:true,
+        _totalDvTTC:totalDvTTC
+      };
+      combo.forEach(function(d){ seenDvIds[String(d.id)]=1; });
+    } else {
+      stillOrphan.push(o);
+    }
+  });
+  orphanFacs=stillOrphan;
+  // === FIN PASS 7 =========================================================
+
   // 2) Construire les rows match/ecart depuis les groupes
   Object.keys(groupes).forEach(function(key){
     var g=groupes[key];
-    var dvTTC=Number(g.devis.ttc||0);
+    // Cas groupé multi-devis (Pass 7) : on utilise la SOMME des TTC des devis
+    var dvTTC=g._isGroup ? Number(g._totalDvTTC||0) : Number(g.devis.ttc||0);
     var ecart=g.totalFac-dvTTC;
     var absEcart=Math.abs(ecart);
     var tolerance=Math.max(1000, dvTTC*0.01);
     if(dvTTC===0){
       // Devis sans TTC (cas rare, peut être un devis cadre sans montant)
-      // On classe en match si au moins une facture, écart non significatif
       nbMatch++;
-      rows.push({kind:'match', devis:g.devis, factures:g.factures, totalFac:g.totalFac, ecart:0});
+      rows.push({
+        kind:'match', devis:g.devis, devisGroup:g.devisGroup,
+        factures:g.factures, totalFac:g.totalFac, totalDv:dvTTC, ecart:0,
+        isGroup:!!g._isGroup
+      });
     } else if(absEcart<=tolerance){
       nbMatch++;
-      rows.push({kind:'match', devis:g.devis, factures:g.factures, totalFac:g.totalFac, ecart:ecart});
+      rows.push({
+        kind:'match', devis:g.devis, devisGroup:g.devisGroup,
+        factures:g.factures, totalFac:g.totalFac, totalDv:dvTTC, ecart:ecart,
+        isGroup:!!g._isGroup
+      });
     } else {
       nbEcart++;
-      rows.push({kind:'ecart', devis:g.devis, factures:g.factures, totalFac:g.totalFac, ecart:ecart});
+      rows.push({
+        kind:'ecart', devis:g.devis, devisGroup:g.devisGroup,
+        factures:g.factures, totalFac:g.totalFac, totalDv:dvTTC, ecart:ecart,
+        isGroup:!!g._isGroup
+      });
     }
   });
 
@@ -10721,6 +10963,42 @@ function renderReconcilTable(){
           '<td style="text-align:right;font-family:var(--mono);font-weight:600">'+fNloc(faMt)+' XPF</td>'+
           '<td style="text-align:right;font-family:var(--mono);color:#f87171">+'+fNloc(faMt)+'</td>'+
           '<td>'+pillKind(r.kind)+'</td>'+
+          '</tr>';
+      } else if(r.isGroup && Array.isArray(r.devisGroup)){
+        // Ligne GROUPÉE : N devis pour 1 facture
+        var grpClient=r.devisGroup[0].client||'—';
+        var grpTTC=Number(r.totalDv||0);
+        var ecartStrG;
+        if(r.ecart>0) ecartStrG='<span style="color:#f87171">+'+fNloc(r.ecart)+'</span>';
+        else if(r.ecart<0) ecartStrG='<span style="color:#fbbf24">'+fNloc(r.ecart)+'</span>';
+        else ecartStrG='<span style="color:#5dcaa5">0</span>';
+        var facBadgesG='';
+        if(r.factures.length>0){
+          facBadgesG=r.factures.map(function(f){
+            var fn=f.num||'?';
+            var fid=f.id;
+            var openFn = (Array.isArray(DB.factures)&&DB.factures.find(function(x){return x.id===fid;})) ? 'openFA('+fid+')' : 'openSUIVI('+fid+')';
+            return '<span onclick="event.stopPropagation();'+openFn+'" style="cursor:pointer;display:inline-block;padding:1px 6px;background:rgba(93,202,165,.1);border:0.5px solid rgba(93,202,165,.25);border-radius:8px;font-size:9.5px;color:#5dcaa5;font-family:var(--mono);font-weight:600;margin-right:3px" title="Ouvrir '+esc(fn)+'">'+esc(fn)+'</span>';
+          }).join('');
+        }
+        // Badges devis cliquables : un clic = ouvrir le devis correspondant
+        var dvBadgesG=r.devisGroup.map(function(d){
+          var dn=d.num||'?';
+          return '<span onclick="event.stopPropagation();openDV('+d.id+')" style="cursor:pointer;display:inline-block;padding:1px 6px;background:rgba(167,139,250,.1);border:0.5px solid rgba(167,139,250,.25);border-radius:8px;font-size:9.5px;color:#a78bfa;font-family:var(--mono);font-weight:600;margin-right:3px;margin-bottom:2px" title="Ouvrir '+esc(dn)+'">'+esc(dn)+'</span>';
+        }).join('');
+        // Objet : utiliser celui de la facture si dispo, sinon construire depuis les objets devis
+        var objG=(r.factures[0]&&r.factures[0].objet) || r.devisGroup.map(function(d){return d.objet||'';}).filter(function(s){return s;}).join(' + ');
+        // Pas de onclick sur le <tr> : le clic global serait ambigu (quel devis ouvrir ?)
+        // → on laisse le clic sur les badges individuels
+        html+='<tr style="background:'+bg+'">'+
+          '<td style="padding-top:8px;padding-bottom:8px">'+dvBadgesG+'<div style="font-size:9px;color:var(--muted-soft);margin-top:2px;letter-spacing:0.04em;text-transform:uppercase">'+r.devisGroup.length+' devis groupés</div></td>'+
+          '<td>'+esc(grpClient)+'</td>'+
+          '<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(objG)+'">'+esc(objG)+'</td>'+
+          '<td style="text-align:right;font-family:var(--mono);font-weight:600">'+fNloc(grpTTC)+' XPF</td>'+
+          '<td>'+facBadgesG+'</td>'+
+          '<td style="text-align:right;font-family:var(--mono);font-weight:600">'+fNloc(r.totalFac)+' XPF</td>'+
+          '<td style="text-align:right;font-family:var(--mono)">'+ecartStrG+'</td>'+
+          '<td>'+pillKind(r.kind)+' <span style="display:inline-block;padding:1px 5px;border-radius:8px;font-size:8.5px;font-weight:700;background:rgba(167,139,250,.12);color:#a78bfa;border:0.5px solid rgba(167,139,250,.3);margin-left:3px" title="Plusieurs devis regroupés sur une seule facture">Groupé</span></td>'+
           '</tr>';
       } else {
         var d=r.devis;
