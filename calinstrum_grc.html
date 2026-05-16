@@ -1692,6 +1692,11 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
         <!-- Carte fichier PDF Quote Emerson (si attaché) -->
         <div id="dv-quote-emerson-pdf-card" style="display:none;margin-top:6px"></div>
         </div>
+        <!-- Bouton global : forcer la re-extraction des dates depuis tous les PDFs déjà attachés.
+             Utile pour corriger une date erronée saisie manuellement ou héritée d'un ancien import. -->
+        <div style="margin-top:12px;padding-top:10px;border-top:1px dashed rgba(255,255,255,0.08);text-align:right">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="_forceReExtractAllDevisPdfs()" title="Relit tous les PDFs déjà attachés et écrase les champs Réf/Date avec les valeurs extraites. Utile pour corriger une date erronée." style="font-size:10px;padding:3px 10px;border-color:rgba(251,191,36,.4);color:#fbbf24"><i class="ti ti-refresh" style="font-size:11px;vertical-align:-1px"></i> Re-extraire les dates depuis les PDFs joints</button>
+        </div>
       </div>
     </div>
     <div class="tab-pane" id="dvt-lignes">
@@ -28248,6 +28253,66 @@ function storeDevisPdf(att){
 }
 
 // Récupère le record PDF (avec le blob) pour (devisId, kind). Retourne null si rien.
+// =============================================================================
+// _forceReExtractDevisPdf — Re-extrait les infos depuis un PDF déjà attaché
+// =============================================================================
+// Utilisé par le bouton "Re-extraire" pour corriger une valeur erronée dans les
+// champs Réf/Date d'une zone PDF. Lit le PDF stocké en IndexedDB, le repasse
+// dans le parser, et force le remplissage (écrase la valeur existante).
+//
+// kind : 'emerson' | 'act' | 'po_cali' | 'bc_client' | 'quote_emerson'
+// =============================================================================
+// _forceReExtractAllDevisPdfs — Boucle sur tous les kinds et relance la
+// re-extraction en mode force. Utile pour corriger plusieurs champs en un clic.
+function _forceReExtractAllDevisPdfs(){
+  if(!eDVid){
+    alert('⚠️ Aucun devis ouvert.');
+    return;
+  }
+  var kinds=['emerson','act','po_cali','bc_client','quote_emerson'];
+  var nbFound=0;
+  var nbDone=0;
+  Promise.all(kinds.map(function(k){
+    return getDevisPdf(eDVid,k).then(function(pdfRow){
+      if(!pdfRow || !pdfRow.bytes) return null;
+      nbFound++;
+      return _autoFillFromAttachedPdf(pdfRow.bytes,k,true).then(function(){nbDone++;});
+    }).catch(function(err){
+      console.warn('[force re-extract] kind',k,'failed:',err);
+    });
+  })).then(function(){
+    if(nbFound===0){
+      alert('ℹ️ Aucun PDF attaché à ce devis. Joins des PDFs d\'abord.');
+    } else {
+      if(typeof showBCSaveToast==='function'){
+        showBCSaveToast('🔄 Re-extraction terminée ('+nbFound+' PDF'+(nbFound>1?'s':'')+' traité'+(nbFound>1?'s':'')+')');
+      }
+    }
+  });
+}
+
+function _forceReExtractDevisPdf(kind){
+  if(!eDVid){
+    alert('⚠️ Aucun devis ouvert.');
+    return;
+  }
+  if(typeof getDevisPdf!=='function'){
+    alert('⚠️ Fonction getDevisPdf indisponible.');
+    return;
+  }
+  getDevisPdf(eDVid,kind).then(function(pdfRow){
+    if(!pdfRow || !pdfRow.bytes){
+      alert('⚠️ Aucun PDF '+kind+' attaché à ce devis. Joins d\'abord un PDF.');
+      return;
+    }
+    // Forcer la re-extraction (écrase les valeurs existantes)
+    return _autoFillFromAttachedPdf(pdfRow.bytes, kind, true);
+  }).catch(function(err){
+    console.error('[_forceReExtractDevisPdf] erreur:',err);
+    alert('❌ Échec de la re-extraction : '+(err.message||err));
+  });
+}
+
 function getDevisPdf(devisId,kind){
   if(!devisId||!kind) return Promise.resolve(null);
   return openAttachDB().then(function(db){
@@ -28621,9 +28686,10 @@ function extractBCClientPdf(uint8arr){
 // Si le parser échoue (PDF illisible, format non reconnu) → silencieux, juste un
 // console.warn. Le PDF reste joint, juste pas d'auto-fill.
 //
-// Mode B = on remplit UNIQUEMENT si le champ est vide. Pas d'écrasement.
+// Mode B = on remplit UNIQUEMENT si le champ est vide. Pas d'écrasement par défaut.
+// force=true → on écrase la valeur existante (utilisé par le bouton "Re-extraire").
 // =============================================================================
-function _autoFillFromAttachedPdf(bytes,kind){
+function _autoFillFromAttachedPdf(bytes,kind,force){
   if(typeof pdfjsLib==='undefined') return Promise.resolve();
   var extractor=null;
   if(kind==='emerson') extractor=(typeof extractEmersonPdf==='function')?extractEmersonPdf:null;
@@ -28701,24 +28767,27 @@ function _autoFillFromAttachedPdf(bytes,kind){
     var refInput=document.getElementById(ids.ref);
     var dateInput=document.getElementById(ids.date);
     var filled=[];
-    if(refInput && !refInput.value.trim() && refValue){
+    // En mode force, on écrase même les valeurs existantes (pour corriger les erreurs).
+    var canWriteRef = refInput && (force || !refInput.value.trim());
+    if(canWriteRef && refValue){
       refInput.value=refValue;
       filled.push('Réf');
-    } else if(refInput && refInput.value.trim() && typeof console!=='undefined'){
+    } else if(refInput && refInput.value.trim() && !force && typeof console!=='undefined'){
       console.log('[PDF autofill]',kind,'→ Réf déjà remplie, skip ('+refInput.value+')');
     } else if(!refValue && typeof console!=='undefined'){
       console.warn('[PDF autofill]',kind,'→ Réf extraite vide, rien à poser');
     }
-    if(dateInput && !dateInput.value.trim() && refDate){
+    var canWriteDate = dateInput && (force || !dateInput.value.trim());
+    if(canWriteDate && refDate){
       dateInput.value=refDate;
       filled.push('Date');
-    } else if(dateInput && dateInput.value.trim() && typeof console!=='undefined'){
+    } else if(dateInput && dateInput.value.trim() && !force && typeof console!=='undefined'){
       console.log('[PDF autofill]',kind,'→ Date déjà remplie, skip ('+dateInput.value+')');
     } else if(!refDate && typeof console!=='undefined'){
       console.warn('[PDF autofill]',kind,'→ Date extraite vide, rien à poser');
     }
     if(filled.length && typeof showBCSaveToast==='function'){
-      showBCSaveToast('✨ Auto-rempli depuis le PDF : '+filled.join(' + '));
+      showBCSaveToast('✨ Auto-rempli depuis le PDF : '+filled.join(' + ')+(force?' (écrasé)':''));
     }
   }).catch(function(err){
     // Silencieux : l'utilisateur a quand même son PDF joint
@@ -29493,17 +29562,32 @@ function parsePOCalinstrumText(text){
     }
   }
   // Fallback Date INDÉPENDANT : se déclenche aussi si on a le N° mais pas la date.
-  // Permissive sur les espaces dans les chiffres jour/mois.
+  // IMPORTANT : on doit éviter de capturer "001 12/11/2025" (où "001" est la version
+  // du suffixe PO, suivi d'un espace, puis la vraie date). Le regex permissif sur
+  // les espaces fusionnait "001" + "12" en un jour invalide "00112".
+  //
+  // Solution : utiliser des bornes (?:^|\s) avant le jour, et exiger jour 1-2 chiffres
+  // SANS espace interne (un jour réel n'a jamais d'espace dans son écriture).
+  // On accepte des espaces autour des slashes pour la robustesse pdf.js.
   if(!result.date){
-    var mDateOnly = text.match(/(\d{1,2}(?:\s*\d)*\s*\/\s*\d{1,2}(?:\s*\d)*\s*\/\s*\d{4})/);
+    var mDateOnly = text.match(/(?:^|\s)(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{4})\b/);
     if(mDateOnly){
-      var dC = mDateOnly[1].replace(/\s+/g,'');
-      var dpf = dC.split('/');
-      if(dpf.length===3){
-        var jjN2=parseInt(dpf[0],10), mmN2=parseInt(dpf[1],10), aaN2=parseInt(dpf[2],10);
-        if(jjN2>=1 && jjN2<=31 && mmN2>=1 && mmN2<=12 && aaN2>=2020 && aaN2<=2099){
-          result.date = dpf[2]+'-'+dpf[1].padStart(2,'0')+'-'+dpf[0].padStart(2,'0');
-        }
+      var jjN2=parseInt(mDateOnly[1],10), mmN2=parseInt(mDateOnly[2],10), aaN2=parseInt(mDateOnly[3],10);
+      if(jjN2>=1 && jjN2<=31 && mmN2>=1 && mmN2<=12 && aaN2>=2020 && aaN2<=2099){
+        result.date = mDateOnly[3]+'-'+mDateOnly[2].padStart(2,'0')+'-'+mDateOnly[1].padStart(2,'0');
+      }
+    }
+  }
+  // Fallback ULTIME : si toujours rien et qu'on a quand même un format avec espaces internes
+  // dans les jour/mois (rare cas pdf.js), on tente le pattern permissif mais avec validation stricte
+  if(!result.date){
+    var mDatePermissive = text.match(/(?:^|\s)((?:\d\s){0,1}\d)\s*\/\s*((?:\d\s){0,1}\d)\s*\/\s*(\d{4})\b/);
+    if(mDatePermissive){
+      var dd2 = mDatePermissive[1].replace(/\s+/g,'');
+      var mo2 = mDatePermissive[2].replace(/\s+/g,'');
+      var jjN3=parseInt(dd2,10), mmN3=parseInt(mo2,10), aaN3=parseInt(mDatePermissive[3],10);
+      if(jjN3>=1 && jjN3<=31 && mmN3>=1 && mmN3<=12 && aaN3>=2020 && aaN3<=2099){
+        result.date = mDatePermissive[3]+'-'+mo2.padStart(2,'0')+'-'+dd2.padStart(2,'0');
       }
     }
   }
