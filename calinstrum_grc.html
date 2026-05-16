@@ -1842,7 +1842,14 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
           <button type="button" class="btn btn-ghost btn-sm" onclick="addFactureBillingEmail()" style="border-color:rgba(45,212,191,.4);color:var(--teal);white-space:nowrap" title="Ajouter un nouvel email de comptabilité (sera mémorisé pour les prochaines factures)">+ Email</button>
         </div>
       </div>
-      <div class="form-group"><label>Objet <span class="req">*</span></label><textarea class="form-textarea" id="fa-objet" rows="2"></textarea></div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;justify-content:space-between">
+          <span>Objet <span class="req">*</span></span>
+          <button type="button" class="btn btn-ghost btn-xs" onclick="_refreshFAObjet()" title="Régénère l'objet à partir du BC Client, PO Calinstrum et Devis lié (Fourniture uniquement)" style="font-size:10px;padding:3px 8px;border:0.5px solid var(--border);background:transparent;cursor:pointer;border-radius:6px;color:var(--muted);font-weight:400"><i class="ti ti-refresh" style="font-size:11px;vertical-align:-1px"></i> Régénérer</button>
+        </label>
+        <textarea class="form-textarea" id="fa-objet" rows="2"></textarea>
+        <div style="font-size:10px;color:var(--muted-soft);margin-top:3px;font-style:italic">Auto-généré pour Fourniture : <code style="background:rgba(255,255,255,0.05);padding:1px 4px;border-radius:3px;font-size:9.5px">Fourniture Matériel BC … / PO … / REF DEVIS …</code></div>
+      </div>
       <div class="form-row">
         <div class="form-group"><label>Devis lié</label><input class="form-input" id="fa-dvlie"></div>
         <div class="form-group"><label>Type</label>
@@ -10535,6 +10542,9 @@ function _buildReconciliation(opts){
         if(bySignature) return bySignature;
       }
     }
+    // PASS 7 (cadre via BC Calinstrum) déplacée en post-arithmétique :
+    // elle est traitée comme dernier recours après Pass 7 (groupage), pour
+    // ne pas écraser un groupage devis sémantique légitime (DV126+DV128 → F096).
     return null;
   }
 
@@ -10550,9 +10560,19 @@ function _buildReconciliation(opts){
     // (sinon une facture Fourniture liée à un devis Prestation serait orpheline
     // dans la vue Prestation, mais c'est ambigu - on garde le filtre côté FA)
     var key=String(dv.id);
-    if(!groupes[key]) groupes[key]={devis:dv, factures:[], totalFac:0};
+    if(!groupes[key]) groupes[key]={devis:dv, factures:[], totalFac:0, bcLinks:[]};
     groupes[key].factures.push(f);
     groupes[key].totalFac+=Number(f.ttc||f.montant||0);
+    // Si le devis est un Cadre, on trace le BC Calinstrum lié à cette facture
+    // pour pouvoir l'afficher en UI (badge "via BC 28042026/097")
+    var isCadre=dv.status==='Cadre' || (dv.num||'').toUpperCase().indexOf('CADRE')>=0;
+    if(isCadre && Array.isArray(DB.bcs)){
+      var bcLinked=DB.bcs.find(function(bc){return bc.linkFactureId===f.id;});
+      if(bcLinked){
+        groupes[key].bcLinks.push({facId:f.id, bcNum:bcLinked.num, bcId:bcLinked.id});
+        groupes[key]._isCadre=true;
+      }
+    }
     seenDvIds[key]=1;
   }
 
@@ -10765,6 +10785,73 @@ function _buildReconciliation(opts){
   orphanFacs=stillOrphan;
   // === FIN PASS 7 =========================================================
 
+  // === PASS 8 : CIRCUIT CADRE via BC CALINSTRUM ===========================
+  // Cas du circuit officiel "Cadre" (facturation récurrente sur grille) :
+  //   Devis Cadre (SLN-DV143-CADRE-2026, grille tarifaire annuelle)
+  //     ↓ référence prix
+  //   BC Client SLN (le client commande sur la grille)
+  //     ↓ génère
+  //   BC Calinstrum → Emerson (28042026/097, dans DB.bcs)
+  //     ↓ linkFactureId
+  //   Pré-facture SLN-F097 (auto-générée)
+  //
+  // Le devis cadre n'a PAS de lien direct avec la facture, mais sert de
+  // référentiel prix. Le lien direct est : BC Calinstrum (linkFactureId) →
+  // Facture. On retrouve le devis cadre par :
+  //   - num du devis contient 'CADRE' (ou status === 'Cadre')
+  //   - même préfixe client (SLN/PRNC)
+  //   - même année si possible
+  //
+  // Exécutée en DERNIER recours : les passes 1-6 (lien direct) et la Pass 7
+  // (groupage arithmétique sémantique) ont la priorité, car le cadre est juste
+  // une grille générique qui matcherait n'importe quelle facture cliente.
+  // ========================================================================
+  var stillOrphan8=[];
+  orphanFacs.forEach(function(o){
+    var f=o.facture;
+    if(!Array.isArray(DB.bcs)){ stillOrphan8.push(o); return; }
+    var bcCalinstrum=DB.bcs.find(function(bc){return bc.linkFactureId===f.id;});
+    if(!bcCalinstrum){ stillOrphan8.push(o); return; }
+    // Chercher le devis Cadre
+    var clientFinal=String(bcCalinstrum.clientFinal||f.client||'').toUpperCase();
+    var clientPrefix=clientFinal.split(/[\s-]/)[0];
+    var facYear=String(f.dateEnvoi||f.date||bcCalinstrum.date||'').substring(0,4);
+    var cadre=null;
+    if(clientPrefix){
+      var cadreCandidates=dvAll.filter(function(d){
+        var isCadre=d.status==='Cadre' || (d.num||'').toUpperCase().indexOf('CADRE')>=0;
+        if(!isCadre) return false;
+        var dnClientPrefix=String(d.client||'').toUpperCase().split(/[\s-]/)[0];
+        return dnClientPrefix===clientPrefix;
+      });
+      if(cadreCandidates.length===1){
+        cadre=cadreCandidates[0];
+      } else if(cadreCandidates.length>1 && facYear){
+        cadre=cadreCandidates.find(function(d){
+          var dnYear=String(d.date||'').substring(0,4);
+          if(dnYear===facYear) return true;
+          if((d.num||'').indexOf(facYear)>=0) return true;
+          return false;
+        }) || cadreCandidates[0];
+      }
+    }
+    if(!cadre){ stillOrphan8.push(o); return; }
+    // Match cadre trouvé : attacher la facture au groupe du devis cadre
+    var keyC=String(cadre.id);
+    if(!groupes[keyC]){
+      groupes[keyC]={devis:cadre, factures:[], totalFac:0, bcLinks:[], _isCadre:true};
+    } else {
+      groupes[keyC]._isCadre=true;
+      if(!groupes[keyC].bcLinks) groupes[keyC].bcLinks=[];
+    }
+    groupes[keyC].factures.push(f);
+    groupes[keyC].totalFac+=Number(f.ttc||f.montant||0);
+    groupes[keyC].bcLinks.push({facId:f.id, bcNum:bcCalinstrum.num, bcId:bcCalinstrum.id});
+    seenDvIds[keyC]=1;
+  });
+  orphanFacs=stillOrphan8;
+  // === FIN PASS 8 =========================================================
+
   // 2) Construire les rows match/ecart depuis les groupes
   Object.keys(groupes).forEach(function(key){
     var g=groupes[key];
@@ -10773,7 +10860,17 @@ function _buildReconciliation(opts){
     var ecart=g.totalFac-dvTTC;
     var absEcart=Math.abs(ecart);
     var tolerance=Math.max(1000, dvTTC*0.01);
-    if(dvTTC===0){
+    // Pour les CADRE : pas d'écart à comparer (devis cadre = grille de prix,
+    // pas un engagement de montant). On classe toujours en match.
+    var isCadreMatch=!!g._isCadre;
+    if(isCadreMatch){
+      nbMatch++;
+      rows.push({
+        kind:'match', devis:g.devis, devisGroup:g.devisGroup,
+        factures:g.factures, totalFac:g.totalFac, totalDv:0, ecart:0,
+        isGroup:!!g._isGroup, isCadre:true, bcLinks:g.bcLinks||[]
+      });
+    } else if(dvTTC===0){
       // Devis sans TTC (cas rare, peut être un devis cadre sans montant)
       nbMatch++;
       rows.push({
@@ -11007,7 +11104,11 @@ function renderReconcilTable(){
         var dvObjet=d.objet||'';
         var dvTTC=Number(d.ttc||0);
         var ecartStr;
-        if(r.ecart>0) ecartStr='<span style="color:#f87171">+'+fNloc(r.ecart)+'</span>';
+        // Pour les CADRE : pas d'écart à afficher (devis cadre = grille de prix
+        // pour N BC; on ne compare pas montant cadre vs montant facture).
+        if(r.isCadre){
+          ecartStr='<span style="color:var(--muted-soft);font-style:italic;font-size:10px">cadre</span>';
+        } else if(r.ecart>0) ecartStr='<span style="color:#f87171">+'+fNloc(r.ecart)+'</span>';
         else if(r.ecart<0) ecartStr='<span style="color:#fbbf24">'+fNloc(r.ecart)+'</span>';
         else ecartStr='<span style="color:#5dcaa5">0</span>';
         var facBadges='';
@@ -11018,18 +11119,38 @@ function renderReconcilTable(){
             var fn=f.num||'?';
             var fid=f.id;
             var openFn = (Array.isArray(DB.factures)&&DB.factures.find(function(x){return x.id===fid;})) ? 'openFA('+fid+')' : 'openSUIVI('+fid+')';
-            return '<span onclick="event.stopPropagation();'+openFn+'" style="cursor:pointer;display:inline-block;padding:1px 6px;background:rgba(93,202,165,.1);border:0.5px solid rgba(93,202,165,.25);border-radius:8px;font-size:9.5px;color:#5dcaa5;font-family:var(--mono);font-weight:600;margin-right:3px" title="Ouvrir '+esc(fn)+'">'+esc(fn)+'</span>';
+            // Pour le cas Cadre : ajouter sous chaque badge facture le BC Calinstrum lié
+            var bcInfo='';
+            if(r.isCadre && Array.isArray(r.bcLinks)){
+              var lk=r.bcLinks.find(function(x){return x.facId===fid;});
+              if(lk){
+                bcInfo='<div style="font-size:9px;color:var(--muted-soft);margin-top:2px;letter-spacing:0.04em" title="BC Calinstrum source de cette facture">via BC '+esc(lk.bcNum||'?')+'</div>';
+              }
+            }
+            return '<div style="display:inline-block;margin-right:6px;margin-bottom:3px;vertical-align:top">'+
+              '<span onclick="event.stopPropagation();'+openFn+'" style="cursor:pointer;display:inline-block;padding:1px 6px;background:rgba(93,202,165,.1);border:0.5px solid rgba(93,202,165,.25);border-radius:8px;font-size:9.5px;color:#5dcaa5;font-family:var(--mono);font-weight:600" title="Ouvrir '+esc(fn)+'">'+esc(fn)+'</span>'+
+              bcInfo+
+              '</div>';
           }).join('');
         }
+        // Pill Cadre supplémentaire à côté du pill match
+        var cadrePill='';
+        if(r.isCadre){
+          cadrePill=' <span style="display:inline-block;padding:1px 5px;border-radius:8px;font-size:8.5px;font-weight:700;background:rgba(167,139,250,.12);color:#a78bfa;border:0.5px solid rgba(167,139,250,.3);margin-left:3px" title="Devis cadre — grille tarifaire référencée par N factures">Cadre</span>';
+        }
+        // Montant devis : afficher "—" pour les cadres (montant n'est pas comparable)
+        var dvTTCcell=r.isCadre
+          ? '<td style="text-align:right;color:var(--muted-soft);font-style:italic;font-size:10px">grille tarifaire</td>'
+          : '<td style="text-align:right;font-family:var(--mono);font-weight:600">'+fNloc(dvTTC)+' XPF</td>';
         html+='<tr style="background:'+bg+';cursor:pointer" onclick="openDV('+d.id+')">'+
           '<td><span style="font-family:var(--mono);color:#5dcaa5;font-weight:600">'+esc(dvNum)+'</span></td>'+
           '<td>'+esc(dvClient)+'</td>'+
           '<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(dvObjet)+'">'+esc(dvObjet)+'</td>'+
-          '<td style="text-align:right;font-family:var(--mono);font-weight:600">'+fNloc(dvTTC)+' XPF</td>'+
+          dvTTCcell+
           '<td>'+facBadges+'</td>'+
           '<td style="text-align:right;font-family:var(--mono);'+(r.totalFac>0?'font-weight:600':'color:var(--muted)')+'">'+(r.totalFac>0?fNloc(r.totalFac)+' XPF':'—')+'</td>'+
           '<td style="text-align:right;font-family:var(--mono)">'+ecartStr+'</td>'+
-          '<td>'+pillKind(r.kind)+'</td>'+
+          '<td>'+pillKind(r.kind)+cadrePill+'</td>'+
           '</tr>';
       }
     });
@@ -24337,8 +24458,90 @@ function deleteAcompte(id){
   if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
 }
 
+// =============================================================================
+// _buildFAFournitureObjet — Génère automatiquement l'objet d'une facture Fourniture
+// =============================================================================
+// Format : "Fourniture Matériel BC <bcClient> / PO <poCalinstrum> / REF DEVIS <dvNum>"
+// Champs manquants → remplacés par '?' pour signaler à l'utilisateur la donnée à compléter.
+//
+// Sources de données :
+//   - BC Client : f.po (champ unifié, ex: "28042026/97" ou "00734811-01")
+//                 fallback : f._importPONum, f.bcClientSLN
+//                 si non renseigné côté facture, récupéré côté devis lié
+//   - PO Calinstrum : DB.bcs.find(bc => bc.linkFactureId === f.id).num
+//   - Devis lié : f.dvlie
+//
+// IMPORTANT : ne touche QUE le champ f.objet (visible dans la modale). Le titre du
+// PDF généré reste inchangé (généré par d'autres fonctions à partir d'autres sources).
+// =============================================================================
+function _buildFAFournitureObjet(f){
+  if(!f) return '';
+  // 1) BC Client : priorité au champ explicite, fallback sur les alias
+  var bcClient=String(f.po||f._importPONum||f.bcClientSLN||'').trim();
+  // Si encore vide, essayer côté devis lié (dvlie → devis → bcClientSLN/PRNC)
+  if(!bcClient && f.dvlie && Array.isArray(DB.devis)){
+    var dvUp=String(f.dvlie).toUpperCase().trim();
+    var dvFound=DB.devis.find(function(d){
+      var dn=String(d.num||'').toUpperCase().trim();
+      if(dn===dvUp) return true;
+      // Stripping REV pour matcher dvlie "SLN-DV127REV1" avec devis "SLN-DV127"
+      var dnNoRev=dn.replace(/REV\d*$/i,'').trim();
+      var dvUpNoRev=dvUp.replace(/REV\d*$/i,'').trim();
+      return dnNoRev===dvUpNoRev;
+    });
+    if(dvFound){
+      bcClient=String(dvFound.bcClientSLN||dvFound.bcClientPRNC||dvFound.bcClientRef||'').trim();
+    }
+  }
+  // 2) PO Calinstrum : recherche dans DB.bcs par linkFactureId === f.id
+  var poCalinstrum='';
+  if(Array.isArray(DB.bcs)){
+    var bc=DB.bcs.find(function(b){return b.linkFactureId===f.id;});
+    if(bc) poCalinstrum=String(bc.num||'').trim();
+  }
+  // 3) Devis lié
+  var dvNum=String(f.dvlie||'').trim();
+  // Construction avec placeholders pour les champs manquants
+  return 'Fourniture Matériel BC '+(bcClient||'?')+' / PO '+(poCalinstrum||'?')+' / REF DEVIS '+(dvNum||'?');
+}
+
+// _refreshFAObjet — bouton "Régénérer" dans la modale facture.
+// Repeuple le champ #fa-objet à partir des autres champs de la modale en vol
+// (sans avoir besoin de sauvegarder d'abord).
+function _refreshFAObjet(){
+  var faObjetEl=document.getElementById('fa-objet');
+  if(!faObjetEl) return;
+  var typeEl=document.getElementById('fa-type');
+  var type=typeEl?typeEl.value:'';
+  if(type!=='Fourniture'){
+    // Sécurité : on ne génère pas pour les Prestation/Mixte (l'objet est saisi à la main)
+    if(typeof showToast==='function') showToast('Génération réservée aux factures Fourniture','warn');
+    return;
+  }
+  // Construire un f temporaire avec les valeurs courantes de la modale
+  var tempF={
+    id:(typeof eFAid!=='undefined')?eFAid:null,
+    po:(document.getElementById('fa-po')||{}).value||'',
+    dvlie:(document.getElementById('fa-dvlie')||{}).value||'',
+    type:type
+  };
+  faObjetEl.value=_buildFAFournitureObjet(tempF);
+  // Dispatcher un event input pour que les listeners éventuels (validation, etc.) se réveillent
+  faObjetEl.dispatchEvent(new Event('input',{bubbles:true}));
+  if(typeof showToast==='function') showToast('Objet régénéré','info');
+}
+
 function saveFA(){
-  var f=getFA();if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
+  var f=getFA();
+  // === Génération auto de l'objet pour les factures Fourniture ============
+  // Format : "Fourniture Matériel BC <bcClient> / PO <poCalinstrum> / REF DEVIS <dvNum>"
+  // Déclenchée à chaque save (cf demande utilisateur : "À chaque création/sauvegarde").
+  // Le champ objet visible dans la modale est régénéré ; le titre PDF (généré par
+  // d'autres fonctions à partir d'autres sources) n'est pas affecté.
+  if(f.type==='Fourniture'){
+    f.objet=_buildFAFournitureObjet(f);
+  }
+  if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
   // Snapshot pour undo : si on modifie une facture existante, on garde son ancien état
   var prevSnapshot=null;
   var wasNew=!eFAid;
