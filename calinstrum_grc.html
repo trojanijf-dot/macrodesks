@@ -6971,7 +6971,16 @@ function renderTable(){
         var typ=i.type||'Fourniture';
         if(typ!==activeTypeFilter) return false;
       }
-      if(search&&JSON.stringify(i).toLowerCase().indexOf(search)<0)return false;
+      // Recherche restreinte aux champs métier pertinents (et non plus
+      // JSON.stringify(i) qui matchait dans les notes/champs internes).
+      // Champs scannés : num, client, intitulé/objet, dvlie, po, contact.
+      if(search){
+        var hay=[
+          i.num, i.client, i.intitule, i.objet, i.dvlie,
+          i.po, i._importPONum, i.bcClientSLN, i.contact, i.poClient
+        ].filter(function(v){return v!=null;}).join(' ').toLowerCase();
+        if(hay.indexOf(search)<0) return false;
+      }
       return true;
     });
   }
@@ -9215,8 +9224,16 @@ function rDashPro(){
   // --- Données ---
   var dv=DB.devis||[];
   var fa=DB.factures||[];
+  // Cohérence avec la section Factures (renderFA) : on filtre par dateEnvoi en
+  // priorité (date d'émission au client = date d'imputation fiscale), avec
+  // fallback sur f.date pour les factures GRC pures jamais transitées par le miroir.
+  // Sans ce fallback, le dashboard comptait 29 factures vs 28 dans la liste (cf.
+  // ligne 14078 dans renderFA pour la définition originale).
+  function _dashFactureYear(f){
+    return String(f.dateEnvoi||f.date||'').substring(0,4);
+  }
   var dvFy=dv.filter(function(d){return (d.date||'').substring(0,4)==String(fy);});
-  var faFy=fa.filter(function(f){return (f.date||'').substring(0,4)==String(fy);});
+  var faFy=fa.filter(function(f){return _dashFactureYear(f)==String(fy);});
 
   // Totaux annuels
   function devisTtc(d){return Number(d.ttc)||0;}
@@ -9241,7 +9258,10 @@ function rDashPro(){
 
   // Sparklines (cumul mensuel)
   var dvMonthly=getMonthlyTotals(dvFy,devisTtc);
-  var faMonthly=getMonthlyTotals(faFy,factureMt);
+  // Pour les factures : utiliser dateEnvoi (date d'émission au client) en
+  // priorité comme dans renderFA. getMonthlyTotals retombe sur f.date si
+  // dateEnvoi est absent (cf signature getDateField||'date' avec fallback ds=d[field]||d.date).
+  var faMonthly=getMonthlyTotals(faFy,factureMt,'dateEnvoi');
   var dvCum=getMonthlyCumulative(dvMonthly);
   var faCum=getMonthlyCumulative(faMonthly);
   // Encaissé mensuel : utilise les versements (chaque versement compte pour son mois)
@@ -9261,7 +9281,8 @@ function rDashPro(){
     // Cas 2 : status Payée + dateEncaissement → utilise dateEncaissement
     var st=(f.status||'').toLowerCase();
     if(st.indexOf('payée')>=0||st==='paid'){
-      var ds=f.dateEncaissement||f.date||'';
+      // Fallback : dateEncaissement → dateEnvoi → date (cohérent avec _dashFactureYear)
+      var ds=f.dateEncaissement||f.dateEnvoi||f.date||'';
       var m=parseInt(ds.substring(5,7),10);
       if(m>=1&&m<=12) encMonthly[m-1]+=factureMt(f);
     }
@@ -9307,7 +9328,11 @@ function rDashPro(){
   });
   var faMonthlyCount=new Array(12).fill(0);
   faFy.forEach(function(f){
-    var m=parseInt((f.date||'').substring(5,7),10)-1;
+    // Cohérent avec _dashFactureYear ci-dessus : dateEnvoi en priorité,
+    // sinon f.date. Sans ça, les factures qui n'ont que dateEnvoi étaient
+    // exclues du compte mensuel (sparkline → courbe sous-estimée).
+    var dsM=String(f.dateEnvoi||f.date||'').substring(5,7);
+    var m=parseInt(dsM,10)-1;
     if(m>=0&&m<=11) faMonthlyCount[m]++;
   });
   // Restant à recouvrer mensuel = facturé - encaissé (cumulatif)
