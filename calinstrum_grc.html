@@ -663,6 +663,14 @@ th:hover{color:var(--teal)}
 td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(255,255,255,.02)}
+/* === Surbrillance "ligne en édition" — appliquée quand une modale d'édition est ouverte === */
+/* Style variante D : hover figé (outline bleu pâle + fond bleu très léger). */
+/* Persistante tant que la modale reste ouverte (vs tr:hover qui est éphémère). */
+tr.row-editing td{background:rgba(56,189,248,0.08)!important;border-bottom-color:rgba(56,189,248,0.2)!important}
+tr.row-editing td:first-child{box-shadow:inset 1px 0 0 rgba(56,189,248,0.45)}
+tr.row-editing td:last-child{box-shadow:inset -1px 0 0 rgba(56,189,248,0.45)}
+/* Pour les cards (Clients) : même esprit visuel, outline complet */
+.card.row-editing{background:rgba(56,189,248,0.04)!important;outline:1px solid rgba(56,189,248,0.45);outline-offset:-1px}
 .form-group{margin-bottom:10px}
 .form-group label{font-size:8.5px;color:var(--muted);display:block;margin-bottom:3px;text-transform:uppercase;letter-spacing:.08em}
 .form-input,.form-select,.form-textarea{width:100%;background:var(--bg3);border:1px solid rgba(255,255,255,.12);border-radius:5px;color:var(--text);padding:6px 9px;font-family:var(--mono);font-size:11px;outline:none;transition:border .15s}
@@ -4267,8 +4275,141 @@ function escNL(s){return esc(s).replace(/\n/g,'<br>');}
 function gv(id,v){var e=document.getElementById(id);if(e)e.value=String(v==null?'':v);}
 function gvg(id){var e=document.getElementById(id);return e?e.value:'';}
 function sv(id,v){var e=document.getElementById(id);if(e)e.textContent=String(v==null?'':v);}
-function cm(id){var e=document.getElementById(id);if(e)e.classList.remove('open');}
-function om(id){var e=document.getElementById(id);if(e)e.classList.add('open');}
+function cm(id){var e=document.getElementById(id);if(e)e.classList.remove('open');_onModalClose(id);}
+function om(id){var e=document.getElementById(id);if(e)e.classList.add('open');_onModalOpen(id);}
+
+// =============================================================================
+// Surbrillance "ligne en édition" — derrière une modale ouverte
+// =============================================================================
+// Quand une modale d'édition (mDV/mFA/mBC/mBL/mCL/mART) s'ouvre, on marque la
+// ligne correspondante dans la liste de fond avec la classe `.row-editing`.
+// Style : variante D (hover figé : outline bleu pâle + fond très léger).
+//
+// Stratégie : à l'ouverture on lit la variable globale d'ID actif (eDVid, eFAid…)
+// et on scanne le DOM pour trouver la <tr> ou .card dont l'onclick contient
+// "openXX(<id>)" → on lui ajoute la classe. À la fermeture on retire la classe.
+//
+// Sécurité : un re-render des tables (renderDV, renderFA, etc.) après ouverture
+// efface la classe → MutationObserver re-applique la classe tant que la modale
+// est ouverte.
+//
+// Mapping : modalId → { idVar:'eDVid', openFn:'openDV' }
+var _MODAL_EDIT_MAP = {
+  'mDV':  {idVar:'eDVid',  openFn:'openDV'},
+  'mFA':  {idVar:'eFAid',  openFn:'openFA'},
+  'mBC':  {idVar:'eBCid',  openFn:'openBC'},
+  'mBL':  {idVar:'eBLid',  openFn:'openBL'},
+  'mCL':  {idVar:'eCLid',  openFn:'openCL'},
+  'mART': {idVar:'eARTid', openFn:'openART'}
+};
+var _rowHighlightObserver = null;
+var _activeHighlight = null; // {modalId, openFn, id} pour ré-application post-render
+
+function _onModalOpen(modalId){
+  var map = _MODAL_EDIT_MAP[modalId];
+  if(!map) return;
+  // Les openFn() sont appelées AVANT om(), donc les variables globales sont déjà à jour.
+  // setTimeout 0 pour laisser le DOM se mettre à jour (cas où la table est en train d'être rendue)
+  setTimeout(function(){
+    // Resolve l'id actif : window.eDVid en navigateur (var top-level → prop window),
+    // ou globalThis[map.idVar] en fallback (Node/JSDOM tests).
+    var id = null;
+    try { id = window[map.idVar]; } catch(e){}
+    if(id == null){ try { id = globalThis[map.idVar]; } catch(e){} }
+    if(id == null) return; // nouveau document (id null/undefined) : pas de surbrillance
+    _activeHighlight = {modalId: modalId, openFn: map.openFn, id: id};
+    _applyRowHighlight();
+    _startHighlightObserver();
+  },0);
+}
+
+function _onModalClose(modalId){
+  if(!_activeHighlight || _activeHighlight.modalId !== modalId) return;
+  _clearRowHighlight();
+  _activeHighlight = null;
+  _stopHighlightObserver();
+}
+
+// Trouve la ligne correspondante via attribut onclick=openXX(id) et lui applique .row-editing
+function _applyRowHighlight(){
+  if(!_activeHighlight) return;
+  var openFn = _activeHighlight.openFn;
+  var id = _activeHighlight.id;
+  // On cherche n'importe quel élément (tr, div.card, button) dont l'attribut onclick
+  // contient openFn(id). Plus large que tr pour couvrir aussi les cards Clients.
+  var needle = openFn + '(' + id + ')';
+  // 1. Nettoyer d'abord toute surbrillance existante (sauf la nôtre, qu'on va ré-appliquer)
+  document.querySelectorAll('.row-editing').forEach(function(el){
+    if(el.getAttribute('data-edit-marker') !== (openFn+':'+id)){
+      el.classList.remove('row-editing');
+      el.removeAttribute('data-edit-marker');
+    }
+  });
+  // 2. Trouver les éléments à marquer (clickable directement)
+  var candidates = document.querySelectorAll('[onclick]');
+  candidates.forEach(function(el){
+    var oc = el.getAttribute('onclick') || '';
+    if(oc.indexOf(needle) >= 0){
+      // Si c'est un bouton "modifier" à l'intérieur d'une card/row, on remonte au container parent
+      // (préférable d'éclairer la card entière plutôt qu'un petit bouton).
+      var target = _resolveHighlightTarget(el);
+      if(target){
+        target.classList.add('row-editing');
+        target.setAttribute('data-edit-marker', openFn+':'+id);
+      }
+    }
+  });
+}
+
+// Donne le bon élément à surligner :
+//   - si l'élément est déjà un <tr> ou une .card → c'est lui
+//   - sinon on remonte au plus proche <tr> ou .card parent
+function _resolveHighlightTarget(el){
+  if(!el) return null;
+  if(el.tagName === 'TR') return el;
+  if(el.classList && el.classList.contains('card')) return el;
+  // Remonter
+  var parent = el.parentElement;
+  while(parent && parent !== document.body){
+    if(parent.tagName === 'TR') return parent;
+    if(parent.classList && parent.classList.contains('card')) return parent;
+    parent = parent.parentElement;
+  }
+  // Fallback : l'élément lui-même
+  return el;
+}
+
+function _clearRowHighlight(){
+  document.querySelectorAll('.row-editing').forEach(function(el){
+    el.classList.remove('row-editing');
+    el.removeAttribute('data-edit-marker');
+  });
+}
+
+// Observer qui ré-applique la surbrillance si le DOM est re-rendu pendant l'édition
+function _startHighlightObserver(){
+  if(_rowHighlightObserver) return;
+  _rowHighlightObserver = new MutationObserver(function(mutations){
+    if(!_activeHighlight) return;
+    // Détection : un re-render a-t-il touché la table de fond ? On regarde si la classe
+    // a disparu sur un élément qui devrait l'avoir.
+    var needle = _activeHighlight.openFn + '(' + _activeHighlight.id + ')';
+    var stillMarked = document.querySelector('.row-editing[data-edit-marker="'+_activeHighlight.openFn+':'+_activeHighlight.id+'"]');
+    if(!stillMarked){
+      // Réappliquer
+      _applyRowHighlight();
+    }
+  });
+  // Observer le body en mode subtree pour capter tous les re-render de tables
+  _rowHighlightObserver.observe(document.body, {childList:true, subtree:true});
+}
+
+function _stopHighlightObserver(){
+  if(_rowHighlightObserver){
+    _rowHighlightObserver.disconnect();
+    _rowHighlightObserver = null;
+  }
+}
 
 function updateClock(){var el=document.getElementById('time-v');if(el)el.textContent=new Date().toLocaleTimeString('fr-FR',{timeZone:'Pacific/Noumea',hour:'2-digit',minute:'2-digit',second:'2-digit'})+' NCT';}
 updateClock();setInterval(updateClock,1000);
