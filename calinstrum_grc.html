@@ -35728,8 +35728,366 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   return pagesHTML;
 }
 
+// =============================================================================
+// buildPaginatedFA — Pagination intelligente pour FACTURE (clone de buildPaginatedDV)
+// =============================================================================
+// Mêmes principes que buildPaginatedDV :
+//   - Décompose f.lines en lineData (section_banner, header KIT/TASK, rows normales, sub-lignes KIT/TASK)
+//   - Mesure les hauteurs réelles via un table DOM hors-écran
+//   - Distribue dans des pages avec budgets PAGE1_BUDGET / PAGE_N_BUDGET / LAST_EXTRA
+//   - Sous-total "Sous-total HT (XPF) — Report page suivante" en bas de chaque page intermédiaire
+// Différences avec le devis :
+//   - Source = f.lines (array PLAT déjà sectionné par {type:'section_banner'}) au lieu de d.lines.{fourniture,service,fret}
+//   - Header DEVIS N° → FACTURE N°
+//   - Info-bar : Facture N° / Type / BC Client / Devis N°
+//   - Bloc final : juste Délai (pas Validité, Paiement, Délai des travaux)
+//   - Tag de section géré via type='section_banner' (déjà inséré par generateFactureFromDV)
+// =============================================================================
+function buildPaginatedFA(f, logoSrc, sigSrc){
+  var isExo=isClientExo(f.client);
+  var clientDetail=getClientDetail(f.client);
+  // === Récup Devis lié pour info-bar ===
+  var devisNumLink=f.dvlie||'';
+  if(!devisNumLink && f.devisLieId){
+    var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
+    if(_dvObj) devisNumLink=_dvObj.num||'';
+  }
+  // === Préparation allL : array plat avec {sec} sur chaque ligne ===
+  // f.lines peut contenir des type='section_banner' explicites. On les utilise pour tracker
+  // la section courante. Fallback : si pas de section_banner mais des _sec, on traduit.
+  var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
+  var allL=[];
+  var currentSecLabel='';
+  (f.lines||[]).forEach(function(l){
+    if(!l) return;
+    if(l.type==='section_banner'){
+      currentSecLabel=l.desc||'';
+      return; // on consomme le banner, on n'ajoute pas la ligne (le label est tracké)
+    }
+    // Fallback _sec → label si pas de section_banner
+    if(l._sec && SEC_LABELS[l._sec] && !currentSecLabel){
+      currentSecLabel=SEC_LABELS[l._sec];
+    }
+    allL.push(Object.assign({},l,{sec:currentSecLabel||"MAIN D'OEUVRE"}));
+    // Pour les lignes suivantes : si on change de _sec, on doit re-changer le label
+    // (cas où plusieurs sections coexistent sans section_banner explicite)
+    // → géré par le test l.sec!==lastS dans la boucle lineData
+    if(l._sec && SEC_LABELS[l._sec]){
+      currentSecLabel=SEC_LABELS[l._sec];
+    }
+  });
+  // === Construction lineData (identique à buildPaginatedDV) ===
+  var lineData=[];
+  var lastS='';
+  var itemNum=0;
+  allL.forEach(function(l,i){
+    if(l.sec!==lastS){lineData.push({isSec:true,label:l.sec});lastS=l.sec;}
+    if(l.type==='header'){
+      lineData.push({isHeader:true,mode:l.mode||'items',desc:l.desc||''});
+      return;
+    }
+    var prevIsKitHeader=(i>0 && allL[i-1] && allL[i-1].type==='header' && allL[i-1].mode==='kit');
+    var isTaskMain=(function(){
+      for(var k=i-1;k>=0;k--){
+        if(allL[k] && allL[k].type==='header'){
+          return allL[k].mode==='task';
+        }
+      }
+      return false;
+    })();
+    var isKitMain=prevIsKitHeader || (Array.isArray(l.subLines) && !isTaskMain);
+    if(isTaskMain){
+      if(Array.isArray(l.subLines) && l.subLines.length>0){
+        var totalSubs=l.subLines.length;
+        l.subLines.forEach(function(sub,si){
+          var subPu=Number(sub.pu)||0;
+          var subQte=Number(sub.qte)||0;
+          var subTgc=Number(sub.tgc)||0;
+          var subTot=Math.round(subQte*subPu*(1+(isExo?0:subTgc)/100));
+          var thisIdx;
+          if(si===0){itemNum++;thisIdx=itemNum;}
+          lineData.push({
+            isTaskRow:true,
+            idx:thisIdx,
+            sub:sub,
+            tot:subTot,
+            taskDesignation:l.designation||'',
+            taskRef:l.ref||'',
+            isFirstOfTask:si===0,
+            taskRowspan:totalSubs
+          });
+        });
+      }
+      return;
+    }
+    // Ligne normale ou KIT main
+    var pu=l.pu||0;
+    if(!pu&&l.audPrice&&parseFloat(l.audPrice)>0){
+      var ap=parseFloat(l.audPrice)||0,ar=parseFloat(l.audRate)||74.5,am=parseFloat(l.audMargin)||1.2;
+      pu=Math.round(ap*ar*am);
+    }
+    var tot=Math.round((l.qte||0)*pu*(1+(isExo?0:Number(l.tgc)||0)/100));
+    itemNum++;
+    lineData.push({isSec:false,idx:itemNum,l:Object.assign({},l,{pu:pu}),tot:tot,isKitMain:isKitMain});
+    if(isKitMain && Array.isArray(l.subLines)){
+      l.subLines.forEach(function(sub){lineData.push({isSubLine:true,sub:sub});});
+    }
+  });
+  // === Adresse Client — règle spéciale SLN (héritée de bFA) ===
+  var ci_adr=CI.adresse.replace(/\n/g,'<br>');
+  var clientStr=String(f.client||'').trim();
+  var ctxStr=(clientStr+' '+(f.contact||'')+' '+(f.adresse||'')+' '+(f.email||'')+' '+(f.objet||'')).toLowerCase();
+  var isSLN=/(\bsln\b|\beramet\b|le\s+nickel|@eramet-sln\.com)/i.test(ctxStr);
+  var contactFromClient='';
+  if(isSLN&&!f.contact){
+    var mC=clientStr.match(/^SLN\s*[-\s]\s*(.+)$/i);
+    if(mC)contactFromClient=mC[1].trim();
+  }
+  var displayContact=f.contact||contactFromClient||'';
+  var cliAddr,cliTel,cliEmail,cliCompany;
+  if(isSLN){
+    cliCompany='SOCIETE LE NICKEL — ERAMET-SLN';
+    cliAddr='Magasin Général, 2 Rue Desjardins<br>Doniambo BP E5 98845 NOUMEA CEDEX<br>NOUVELLE-CALÉDONIE';
+    cliTel='+687 245446';
+    cliEmail=(f.email&&f.email.trim())?f.email:'gen_sct.dbo@eramet-sln.com';
+  } else {
+    var adr=(f.adresse||'').replace(/\n/g,'<br>');
+    cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
+    cliTel=clientDetail.tel||'';
+    cliEmail=(f.email&&f.email.trim())?f.email:(clientDetail.email||'');
+    cliCompany='';
+  }
+  var ttcDisp=isExo?(f.ht||0):(f.ttc||0);
+  var mention=getMention(isExo?f.tgcM:'tgc');
 
-var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;padding:10px;font-size:9px;color:#111}.doc{max-width:760px;margin:0 auto}.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:7px;border-bottom:2.5px solid #1e3a5f}.doc-title{font-size:18px;font-weight:900;color:#1e3a5f;text-align:right}.doc-meta{text-align:right;font-size:10px;color:#555}.doc-parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px}.doc-party h4{font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px}.doc-party p{font-size:13px;line-height:1.6;color:#333}.doc-info-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact;word-break:break-word}.bc-info-bar{background:#dbeafe!important;border-bottom:2px solid #1e3a5f!important;border-radius:3px 3px 0 0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.bc-info-bar-5col{grid-template-columns:repeat(5,1fr) !important;gap:8px;font-size:11px}.bc-info-bar-5col .dlbl{font-size:9.5px}.dlbl{font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block}.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px;table-layout:fixed}.doc-tbl col.c-num{width:28px}.doc-tbl col.c-ref{width:130px}.doc-tbl col.c-des{width:auto}.doc-tbl col.c-tgc{width:38px}.doc-tbl col.c-ute{width:32px}.doc-tbl col.c-qte{width:32px}.doc-tbl col.c-pu{width:78px}.doc-tbl col.c-ttc{width:82px}.doc-tbl thead th{background:#1e3a5f;color:#fff;padding:6px 5px;text-align:left;font-size:11.5px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact;overflow:hidden}.doc-tbl thead th:nth-child(1){text-align:center}.doc-tbl thead th:nth-child(n+4){text-align:center}.doc-tbl thead th:nth-child(7),.doc-tbl thead th:nth-child(8){text-align:right}.doc-tbl tbody td{padding:6px 5px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word;font-size:13px;overflow:hidden}.doc-tbl tbody td:nth-child(1){text-align:center}.doc-tbl tbody td:nth-child(2){word-break:keep-all;overflow-wrap:normal}.doc-tbl tbody td:nth-child(4),.doc-tbl tbody td:nth-child(5),.doc-tbl tbody td:nth-child(6){text-align:center;white-space:nowrap}.doc-tbl tbody td:nth-child(7),.doc-tbl tbody td:nth-child(8){text-align:right;white-space:nowrap;font-weight:600}.doc-tbl tfoot td{padding:5px 5px;font-weight:800;font-size:12.5px;color:#1e3a5f;border-top:2px solid #1e3a5f}.doc-tbl tfoot td:last-child{text-align:right}.doc-totals{margin-left:auto;width:270px;border-collapse:collapse;font-size:10.5px}.doc-totals td{padding:2px 6px}.doc-totals td:last-child{text-align:right;font-weight:600}.dtf td{font-size:12px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:8px 11px;font-size:13px;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank{background:#eef2f7;padding:7px 10px;border-radius:3px;margin-bottom:10px;font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px}.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:14px;padding-top:9px;border-top:1px solid #ddd;align-items:stretch}.doc-sign-box{text-align:center;font-size:11px;display:flex;flex-direction:column;min-height:195px}.doc-sign-box .dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f;flex-shrink:0}.doc-sign-box .ds-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:stretch}.doc-sign-box .ds-siglot{height:115px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:2px}.doc-sign-box .ds-siglot img{max-height:110px;max-width:260px;display:block;margin:0 auto}.doc-sign-box .dsline{height:0;border-bottom:1px solid #999;margin:0 0 3px 0}.doc-sign-box p{margin:0;line-height:1.3}.dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f}.dsline{height:0;border-bottom:1px solid #999;margin-bottom:2px}.doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:5px;font-size:9px;margin-top:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-legal{font-size:11px;color:#cc2200;font-style:italic;text-align:center;margin-top:4px}.doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-tbl{page-break-inside:auto}.doc-tbl tr{page-break-inside:avoid;page-break-after:auto}.doc-sec-head{page-break-after:avoid}.doc-totals-wrap{page-break-inside:avoid}.doc-repeat-header{display:none}.tbl-subtotal{display:none}.thead-repeat-header{display:none}@media print{.doc-repeat-header{display:block}.tbl-subtotal{display:table-row}.thead-repeat-header{display:table-row}}';
+  // === Mesure des hauteurs via DOM hors-écran (identique au devis) ===
+  var PAGE1_BUDGET=700, PAGE_N_BUDGET=900, LAST_EXTRA=600, FOOTER_H=45;
+  var measureDiv=document.createElement('div');
+  measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:14px;visibility:hidden';
+  document.body.appendChild(measureDiv);
+  var colgroup='<colgroup><col style="width:28px"><col style="width:130px"><col><col style="width:38px"><col style="width:46px"><col style="width:36px"><col style="width:78px"><col style="width:82px"></colgroup>';
+  function measureRow(html){var t=document.createElement('table');t.style.cssText='width:703px;border-collapse:collapse;table-layout:fixed;font-size:14px;font-family:Calibri,Arial,sans-serif';t.innerHTML=colgroup+'<tbody>'+html+'</tbody>';measureDiv.appendChild(t);var h=t.getBoundingClientRect().height;measureDiv.removeChild(t);return h;}
+  var rowItems=[];
+  lineData.forEach(function(item){
+    if(item.isSec){
+      var h='<tr><td colspan="8" style="background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+item.label+'</td></tr>';
+      rowItems.push({html:h,height:measureRow(h),isSec:true,tot:0});
+    } else if(item.isHeader){
+      var bg, col, bdr, badge;
+      if(item.mode==='kit'){
+        bg='#ede9fe'; col='#5b21b6'; bdr='#7c3aed';
+        badge=' <span style="display:inline-block;background:#7c3aed;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact">KIT — 1 prix global</span>';
+      } else if(item.mode==='task'){
+        bg='#fef3c7'; col='#78350f'; bdr='#d97706';
+        badge=' <span style="display:inline-block;background:#d97706;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact">TÂCHE</span>';
+      } else {
+        bg='#dbeafe'; col='#1e3a5f'; bdr='#1e3a5f';
+        badge='';
+      }
+      var hH='<tr><td colspan="8" style="background:'+bg+';color:'+col+';padding:5px 9px;font-weight:700;font-size:11px;border-left:3px solid '+bdr+';text-transform:uppercase;letter-spacing:.05em;-webkit-print-color-adjust:exact;print-color-adjust:exact">▸ '+esc(item.desc||'')+badge+'</td></tr>';
+      rowItems.push({html:hH,height:measureRow(hH),isSec:true,tot:0});
+    } else if(item.isSubLine){
+      var sub=item.sub;
+      var hS='<tr style="background:rgba(124,58,237,.04);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+        '<td></td>'+
+        '<td style="padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">'+esc(sub.ref||'')+'</td>'+
+        '<td colspan="3" style="padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">↳ '+esc(sub.designation||'')+'</td>'+
+        '<td style="text-align:center;padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">'+(sub.qte||1)+'</td>'+
+        '<td colspan="2" style="text-align:center;padding:5px 5px;font-style:italic;color:#9ca3af;font-size:10px">inclus</td>'+
+        '</tr>';
+      rowItems.push({html:hS,height:measureRow(hS),isSec:false,tot:0});
+    } else if(item.isTaskRow){
+      var sub2=item.sub;
+      var subTgcD=(sub2.tgc||0)+'%';
+      var hT;
+      if(item.isFirstOfTask){
+        var rspn=item.taskRowspan||1;
+        hT='<tr style="background:rgba(245,158,11,.05);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+          '<td rowspan="'+rspn+'" style="vertical-align:middle;text-align:center;padding:6px 5px">'+(item.idx||'')+'</td>'+
+          '<td rowspan="'+rspn+'" style="vertical-align:middle;text-align:center;padding:6px 5px">'+esc(item.taskRef||'')+'</td>'+
+          '<td rowspan="'+rspn+'" style="vertical-align:middle;padding:6px 5px">'+esc(item.taskDesignation||'')+'</td>'+
+          '<td style="text-align:center;padding:6px 5px">'+subTgcD+'</td>'+
+          '<td style="text-align:center;padding:6px 5px">'+(sub2.unite||'U')+'</td>'+
+          '<td style="text-align:center;padding:6px 5px">'+(sub2.qte||0)+'</td>'+
+          '<td style="text-align:right;padding:6px 5px">'+fN(sub2.pu)+'</td>'+
+          '<td style="text-align:right;font-weight:700;padding:6px 5px">'+fN(item.tot)+'</td></tr>';
+      } else {
+        hT='<tr style="background:rgba(245,158,11,.03);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+          '<td style="text-align:center;padding:6px 5px">'+subTgcD+'</td>'+
+          '<td style="text-align:center;padding:6px 5px">'+(sub2.unite||'U')+'</td>'+
+          '<td style="text-align:center;padding:6px 5px">'+(sub2.qte||0)+'</td>'+
+          '<td style="text-align:right;padding:6px 5px">'+fN(sub2.pu)+'</td>'+
+          '<td style="text-align:right;font-weight:700;padding:6px 5px">'+fN(item.tot)+'</td></tr>';
+      }
+      rowItems.push({html:hT,height:measureRow(hT),isSec:false,tot:item.tot,taskGroup:true,taskGroupStart:item.isFirstOfTask});
+    } else {
+      var l=item.l,tot=item.tot,tgcD=(l.tgc||0)+'%';
+      var rowBg=item.isKitMain?'background:rgba(124,58,237,.06);-webkit-print-color-adjust:exact;print-color-adjust:exact;':'';
+      var h='<tr style="'+rowBg+'"><td style="text-align:center;padding:6px 5px">'+item.idx+'</td><td style="text-align:center;padding:6px 5px">'+esc(l.ref||'')+'</td>'+
+        '<td style="padding:6px 5px">'+esc(l.designation||'')+'</td>'+
+        '<td style="text-align:center;padding:6px 5px">'+tgcD+'</td><td style="text-align:center;padding:6px 5px">'+(l.unite||'U')+'</td>'+
+        '<td style="text-align:center;padding:6px 5px">'+(l.qte||0)+'</td><td style="text-align:right;padding:6px 5px">'+fN(l.pu)+'</td>'+
+        '<td style="text-align:right;font-weight:700;padding:6px 5px">'+fN(tot)+'</td></tr>';
+      rowItems.push({html:h,height:measureRow(h),isSec:false,tot:tot});
+    }
+  });
+  document.body.removeChild(measureDiv);
+
+  // === Distribution dans les pages (identique au devis) ===
+  var pages=[],currentPage=[],usedHeight=0,budget=PAGE1_BUDGET,SUBTOTAL_H=30;
+  function nextNonSecHeight(fromIdx){
+    for(var j=fromIdx;j<rowItems.length;j++){
+      if(!rowItems[j].isSec) return rowItems[j].height;
+    }
+    return 0;
+  }
+  rowItems.forEach(function(item,i){
+    var tentativeHeight=usedHeight+item.height+SUBTOTAL_H;
+    if(item.isSec){
+      var nextLineH=nextNonSecHeight(i+1);
+      if(nextLineH>0 && usedHeight+item.height+nextLineH+SUBTOTAL_H>budget){
+        if(currentPage.length){pages.push(currentPage);currentPage=[];usedHeight=0;budget=PAGE_N_BUDGET;}
+      }
+      currentPage.push(item);
+      usedHeight+=item.height;
+      return;
+    }
+    if(item.taskGroupStart){
+      var groupHeight=item.height;
+      for(var gj=i+1;gj<rowItems.length;gj++){
+        var gi=rowItems[gj];
+        if(gi.taskGroup && !gi.taskGroupStart){
+          groupHeight+=gi.height;
+        } else {
+          break;
+        }
+      }
+      if(usedHeight+groupHeight+SUBTOTAL_H>budget){
+        if(currentPage.length){pages.push(currentPage);currentPage=[];usedHeight=0;budget=PAGE_N_BUDGET;}
+      }
+      currentPage.push(item);usedHeight+=item.height;
+      return;
+    }
+    if(item.taskGroup){
+      currentPage.push(item);usedHeight+=item.height;
+      return;
+    }
+    if(tentativeHeight>budget){
+      pages.push(currentPage);currentPage=[item];usedHeight=item.height;budget=PAGE_N_BUDGET;
+    } else {
+      currentPage.push(item);usedHeight+=item.height;
+    }
+  });
+  if(currentPage.length)pages.push(currentPage);
+  // Nettoyage headers orphelins en fin de page
+  for(var pi=0;pi<pages.length-1;pi++){
+    var pg=pages[pi];
+    var orphanStart=pg.length;
+    while(orphanStart>0 && pg[orphanStart-1].isSec){ orphanStart--; }
+    if(orphanStart<pg.length){
+      var orphans=pg.splice(orphanStart);
+      pages[pi+1]=orphans.concat(pages[pi+1]);
+    }
+  }
+  pages=pages.filter(function(p){return p.length>0;});
+  // Réserver LAST_EXTRA pour la dernière page (totals+notes+bank+signatures)
+  if(pages.length>=1){
+    var lastPage=pages[pages.length-1];
+    var lastHeight=lastPage.reduce(function(s,r){return s+r.height;},0);
+    var lastBudget=pages.length===1?PAGE1_BUDGET:PAGE_N_BUDGET;
+    while(lastHeight+LAST_EXTRA>lastBudget && lastPage.length>1){
+      var moved=[lastPage.pop()];
+      while(lastPage.length && lastPage[lastPage.length-1].isSec){
+        moved.unshift(lastPage.pop());
+      }
+      pages.push(moved);
+      lastPage=pages[pages.length-1];
+      lastHeight=moved.reduce(function(s,r){return s+r.height;},0);
+      lastBudget=PAGE_N_BUDGET;
+    }
+  }
+
+  var isMultiPage=pages.length>1;
+  var tblCols='<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>';
+  var tblHead='<thead><tr><th>#</th><th>Réf.</th><th>Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th style="text-align:right">PU</th><th style="text-align:right">TOTAL HT</th></tr></thead>';
+  // === Header de page (DIFFÉRENCES vs devis : titre FACTURE N°, info-bar 4 champs facture) ===
+  function buildPageHeader(pageNum,totalPages){
+    var isFirstPage=pageNum===1;
+    var logoBlock=
+      '<div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:8px;border-bottom:2.5px solid #1e3a5f;margin-bottom:14px">'+
+        '<div style="text-align:center"><img src="'+logoSrc+'" style="height:50px;width:auto;display:block;margin:0 auto 3px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px">CALINSTRUM</div></div>'+
+        '<div style="text-align:right;padding-bottom:4px">'+
+          '<div style="font-size:18px;font-weight:900;color:#1e3a5f">FACTURE N\u00b0 '+esc(f.num||'')+'</div>'+
+          '<div style="font-size:10px;color:#555;margin-top:3px">Le : '+fD(f.date)+'</div>'+
+        '</div>'+
+      '</div>';
+    if(!isFirstPage)return logoBlock;
+    return logoBlock+
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Facture N\u00b0</span><strong>'+esc(f.num||'')+'</strong></div>'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Type</span>'+esc(f.type||'')+'</div>'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">BC Client</span>'+esc(f.bcClientSLN||'\u2014')+'</div>'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Devis N\u00b0</span>'+esc(devisNumLink||'\u2014')+'</div>'+
+      '</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px">'+
+        '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CALINSTRUM SARL</h4><p style="font-size:13px;line-height:1.6;color:#333;margin:0">RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+'<br>'+CI.email+'</p></div>'+
+        '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CLIENT</h4>'+
+          '<p style="font-size:13px;line-height:1.6;color:#333;margin:0">'+
+            (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>À M. <strong>'+esc(displayContact)+'</strong><br>':'À M. <strong>'+esc(displayContact)+'</strong><br>')+
+            cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+
+          '</p></div>'+
+      '</div>'+
+      '<p style="font-size:13px;margin-bottom:8px;margin-top:0"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>';
+  }
+  var pagesHTML='',cumulSub=0;
+  pages.forEach(function(pageRows,pi){
+    var isLast=pi===pages.length-1;
+    var pageSub=0;
+    pageRows.forEach(function(r){if(!r.isSec)pageSub+=r.tot;});
+    cumulSub+=pageSub;
+    var rowsHTML=pageRows.map(function(r){return r.html;}).join('');
+    var subtotalRowHTML='';
+    if(isMultiPage && !isLast){
+      var stLabel='Sous-total HT (XPF) — Report page suivante',stValue=fN(cumulSub);
+      subtotalRowHTML='<tfoot><tr>'+
+        '<td colspan="6" style="text-align:left;font-weight:700;color:#1e3a5f;background:#dbeafe!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;border-top:2px solid #1e3a5f;padding:8px 12px;font-size:12px">'+stLabel+'</td>'+
+        '<td colspan="2" style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f;background:#dbeafe!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;border-top:2px solid #1e3a5f;padding:8px 12px">'+stValue+'</td>'+
+      '</tr></tfoot>';
+    }
+    var tableHTML='<table class="doc-tbl">'+tblCols+tblHead+'<tbody>'+rowsHTML+'</tbody>'+subtotalRowHTML+'</table>';
+    var pageFooterHTML=
+      '<div class="doc-page-footer">'+
+        '<div class="doc-footer-bar">'+CI.nom+' \u2014 '+CI.tel+' \u2014 '+CI.email+' \u2014 '+CI.rcs+'</div>'+
+        '<p class="doc-legal">'+mention+'</p>'+
+      '</div>';
+    var pageHTML='<div class="doc-page">';
+    pageHTML+=buildPageHeader(pi+1,pages.length);
+    pageHTML+=tableHTML;
+    if(isLast){
+      // === Bloc final FACTURE : différent du devis (pas Validité/Paiement, juste Délai) ===
+      pageHTML+=
+        '<div class="doc-page-final-block" style="margin-top:8px">'+
+        buildFATotsHtml(f,isExo)+
+        '<div class="doc-notes"><strong>Montant en lettres :</strong> '+toLtr(ttcDisp)+'<br>'+
+          '<strong>Délai :</strong> '+esc(f.delai||'Paiement sous 30 jours à réception de la facture')+
+        '</div>'+
+        bankHtml()+
+        '<div class="doc-sign">'+
+          '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de "lu et approuvé"</p></div></div>'+
+          '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot">'+
+            (sigSrc?'<img src="'+sigSrc+'">':'')+'</div><div class="dsline"></div><p>Signature</p></div></div>'+
+        '</div>'+
+        '</div>';
+    }
+    pageHTML+=pageFooterHTML;
+    pageHTML+='</div>';
+    pagesHTML+=pageHTML;
+  });
+  return pagesHTML;
+}
+
+
+var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;padding:10px;font-size:9px;color:#111}.doc{max-width:760px;margin:0 auto}.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:7px;border-bottom:2.5px solid #1e3a5f}.doc-title{font-size:18px;font-weight:900;color:#1e3a5f;text-align:right}.doc-meta{text-align:right;font-size:10px;color:#555}.doc-parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px}.doc-party h4{font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px}.doc-party p{font-size:13px;line-height:1.6;color:#333}.doc-info-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact;word-break:break-word}.bc-info-bar{background:#dbeafe!important;border-bottom:2px solid #1e3a5f!important;border-radius:3px 3px 0 0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.bc-info-bar-5col{grid-template-columns:repeat(5,1fr) !important;gap:8px;font-size:11px}.bc-info-bar-5col .dlbl{font-size:9.5px}.dlbl{font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block}.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px;table-layout:fixed}.doc-tbl col.c-num{width:28px}.doc-tbl col.c-ref{width:130px}.doc-tbl col.c-des{width:auto}.doc-tbl col.c-tgc{width:38px}.doc-tbl col.c-ute{width:46px}.doc-tbl col.c-qte{width:36px}.doc-tbl col.c-pu{width:78px}.doc-tbl col.c-ttc{width:82px}.doc-tbl thead th{background:#1e3a5f;color:#fff;padding:6px 5px;text-align:left;font-size:11.5px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact;overflow:hidden}.doc-tbl thead th:nth-child(1){text-align:center}.doc-tbl thead th:nth-child(n+4){text-align:center}.doc-tbl thead th:nth-child(7),.doc-tbl thead th:nth-child(8){text-align:right}.doc-tbl tbody td{padding:6px 5px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word;font-size:13px;overflow:hidden}.doc-tbl tbody td:nth-child(1){text-align:center}.doc-tbl tbody td:nth-child(2){word-break:keep-all;overflow-wrap:normal}.doc-tbl tbody td:nth-child(4),.doc-tbl tbody td:nth-child(5),.doc-tbl tbody td:nth-child(6){text-align:center;white-space:nowrap}.doc-tbl tbody td:nth-child(7),.doc-tbl tbody td:nth-child(8){text-align:right;white-space:nowrap;font-weight:600}.doc-tbl tfoot td{padding:5px 5px;font-weight:800;font-size:12.5px;color:#1e3a5f;border-top:2px solid #1e3a5f}.doc-tbl tfoot td:last-child{text-align:right}.doc-totals{margin-left:auto;width:270px;border-collapse:collapse;font-size:10.5px}.doc-totals td{padding:2px 6px}.doc-totals td:last-child{text-align:right;font-weight:600}.dtf td{font-size:12px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:8px 11px;font-size:13px;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank{background:#eef2f7;padding:7px 10px;border-radius:3px;margin-bottom:10px;font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px}.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:14px;padding-top:9px;border-top:1px solid #ddd;align-items:stretch}.doc-sign-box{text-align:center;font-size:11px;display:flex;flex-direction:column;min-height:195px}.doc-sign-box .dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f;flex-shrink:0}.doc-sign-box .ds-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:stretch}.doc-sign-box .ds-siglot{height:115px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:2px}.doc-sign-box .ds-siglot img{max-height:110px;max-width:260px;display:block;margin:0 auto}.doc-sign-box .dsline{height:0;border-bottom:1px solid #999;margin:0 0 3px 0}.doc-sign-box p{margin:0;line-height:1.3}.dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f}.dsline{height:0;border-bottom:1px solid #999;margin-bottom:2px}.doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:5px;font-size:9px;margin-top:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-legal{font-size:11px;color:#cc2200;font-style:italic;text-align:center;margin-top:4px}.doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-tbl{page-break-inside:auto}.doc-tbl tr{page-break-inside:avoid;page-break-after:auto}.doc-sec-head{page-break-after:avoid}.doc-totals-wrap{page-break-inside:avoid}.doc-repeat-header{display:none}.tbl-subtotal{display:none}.thead-repeat-header{display:none}@media print{.doc-repeat-header{display:block}.tbl-subtotal{display:table-row}.thead-repeat-header{display:table-row}}';
 
 // ========================================================================
 // TÉLÉCHARGEMENT PDF HAUTE DÉFINITION
@@ -37005,6 +37363,8 @@ function doPrint(){
   var titleEl=document.getElementById('prvTitle');
   var docTitle=titleEl?titleEl.textContent:'CALINSTRUM';
   var isDevisDoc=docTitle && /^Devis\s/i.test(docTitle);
+  // Détection facture (titre commence par "Facture")
+  var isFactureDoc=docTitle && /^Facture\s/i.test(docTitle);
   // Détection d'un BC (Purchase Order) pour appliquer la police Arial globale
   var isBCDoc=docTitle && /^BC\s|Purchase\s*Order|^PO\s/i.test(docTitle);
 
@@ -37029,11 +37389,21 @@ function doPrint(){
     }
     var fileTitleRaw='DEVIS CALINSTRUM '+dvNumForFile+(objetForFile?' '+objetForFile:'');
     safeDocTitle=fileTitleRaw.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
+  } else if(isFactureDoc){
+    // Nom fichier facture : "FACTURE CALINSTRUM SLN-F098 BC743380" (numFA + BC client si dispo)
+    var faNumForFile=docTitle.replace(/^Facture\s*[\u2014\-]\s*/i,'').trim();
+    var bcSLNForFile='';
+    if(typeof DB!=='undefined' && Array.isArray(DB.factures)){
+      var faRec=DB.factures.find(function(x){return (x.num||'')===faNumForFile;});
+      if(faRec && faRec.bcClientSLN) bcSLNForFile='BC'+String(faRec.bcClientSLN).replace(/[\\\/:*?"<>|\s]+/g,'');
+    }
+    var fileTitleRawF='FACTURE CALINSTRUM '+faNumForFile+(bcSLNForFile?' '+bcSLNForFile:'');
+    safeDocTitle=fileTitleRawF.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
   }
 
-  // Pour les devis paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
+  // Pour les devis et factures paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
   // Pour les autres docs, on garde des marges A4 standard
-  var pageRule=isDevisDoc
+  var pageRule=(isDevisDoc||isFactureDoc)
     ? `@page{size:A4 portrait;margin:10mm 12mm 16mm 12mm;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}}`
     : `@page{size:A4 portrait;margin:8mm 10mm 20mm 10mm;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}} @page :first{ margin-top:8mm; }`;
 
@@ -37354,6 +37724,21 @@ function doPrint(){
       var sigImgEl=document.querySelector('#prvBody .sig-img');
       if(sigImgEl&&sigImgEl.src)sigSrc=sigImgEl.src;
       content=buildPaginatedDV(dObj,logoSrc,sigSrc);
+      didPaginate=true;
+    } else {
+      content=c.innerHTML;
+    }
+  } else if(isFactureDoc){
+    // === FACTURE : déléguer à buildPaginatedFA pour pagination intelligente ===
+    // Logique identique au devis : trouver f par num, récupérer logo+signature, déléguer.
+    var faNum=(docTitle||'').replace(/^Facture\s*\u2014\s*/,'').trim();
+    var fObj=(DB.factures||[]).find(function(x){return x.num===faNum;});
+    if(fObj){
+      var logoSrcF=document.querySelector('#prvBody img')?document.querySelector('#prvBody img').src:(typeof LG_PLACEHOLDER!=='undefined'?LG_PLACEHOLDER:'');
+      var sigSrcF=null;
+      var sigImgElF=document.querySelector('#prvBody .sig-img');
+      if(sigImgElF&&sigImgElF.src)sigSrcF=sigImgElF.src;
+      content=buildPaginatedFA(fObj,logoSrcF,sigSrcF);
       didPaginate=true;
     } else {
       content=c.innerHTML;
