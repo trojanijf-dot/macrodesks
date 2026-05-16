@@ -10355,78 +10355,191 @@ function _buildReconciliation(opts){
   var dvAll=Array.isArray(DB.devis)?DB.devis:[];
   var facAll=Array.isArray(DB.factures)?DB.factures:[];
   var invAll=Array.isArray(DB.invoices)?DB.invoices:[];
-  // Set des IDs de factures déjà rattachées à un devis (pour détecter orphelines)
-  var seenFacIds={};
-  // 1) Devis Accepté/Facturé
-  var dvFiltered=dvAll.filter(function(d){
-    var s=d.status||'';
-    if(s!=='Accepté' && s!=='Facturé') return false;
-    if(opts.typeFilter && opts.typeFilter!=='all'){
-      var t=d.type||'Fourniture';
-      if(t!==opts.typeFilter) return false;
-    }
-    if(opts.fiscalYear){
-      var yr=String(d.date||'').substring(0,4);
-      if(yr!==String(opts.fiscalYear)) return false;
-    }
-    return true;
-  });
-  // 2) Pour chaque devis, lookup ses factures
-  dvFiltered.forEach(function(d){
-    var links=_findLinkedFactures(d);
-    var allLinked=(links.factures||[]).concat(links.invoices||[]);
-    allLinked.forEach(function(f){ seenFacIds[f.id]=1; });
-    var totalFac=allLinked.reduce(function(s,f){
-      return s+Number(f.ttc||f.montant||0);
-    },0);
-    var dvTTC=Number(d.ttc||0);
-    if(allLinked.length===0){
-      nbMissing++;
-      rows.push({kind:'missing', devis:d, factures:[], totalFac:0, ecart:-dvTTC});
-    } else {
-      var ecart=totalFac-dvTTC;
-      var absEcart=Math.abs(ecart);
-      // Tolérance : 1% du devis ou 1000 XPF mini (arrondis, écarts de TGC)
-      var tolerance=Math.max(1000, dvTTC*0.01);
-      if(absEcart<=tolerance){
-        nbMatch++;
-        rows.push({kind:'match', devis:d, factures:allLinked, totalFac:totalFac, ecart:ecart});
-      } else {
-        nbEcart++;
-        rows.push({kind:'ecart', devis:d, factures:allLinked, totalFac:totalFac, ecart:ecart});
-      }
-    }
-  });
-  // 3) Factures orphelines (pas rattachées à un devis Accepté/Facturé connu)
-  // On parcourt DB.factures et DB.invoices, on garde celles non vues
-  // Filtre fiscalYear (sur dateEnvoi ou date), filtre typeFilter (sur f.type)
-  function matchesYear(f){
+
+  // ===========================================================================
+  // LOGIQUE PIVOT FACTURE (et non plus pivot devis)
+  // ---------------------------------------------------------------------------
+  // L'année fiscale s'applique à la FACTURE (date d'émission au client). Les
+  // devis peuvent être pris l'année précédente (ex: SLN-DV127 en déc 2025
+  // facturé via SLN-F073 en mars 2026). Ces cas étaient classés "orphelins" à
+  // tort dans la version pivot-devis.
+  //
+  // Nouvelle logique :
+  //  1. On prend toutes les factures FY (par dateEnvoi||date)
+  //  2. Pour chaque facture, on cherche son devis lié (via dvlie, linkFactureId,
+  //     objet) - peu importe l'année du devis
+  //  3. On groupe par devis : si plusieurs factures pointent vers le même devis,
+  //     une seule ligne avec total cumulé
+  //  4. Factures sans devis lié → orphelines
+  //  5. Devis Accepté de l'année fiscale sans aucune facture → "À facturer"
+  // ===========================================================================
+  function matchesType(t){
+    if(!opts.typeFilter || opts.typeFilter==='all') return true;
+    return (t||'Fourniture')===opts.typeFilter;
+  }
+  function inFiscalYearFA(f){
     if(!opts.fiscalYear) return true;
     var ds=f.dateEnvoi||f.date||'';
     return String(ds).substring(0,4)===String(opts.fiscalYear);
   }
-  function matchesType(f){
-    if(!opts.typeFilter || opts.typeFilter==='all') return true;
-    return (f.type||'Fourniture')===opts.typeFilter;
+  function inFiscalYearDV(d){
+    if(!opts.fiscalYear) return true;
+    var ds=d.date||'';
+    return String(ds).substring(0,4)===String(opts.fiscalYear);
   }
-  facAll.forEach(function(f){
-    if(seenFacIds[f.id]) return;
-    if(!matchesYear(f) || !matchesType(f)) return;
-    nbOrphan++;
-    rows.push({kind:'orphan', facture:f, factureKind:'factures'});
-  });
+
+  // 1) Factures de l'année fiscale, indexées par devis lié
+  // groupes[dvNum] = { devis, factures:[], totalFac }
+  var groupes={};      // matched/ecart par num devis
+  var orphanFacs=[];   // factures sans devis lié
+  var seenDvIds={};    // devis déjà groupés (pour ne pas les retraiter en "missing")
+
+  function _matchFactureToDevis(f){
+    // Pass 1 : par linkFactureId côté devis
+    var byLink=dvAll.find(function(d){return d.linkFactureId===f.id;});
+    if(byLink) return byLink;
+    // Pass 2 : par f.dvlie (champ texte sur la facture)
+    var dvlie=String(f.dvlie||'').toUpperCase().trim();
+    if(dvlie){
+      // Match exact d'abord
+      var exact=dvAll.find(function(d){return String(d.num||'').toUpperCase()===dvlie;});
+      if(exact) return exact;
+      // Match approximatif : dvlie peut contenir un suffixe REV/REV1 que le devis
+      // n'a pas, et inversement. On compare en strippant le suffixe REV[N].
+      var dvlieNoRev=dvlie.replace(/REV\d*$/i,'').trim();
+      var approx=dvAll.find(function(d){
+        var dn=String(d.num||'').toUpperCase().replace(/REV\d*$/i,'').trim();
+        return dn===dvlieNoRev;
+      });
+      if(approx) return approx;
+      // Pass 2b : ranges du type "SLN-DV144-145" qui contiennent dvlie SLN-DV144
+      // (devis qui regroupe plusieurs N° dans son num). On vérifie si un devis
+      // existant contient le dvlie en tant que sous-séquence numérique.
+      var dvlieMatch=dvlie.match(/^(.+)-DV[-]?(\d+[A-Z]*)$/i);
+      if(dvlieMatch){
+        var dvliePrefix=dvlieMatch[1]; // ex "SLN"
+        var dvlieNum=dvlieMatch[2];    // ex "144"
+        var byRange=dvAll.find(function(d){
+          var dn=String(d.num||'').toUpperCase();
+          // Devis de forme "SLN-DV144-145" : préfixe identique + premier N° identique
+          var rng=dn.match(/^(.+)-DV[-]?(\d+)-(\d+)$/i);
+          if(rng && rng[1]===dvliePrefix){
+            return rng[2]===dvlieNum || rng[3]===dvlieNum;
+          }
+          return false;
+        });
+        if(byRange) return byRange;
+      }
+      // Pass 2c : mismatch préfixe société (la facture PRNC-F040 a dvlie "SLN-DV022"
+      // alors que le devis est PRNC-DV022 — saisie incorrecte historique).
+      // On essaye en remplaçant le préfixe du dvlie par celui de la facture.
+      var facNum=String(f.num||'').toUpperCase();
+      var facPrefMatch=facNum.match(/^([A-Z]+)-/);
+      var dvliePrefMatch=dvlie.match(/^([A-Z]+)-/);
+      if(facPrefMatch && dvliePrefMatch && facPrefMatch[1]!==dvliePrefMatch[1]){
+        var swapped=facPrefMatch[1]+dvlie.substring(dvliePrefMatch[1].length);
+        // On strippe aussi REV au cas où
+        var swappedNoRev=swapped.replace(/REV\d*$/i,'').trim();
+        var byPrefix=dvAll.find(function(d){
+          var dn=String(d.num||'').toUpperCase();
+          if(dn===swapped) return true;
+          if(dn.replace(/REV\d*$/i,'').trim()===swappedNoRev) return true;
+          return false;
+        });
+        if(byPrefix) return byPrefix;
+      }
+    }
+    // Pass 3 : N° devis présent dans l'objet/intitulé de la facture
+    var objet=String(f.objet||f.intitule||'').toUpperCase();
+    if(objet){
+      var byObj=dvAll.find(function(d){
+        var dn=String(d.num||'').toUpperCase();
+        if(!dn) return false;
+        // Match si le N° devis (ou sa variante sans REV) apparaît dans l'objet
+        if(objet.indexOf(dn)>=0) return true;
+        var dnNoRev=dn.replace(/REV\d*$/i,'').trim();
+        if(dnNoRev && dnNoRev!==dn && objet.indexOf(dnNoRev)>=0) return true;
+        return false;
+      });
+      if(byObj) return byObj;
+    }
+    return null;
+  }
+
+  function _processFacture(f, factureKind){
+    if(!inFiscalYearFA(f)) return;
+    if(!matchesType(f.type)) return;
+    var dv=_matchFactureToDevis(f);
+    if(!dv){
+      orphanFacs.push({facture:f, factureKind:factureKind});
+      return;
+    }
+    // Filtre type : le devis matché doit aussi respecter le filtre type
+    // (sinon une facture Fourniture liée à un devis Prestation serait orpheline
+    // dans la vue Prestation, mais c'est ambigu - on garde le filtre côté FA)
+    var key=String(dv.id);
+    if(!groupes[key]) groupes[key]={devis:dv, factures:[], totalFac:0};
+    groupes[key].factures.push(f);
+    groupes[key].totalFac+=Number(f.ttc||f.montant||0);
+    seenDvIds[key]=1;
+  }
+
+  facAll.forEach(function(f){ _processFacture(f,'factures'); });
   invAll.forEach(function(i){
-    if(seenFacIds[i.id]) return;
-    // Skip les invoices qui sont des miroirs de DB.factures (déjà comptées)
+    // Skip les invoices miroirs de DB.factures (déjà comptées)
     if(i.grcFactureId || i._factureId) return;
-    if(!matchesYear(i) || !matchesType(i)) return;
-    nbOrphan++;
-    rows.push({kind:'orphan', facture:i, factureKind:'invoices'});
+    _processFacture(i,'invoices');
   });
+
+  // 2) Construire les rows match/ecart depuis les groupes
+  Object.keys(groupes).forEach(function(key){
+    var g=groupes[key];
+    var dvTTC=Number(g.devis.ttc||0);
+    var ecart=g.totalFac-dvTTC;
+    var absEcart=Math.abs(ecart);
+    var tolerance=Math.max(1000, dvTTC*0.01);
+    if(dvTTC===0){
+      // Devis sans TTC (cas rare, peut être un devis cadre sans montant)
+      // On classe en match si au moins une facture, écart non significatif
+      nbMatch++;
+      rows.push({kind:'match', devis:g.devis, factures:g.factures, totalFac:g.totalFac, ecart:0});
+    } else if(absEcart<=tolerance){
+      nbMatch++;
+      rows.push({kind:'match', devis:g.devis, factures:g.factures, totalFac:g.totalFac, ecart:ecart});
+    } else {
+      nbEcart++;
+      rows.push({kind:'ecart', devis:g.devis, factures:g.factures, totalFac:g.totalFac, ecart:ecart});
+    }
+  });
+
+  // 3) Devis "À facturer" : Accepté de l'année fiscale + bon type + sans facture
+  // On vise les devis en attente de facturation (Accepté mais pas encore Facturé).
+  // Un devis avec status Facturé qui n'aurait aucune facture détectée dans la FY
+  // est aussi signalé.
+  dvAll.forEach(function(d){
+    var s=d.status||'';
+    if(s!=='Accepté' && s!=='Facturé') return;
+    if(!matchesType(d.type)) return;
+    if(!inFiscalYearDV(d)) return; // périmètre : devis de l'année fiscale
+    if(seenDvIds[String(d.id)]) return; // déjà groupé via une facture
+    nbMissing++;
+    rows.push({kind:'missing', devis:d, factures:[], totalFac:0, ecart:-Number(d.ttc||0)});
+  });
+
+  // 4) Factures orphelines
+  orphanFacs.forEach(function(o){
+    nbOrphan++;
+    rows.push({kind:'orphan', facture:o.facture, factureKind:o.factureKind});
+  });
+
+  // Total devis affichés = groupes (matched/ecart) + missing
+  // C'est le nbDevis "pertinents" pour le KPI du haut de l'onglet.
+  var nbDevisTotal=Object.keys(groupes).length+nbMissing;
+
   return {
     rows:rows,
     kpi:{
-      nbDevis:dvFiltered.length,
+      nbDevis:nbDevisTotal,
       nbMatch:nbMatch,
       nbMissing:nbMissing,
       nbEcart:nbEcart,
