@@ -28635,11 +28635,26 @@ function _autoFillFromAttachedPdf(bytes,kind){
   else if(kind==='quote_emerson') extractor=(typeof extractEmersonPdf==='function')?extractEmersonPdf:null;
   if(!extractor) return Promise.resolve();
   return extractor(bytes).then(function(result){
-    if(!result) return;
+    if(!result){
+      if(typeof console!=='undefined') console.warn('[PDF autofill]',kind,'→ extractor returned null/undefined');
+      return;
+    }
     // Les parsers renvoient soit {header, ...} (ACT, Emerson, BC Client, Quote Emerson),
     // soit {parsed, ...} (PO Calinstrum), soit directement le header (Emerson ancien).
     var h=result.header||result.parsed||result;
-    if(!h) return;
+    if(!h){
+      if(typeof console!=='undefined') console.warn('[PDF autofill]',kind,'→ no header/parsed in result');
+      return;
+    }
+    // Debug : afficher ce qui a été extrait par le parser pour diagnostic.
+    if(typeof console!=='undefined'){
+      console.log('[PDF autofill]',kind,'→ extracted:',{
+        num:h.num||'(vide)',
+        ver:h.ver||'(vide)',
+        date:h.date||'(vide)',
+        refFull:h.refFull||'(vide)'
+      });
+    }
     // Pré-calcul du refValue et de la date ISO selon le kind
     var refValue='',refDate='';
     if(kind==='emerson'){
@@ -28679,17 +28694,28 @@ function _autoFillFromAttachedPdf(bytes,kind){
       'quote_emerson':{ref:'dv-quote-emerson-ref',date:'dv-quote-emerson-date'}
     };
     var ids=refInputMap[kind];
-    if(!ids) return;
+    if(!ids){
+      if(typeof console!=='undefined') console.warn('[PDF autofill]',kind,'→ no inputMap for this kind');
+      return;
+    }
     var refInput=document.getElementById(ids.ref);
     var dateInput=document.getElementById(ids.date);
     var filled=[];
     if(refInput && !refInput.value.trim() && refValue){
       refInput.value=refValue;
       filled.push('Réf');
+    } else if(refInput && refInput.value.trim() && typeof console!=='undefined'){
+      console.log('[PDF autofill]',kind,'→ Réf déjà remplie, skip ('+refInput.value+')');
+    } else if(!refValue && typeof console!=='undefined'){
+      console.warn('[PDF autofill]',kind,'→ Réf extraite vide, rien à poser');
     }
     if(dateInput && !dateInput.value.trim() && refDate){
       dateInput.value=refDate;
       filled.push('Date');
+    } else if(dateInput && dateInput.value.trim() && typeof console!=='undefined'){
+      console.log('[PDF autofill]',kind,'→ Date déjà remplie, skip ('+dateInput.value+')');
+    } else if(!refDate && typeof console!=='undefined'){
+      console.warn('[PDF autofill]',kind,'→ Date extraite vide, rien à poser');
     }
     if(filled.length && typeof showBCSaveToast==='function'){
       showBCSaveToast('✨ Auto-rempli depuis le PDF : '+filled.join(' + '));
@@ -29446,41 +29472,24 @@ function parsePOCalinstrumText(text){
   //   - "30032026 /0 95   30/03/2026"      (espaces dans le suffixe)
   //   - "07052026/042  DATE  07/05/2026"   (label DATE intercalé)
   //   - "19032026/08 8   19/03/2026"       (espaces suffixe)
-  //   - "13 0 3 2026/08 7   13 /0 3 /2026" (espaces dans le PRÉFIXE 8 chiffres ET dans la date,
-  //                                          espaces avant les slashes de la date)
+  //   - "13 0 3 2026/08 7   13 /0 3 /2026" (espaces dans le PRÉFIXE 8 chiffres ET dans la date)
+  //   - "12112025/063-001 12/11/2025"      (suffixe avec tiret pour la VERSION
+  //                                           ex : 063 = N° du BC, 001 = version/rev)
   //
-  // Regex date permissive : `\d{1,2}\s*\/\s*\d{1,2}\s*\/\s*\d{4}` ne suffit pas car les
-  // espaces peuvent aussi être DANS les nombres jour/mois (ex: "0 3" pour mars).
-  // Nouveau pattern accepte 1-3 chiffres séparés par espaces autour de chaque slash.
+  // Stratégie : extraire le N° et la Date séparément avec 2 regex distincts.
+  // Le mega-regex unifié était trop fragile sur le délimiteur entre les 2.
   //
-  // Pattern N° + Date (capture-tout permissif, validé en post-traitement) :
-  var mNum = text.match(/([\d\s]{8,16})\s*\/\s*(\d(?:\s*\d){0,3})(?:\s{2,}|[^\d\/\s][^\d\/]{0,80})(\d{1,2}(?:\s*\d)*\s*\/\s*\d{1,2}(?:\s*\d)*\s*\/\s*\d{4})/);
-  if(mNum){
-    var prefDigits = mNum[1].replace(/\s+/g,'');
-    var suffDigits = mNum[2].replace(/\s+/g,'');
-    if(prefDigits.length===8 && suffDigits.length>=1 && suffDigits.length<=4){
+  // (A) N° : préfixe 8 chiffres (avec espaces internes possibles) + slash + suffixe 3 chiffres
+  //     éventuellement suivi d'un tiret + version (1-3 chiffres). Format final : XXXXXXXX/NNN ou XXXXXXXX/NNN-VVV.
+  //     Le suffixe doit faire 3 chiffres pile (pas plus, sinon on capture trop).
+  var mPONum = text.match(/([\d\s]{8,16})\s*\/\s*(\d\s*\d\s*\d)(?:\s*-\s*(\d{1,3}))?/);
+  if(mPONum){
+    var prefDigits = mPONum[1].replace(/\s+/g,'');
+    var suffDigits = mPONum[2].replace(/\s+/g,'');
+    if(prefDigits.length===8 && suffDigits.length===3){
       result.num = prefDigits + '/' + suffDigits;
-      // Date : retirer espaces puis split sur /
-      var dClean = mNum[3].replace(/\s+/g,'');
-      var dParts = dClean.split('/');
-      if(dParts.length===3){
-        var jj = dParts[0].padStart(2,'0');
-        var mm = dParts[1].padStart(2,'0');
-        // Validation basique : jour 01-31, mois 01-12, année 2020-2099
-        var jjN=parseInt(jj,10), mmN=parseInt(mm,10), aaN=parseInt(dParts[2],10);
-        if(jjN>=1 && jjN<=31 && mmN>=1 && mmN<=12 && aaN>=2020 && aaN<=2099){
-          result.date = dParts[2]+'-'+mm+'-'+jj;
-        }
-      }
-    }
-  }
-  // Fallback N° si pas trouvé
-  if(!result.num){
-    var mNumOnly = text.match(/([\d\s]{8,16})\s*\/\s*(\d(?:\s*\d){0,3})(?:\s|$)/);
-    if(mNumOnly){
-      var pf = mNumOnly[1].replace(/\s+/g,'');
-      var sf = mNumOnly[2].replace(/\s+/g,'');
-      if(pf.length===8 && sf.length<=4) result.num = pf + '/' + sf;
+      // Si version présente (tiret + chiffres), l'ajouter au num
+      if(mPONum[3]) result.num += '-' + mPONum[3].trim();
     }
   }
   // Fallback Date INDÉPENDANT : se déclenche aussi si on a le N° mais pas la date.
