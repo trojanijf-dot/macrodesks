@@ -30850,9 +30850,21 @@ function parseBCClientPdfItems(items){
   // ====== ÉTAPE 2 : détecter format ======
   // SLN : header "LE NICKEL", "COMMANDE / PURCHASE ORDER", "ERAMET - SLN", N° "00\d{6,8}-\d{2}-"
   // PRNC : header "Prony Resources", "PRONY RESOURCES", N° "L\d{5,6} / \d{4}"
+  //        + variantes : "Prony", "PRNC", "DAY/MON/YR" (header date PRNC),
+  //          ou N° "LXXXXX / XXXX" trouvé seul (signature non ambiguë)
   var format = '?';
-  if(/Prony\s+Resources|PRONY\s+RESOURCES/i.test(fullText)) format = 'PRNC';
+  // Détection PRNC élargie : on accepte "Prony" seul, "PRNC" en acronyme,
+  // ou le pattern N° "L\d{5,6} / \d{4}" qui est non ambigu (jamais utilisé par SLN).
+  // L'en-tête "DAY/MON/YR" est aussi signature unique du format PRNC.
+  if(/Prony(?:\s+Resources)?|PRONY(?:\s+RESOURCES)?|\bPRNC\b|DAY\/MON\/YR|\bL\d{5,6}\s*\/\s*\d{4}\b/i.test(fullText)) format = 'PRNC';
   else if(/LE\s*NICKEL|ERAMET\s*[-–]\s*SLN|N°\s*de\s*BC[\s\S]{0,200}\b00\d{6,8}-\d{2}/i.test(fullText)) format = 'SLN';
+
+  // Debug : si format non détecté, logger un extrait du texte pour aider au diagnostic.
+  // Ce log apparaît dans la console navigateur quand l'auto-fill échoue.
+  if(format==='?' && typeof console!=='undefined'){
+    var preview=String(fullText||'').substring(0,300).replace(/\s+/g,' ');
+    console.warn('[BC Client PDF] Format non détecté. Extrait du texte :',preview);
+  }
 
   var result = {
     format: format,
@@ -31101,25 +31113,55 @@ function _parseBCPRNC(rawLines, lineGroups, fullText, result){
   else result._errors.push('N° BC PRNC non détecté');
 
   // --- Date d'émission : header "DAY/MON/YR" avec valeur "JJ / MM / AA" ---
-  // Pattern observé : "08 / 11 / 25" ou "08/11/25"
-  // Chercher après le label "Date" du header
+  // Patterns observés :
+  //   • "08 / 11 / 25" ou "08/11/25" (le plus courant)
+  //   • header "Date / DAY/MON/YR" puis valeur sur la ligne suivante
+  //   • Parfois "JJ/MM/YYYY" (année 4 chiffres)
+  // On essaye plusieurs stratégies dans l'ordre du plus fiable au moins fiable.
+  function _parsePRNCDateTokens(d,m,y){
+    // Normalise vers ISO YYYY-MM-DD
+    var year=parseInt(y,10);
+    if(year<100){
+      // 2 chiffres : ≥50 → 19xx, sinon 20xx (pivot année 2 chiffres)
+      year = year>=50 ? 1900+year : 2000+year;
+    }
+    var mm=String(parseInt(m,10)).padStart(2,'0');
+    var dd=String(parseInt(d,10)).padStart(2,'0');
+    return year+'-'+mm+'-'+dd;
+  }
+  // Stratégie 1 : pattern "DAY/MON/YR" puis date
   var idxDate = fullText.search(/Date\s*\n?\s*DAY\/MON\/YR/i);
   if(idxDate >= 0){
     var after = fullText.substring(idxDate, idxDate+200);
-    var mDate = after.match(/(\d{2})\s*\/\s*(\d{2})\s*\/\s*(\d{2})/);
-    if(mDate){
-      // JJ/MM/AA → 20AA-MM-JJ (on est dans les années 20xx)
-      result.date = '20'+mDate[3]+'-'+mDate[2]+'-'+mDate[1];
+    var mDate = after.match(/(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/);
+    if(mDate) result.date = _parsePRNCDateTokens(mDate[1],mDate[2],mDate[3]);
+  }
+  // Stratégie 2 : "DAY/MON/YR" seul (sans "Date" devant)
+  if(!result.date){
+    var idx2 = fullText.search(/DAY\/MON\/YR/i);
+    if(idx2 >= 0){
+      var after2 = fullText.substring(idx2, idx2+200);
+      var mDate2 = after2.match(/(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/);
+      if(mDate2) result.date = _parsePRNCDateTokens(mDate2[1],mDate2[2],mDate2[3]);
+    }
+  }
+  // Stratégie 3 : Fallback ouvert — première date JJ/MM/AA ou JJ/MM/YYYY dans le PDF
+  // (utilisée pour les PDFs PRNC qui n'auraient pas le header "DAY/MON/YR")
+  if(!result.date){
+    // On préfère la 1ère date trouvée mais on vérifie que l'année a du sens
+    var mFallback = fullText.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})\b/);
+    if(mFallback){
+      var yr=parseInt(mFallback[3],10);
+      // Année valide : 2 chiffres (≥20) ou 4 chiffres (2000-2099)
+      if((yr>=20 && yr<=99) || (yr>=2000 && yr<=2099)){
+        result.date = _parsePRNCDateTokens(mFallback[1],mFallback[2],mFallback[3]);
+      }
     }
   }
   if(!result.date){
-    // Fallback : chercher première date JJ/MM/AA dans le PDF
-    var mFallback = fullText.match(/(\d{2})\s*\/\s*(\d{2})\s*\/\s*(\d{2})\b/);
-    if(mFallback && parseInt(mFallback[3])<=99 && parseInt(mFallback[3])>=20){
-      result.date = '20'+mFallback[3]+'-'+mFallback[2]+'-'+mFallback[1];
-    }
+    result._errors.push('Date d\'émission non détectée');
+    if(typeof console!=='undefined') console.warn('[BC PRNC] Date non extraite. Texte:',String(fullText).substring(0,400).replace(/\s+/g,' '));
   }
-  if(!result.date) result._errors.push('Date d\'émission non détectée');
 
   // --- Devis référencé : "Selon devis n° PRNC-DVxxx", "Devis PRNC-DVxxx", "devis n° PRNC-..." ---
   var mDV = fullText.match(/(?:Selon\s+devis\s*n°?|Devis\s*:?|devis\s*n°)\s*(PRNC-DV\d+[A-Z0-9]*)/i);
