@@ -10395,9 +10395,17 @@ function _buildReconciliation(opts){
   var seenDvIds={};    // devis déjà groupés (pour ne pas les retraiter en "missing")
 
   function _matchFactureToDevis(f){
-    // Pass 1 : par linkFactureId côté devis
+    // Pass 1 : par linkFactureId côté devis (lookup direct par id)
     var byLink=dvAll.find(function(d){return d.linkFactureId===f.id;});
     if(byLink) return byLink;
+    // Pass 1bis : LEGACY MIGRATION — les factures migrées depuis les anciennes
+    // invoices ont gardé leur ancien id dans f._originalInvoiceId. Le devis
+    // garde l'ancien id dans d.linkFactureId (jamais mis à jour). Donc on
+    // match aussi sur ce champ pour les liens historiques.
+    if(f._originalInvoiceId){
+      var byLegacy=dvAll.find(function(d){return d.linkFactureId===f._originalInvoiceId;});
+      if(byLegacy) return byLegacy;
+    }
     // Pass 2 : par f.dvlie (champ texte sur la facture)
     var dvlie=String(f.dvlie||'').toUpperCase().trim();
     if(dvlie){
@@ -10462,6 +10470,42 @@ function _buildReconciliation(opts){
         return false;
       });
       if(byObj) return byObj;
+    }
+    // Pass 4 : DEVIS BCGMAO — l'objet contient le N° de BC sans préfixe
+    // (ex: objet "Fourniture BC 737738_01" pour devis "SLN-DV-BCGMAO-00737738").
+    // On extrait les fragments numériques de l'objet et on cherche un devis
+    // BCGMAO dont le N° contient ce fragment.
+    if(objet){
+      // Extraire séquences de 5+ chiffres consécutifs dans l'objet
+      var numFragments=objet.match(/\d{5,}/g) || [];
+      for(var k=0;k<numFragments.length;k++){
+        var frag=numFragments[k];
+        var byBCGMAO=dvAll.find(function(d){
+          var dn=String(d.num||'').toUpperCase();
+          if(dn.indexOf('BCGMAO')<0) return false;
+          // Le N° devis BCGMAO contient le fragment ?
+          // ex: dn="SLN-DV-BCGMAO-00737738", frag="737738" → match
+          return dn.indexOf(frag)>=0;
+        });
+        if(byBCGMAO) return byBCGMAO;
+      }
+    }
+    // Pass 5 : champ _importPONum (pour les factures importées qui ont gardé
+    // le N° de BC original dans ce champ)
+    if(f._importPONum){
+      var poNum=String(f._importPONum).toUpperCase();
+      // Extraire les chiffres du PO (ex "737738_01" → "737738")
+      var poDigits=(poNum.match(/\d+/g) || []);
+      for(var p=0;p<poDigits.length;p++){
+        var d2=poDigits[p];
+        if(d2.length<5) continue;
+        var byPO=dvAll.find(function(d){
+          var dn=String(d.num||'').toUpperCase();
+          if(dn.indexOf('BCGMAO')<0) return false;
+          return dn.indexOf(d2)>=0;
+        });
+        if(byPO) return byPO;
+      }
     }
     return null;
   }
