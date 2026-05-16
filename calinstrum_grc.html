@@ -2083,7 +2083,8 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   </div>
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mFA')">Annuler</button>
-    <button class="btn btn-ghost" onclick="previewFA()">👁 Aperçu</button>
+    <button class="btn btn-ghost" onclick="previewFA()" title="Aperçu PDF de la facture (génération à la volée depuis les données actuelles — toute modif du code de rendu est appliquée automatiquement)">👁 Aperçu</button>
+    <button class="btn btn-ghost" onclick="regenerateFAPdf()" title="Re-génère l'aperçu PDF facture en appliquant le dernier code de rendu (utile après mise à jour de la mise en page). Strictement équivalent à 'Aperçu' mais avec confirmation explicite que la nouvelle mise en page est utilisée.">🔄 Re-générer PDF</button>
     <button class="btn btn-teal" onclick="saveFA()">✓ Enregistrer</button>
   </div>
 </div></div>
@@ -18480,16 +18481,27 @@ function generateFactureFromDV(){
   // PDF facture (renderFAPdfRows) sait afficher ces 3 cas grâce au flag _isTaskMain.
   // Deep-clone via JSON pour éviter les références partagées avec le devis source.
   var faLines=[];
+  // Mapping des sections → label banner (identique à bDV.secNames)
+  var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
   ['fourniture','service','fret'].forEach(function(sec){
-    (d.lines[sec]||[]).forEach(function(l){
+    var secLines=(d.lines&&d.lines[sec])||[];
+    if(!secLines.length)return; // pas de banner si section vide
+    // Pousser un banner de section AVANT les lignes de cette section
+    // (préserve l'affichage FOURNITURE / MAIN D'OEUVRE / FRET dans le PDF facture)
+    faLines.push({type:'section_banner',desc:SEC_LABELS[sec],_sec:sec});
+    secLines.forEach(function(l){
       if(!l)return;
       // Headers (sous-titres / KIT / TASK) → conservés tels quels pour structurer le PDF
       if(l.type==='header'){
-        faLines.push(JSON.parse(JSON.stringify(l)));
+        var clonedH=JSON.parse(JSON.stringify(l));
+        clonedH._sec=sec; // tag de section pour le rendu
+        faLines.push(clonedH);
         return;
       }
       // Ligne normale, KIT ou TASK : deep clone complet (préserve subLines, _isTaskMain)
-      faLines.push(JSON.parse(JSON.stringify(l)));
+      var clonedL=JSON.parse(JSON.stringify(l));
+      clonedL._sec=sec;
+      faLines.push(clonedL);
     });
   });
   var fa={
@@ -34728,125 +34740,130 @@ function bDV(d){
 function bFA(f){
   var isExo=isClientExo(f.client);
   var clientDetail=getClientDetail(f.client);
-  // === CONSTRUCTION DU CORPS DE LA TABLE — STRUCTURE SECTION-COHÉSIVE ===
-  // Stratégie : chaque SECTION COMPLÈTE (bandeau + toutes ses lignes) = 1 <tbody class="fa-section">
-  // Avec page-break-inside:avoid sur ce <tbody>, Chrome traite la section comme une unité :
-  // soit elle tient sur la page courante, soit elle bascule entièrement sur la suivante.
-  // Conséquence : si la section "WI-FI TEMPERATURE" + ses 4 lignes ne tient pas sur la page 1
-  // après les 3 sections précédentes, elle bascule entièrement en page 2 (avec son bandeau,
-  // sans coupure orpheline).
-  //
-  // Garde-fou : si une section dépasse 12 lignes (rare), on désactive la cohésion pour cette
-  // section précise (elle peut se couper) — sinon risque que la section déborde la page entière
-  // et reste coupée silencieusement.
-  //
-  // Les KIT (lignes avec subLines) restent dans le tbody de leur section et leurs subLines
-  // sont placées juste après la ligne porteuse — pas de tbody séparé pour les KITs.
-  var lines=f.lines||[];
-  var sections=[];   // Array<{rowsHtml: string, lineCount: number}>
-  var currentSection=null;
-  // Compteur d'items pour la colonne # (incrémenté UNIQUEMENT pour les lignes mères)
-  var _faItemNo=0;
-  function ensureSection(){
-    if(!currentSection){
-      currentSection={rowsHtml:'',lineCount:0};
-      sections.push(currentSection);
-    }
-    return currentSection;
-  }
-  lines.forEach(function(l){
+  // === CONSTRUCTION DU CORPS DE LA TABLE — CLONE EXACT DU DEVIS ===
+  // Stratégie (alignée sur bDV) : itération séquentielle sur f.lines (array plat) avec
+  // gestion des 4 types de lignes reconnus :
+  //   1. type='section_banner'  → bandeau gris pleine largeur (FOURNITURE / MAIN D'OEUVRE / FRET)
+  //   2. type='header'          → bandeau coloré (KIT violet ou TÂCHE orange) avec préfixe ▸ et badge
+  //   3. ligne KIT-main         → ligne chiffrée violette + sub-lignes "inclus" italique (6 cellules)
+  //   4. ligne TASK-main        → rowspan sur Item/Réf/Désignation, sub-lignes chiffrées en dessous
+  //   5. ligne normale          → 8 cellules standard
+  // Le rendu sortant est UNE SEULE <tbody> (pas de tbodies cohésifs séparés) pour matcher
+  // exactement le devis, qui s'appuie sur la pagination naturelle de Chrome.
+  var allL=f.lines||[];
+  // Fallback compat anciennes factures : si aucune ligne section_banner mais qu'il y a des _sec
+  // sur les lignes, on synthétise des banners virtuels au survol de chaque transition _sec.
+  // Mapping cohérent avec generateFactureFromDV (SEC_LABELS).
+  var _SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
+  var _hasBanner=allL.some(function(x){return x && x.type==='section_banner';});
+  var lastS='',itemNum=0,rows='';
+  var _lastSec='';
+  allL.forEach(function(l,i){
     if(!l)return;
-    if(l.type==='header'){
-      // Nouveau bandeau de section → démarrer un nouveau tbody
-      var sectionColor=l.mode==='kit'?'#3b82f6':l.mode==='task'?'#a78bfa':'#1e3a5f';
-      currentSection={rowsHtml:'',lineCount:0};
-      sections.push(currentSection);
-      currentSection.rowsHtml+='<tr><td colspan="8" style="background:#e8eef5;color:'+sectionColor+';font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-top:1px solid #c8d1de;border-bottom:1px solid #c8d1de">'+
-        escNL(l.desc||'')+
-        (l.mode==='kit'?' <span style="font-size:9px;color:#3b82f6;font-weight:600;text-transform:none;letter-spacing:0">— KIT (1 prix global)</span>':'')+
-        '</td></tr>';
+    // Fallback : insérer un section_banner virtuel à chaque changement de _sec si absent
+    if(!_hasBanner && l._sec && l._sec!==_lastSec && _SEC_LABELS[l._sec]){
+      rows+='<tr><td colspan="8" class="doc-sec-head">'+esc(_SEC_LABELS[l._sec])+'</td></tr>';
+      _lastSec=l._sec;
+    }
+    // === 1. Bandeau de section explicite (FOURNITURE / MAIN D'OEUVRE / FRET) ===
+    if(l.type==='section_banner'){
+      rows+='<tr><td colspan="8" class="doc-sec-head">'+esc(l.desc||'')+'</td></tr>';
+      lastS=l.desc||'';
       return;
     }
-    var sec=ensureSection();
-    var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
-    // === DÉTECTION TASK vs KIT ===
-    // Une ligne TASK : porteuse avec _isTaskMain=true ou qte=0+pu=0+subLines chiffrées.
-    // Ses sub-lignes sont valorisées (Hsup/Htech avec qte/pu réels).
-    // Une ligne KIT : porteuse chiffrée (qte=1, pu=120000) + sub-lignes descriptives à pu=0.
-    // Détection robuste : on remonte au header le plus proche s'il existe (mode='task'/'kit').
-    // Sinon on s'appuie sur _isTaskMain et la structure des subLines.
-    var isTaskMain = !!l._isTaskMain ||
-      (hasSubLines && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
-       l.subLines.some(function(sub){return (Number(sub.pu)||0)>0;}));
-    var tgcDisplay=(l.tgc||0)+'%';
-    // Pour TASK : la ligne mère affiche un total = somme des subLines chiffrées
-    // Pour ligne normale ou KIT : total = qte * pu (qte/pu de la ligne)
-    var tot;
-    if(isTaskMain){
-      tot=l.subLines.reduce(function(s,sub){
-        var subHt=(Number(sub.qte)||0)*(Number(sub.pu)||0);
-        return s+Math.round(subHt*(1+(isExo?0:Number(sub.tgc)||0)/100));
-      },0);
-    } else {
-      tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    // === 2. Header (KIT, TÂCHE, ou sous-titre simple) ===
+    if(l.type==='header'){
+      var isKit=l.mode==='kit';
+      var isTask=l.mode==='task';
+      var bg, col, bdr, badge;
+      if(isKit){
+        bg='#ede9fe'; col='#5b21b6'; bdr='#7c3aed';
+        badge=' <span style="display:inline-block;background:#7c3aed;color:#fff;padding:1px 5px;border-radius:3px;font-size:8.5px;margin-left:6px;font-weight:700">KIT — 1 prix global</span>';
+      } else if(isTask){
+        bg='#fef3c7'; col='#78350f'; bdr='#d97706';
+        badge=' <span style="display:inline-block;background:#d97706;color:#fff;padding:1px 5px;border-radius:3px;font-size:8.5px;margin-left:6px;font-weight:700">TÂCHE</span>';
+      } else {
+        bg='#dbeafe'; col='#1e3a5f'; bdr='#1e3a5f';
+        badge='';
+      }
+      rows+='<tr><td colspan="8" style="background:'+bg+';color:'+col+';padding:6px 10px;font-weight:700;font-size:10.5px;border-left:3px solid '+bdr+';text-transform:uppercase;letter-spacing:.05em">▸ '+esc(l.desc||'')+badge+'</td></tr>';
+      return;
     }
-    // Affichage de la ligne mère
-    _faItemNo++;
-    sec.rowsHtml+='<tr>'+
-      '<td style="text-align:center;font-weight:600;color:#64748b">'+_faItemNo+'</td>'+
-      '<td style="font-family:monospace;font-size:11px;color:#475569">'+esc(l.ref||'')+'</td>'+
-      '<td>'+escNL(l.designation||'')+'</td>'+
-      '<td style="text-align:center">'+(isTaskMain?'—':tgcDisplay)+'</td>'+
-      '<td style="text-align:center">'+(isTaskMain?'—':(l.unite||'U'))+'</td>'+
-      '<td style="text-align:center">'+(isTaskMain?'—':(l.qte||0))+'</td>'+
-      '<td style="text-align:right">'+(isTaskMain?'—':fN(l.pu))+'</td>'+
-      '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td>'+
-    '</tr>';
-    sec.lineCount++;
-    if(hasSubLines){
-      l.subLines.forEach(function(sub){
-        var subTgcDisplay=(sub.tgc||0)+'%';
-        if(isTaskMain){
-          // === SOUS-LIGNE TASK : chiffrée (qte, pu, total réels) ===
-          var subTot=Math.round((sub.qte||0)*(sub.pu||0)*(1+(isExo?0:Number(sub.tgc)||0)/100));
-          sec.rowsHtml+='<tr style="background:rgba(167,139,250,.04)">'+
-            '<td style="text-align:center;color:#94a3b8;font-size:10px">·</td>'+
-            '<td style="font-family:monospace;font-size:10px;color:#64748b">'+esc(sub.ref||'')+'</td>'+
-            '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
-              '<span style="color:#a78bfa;margin-right:4px">└</span>'+
-              escNL(sub.designation||'')+
-            '</td>'+
-            '<td style="text-align:center;font-size:10px">'+subTgcDisplay+'</td>'+
-            '<td style="text-align:center;font-size:10px">'+(sub.unite||'U')+'</td>'+
-            '<td style="text-align:center;font-size:10px">'+(sub.qte||0)+'</td>'+
-            '<td style="text-align:right;font-size:10px">'+fN(sub.pu)+'</td>'+
-            '<td style="text-align:right;font-weight:700;font-size:10.5px">'+fN(subTot)+'</td>'+
-          '</tr>';
-        } else {
-          // === SOUS-LIGNE KIT : descriptive ("inclus dans KIT") ===
-          sec.rowsHtml+='<tr style="background:rgba(59,130,246,.04)">'+
-            '<td style="text-align:center;color:#94a3b8;font-size:10px">·</td>'+
-            '<td style="font-family:monospace;font-size:10px;color:#64748b">'+esc(sub.ref||'')+'</td>'+
-            '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
-              '<span style="color:#3b82f6;margin-right:4px">└</span>'+
-              escNL(sub.designation||'')+
-            '</td>'+
-            '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
-            '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
-            '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
-            '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
-          '</tr>';
+    // === Détection KIT-main vs TASK-main ===
+    // Identique à bDV : on remonte au header le plus proche pour décider TASK.
+    // KIT-main : header précédent mode='kit' OU subLines présentes sans être TASK.
+    var prevIsKitHeader=(i>0 && allL[i-1] && allL[i-1].type==='header' && allL[i-1].mode==='kit');
+    var isTaskMain=(function(){
+      for(var k=i-1;k>=0;k--){
+        if(allL[k] && allL[k].type==='header'){
+          return allL[k].mode==='task';
         }
-        sec.lineCount++;
+        // Si on traverse un section_banner sans rencontrer de header, on s'arrête (pas de TASK)
+        if(allL[k] && allL[k].type==='section_banner') return false;
+      }
+      return false;
+    })();
+    var isKitMain=prevIsKitHeader || (Array.isArray(l.subLines) && !isTaskMain);
+
+    // === 3. TASK-main : rowspan sur Item/Réf/Désignation, sub-lignes chiffrées ===
+    if(isTaskMain){
+      if(Array.isArray(l.subLines) && l.subLines.length>0){
+        var subsArr=l.subLines;
+        var rowspan=subsArr.length;
+        itemNum++;
+        var firstSub=subsArr[0];
+        var firstTgc=(firstSub.tgc||0)+'%';
+        var firstTot=Math.round((firstSub.qte||0)*(firstSub.pu||0)*(1+(isExo?0:Number(firstSub.tgc)||0)/100));
+        rows+='<tr style="background:rgba(245,158,11,.03)">'+
+          '<td rowspan="'+rowspan+'" style="vertical-align:middle;text-align:center">'+itemNum+'</td>'+
+          '<td rowspan="'+rowspan+'" style="vertical-align:middle">'+escNL(l.ref||'')+'</td>'+
+          '<td rowspan="'+rowspan+'" style="vertical-align:middle">'+escNL(l.designation||'')+'</td>'+
+          '<td style="text-align:center">'+firstTgc+'</td>'+
+          '<td style="text-align:center">'+(firstSub.unite||'U')+'</td>'+
+          '<td style="text-align:center">'+(firstSub.qte||0)+'</td>'+
+          '<td style="text-align:right">'+fN(firstSub.pu)+'</td>'+
+          '<td style="text-align:right;font-weight:700">'+fN(firstTot)+'</td>'+
+          '</tr>';
+        for(var sIdx=1;sIdx<subsArr.length;sIdx++){
+          var sub_=subsArr[sIdx];
+          var subTgc_=(sub_.tgc||0)+'%';
+          var subTot_=Math.round((sub_.qte||0)*(sub_.pu||0)*(1+(isExo?0:Number(sub_.tgc)||0)/100));
+          rows+='<tr style="background:rgba(245,158,11,.03)">'+
+            '<td style="text-align:center">'+subTgc_+'</td>'+
+            '<td style="text-align:center">'+(sub_.unite||'U')+'</td>'+
+            '<td style="text-align:center">'+(sub_.qte||0)+'</td>'+
+            '<td style="text-align:right">'+fN(sub_.pu)+'</td>'+
+            '<td style="text-align:right;font-weight:700">'+fN(subTot_)+'</td>'+
+            '</tr>';
+        }
+      }
+      return;
+    }
+
+    // === 4. Ligne normale ou KIT-main (8 cellules) ===
+    itemNum++;
+    var tgcDisplay=(l.tgc||0)+'%';
+    var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    var rowStyle=isKitMain?' style="background:rgba(124,58,237,.06)"':'';
+    rows+='<tr'+rowStyle+'><td>'+itemNum+'</td><td>'+escNL(l.ref||'')+'</td><td>'+escNL(l.designation||'')+'</td>'+
+      '<td style="text-align:center">'+tgcDisplay+'</td><td style="text-align:center">'+(l.unite||'U')+'</td>'+
+      '<td style="text-align:center">'+(l.qte||0)+'</td><td style="text-align:right">'+fN(l.pu)+'</td>'+
+      '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td></tr>';
+    // === 5. Sub-lignes KIT (descriptives, "inclus") ===
+    if(isKitMain && Array.isArray(l.subLines)){
+      l.subLines.forEach(function(sub){
+        rows+='<tr style="background:rgba(124,58,237,.025);color:#6b21a8">'+
+          '<td></td>'+
+          '<td style="font-style:italic">'+esc(sub.ref||'')+'</td>'+
+          '<td colspan="3" style="font-style:italic">↳ '+esc(sub.designation||'')+'</td>'+
+          '<td style="text-align:center;font-style:italic">'+(sub.qte||1)+'</td>'+
+          '<td colspan="2" style="text-align:center;font-style:italic;color:#9ca3af">inclus</td>'+
+          '</tr>';
       });
     }
   });
-  // Construire le HTML : un <tbody class="fa-section"> par section. Si trop long (>12 lignes),
-  // pas de classe cohésion → cette section peut se couper (garde-fou anti-débordement page).
-  var tbodiesHtml=sections.map(function(s){
-    var cls=s.lineCount<=12?'fa-section':'fa-section-loose';
-    return '<tbody class="'+cls+'">'+s.rowsHtml+'</tbody>';
-  }).join('');
+  // tbodiesHtml = juste le contenu (compat avec le reste de la fonction)
+  var tbodiesHtml='<tbody>'+rows+'</tbody>';
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   // === ADRESSE CLIENT — règle spéciale SLN ===
   // Pour le client SLN (Société Le Nickel - ERAMET), on utilise toujours l'adresse
@@ -34894,10 +34911,23 @@ function bFA(f){
   // Ligne 2 : adresse multi-lignes
   // Ligne 3 : Tél
   // Ligne 4 : Email
+  // Récupérer le N° de devis lié (priorité : dvlie, sinon trouver via devisLieId)
+  var devisNumLink=f.dvlie||'';
+  if(!devisNumLink && f.devisLieId){
+    var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
+    if(_dvObj) devisNumLink=_dvObj.num||'';
+  }
   return'<div class="doc">'+
     '<div class="doc-head">'+
       '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
       '<div style="width:50%;text-align:right"><div class="doc-title">FACTURE N° '+esc(f.num||'')+'</div><div class="doc-meta">Le : '+fD(f.date)+'</div></div>'+
+    '</div>'+
+    // Info-bar 4 colonnes (alignée sur celle du devis, mais avec champs facture-spécifiques)
+    '<div class="doc-info-bar">'+
+      '<div><span class="dlbl">Facture N°</span><strong>'+esc(f.num||'')+'</strong></div>'+
+      '<div><span class="dlbl">Type</span>'+esc(f.type||'')+'</div>'+
+      '<div><span class="dlbl">BC Client</span>'+esc(f.bcClientSLN||'—')+'</div>'+
+      '<div><span class="dlbl">Devis N°</span>'+esc(devisNumLink||'—')+'</div>'+
     '</div>'+
     '<div class="doc-parties">'+
       '<div class="doc-party">'+
@@ -34918,15 +34948,18 @@ function bFA(f){
         '</p>'+
       '</div>'+
     '</div>'+
-    '<p style="font-size:13px;margin-bottom:6px"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+
-    '<p style="font-size:11px;margin-bottom:8px"><strong>Facture N° :</strong> '+esc(f.num||'')+(f.dvlie?' — Devis N° '+esc(f.dvlie):'')+'</p>'+
-    '<table class="doc-tbl">'+
-      '<thead><tr><th style="text-align:center;width:30px">#</th><th style="width:110px">Réf.</th><th>Désignation</th><th>TGC%</th><th>Unité</th><th>Quantité</th><th style="text-align:right">Prix unitaire</th><th style="text-align:right">TOTAL HT</th></tr></thead>'+
-      tbodiesHtml+
+    '<p style="font-size:13px;margin-bottom:8px"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+
+    '<table class="doc-tbl" style="page-break-inside:auto">'+
+    '<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>'+
+    '<thead>'+
+      '<tr><th>Item</th><th>Réf.</th><th>Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th style="text-align:right">PU</th><th style="text-align:right">TOTAL HT</th></tr>'+
+    '</thead>'+
+    tbodiesHtml+
     '</table>'+
     // Bloc final groupé avec page-break-inside:avoid pour qu'il reste cohérent en bas de la dernière page
     '<div class="doc-final-block">'+
     buildFATotsHtml(f,isExo)+
+    // Bloc notes facture : uniquement Montant en lettres + Délai (pas de Validité/Paiement/Délai des travaux qui sont propres au devis)
     '<div class="doc-notes"><strong>Montant en lettres :</strong> '+toLtr(ttcDisp)+'<br>'+
       '<strong>Délai :</strong> '+esc(f.delai||'Paiement sous 30 jours à réception de la facture')+
     '</div>'+
@@ -35316,6 +35349,17 @@ function prvBC(id){var b=DB.bcs.find(function(x){return x.id===id;});if(b)showPr
 function prvBL(id){var b=DB.bls.find(function(x){return x.id===id;});if(b)showPrv('BL — '+b.num,bBL(b));}
 function previewDV(){var d=getDV();if(!d.num)return;showPrv('Devis — '+d.num,bDV(d));}
 function previewFA(){var f=getFA();if(!f.num)return;showPrv('Facture — '+f.num,bFA(f));}
+// Re-génère l'aperçu PDF facture (équivalent à previewFA mais avec confirmation visuelle
+// que la dernière version du code de rendu est utilisée — utile après mise à jour de la
+// mise en page pour rassurer l'utilisateur sur les anciennes factures).
+function regenerateFAPdf(){
+  var f=getFA();
+  if(!f.num){alert('⚠ Aucune facture à régénérer');return;}
+  showPrv('Facture — '+f.num,bFA(f));
+  if(typeof showBCSaveToast==='function'){
+    showBCSaveToast('🔄 PDF facture re-généré avec la dernière mise en page');
+  }
+}
 function previewBC(){var b=getBC();if(!b.num)return;showPrv(buildBCTitle(b),bBC(b));}
 function previewBL(){var b=getBL();if(!b.num)return;showPrv('BL — '+b.num,bBL(b));}
 
