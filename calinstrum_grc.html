@@ -10550,6 +10550,27 @@ function rDashPro(){
   var restMonthly=faMonthly.map(function(v,i){return Math.max(0,v-encMonthly[i]);});
 
   var html='<div class="kpi-grid-pro">';
+  // === HELPER : badge "?" tooltip pédagogique (réutilisé sur les 4 KPIs) ===
+  // Même pattern que renderSuivi (ligne 15493) : <span title="..."> natif HTML.
+  // Au survol, le navigateur affiche un tooltip multi-ligne (les \n sont préservés).
+  var dashHelpDot = function(txt){
+    return '<span class="kpi-help" title="'+esc(txt)+'" style="position:absolute;top:8px;right:8px;width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.08);color:var(--muted);font-size:10px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:help;font-family:monospace" aria-label="Aide">?</span>';
+  };
+  // === Helper : ligne meta sous le kpi-sub (sens métier en 1-2 lignes) ===
+  var dashMetaLine = function(label, detail){
+    return '<div style="font-size:10.5px;color:var(--muted-soft);margin-top:6px;line-height:1.45">'+
+      '<span style="color:var(--muted)">'+esc(label)+'</span>'+
+      (detail?'<br>'+detail:'')+
+      '</div>';
+  };
+  // === Helper : mini-barre de progression ===
+  var dashProgressBar = function(pct, color){
+    var w=Math.max(0,Math.min(100,Number(pct)||0));
+    return '<div style="height:3px;background:rgba(255,255,255,0.06);border-radius:2px;margin:6px 0 2px;overflow:hidden">'+
+      '<div style="height:100%;width:'+w+'%;background:'+color+';border-radius:2px;transition:width .3s ease"></div>'+
+      '</div>';
+  };
+
   // KPI Devis (sparkline interactive)
   var sparkDv=(typeof _interactiveSparkline==='function')?
     _interactiveSparkline(dvCum,'#88aae0',dvMonthly,function(idx,monthlyV,cumV,months){
@@ -10559,11 +10580,23 @@ function rDashPro(){
         '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
     },'dash_dv'):
     makeSparkline(dvCum,'#88aae0',true);
-  html+='<div class="kpi-pro kpi-blue">'+
+  var devisHelp = 'DEVIS '+fy+' — Bookings (activité commerciale)\n\n'+
+    '= Somme TTC de tous les devis créés en '+fy+'.\n\n'+
+    'Inclus :\n'+
+    '• Tous statuts (Brouillon, Envoyé, Accepté, Refusé, Facturé)\n'+
+    '• Tous types (Fourniture, Prestation, Mixte)\n'+
+    '• Tous clients (SLN, PRNC, etc.)\n\n'+
+    'Lien métier :\n'+
+    'Ce chiffre ≠ Facturation à cause du décalage temporel\n'+
+    '(cycle Emerson 3-12 mois). Cf. carte "Décomposition flux".\n\n'+
+    'Conversion : '+dvFacturedCount+'/'+dvFy.length+' devis ont au moins une facture liée.';
+  html+='<div class="kpi-pro kpi-blue" style="position:relative">'+
+    dashHelpDot(devisHelp)+
     '<div class="kpi-label"><i class="ti ti-file-text"></i>Devis '+fy+'</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalDevis)+'</div>'+
     '<div class="kpi-sub">XPF · '+dvFy.length+' devis</div>'+
     sparkDv+
+    dashMetaLine('Bookings', '<span style="color:var(--text)">'+dvFacturedCount+'/'+dvFy.length+'</span> facturés <span style="color:var(--muted-soft)">('+conversionPct+'%)</span>')+
     '</div>';
   // KPI Factures (sparkline interactive)
   var sparkFa=(typeof _interactiveSparkline==='function')?
@@ -10574,11 +10607,24 @@ function rDashPro(){
         '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
     },'dash_fa'):
     makeSparkline(faCum,'#a3a39a',true);
-  html+='<div class="kpi-pro">'+
+  var facHelp = 'FACTURATION '+fy+' — CA comptable\n\n'+
+    '= Somme TTC de toutes les factures émises en '+fy+'.\n'+
+    '(date d\'émission OU date de réception BC pour pré-facturées)\n\n'+
+    'Inclus :\n'+
+    '• Tous statuts paiement (En attente, Partiel, Payée)\n'+
+    '• Toutes phases (transit, livré, reçu PV, payé)\n'+
+    '• Inclut le backlog facturé issu de devis 2024/2025\n\n'+
+    'Décomposition '+fy+' :\n'+
+    '• Cycle court (sur devis '+fy+') : '+faFromDv2026Count+' factures · '+fNloc(faFromDv2026Sum)+' XPF\n'+
+    '• Backlog rentrant (sur devis pré-'+fy+') : '+faFromPreCount+' factures · '+fNloc(faFromPreSum)+' XPF\n\n'+
+    'C\'est ton CA comptable réel pour le bilan annuel.';
+  html+='<div class="kpi-pro" style="position:relative">'+
+    dashHelpDot(facHelp)+
     '<div class="kpi-label"><i class="ti ti-receipt-2"></i>Facturation</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalFa)+'</div>'+
     '<div class="kpi-sub">XPF · '+faFy.length+' factures</div>'+
     sparkFa+
+    dashMetaLine('CA comptable', '<span style="color:var(--text)">'+faFromDv2026Count+'</span> cycle court · <span style="color:var(--text)">'+faFromPreCount+'</span> backlog rentrant')+
     '</div>';
   // KPI Encaissé (sparkline interactive)
   var sparkEnc=(typeof _interactiveSparkline==='function')?
@@ -10590,11 +10636,24 @@ function rDashPro(){
         '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
     },'dash_enc'):
     makeSparkline(encCum,'#5dcaa5',true);
-  html+='<div class="kpi-pro kpi-green">'+
+  var pctEnc = totalFa>0?Math.round(totalEnc/totalFa*100):0;
+  var encHelpDash = 'ENCAISSÉ '+fy+' — Cash réel perçu\n\n'+
+    '= Somme des versements clients reçus sur les factures '+fy+'.\n\n'+
+    'Mode de calcul par facture :\n'+
+    '• Statut « Payée » → 100% du montant TTC\n'+
+    '• Statut « Partiel » → montant × pct/100\n'+
+    '• Statut « En attente » → 0\n\n'+
+    'Ratio « % des émises » = Encaissé / Facturation = '+pctEnc+'%\n\n'+
+    'Indicateur clé du recouvrement client.\n'+
+    'Plus c\'est haut, mieux ta trésorerie se porte.';
+  html+='<div class="kpi-pro kpi-green" style="position:relative">'+
+    dashHelpDot(encHelpDash)+
     '<div class="kpi-label"><i class="ti ti-trending-up"></i>Encaissé</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalEnc)+'</div>'+
-    '<div class="kpi-sub">XPF · '+(totalFa>0?Math.round(totalEnc/totalFa*100):0)+'% des émises</div>'+
+    '<div class="kpi-sub">XPF · '+pctEnc+'% des émises</div>'+
     sparkEnc+
+    dashProgressBar(pctEnc,'#5dcaa5')+
+    dashMetaLine('Cash réel', '<span style="color:var(--text)" data-money>'+fNloc(totalFa-totalEnc)+'</span> XPF restant à encaisser')+
     '</div>';
   // KPI À recouvrer (sparkline interactive)
   var restCum=faCum.map(function(v,i){return Math.max(0,v-encCum[i]);});
@@ -10609,11 +10668,24 @@ function rDashPro(){
         '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul restant</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
     },'dash_rest'):
     makeSparkline(faCum.map(function(v,i){return v-encCum[i];}),'#f09595',true);
-  html+='<div class="kpi-pro kpi-red">'+
+  var pctRest = totalFa>0?Math.round(totalRest/totalFa*100):0;
+  var restHelp = 'À RECOUVRER '+fy+' — Créances ouvertes\n\n'+
+    '= Facturation '+fy+' − Encaissé '+fy+'\n'+
+    '= '+fNloc(totalFa)+' − '+fNloc(totalEnc)+' = '+fNloc(totalRest)+' XPF\n\n'+
+    'Ce que tes clients te doivent encore sur les factures '+fy+'.\n\n'+
+    '• '+nbLate+' facture(s) en RETARD (échéance dépassée)\n'+
+    '• Représente '+pctRest+'% du facturé annuel\n\n'+
+    'Vue trésorerie :\n'+
+    'Ce montant n\'est PAS encore dans ta banque — c\'est ton DSO\n'+
+    '(Days Sales Outstanding) à surveiller. Plus c\'est bas, mieux c\'est.';
+  html+='<div class="kpi-pro kpi-red" style="position:relative">'+
+    dashHelpDot(restHelp)+
     '<div class="kpi-label"><i class="ti ti-alert-circle"></i>À recouvrer</div>'+
     '<div class="kpi-value" data-money>'+fNloc(totalRest)+'</div>'+
     '<div class="kpi-sub">XPF restants · '+nbLate+' en retard</div>'+
     sparkRest+
+    dashProgressBar(pctRest,'#f09595')+
+    dashMetaLine('Créances ouvertes', '<span style="color:var(--text)">'+pctRest+'%</span> du facturé · '+(nbLate>0?'<span style="color:#ef4444">'+nbLate+' en retard</span>':'<span style="color:var(--muted-soft)">aucun retard</span>'))+
     '</div>';
   html+='</div>';
 
