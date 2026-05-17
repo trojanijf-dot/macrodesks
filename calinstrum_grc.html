@@ -12345,11 +12345,30 @@ function _normalizeFactureStatus(f){
   }
 
   // Vérification retard (facture vraiment émise mais pas payée à temps)
+  // === ROBUSTESSE dateButoir ===
+  // DB.factures n'a pas toujours dateButoir peuplée directement (calculée à la volée
+  // par getSuiviSource via date+délai). Si absente ici, on la recalcule pour ne pas
+  // perdre la détection "retard" sur les pages Devis (cellule facture) et popovers.
   var today=new Date().toISOString().substring(0,10);
+  var bd=f.dateButoir||'';
+  if(!bd){
+    var srcDate=f.date||f.dateEnvoi||'';
+    if(srcDate){
+      try{
+        var delai=(f.delai||'').toString();
+        var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
+        var dE=new Date(srcDate);
+        if(!isNaN(dE.getTime())){
+          dE.setDate(dE.getDate()+days);
+          bd=dE.toISOString().slice(0,10);
+        }
+      }catch(e){}
+    }
+  }
   var isLate=false, daysLate=0;
-  if(f.dateButoir && f.dateButoir<today){
+  if(bd && bd<today){
     isLate=true;
-    var diff=Math.floor((new Date(today)-new Date(f.dateButoir))/(1000*60*60*24));
+    var diff=Math.floor((new Date(today)-new Date(bd))/(1000*60*60*24));
     daysLate=diff;
   }
   if(isLate) return {key:'late',label:'Retard '+daysLate+'j',color:'#ef4444',icon:'alert-triangle'};
@@ -22962,6 +22981,32 @@ function extractStatusKey(item,type){
     var ttc=item.ttc||0;
     if(totVerse>=ttc&&ttc>0)return 'Payée';
     if(totVerse>0)return 'Partiel';
+    // === DÉTECTION RETARD (cohérence avec getStatus / _normalizeFactureStatus) ===
+    // Une facture émise non payée dont l'échéance est dépassée doit remonter
+    // "En retard" dans les agrégats mois (badge), pas son status brut "En attente".
+    // Sans cela, le badge agrégé du mois Avril 2026 affichait "en attente·1"
+    // alors que la ligne F093 montrait "RETARD 16j" rouge — incohérence visible.
+    var rawStatus=item.status||item.statut||'';
+    var isPaid=/^pay(é|e)e?$/i.test(rawStatus);
+    if(!isPaid){
+      var today_=new Date().toISOString().substring(0,10);
+      var bd=item.dateButoir||'';
+      if(!bd){
+        var srcDate=item.date||item.dateEnvoi||'';
+        if(srcDate){
+          try{
+            var delai=(item.delai||'').toString();
+            var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
+            var dE=new Date(srcDate);
+            if(!isNaN(dE.getTime())){
+              dE.setDate(dE.getDate()+days);
+              bd=dE.toISOString().slice(0,10);
+            }
+          }catch(e){}
+        }
+      }
+      if(bd && bd<today_) return 'En retard';
+    }
     return item.status||'En attente';
   }
   return item.status||'';
