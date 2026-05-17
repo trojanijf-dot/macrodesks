@@ -663,6 +663,14 @@ th:hover{color:var(--teal)}
 td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(255,255,255,.02)}
+/* === Surbrillance "ligne en édition" — appliquée quand une modale d'édition est ouverte === */
+/* Style variante D : hover figé (outline bleu pâle + fond bleu très léger). */
+/* Persistante tant que la modale reste ouverte (vs tr:hover qui est éphémère). */
+tr.row-editing td{background:rgba(56,189,248,0.08)!important;border-bottom-color:rgba(56,189,248,0.2)!important}
+tr.row-editing td:first-child{box-shadow:inset 1px 0 0 rgba(56,189,248,0.45)}
+tr.row-editing td:last-child{box-shadow:inset -1px 0 0 rgba(56,189,248,0.45)}
+/* Pour les cards (Clients) : même esprit visuel, outline complet */
+.card.row-editing{background:rgba(56,189,248,0.04)!important;outline:1px solid rgba(56,189,248,0.45);outline-offset:-1px}
 .form-group{margin-bottom:10px}
 .form-group label{font-size:8.5px;color:var(--muted);display:block;margin-bottom:3px;text-transform:uppercase;letter-spacing:.08em}
 .form-input,.form-select,.form-textarea{width:100%;background:var(--bg3);border:1px solid rgba(255,255,255,.12);border-radius:5px;color:var(--text);padding:6px 9px;font-family:var(--mono);font-size:11px;outline:none;transition:border .15s}
@@ -969,6 +977,8 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <button class="sb-item" onclick="exportJSON()"><span class="ico"><span class="ico-classic">💾</span><i class="ti ti-download ico-pro"></i></span>Exporter JSON</button>
   <button class="sb-item" onclick="document.getElementById('impFile').click()"><span class="ico"><span class="ico-classic">📁</span><i class="ti ti-upload ico-pro"></i></span>Importer JSON</button>
   <input type="file" id="impFile" accept=".json" style="display:none" onchange="importJSON(this)">
+  <button class="sb-item" onclick="exportAllDevisPdfs()" title="Télécharge sur ton disque TOUS les PDFs (Emerson, ACT, PO Cali, BC Client, Quote) stockés dans IndexedDB pour TOUS les devis. Backup de sécurité — les PDFs originaux restent dans le GRC. Téléchargement séquentiel, chaque PDF arrive dans ton dossier Downloads."><span class="ico"><span class="ico-classic">🗃</span><i class="ti ti-files ico-pro"></i></span>Backup PDFs joints</button>
+  <button class="sb-item" onclick="openDvlieRepairTool()" title="Détecte les factures sans dvlie ou avec dvlie cassé, propose des matchs par montant + objet + PO, et applique les réparations validées. Cohérence Dashboard ↔ Section Factures."><span class="ico"><span class="ico-classic">🔧</span><i class="ti ti-link ico-pro"></i></span>Réparer liens DV/FA</button>
   <button class="sb-item" onclick="loadDossierPRNC()" title="Crée le BC Emerson 12112025/063-001 (114 998 AUD, taux 74.5) et le lie automatiquement aux factures PRNC-F037, F040, F041"><span class="ico"><span class="ico-classic">⚡</span><i class="ti ti-bolt ico-pro"></i></span>Charger dossier PRNC</button>
   <div class="sb-footer">CALINSTRUM SARL<br>RIDET 1 490 804.001<br>1 490 804 RCS Nouméa</div>
 </nav>
@@ -1299,6 +1309,7 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadExcelSync()" title="Synchronise depuis votre fichier Excel SLN 2026 (upload). Importe factures + devis simultanément, anti-doublon strict." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📥 Excel SLN</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadExcelSyncPRNC()" title="Synchronise depuis votre fichier Excel PRNC (upload). Format spécifique PRNC : Intitulé / N°Devis / Montant / N°PO / Date PO / N°Facture / Date envoi / État / Date paiement. Anti-doublon strict." style="border-color:rgba(244,114,182,.4);color:#f472b6">📥 Excel PRNC</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadBCSLNPdf()" title="Importe un PDF de BC SLN GMAO. Matche automatiquement les articles avec votre grille tarifaire (devis cadre) et crée la facture pré-remplie." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Import BC SLN (PDF)</button>
+      <button class="btn btn-ghost btn-sm no-print" onclick="uploadBCReapproPdf()" title="Importe un PDF de BC SLN REAPPRO (signature : « GÉNÉRÉ PAR LE RÉAPPROVISIONNEMENT »). Crée AUTOMATIQUEMENT 4 documents liés en cascade : 1) Devis SLN-DV-BCGMAO-{numBC}, 2) Facture SLN-F{NNN}, 3) BL BL{JJMMAAAA}/{NNN}, 4) BC Calinstrum (Emerson, AUD) {JJMMAAAA}/{NNN}. Le NNN est partagé entre les 4 documents. Bloque l'import si une ref est hors grille tarifaire." style="border-color:rgba(167,139,250,.5);color:#a78bfa;font-weight:700">🔄 Import REAPPRO (cascade)</button>
       <!-- Importer un avis de règlement client (PDF ou texte collé) :
            parse la liste des factures réglées + date virement, propose un aperçu validable
            ligne par ligne, puis applique en bloc (statut Payée + dateEncaissement + versement) -->
@@ -2073,7 +2084,8 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   </div>
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mFA')">Annuler</button>
-    <button class="btn btn-ghost" onclick="previewFA()">👁 Aperçu</button>
+    <button class="btn btn-ghost" onclick="previewFA()" title="Aperçu PDF de la facture (génération à la volée depuis les données actuelles — toute modif du code de rendu est appliquée automatiquement)">👁 Aperçu</button>
+    <button class="btn btn-ghost" onclick="regenerateFAPdf()" title="Re-génère l'aperçu PDF facture en appliquant le dernier code de rendu (utile après mise à jour de la mise en page). Strictement équivalent à 'Aperçu' mais avec confirmation explicite que la nouvelle mise en page est utilisée.">🔄 Re-générer PDF</button>
     <button class="btn btn-teal" onclick="saveFA()">✓ Enregistrer</button>
   </div>
 </div></div>
@@ -2780,6 +2792,40 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
     <button class="btn btn-ghost" onclick="cm('mPRV')">Fermer</button>
     <button class="btn btn-ghost" onclick="om('mSTAMP');initStampCanvas()" title="Choisir, dessiner ou charger une signature à apposer sur l'aperçu">✍️ Tampon / Signature</button>
     <button class="btn btn-teal" onclick="printPreviewBC()" title="Ouvre la boîte de dialogue d'impression — choisir « Enregistrer en PDF » comme imprimante pour obtenir un PDF fiable">🖨️ Imprimer / PDF</button>
+  </div>
+</div></div>
+
+<!-- ============================================================ -->
+<!-- MODALE : Réparation liens devis ↔ facture (dvlie)            -->
+<!-- ============================================================ -->
+<div class="modal-overlay" id="mDvlieRepair">
+<div class="modal modal-lg" style="max-width:920px">
+  <div class="modal-header">
+    <h3>🔧 Réparer les liens devis ↔ facture</h3>
+    <button class="modal-close" onclick="cm('mDvlieRepair')">✕</button>
+  </div>
+  <div class="modal-body">
+    <div id="dvlieRepairStats" style="display:flex;gap:18px;margin-bottom:12px;font-size:12px;color:var(--muted)">
+      <span>Détection en cours…</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;font-size:12px;color:var(--muted)">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="dvlieSelectAll" onchange="_dvlieToggleAll(this.checked)" checked>
+        Tout cocher (matchs sûrs)
+      </label>
+      <span style="margin-left:auto">Confiance minimum&nbsp;
+        <select id="dvlieMinScore" onchange="_dvlieRenderList()" style="background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text);padding:2px 6px;border-radius:4px;font-size:12px">
+          <option value="90">Élevée (90+)</option>
+          <option value="70" selected>Moyenne (70+)</option>
+          <option value="0">Tout afficher</option>
+        </select>
+      </span>
+    </div>
+    <div id="dvlieRepairList" style="max-height:480px;overflow-y:auto"></div>
+  </div>
+  <div class="modal-footer no-print">
+    <button class="btn btn-ghost" onclick="cm('mDvlieRepair')">Annuler</button>
+    <button class="btn btn-teal" onclick="_dvlieApplyRepairs()" id="dvlieApplyBtn">✓ Appliquer les réparations cochées</button>
   </div>
 </div></div>
 <script>
@@ -3903,6 +3949,14 @@ function getSuiviSource(){
       po:po,
       dateEnvoi:viewDateEnvoi,
       dateButoir:viewDateButoir,
+      // === COHÉRENCE DASHBOARD / SECTION FACTURES (mai 2026) ===
+      // f.date (date de création GRC) est TOUJOURS présent dans DB.factures
+      // mais viewDateEnvoi peut être vide si phase non-billed (transit/chantier/...)
+      // → on l'expose comme _dateCreation pour permettre aux filtres année
+      // de retomber dessus quand dateEnvoi ET dateReceptionBC sont vides.
+      // Sans ça, le dashboard comptait 30 factures vs 29 dans la section Factures
+      // pour les factures en chantier avec dateReceptionBC < année courante.
+      _dateCreation:f.date||'',
       statut:statutSuivi,
       pct:pctEnc,
       type:f.type||'Prestation de service',
@@ -4265,8 +4319,141 @@ function escNL(s){return esc(s).replace(/\n/g,'<br>');}
 function gv(id,v){var e=document.getElementById(id);if(e)e.value=String(v==null?'':v);}
 function gvg(id){var e=document.getElementById(id);return e?e.value:'';}
 function sv(id,v){var e=document.getElementById(id);if(e)e.textContent=String(v==null?'':v);}
-function cm(id){var e=document.getElementById(id);if(e)e.classList.remove('open');}
-function om(id){var e=document.getElementById(id);if(e)e.classList.add('open');}
+function cm(id){var e=document.getElementById(id);if(e)e.classList.remove('open');_onModalClose(id);}
+function om(id){var e=document.getElementById(id);if(e)e.classList.add('open');_onModalOpen(id);}
+
+// =============================================================================
+// Surbrillance "ligne en édition" — derrière une modale ouverte
+// =============================================================================
+// Quand une modale d'édition (mDV/mFA/mBC/mBL/mCL/mART) s'ouvre, on marque la
+// ligne correspondante dans la liste de fond avec la classe `.row-editing`.
+// Style : variante D (hover figé : outline bleu pâle + fond très léger).
+//
+// Stratégie : à l'ouverture on lit la variable globale d'ID actif (eDVid, eFAid…)
+// et on scanne le DOM pour trouver la <tr> ou .card dont l'onclick contient
+// "openXX(<id>)" → on lui ajoute la classe. À la fermeture on retire la classe.
+//
+// Sécurité : un re-render des tables (renderDV, renderFA, etc.) après ouverture
+// efface la classe → MutationObserver re-applique la classe tant que la modale
+// est ouverte.
+//
+// Mapping : modalId → { idVar:'eDVid', openFn:'openDV' }
+var _MODAL_EDIT_MAP = {
+  'mDV':  {idVar:'eDVid',  openFn:'openDV'},
+  'mFA':  {idVar:'eFAid',  openFn:'openFA'},
+  'mBC':  {idVar:'eBCid',  openFn:'openBC'},
+  'mBL':  {idVar:'eBLid',  openFn:'openBL'},
+  'mCL':  {idVar:'eCLid',  openFn:'openCL'},
+  'mART': {idVar:'eARTid', openFn:'openART'}
+};
+var _rowHighlightObserver = null;
+var _activeHighlight = null; // {modalId, openFn, id} pour ré-application post-render
+
+function _onModalOpen(modalId){
+  var map = _MODAL_EDIT_MAP[modalId];
+  if(!map) return;
+  // Les openFn() sont appelées AVANT om(), donc les variables globales sont déjà à jour.
+  // setTimeout 0 pour laisser le DOM se mettre à jour (cas où la table est en train d'être rendue)
+  setTimeout(function(){
+    // Resolve l'id actif : window.eDVid en navigateur (var top-level → prop window),
+    // ou globalThis[map.idVar] en fallback (Node/JSDOM tests).
+    var id = null;
+    try { id = window[map.idVar]; } catch(e){}
+    if(id == null){ try { id = globalThis[map.idVar]; } catch(e){} }
+    if(id == null) return; // nouveau document (id null/undefined) : pas de surbrillance
+    _activeHighlight = {modalId: modalId, openFn: map.openFn, id: id};
+    _applyRowHighlight();
+    _startHighlightObserver();
+  },0);
+}
+
+function _onModalClose(modalId){
+  if(!_activeHighlight || _activeHighlight.modalId !== modalId) return;
+  _clearRowHighlight();
+  _activeHighlight = null;
+  _stopHighlightObserver();
+}
+
+// Trouve la ligne correspondante via attribut onclick=openXX(id) et lui applique .row-editing
+function _applyRowHighlight(){
+  if(!_activeHighlight) return;
+  var openFn = _activeHighlight.openFn;
+  var id = _activeHighlight.id;
+  // On cherche n'importe quel élément (tr, div.card, button) dont l'attribut onclick
+  // contient openFn(id). Plus large que tr pour couvrir aussi les cards Clients.
+  var needle = openFn + '(' + id + ')';
+  // 1. Nettoyer d'abord toute surbrillance existante (sauf la nôtre, qu'on va ré-appliquer)
+  document.querySelectorAll('.row-editing').forEach(function(el){
+    if(el.getAttribute('data-edit-marker') !== (openFn+':'+id)){
+      el.classList.remove('row-editing');
+      el.removeAttribute('data-edit-marker');
+    }
+  });
+  // 2. Trouver les éléments à marquer (clickable directement)
+  var candidates = document.querySelectorAll('[onclick]');
+  candidates.forEach(function(el){
+    var oc = el.getAttribute('onclick') || '';
+    if(oc.indexOf(needle) >= 0){
+      // Si c'est un bouton "modifier" à l'intérieur d'une card/row, on remonte au container parent
+      // (préférable d'éclairer la card entière plutôt qu'un petit bouton).
+      var target = _resolveHighlightTarget(el);
+      if(target){
+        target.classList.add('row-editing');
+        target.setAttribute('data-edit-marker', openFn+':'+id);
+      }
+    }
+  });
+}
+
+// Donne le bon élément à surligner :
+//   - si l'élément est déjà un <tr> ou une .card → c'est lui
+//   - sinon on remonte au plus proche <tr> ou .card parent
+function _resolveHighlightTarget(el){
+  if(!el) return null;
+  if(el.tagName === 'TR') return el;
+  if(el.classList && el.classList.contains('card')) return el;
+  // Remonter
+  var parent = el.parentElement;
+  while(parent && parent !== document.body){
+    if(parent.tagName === 'TR') return parent;
+    if(parent.classList && parent.classList.contains('card')) return parent;
+    parent = parent.parentElement;
+  }
+  // Fallback : l'élément lui-même
+  return el;
+}
+
+function _clearRowHighlight(){
+  document.querySelectorAll('.row-editing').forEach(function(el){
+    el.classList.remove('row-editing');
+    el.removeAttribute('data-edit-marker');
+  });
+}
+
+// Observer qui ré-applique la surbrillance si le DOM est re-rendu pendant l'édition
+function _startHighlightObserver(){
+  if(_rowHighlightObserver) return;
+  _rowHighlightObserver = new MutationObserver(function(mutations){
+    if(!_activeHighlight) return;
+    // Détection : un re-render a-t-il touché la table de fond ? On regarde si la classe
+    // a disparu sur un élément qui devrait l'avoir.
+    var needle = _activeHighlight.openFn + '(' + _activeHighlight.id + ')';
+    var stillMarked = document.querySelector('.row-editing[data-edit-marker="'+_activeHighlight.openFn+':'+_activeHighlight.id+'"]');
+    if(!stillMarked){
+      // Réappliquer
+      _applyRowHighlight();
+    }
+  });
+  // Observer le body en mode subtree pour capter tous les re-render de tables
+  _rowHighlightObserver.observe(document.body, {childList:true, subtree:true});
+}
+
+function _stopHighlightObserver(){
+  if(_rowHighlightObserver){
+    _rowHighlightObserver.disconnect();
+    _rowHighlightObserver = null;
+  }
+}
 
 function updateClock(){var el=document.getElementById('time-v');if(el)el.textContent=new Date().toLocaleTimeString('fr-FR',{timeZone:'Pacific/Noumea',hour:'2-digit',minute:'2-digit',second:'2-digit'})+' NCT';}
 updateClock();setInterval(updateClock,1000);
@@ -7820,6 +8007,671 @@ function confirmBCSLNImport(){
     '\n\nLa modale facture va s\'ouvrir pour vérification.');
   setTimeout(function(){if(typeof openFA==='function')openFA(fa.id);},250);
 }
+
+// =============================================================================
+// PHASE 2c — IMPORT BC REAPPRO + CASCADE (Devis + Facture + BL + BC Calinstrum)
+// =============================================================================
+// Workflow métier validé par l'utilisateur (16/05/2026) :
+//   1. SLN envoie un BC REAPPRO par mail (SVC-DBO-MAXIMO@eramet-sln.com, PAKORO en copie)
+//      Signature : objet du BC contient "GÉNÉRÉ PAR LE RÉAPPROVISIONNEMENT"
+//   2. L'utilisateur identifie le BC comme REAPPRO, récupère le PDF
+//   3. Import dans GRC via bouton "🔄 Import REAPPRO (cascade)"
+//      → parser → preview → validation → cascade
+//   4. Cascade automatique : 4 documents créés liés, partageant le MÊME numéro NNN :
+//      - Devis    SLN-DV-BCGMAO-{numBC}      (ex: SLN-DV-BCGMAO-737738-01)
+//      - Facture  SLN-F{NNN}                 (ex: SLN-F098)              [NNN = MAX(SLN-F)+1]
+//      - BL       BL{JJMMAAAA}/{NNN}         (ex: BL15052026/098)        [même NNN]
+//      - BC Cali  {JJMMAAAA}/{NNN}           (ex: 15052026/098)          [même NNN, AUD]
+//
+// Si une ref est hors grille → cascade BLOQUÉE, message à l'utilisateur d'ajouter au catalogue.
+//
+// Réutilise :
+//   - parseBCClientPdfItems (lignes 31419+) : parser items-based déjà validé sur format SLN
+//   - findCatalogMatch (lignes 7628+) : matching grille
+//   - nxt('fa',pfx), nxt('bl'), nxt('bc') existants : on contourne en générant le NNN nous-mêmes
+//     car les compteurs sont indépendants par doc, mais on veut le MÊME NNN partout.
+
+// État global pour preview / validation cascade
+var _reapproPreviewState = null;
+
+// ----------------------------------------------------------------------------
+// ENTRY POINT : file picker → parse → preview
+// ----------------------------------------------------------------------------
+function uploadBCReapproPdf(){
+  if(typeof loadPdfJs!=='function' && typeof pdfjsLib==='undefined'){
+    alert('⚠ La fonction de parsing PDF n\'est pas disponible. Rechargez la page.');
+    return;
+  }
+  // Vérifier qu'au moins 1 article existe dans la grille
+  if(!DB.articles || DB.articles.length===0){
+    alert('⚠ La grille tarifaire (Catalogue) est vide.\n\nLa cascade REAPPRO nécessite au moins 1 article référencé pour matcher les lignes du BC.\n\nAllez dans Catalogue pour ajouter vos articles.');
+    return;
+  }
+  var input=document.createElement('input');
+  input.type='file';
+  input.accept='.pdf,application/pdf';
+  input.style.display='none';
+  document.body.appendChild(input);
+  input.onchange=function(e){
+    var file=e.target.files[0];
+    if(!file){document.body.removeChild(input);return;}
+    var loader = (typeof loadPdfJs==='function') ? loadPdfJs() : Promise.resolve();
+    loader.then(function(){
+      var reader=new FileReader();
+      reader.onload=function(evt){
+        try{
+          var typedArr=new Uint8Array(evt.target.result);
+          window.pdfjsLib.getDocument({data:typedArr}).promise.then(function(pdf){
+            // Extraction items pdf.js avec coordonnées x/y/page (même approche que _parseBCClientPdfFile)
+            var pagePromises=[];
+            for(var p=1;p<=pdf.numPages;p++){
+              (function(pNum){
+                pagePromises.push(pdf.getPage(pNum).then(function(page){
+                  return page.getTextContent().then(function(tc){
+                    return tc.items.filter(function(it){return it.str && it.str.trim();}).map(function(it){
+                      return { str: it.str, x: it.transform[4], y: it.transform[5], page: pNum };
+                    });
+                  });
+                }));
+              })(p);
+            }
+            Promise.all(pagePromises).then(function(pages){
+              var allItems=[];
+              pages.forEach(function(p){p.forEach(function(it){allItems.push(it);});});
+              try{
+                var parsed=parseBCReappro(allItems);
+                if(parsed.format !== 'SLN'){
+                  alert('⚠ Ce PDF n\'est pas un BC SLN.\n\nFormat détecté : '+(parsed.format||'inconnu')+'\n\nLe cascade REAPPRO ne fonctionne que pour les BC SLN au format 00XXXXXXXX-XX.');
+                  return;
+                }
+                if(!parsed.isReappro){
+                  // Pas bloquant : on permet la cascade même si le marqueur "GÉNÉRÉ PAR LE RÉAPPROVISIONNEMENT"
+                  // est absent (certains BC peuvent ne pas l'avoir explicitement). On warn et on continue.
+                  if(!confirm('⚠ Ce BC ne contient pas la mention "GÉNÉRÉ PAR LE RÉAPPROVISIONNEMENT".\n\nÊtes-vous sûr que c\'est un BC de réapprovisionnement (cascade Devis + Facture + BL + BC Cali) ?\n\n[OK] = Continuer quand même\n[Annuler] = Stopper l\'import')){
+                    return;
+                  }
+                }
+                if(!parsed.lines || parsed.lines.length===0){
+                  alert('⚠ Aucune ligne d\'article détectée dans ce BC.\n\nVérifiez que le PDF est bien lisible et contient le tableau d\'articles.');
+                  return;
+                }
+                _previewReapproCascade(parsed, file.name);
+              } catch(err){
+                alert('❌ Erreur de parsing :\n\n'+err.message);
+                console.error('[REAPPRO parse error]',err);
+              }
+            });
+          }).catch(function(err){
+            alert('❌ Erreur PDF.js : '+err.message);
+          });
+        } catch(err){
+          alert('❌ Lecture fichier : '+err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }).catch(function(err){
+      alert('❌ Impossible de charger PDF.js : '+err.message);
+    }).finally(function(){
+      setTimeout(function(){if(input.parentNode)document.body.removeChild(input);},1000);
+    });
+  };
+  input.click();
+}
+
+// ----------------------------------------------------------------------------
+// PARSER : étend parseBCClientPdfItems avec les champs spécifiques REAPPRO
+// ----------------------------------------------------------------------------
+// Retourne un objet enrichi :
+//   { format, num, date, isReappro, refMarche, acheteur, lieuLivraison,
+//     client, total, lines:[{codeMaximo, refConstructeur, desc, qte, pu, total,
+//                             matchedArticle, matchType}], _errors }
+function parseBCReappro(items){
+  // 1. Parser de base (existant et validé)
+  var base = parseBCClientPdfItems(items);
+  if(base.format !== 'SLN') return base; // on ne fait du REAPPRO que sur format SLN
+  
+  // 2. Reconstruire le fullText pour analyses header spécifiques
+  //    (parseBCClientPdfItems ne l'expose pas, on regroupe à nouveau)
+  var TOL_Y = 3;
+  var byPage = {};
+  items.forEach(function(it){
+    var p = it.page||1;
+    if(!byPage[p]) byPage[p]=[];
+    byPage[p].push(it);
+  });
+  var rawLines = [];
+  Object.keys(byPage).sort(function(a,b){return parseInt(a,10)-parseInt(b,10);}).forEach(function(p){
+    var pi = byPage[p].slice();
+    var groups = [];
+    pi.forEach(function(it){
+      var found = false;
+      for(var gi=0; gi<groups.length; gi++){
+        var g = groups[gi];
+        if(Math.abs(g.yAvg - it.y) <= TOL_Y){
+          g.items.push(it);
+          g.yAvg = (g.yAvg * g.items.length + it.y) / (g.items.length + 1);
+          found = true; break;
+        }
+      }
+      if(!found) groups.push({yAvg:it.y, items:[it], page:p});
+    });
+    groups.sort(function(a,b){return b.yAvg - a.yAvg;});
+    groups.forEach(function(g){
+      g.items.sort(function(a,b){return a.x - b.x;});
+      rawLines.push(g.items.map(function(it){return it.str;}).join(' '));
+    });
+  });
+  var fullText = rawLines.join('\n');
+  
+  // 3. Flag REAPPRO
+  base.isReappro = /G[ÉE]N[ÉE]R[ÉE]\s+PAR\s+LE\s+R[ÉE]APPROVISIONNEMENT/i.test(fullText);
+  
+  // 4. Référence Marché (interne SLN/Maximo, ex "25074-02")
+  var mMarche = fullText.match(/Marché\s*[:=]?\s*(\d{4,6}-\d{1,3})/i);
+  base.refMarche = mMarche ? mMarche[1] : '';
+  
+  // 5. Acheteur (nom en majuscules sous l'en-tête "Acheteur / Purchaser")
+  var mAcheteur = fullText.match(/Acheteur[^\n]*\n[^\n]*?([A-Z][A-Z\s]{5,30}[A-Z])(?:\s*\n|Téléphone)/);
+  base.acheteur = mAcheteur ? mAcheteur[1].trim() : '';
+  
+  // 6. Lieu livraison : pattern "LOCAL DDP MAG DBO" → on capture "MAG DBO"
+  //    Fallback : "DDP MAG XXX"
+  var mLieu = fullText.match(/LOCAL\s+DDP\s+([A-Z]{3,8}\s+[A-Z]{2,8})/i)
+           || fullText.match(/DDP\s+(MAG\s+[A-Z]{2,8})/i);
+  base.lieuLivraison = mLieu ? mLieu[1].trim().replace(/\s+/g,' ') : '';
+  
+  // 7. Pour chaque ligne : extraire refConstructeur depuis description
+  //    Dans parseBCClientPdfItems, le champ `ref` contient en réalité le Code SLN/Maximo
+  //    (7 chiffres en tête de la cellule désignation). On le réétiquette en `codeMaximo`,
+  //    et on extrait la vraie ref Emerson depuis "Ref.constructeur : XYZ" dans la désignation.
+  (base.lines||[]).forEach(function(l){
+    var m = String(l.desc||'').match(/Ref\.?\s*constructeur\s*[:=]?\s*([A-Z0-9][A-Z0-9\-]+)/i);
+    if(m){
+      l.refConstructeur = m[1];
+      // Nettoyer la désignation : enlever le bloc "Ref.constructeur : XYZ"
+      l.desc = l.desc.replace(/\s*Ref\.?\s*constructeur\s*[:=]?\s*[A-Z0-9\-]+\s*/i, ' ').replace(/\s+/g,' ').trim();
+    } else {
+      l.refConstructeur = '';
+    }
+    l.codeMaximo = l.ref || '';
+  });
+  
+  // 8. Dédup : le BC SLN est multi-pages et la ligne article peut apparaître 2x
+  //    (page principale + page récap signature). Clé : refConstructeur OU codeMaximo + qte + total.
+  var seen = {};
+  base.lines = (base.lines||[]).filter(function(l){
+    var key = (l.refConstructeur || l.codeMaximo || l.desc.substring(0,20)) + '|' + l.qte + '|' + l.total;
+    if(seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+  
+  // 9. Matching grille catalogue
+  //    Priorité 1 : refConstructeur → article.ref (ex "3051TG2A2C21BBLEK8Q4D1M6")
+  //    Priorité 2 : codeMaximo → article.codeSLN (ex "2518911")
+  (base.lines||[]).forEach(function(l){
+    var match = null, matchType = null;
+    if(l.refConstructeur && DB.articles){
+      match = DB.articles.find(function(a){return (a.ref||'').trim() === l.refConstructeur.trim();});
+      if(match) matchType = 'ref';
+    }
+    if(!match && l.codeMaximo && DB.articles){
+      match = DB.articles.find(function(a){return (a.codeSLN||'').trim() === l.codeMaximo.trim();});
+      if(match) matchType = 'codeSLN';
+    }
+    l.matchedArticle = match;
+    l.matchType = matchType;
+  });
+  
+  return base;
+}
+
+// ----------------------------------------------------------------------------
+// HELPERS NUMÉROTATION CASCADE
+// ----------------------------------------------------------------------------
+// MAX(SLN-F)+1 → utilisé comme NNN partagé entre Facture, BL, BC Calinstrum.
+// Le NNN de la facture est ROI : les autres docs adoptent le même NNN, même si
+// leur compteur propre dirait autre chose. C'est le choix utilisateur validé pour
+// la cohérence visuelle (toute la cascade porte le même n° en queue).
+function _getNNNForCascadeReappro(){
+  var max = 0;
+  // Scanner DB.factures (champ num doit matcher /^SLN-F(\d+)$/)
+  (DB.factures||[]).forEach(function(f){
+    var m = String(f.num||'').match(/^SLN-F(\d+)$/i);
+    if(m){var n = parseInt(m[1],10); if(n > max) max = n;}
+  });
+  // Scanner DB.invoices (legacy) au cas où il reste des factures non migrées
+  (DB.invoices||[]).forEach(function(f){
+    var m = String(f.num||'').match(/^SLN-F(\d+)$/i);
+    if(m){var n = parseInt(m[1],10); if(n > max) max = n;}
+  });
+  return max + 1;
+}
+// Format JJMMAAAA/NNN à partir d'une date ISO + NNN
+function _formatDateNumCascade(isoDate, nnn){
+  var d = isoDate ? new Date(isoDate) : new Date();
+  if(isNaN(d.getTime())) d = new Date();
+  var dd = String(d.getDate()).padStart(2,'0');
+  var mm = String(d.getMonth()+1).padStart(2,'0');
+  var yy = d.getFullYear();
+  var nnnStr = String(nnn).padStart(3,'0');
+  return dd+mm+yy+'/'+nnnStr;
+}
+// Pad NNN à 3 chiffres
+function _padNNN(n){return String(n).padStart(3,'0');}
+
+// ----------------------------------------------------------------------------
+// PREVIEW MODALE CASCADE
+// ----------------------------------------------------------------------------
+// Affiche 4 panneaux (Devis, Facture, BL, BC Cali) avec lignes vertes/rouges
+// et bouton "Valider la cascade". Si une ligne est hors grille → bouton désactivé.
+function _previewReapproCascade(parsed, fileName){
+  // Calculer le NNN partagé + dates pour preview
+  var nnn = _getNNNForCascadeReappro();
+  var todayIso = (typeof td==='function') ? td() : new Date().toISOString().substring(0,10);
+  
+  // Préparer les numéros prévus
+  var numFacture = 'SLN-F' + _padNNN(nnn);
+  var numBL = 'BL' + _formatDateNumCascade(todayIso, nnn);
+  var numBCCali = _formatDateNumCascade(todayIso, nnn);
+  // Devis : on suffixe avec le N° BC (sans le 00 initial et le slash : "737738-01")
+  var bcShort = String(parsed.num||'').replace(/^0+/,'').replace(/\//g,'-');
+  var numDevis = 'SLN-DV-BCGMAO-' + bcShort;
+  
+  // Détecter les lignes hors grille
+  var matched = parsed.lines.filter(function(l){return l.matchedArticle;});
+  var unmatched = parsed.lines.filter(function(l){return !l.matchedArticle;});
+  var canCascade = unmatched.length === 0;
+  
+  // Stocker l'état pour _validerCascadeReappro
+  _reapproPreviewState = {
+    parsed: parsed,
+    fileName: fileName,
+    nnn: nnn,
+    todayIso: todayIso,
+    numDevis: numDevis,
+    numFacture: numFacture,
+    numBL: numBL,
+    numBCCali: numBCCali
+  };
+  
+  // Totaux
+  var totalXPF = parsed.total || matched.reduce(function(s,l){return s+(l.total||0);},0);
+  var totalAUD = 0;
+  matched.forEach(function(l){
+    var pa = l.matchedArticle && l.matchedArticle.prixAchatAUD;
+    if(pa) totalAUD += l.qte * pa;
+  });
+  
+  // ====== Construction HTML ======
+  var h = '';
+  
+  // Bloc header BC
+  h += '<div style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.3);border-radius:8px;padding:12px;margin-bottom:14px">';
+  h += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">';
+  h += '<span style="background:rgba(56,189,248,0.2);color:#38bdf8;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.05em">BC REAPPRO SLN</span>';
+  if(parsed.isReappro) h += '<span style="background:rgba(16,185,129,0.15);color:var(--green);padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700">✓ REAPPRO détecté</span>';
+  else h += '<span style="background:rgba(251,191,36,0.15);color:var(--amber);padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700">⚠ Mention REAPPRO absente</span>';
+  h += '</div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:11px">';
+  h += '<div><div style="color:var(--muted);font-size:9.5px;text-transform:uppercase;margin-bottom:2px">N° BC SLN</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;color:#38bdf8">'+esc(parsed.num||'?')+'</div></div>';
+  h += '<div><div style="color:var(--muted);font-size:9.5px;text-transform:uppercase;margin-bottom:2px">Date émission</div><div style="font-weight:700">'+esc(parsed.date||'?')+'</div></div>';
+  h += '<div><div style="color:var(--muted);font-size:9.5px;text-transform:uppercase;margin-bottom:2px">Marché / Maximo</div><div style="font-weight:700;font-family:JetBrains Mono,monospace">'+esc(parsed.refMarche||'-')+'</div></div>';
+  h += '<div><div style="color:var(--muted);font-size:9.5px;text-transform:uppercase;margin-bottom:2px">Acheteur</div><div style="font-weight:700">'+esc(parsed.acheteur||'-')+'</div></div>';
+  h += '</div>';
+  h += '<div style="font-size:11px;color:var(--muted);margin-top:6px">📄 '+esc(fileName||'(sans nom)')+(parsed.lieuLivraison?' · Livraison : <b style="color:var(--text)">'+esc(parsed.lieuLivraison)+'</b>':'')+'</div>';
+  h += '</div>';
+  
+  // Bloc panneau cascade (4 docs)
+  h += '<div style="margin-bottom:14px">';
+  h += '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:8px">📋 Documents qui seront créés (NNN partagé : '+_padNNN(nnn)+')</div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
+  // Devis
+  h += '<div style="background:rgba(167,139,250,0.06);border:1px solid rgba(167,139,250,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:#a78bfa;text-transform:uppercase;font-weight:700;margin-bottom:4px">1️⃣ Devis</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:#a78bfa;word-break:break-all">'+esc(numDevis)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">Statut : Facturé · Type : Fourniture</div></div>';
+  // Facture
+  h += '<div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:var(--teal);text-transform:uppercase;font-weight:700;margin-bottom:4px">2️⃣ Facture</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:var(--teal)">'+esc(numFacture)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">'+fN(totalXPF)+' XPF</div></div>';
+  // BL
+  h += '<div style="background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:#38bdf8;text-transform:uppercase;font-weight:700;margin-bottom:4px">3️⃣ Bon de livraison</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:#38bdf8">'+esc(numBL)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">'+(parsed.lieuLivraison||'NOUMEA')+'</div></div>';
+  // BC Calinstrum
+  h += '<div style="background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:#fbbf24;text-transform:uppercase;font-weight:700;margin-bottom:4px">4️⃣ BC Calinstrum (Emerson)</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:#fbbf24">'+esc(numBCCali)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">'+(totalAUD>0?fN(totalAUD)+' AUD':'AUD non chiffré')+'</div></div>';
+  h += '</div></div>';
+  
+  // Stats matching
+  h += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">';
+  h += '<div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.25);border-radius:6px;padding:8px;text-align:center"><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Matchés grille</div><div style="font-size:18px;font-weight:700;color:var(--green)">'+matched.length+'</div></div>';
+  h += '<div style="background:rgba(244,63,94,'+(unmatched.length>0?'0.12':'0.06')+');border:1px solid rgba(244,63,94,'+(unmatched.length>0?'0.45':'0.25')+');border-radius:6px;padding:8px;text-align:center"><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Hors grille (bloquant)</div><div style="font-size:18px;font-weight:700;color:var(--red)">'+unmatched.length+'</div></div>';
+  h += '<div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.25);border-radius:6px;padding:8px;text-align:center"><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Total HT</div><div style="font-size:18px;font-weight:700;color:var(--teal)">'+fN(totalXPF)+' XPF</div></div>';
+  h += '</div>';
+  
+  // Message bloquant si lignes hors grille
+  if(unmatched.length > 0){
+    h += '<div style="background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.45);border-radius:6px;padding:10px;margin-bottom:12px">';
+    h += '<div style="font-weight:700;color:var(--red);margin-bottom:4px">⛔ Cascade bloquée : '+unmatched.length+' ligne(s) hors grille</div>';
+    h += '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Pour valider la cascade, toutes les références doivent être présentes dans le Catalogue. Ajoutez-les d\'abord, puis recommencez l\'import.</div>';
+    h += '<button class="btn btn-sm btn-ghost" onclick="cm(\'mReappro\');nav(\'catalogue\');" style="border-color:rgba(244,63,94,0.5);color:var(--red);font-size:11px">📑 Aller au Catalogue</button>';
+    h += '</div>';
+  }
+  
+  // Tableau lignes détaillé
+  h += '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">📦 Lignes détaillées</div>';
+  h += '<div style="max-height:30vh;overflow-y:auto;border:1px solid rgba(255,255,255,0.06);border-radius:6px"><table style="width:100%;font-size:11px;border-collapse:collapse">';
+  h += '<thead style="position:sticky;top:0;background:var(--bg);z-index:1"><tr style="border-bottom:1px solid rgba(255,255,255,0.1)">';
+  h += '<th style="text-align:left;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">#</th>';
+  h += '<th style="text-align:left;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">Code Maximo</th>';
+  h += '<th style="text-align:left;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">Ref Constructeur</th>';
+  h += '<th style="text-align:left;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">Désignation</th>';
+  h += '<th style="text-align:center;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">Qté</th>';
+  h += '<th style="text-align:right;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">PU XPF</th>';
+  h += '<th style="text-align:right;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">PU AUD</th>';
+  h += '<th style="text-align:right;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">Total</th>';
+  h += '<th style="text-align:center;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">Match</th>';
+  h += '</tr></thead><tbody>';
+  parsed.lines.forEach(function(l,i){
+    var matched = !!l.matchedArticle;
+    var bgRow = matched ? 'rgba(16,185,129,0.04)' : 'rgba(244,63,94,0.07)';
+    var puAUD = matched ? (l.matchedArticle.prixAchatAUD || 0) : 0;
+    h += '<tr style="background:'+bgRow+';border-bottom:1px solid rgba(255,255,255,0.05)">';
+    h += '<td style="padding:5px 6px;color:var(--muted)">'+(i+1)+'</td>';
+    h += '<td style="padding:5px 6px;font-family:JetBrains Mono,monospace;font-size:10.5px;color:#a78bfa">'+esc(l.codeMaximo||'-')+'</td>';
+    h += '<td style="padding:5px 6px;font-family:JetBrains Mono,monospace;font-size:10.5px;color:var(--teal)">'+esc(l.refConstructeur||'-')+'</td>';
+    h += '<td style="padding:5px 6px">'+esc((l.desc||'').substring(0,55))+(l.desc&&l.desc.length>55?'…':'')+'</td>';
+    h += '<td style="padding:5px 6px;text-align:center;font-weight:700">'+l.qte+'</td>';
+    h += '<td style="padding:5px 6px;text-align:right;font-family:JetBrains Mono,monospace">'+fN(l.pu||0)+'</td>';
+    h += '<td style="padding:5px 6px;text-align:right;font-family:JetBrains Mono,monospace;color:#fbbf24">'+(puAUD>0?fN(puAUD):'-')+'</td>';
+    h += '<td style="padding:5px 6px;text-align:right;font-weight:700;font-family:JetBrains Mono,monospace">'+fN(l.total||0)+'</td>';
+    if(matched){
+      var icon = (l.matchType==='ref') ? '✅' : '🎯';
+      h += '<td style="padding:5px 6px;text-align:center"><span style="background:rgba(16,185,129,0.15);color:var(--green);padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700">'+icon+' '+(l.matchType==='ref'?'Ref':'Code')+'</span></td>';
+    } else {
+      h += '<td style="padding:5px 6px;text-align:center"><span style="background:rgba(244,63,94,0.15);color:var(--red);padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700">⛔ Hors grille</span></td>';
+    }
+    h += '</tr>';
+  });
+  h += '</tbody></table></div>';
+  
+  // Footer
+  h += '<div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;align-items:center">';
+  h += '<button class="btn btn-ghost" onclick="cm(\'mReappro\')">Annuler</button>';
+  if(canCascade){
+    h += '<button class="btn btn-teal" onclick="_validerCascadeReappro()" style="font-weight:700">✓ Valider la cascade (4 documents)</button>';
+  } else {
+    h += '<button class="btn btn-ghost" disabled style="opacity:0.5;cursor:not-allowed">⛔ Cascade bloquée ('+unmatched.length+' hors grille)</button>';
+  }
+  h += '</div>';
+  
+  // Injection dans modal (créé au vol si inexistant)
+  var modal = document.getElementById('mReappro');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'mReappro';
+    modal.innerHTML = '<div class="modal modal-lg" style="max-width:1100px"><div class="modal-header"><h3>🔄 Import REAPPRO — Aperçu cascade</h3><button class="modal-close" onclick="cm(\'mReappro\')">✕</button></div><div class="modal-body" id="mReappro-body"></div></div>';
+    document.body.appendChild(modal);
+  }
+  document.getElementById('mReappro-body').innerHTML = h;
+  om('mReappro');
+}
+
+// ----------------------------------------------------------------------------
+// VALIDATION CASCADE : crée les 4 documents liés
+// ----------------------------------------------------------------------------
+// Tous les documents partagent :
+//   - Même NNN (calculé via _getNNNForCascadeReappro)
+//   - Lien croisé (devis.linkFactureId, facture._cascadeBcReapproId, etc.)
+//
+// Anti-doublon : si SLN-F{NNN} existe déjà, ABORT (sécurité contre double-clic).
+function _validerCascadeReappro(){
+  var st = _reapproPreviewState;
+  if(!st){alert('⚠ Aucun aperçu cascade actif.');return;}
+  var parsed = st.parsed;
+  
+  // Re-checker absence de hors-grille (sécurité)
+  var unmatched = parsed.lines.filter(function(l){return !l.matchedArticle;});
+  if(unmatched.length > 0){
+    alert('⛔ Impossible de valider : '+unmatched.length+' ligne(s) hors grille.');
+    return;
+  }
+  
+  // Anti-doublon (recalculer car le user a pu créer une autre facture entre temps)
+  var freshNNN = _getNNNForCascadeReappro();
+  if(freshNNN !== st.nnn){
+    if(!confirm('⚠ Un autre document a été créé pendant l\'aperçu (NNN attendu : '+st.nnn+', NNN réel : '+freshNNN+').\n\nLa cascade utilisera le NNN réel ('+freshNNN+'). Continuer ?')){
+      return;
+    }
+    st.nnn = freshNNN;
+    st.numFacture = 'SLN-F' + _padNNN(freshNNN);
+    st.numBL = 'BL' + _formatDateNumCascade(st.todayIso, freshNNN);
+    st.numBCCali = _formatDateNumCascade(st.todayIso, freshNNN);
+  }
+  
+  // Vérifier qu'on n'a pas déjà SLN-F{NNN} en base
+  var exists = (DB.factures||[]).some(function(f){return (f.num||'').toUpperCase() === st.numFacture.toUpperCase();})
+           || (DB.invoices||[]).some(function(f){return (f.num||'').toUpperCase() === st.numFacture.toUpperCase();});
+  if(exists){
+    alert('⛔ '+st.numFacture+' existe déjà en base. Cascade annulée.');
+    return;
+  }
+  // Idem pour devis (numéro déterministe basé sur le BC, peut être un re-import)
+  var dvExists = (DB.devis||[]).some(function(d){return (d.num||'').toUpperCase() === st.numDevis.toUpperCase();});
+  if(dvExists){
+    if(!confirm('⚠ Un devis '+st.numDevis+' existe déjà en base. Cela signifie probablement que ce BC a déjà été importé.\n\nCréer quand même la cascade (cela créera un doublon) ?')){
+      return;
+    }
+  }
+  
+  // Construire les lignes "fourniture" au format DV (avec headers de section).
+  // Référence : structure utilisée par generateFactureFromDV (les lignes existent par section).
+  var dvFourniture = [];
+  parsed.lines.forEach(function(l, idx){
+    var art = l.matchedArticle;
+    dvFourniture.push({
+      id: Date.now() + idx,
+      ref: l.refConstructeur || (art && art.ref) || '',
+      codeSLN: l.codeMaximo || (art && art.codeSLN) || '',
+      designation: l.desc || (art && art.nom) || '',
+      tgc: 0,  // BC SLN = exonéré TGC Lp 506-2
+      unite: (art && art.unite) || 'Lot',
+      qte: l.qte || 1,
+      pu: l.pu || (art && art.prixVenteXPF) || 0
+    });
+  });
+  // Totaux
+  var ht = dvFourniture.reduce(function(s,l){return s + (l.qte*l.pu);},0);
+  
+  // ===== Helper : id unique séquentiel pour éviter collisions Date.now() =====
+  var nowBase = Date.now();
+  var seq = 0;
+  function newId(){seq++; return nowBase + seq;}
+  
+  // ===== 1. DEVIS SLN-DV-BCGMAO-{numBC} =====
+  var devisId = newId();
+  var devis = {
+    id: devisId,
+    num: st.numDevis,
+    rev: '',
+    date: parsed.date || st.todayIso,
+    type: 'Fourniture',
+    client: 'SLN',
+    contact: parsed.acheteur || '',
+    email: '',
+    adresse: '',
+    objet: 'REAPPRO BC ' + parsed.num,
+    status: 'Facturé',
+    tgcM: '506-2',
+    bcClientSLN: parsed.num,
+    bcClientSLNDate: parsed.date || '',
+    cadreRef: 'GRILLE-2026', // lié à la grille tarifaire courante
+    lines: {fourniture: dvFourniture, service: [], fret: []},
+    ht: ht, t11: 0, t22: 0, t6: 0, fr: 0, ttc: ht,
+    _isNativeGRC: true,
+    _autoGenerated: true,
+    _fromBCReappro: true,
+    _bcReapproNum: parsed.num,
+    _refMarcheSLN: parsed.refMarche || ''
+  };
+  DB.devis = DB.devis || [];
+  DB.devis.push(devis);
+  
+  // ===== 2. FACTURE SLN-F{NNN} =====
+  var factureId = newId();
+  // Lignes facture = lignes devis aplaties (format facture utilise un tableau plat)
+  var faLines = dvFourniture.map(function(l){
+    return {
+      ref: l.ref,
+      codeSLN: l.codeSLN,
+      designation: l.designation,
+      tgc: 0,
+      unite: l.unite,
+      qte: l.qte,
+      pu: l.pu
+    };
+  });
+  var facture = {
+    id: factureId,
+    num: st.numFacture,
+    date: st.todayIso,
+    client: 'SLN',
+    contact: parsed.acheteur || '',
+    email: 'gen_sct.dbo@eramet-sln.com',
+    adresse: '',
+    objet: 'REAPPRO BC ' + parsed.num,
+    type: 'Fourniture',
+    devisLieId: devisId,
+    dvlie: st.numDevis,
+    bcClientSLN: parsed.num,
+    bcClientSLNDate: parsed.date || '',
+    _importPONum: parsed.num,
+    statut: 'En attente',
+    status: 'En attente',
+    tgcM: '506-2',
+    delai: 'Paiement sous 30 jours à reception de la facture',
+    lines: faLines,
+    ht: ht, t11: 0, t22: 0, t6: 0, fr: 0, ttc: ht,
+    _fromBCReappro: true,
+    _bcReapproNum: parsed.num,
+    _refMarcheSLN: parsed.refMarche || ''
+  };
+  DB.factures = DB.factures || [];
+  DB.factures.push(facture);
+  // Lier devis → facture
+  devis.linkFactureId = factureId;
+  
+  // ===== 3. BON DE LIVRAISON BL{JJMMAAAA}/{NNN} =====
+  var blId = newId();
+  var blLines = dvFourniture.map(function(l){
+    return {
+      ref: l.codeSLN || l.ref,  // BL affiche d'abord le code SLN/Maximo (réf produit côté SLN)
+      designation: l.designation,
+      refConstructeur: l.ref,    // garde la ref Emerson dans un champ secondaire
+      unite: l.unite,
+      qte: l.qte,
+      pu: l.pu
+    };
+  });
+  var bl = {
+    id: blId,
+    num: st.numBL,
+    date: st.todayIso,
+    lieu: 'NOUMEA',
+    client: 'SLN - ' + (parsed.acheteur || 'PAKORO YANNICK'),
+    contact: parsed.acheteur || 'Yannick PAKORO',
+    adrdest: 'Magasin Général, 2 Rue Desjardins, Doniambo BP E5 98845 NOUMEA CEDEX',
+    emaildest: 'gen_sct.dbo@eramet-sln.com',
+    po: parsed.num,
+    emis: 'Fabrice RIZZO',
+    status: 'En préparation',
+    dvlie: st.numDevis,
+    _sourceDevisIds: [devisId],
+    lines: blLines,
+    total: ht,
+    _fromBCReappro: true,
+    _bcReapproNum: parsed.num
+  };
+  DB.bls = DB.bls || [];
+  DB.bls.push(bl);
+  
+  // ===== 4. BC CALINSTRUM (Emerson) {JJMMAAAA}/{NNN} =====
+  var bcCaliId = newId();
+  // Lignes BC Cali = AUD ; on prend prixAchatAUD de l'article matché
+  var bcLines = parsed.lines.map(function(l){
+    var art = l.matchedArticle;
+    var puAUD = (art && art.prixAchatAUD) || 0;
+    return {
+      ref: l.refConstructeur || (art && art.ref) || '',  // ref Emerson
+      desc: 'Inline Pressure Transmitter', // descriptif générique côté Emerson
+      designation: l.desc || (art && art.nom) || '',
+      qte: l.qte || 1,
+      pu: puAUD,
+      unite: (art && art.unite) || 'Lot'
+    };
+  });
+  var totalAUD = bcLines.reduce(function(s,l){return s + (l.qte * l.pu);}, 0);
+  var bcCali = {
+    id: bcCaliId,
+    num: st.numBCCali,
+    date: st.todayIso,
+    devise: 'AUD',
+    vcont: 'Pacheco, Jose',
+    vemail: 'JosePacheco@Emerson.com',
+    vphone: '+61498026183',
+    vaddr: 'Emerson Process management Australia Pty Ltd, 471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA',
+    inco: 'Inco2020: FCA BAYSWATER',
+    fret: 'Collect',
+    status: 'En attente',
+    clientFinal: 'SLN',
+    cref2: parsed.num, // Customer Ref = N° BC SLN
+    linkDevis: st.numDevis,
+    linkBCclient: parsed.num,
+    linkFacture: st.numFacture,
+    linkBL: st.numBL,
+    devisLieIds: [devisId],
+    devisLieId: String(devisId),
+    lines: bcLines,
+    total: totalAUD,
+    totals: {total: totalAUD, subtotal: totalAUD},
+    _fromBCReappro: true,
+    _bcReapproNum: parsed.num,
+    _refMarcheSLN: parsed.refMarche || ''
+  };
+  DB.bcs = DB.bcs || [];
+  DB.bcs.push(bcCali);
+  
+  // ===== Liens croisés inverses =====
+  facture.linkedBCs = [bcCaliId];
+  facture._linkedBLId = blId;
+  bl._linkedFactureId = factureId;
+  bl._linkedBCCaliId = bcCaliId;
+  
+  // ===== Sauvegarde + rendu =====
+  if(typeof saveDB === 'function') saveDB();
+  if(typeof renderDV === 'function') try{renderDV();}catch(e){}
+  if(typeof renderFA === 'function') try{renderFA();}catch(e){}
+  if(typeof renderBL === 'function') try{renderBL();}catch(e){}
+  if(typeof renderBC === 'function') try{renderBC();}catch(e){}
+  if(typeof rDash === 'function') try{rDash();}catch(e){}
+  // Sync Suivi Factures si fonction disponible
+  if(typeof syncFAToSuivi === 'function'){
+    try{syncFAToSuivi(facture);}catch(e){console.warn('Sync Suivi failed:',e);}
+  }
+  
+  // Fermer modale preview
+  cm('mReappro');
+  _reapproPreviewState = null;
+  
+  // Toast / alert succès
+  alert('✅ Cascade REAPPRO créée !\n\n' +
+    '1️⃣ Devis     : ' + st.numDevis + ' (Facturé)\n' +
+    '2️⃣ Facture   : ' + st.numFacture + ' — ' + fN(ht) + ' XPF\n' +
+    '3️⃣ BL        : ' + st.numBL + '\n' +
+    '4️⃣ BC Cali   : ' + st.numBCCali + ' — ' + fN(totalAUD) + ' AUD\n\n' +
+    'BC SLN source : ' + parsed.num + '\n' +
+    'Marché        : ' + (parsed.refMarche||'?') + '\n\n' +
+    'Tous les documents sont liés entre eux.');
+}
+
+// =============================================================================
+// FIN Phase 2c — IMPORT BC REAPPRO + CASCADE
+// =============================================================================
 
 // Lit la feuille Excel et extrait : (1) factures avec type couleur, (2) devis associés
 function processExcelSheet(ws,fileName){
@@ -11536,11 +12388,30 @@ function _normalizeFactureStatus(f){
   }
 
   // Vérification retard (facture vraiment émise mais pas payée à temps)
+  // === ROBUSTESSE dateButoir ===
+  // DB.factures n'a pas toujours dateButoir peuplée directement (calculée à la volée
+  // par getSuiviSource via date+délai). Si absente ici, on la recalcule pour ne pas
+  // perdre la détection "retard" sur les pages Devis (cellule facture) et popovers.
   var today=new Date().toISOString().substring(0,10);
+  var bd=f.dateButoir||'';
+  if(!bd){
+    var srcDate=f.date||f.dateEnvoi||'';
+    if(srcDate){
+      try{
+        var delai=(f.delai||'').toString();
+        var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
+        var dE=new Date(srcDate);
+        if(!isNaN(dE.getTime())){
+          dE.setDate(dE.getDate()+days);
+          bd=dE.toISOString().slice(0,10);
+        }
+      }catch(e){}
+    }
+  }
   var isLate=false, daysLate=0;
-  if(f.dateButoir && f.dateButoir<today){
+  if(bd && bd<today){
     isLate=true;
-    var diff=Math.floor((new Date(today)-new Date(f.dateButoir))/(1000*60*60*24));
+    var diff=Math.floor((new Date(today)-new Date(bd))/(1000*60*60*24));
     daysLate=diff;
   }
   if(isLate) return {key:'late',label:'Retard '+daysLate+'j',color:'#ef4444',icon:'alert-triangle'};
@@ -17672,16 +18543,27 @@ function generateFactureFromDV(){
   // PDF facture (renderFAPdfRows) sait afficher ces 3 cas grâce au flag _isTaskMain.
   // Deep-clone via JSON pour éviter les références partagées avec le devis source.
   var faLines=[];
+  // Mapping des sections → label banner (identique à bDV.secNames)
+  var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
   ['fourniture','service','fret'].forEach(function(sec){
-    (d.lines[sec]||[]).forEach(function(l){
+    var secLines=(d.lines&&d.lines[sec])||[];
+    if(!secLines.length)return; // pas de banner si section vide
+    // Pousser un banner de section AVANT les lignes de cette section
+    // (préserve l'affichage FOURNITURE / MAIN D'OEUVRE / FRET dans le PDF facture)
+    faLines.push({type:'section_banner',desc:SEC_LABELS[sec],_sec:sec});
+    secLines.forEach(function(l){
       if(!l)return;
       // Headers (sous-titres / KIT / TASK) → conservés tels quels pour structurer le PDF
       if(l.type==='header'){
-        faLines.push(JSON.parse(JSON.stringify(l)));
+        var clonedH=JSON.parse(JSON.stringify(l));
+        clonedH._sec=sec; // tag de section pour le rendu
+        faLines.push(clonedH);
         return;
       }
       // Ligne normale, KIT ou TASK : deep clone complet (préserve subLines, _isTaskMain)
-      faLines.push(JSON.parse(JSON.stringify(l)));
+      var clonedL=JSON.parse(JSON.stringify(l));
+      clonedL._sec=sec;
+      faLines.push(clonedL);
     });
   });
   var fa={
@@ -22142,6 +23024,32 @@ function extractStatusKey(item,type){
     var ttc=item.ttc||0;
     if(totVerse>=ttc&&ttc>0)return 'Payée';
     if(totVerse>0)return 'Partiel';
+    // === DÉTECTION RETARD (cohérence avec getStatus / _normalizeFactureStatus) ===
+    // Une facture émise non payée dont l'échéance est dépassée doit remonter
+    // "En retard" dans les agrégats mois (badge), pas son status brut "En attente".
+    // Sans cela, le badge agrégé du mois Avril 2026 affichait "en attente·1"
+    // alors que la ligne F093 montrait "RETARD 16j" rouge — incohérence visible.
+    var rawStatus=item.status||item.statut||'';
+    var isPaid=/^pay(é|e)e?$/i.test(rawStatus);
+    if(!isPaid){
+      var today_=new Date().toISOString().substring(0,10);
+      var bd=item.dateButoir||'';
+      if(!bd){
+        var srcDate=item.date||item.dateEnvoi||'';
+        if(srcDate){
+          try{
+            var delai=(item.delai||'').toString();
+            var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
+            var dE=new Date(srcDate);
+            if(!isNaN(dE.getTime())){
+              dE.setDate(dE.getDate()+days);
+              bd=dE.toISOString().slice(0,10);
+            }
+          }catch(e){}
+        }
+      }
+      if(bd && bd<today_) return 'En retard';
+    }
     return item.status||'En attente';
   }
   return item.status||'';
@@ -25313,7 +26221,11 @@ function renderFA(){
   var sourceForTabs=sourceWithClient;
   if(fYearForTabs){
     sourceForTabs=sourceWithClient.filter(function(f){
-      var ds=String(f.dateEnvoi||f.date||f.dateReceptionBC||'').substring(0,4);
+      // Règle métier (mai 2026) : pour les factures non-billed, dateEnvoi est vide,
+      // mais la date COMPTABLE (création facture) prime sur dateReceptionBC qui peut
+      // dater d'années antérieures. Ordre : dateEnvoi (émission officielle si billed)
+      // → _dateCreation (création GRC = date comptable) → dateReceptionBC (fallback ultime).
+      var ds=String(f.dateEnvoi||f.date||f._dateCreation||f.dateReceptionBC||'').substring(0,4);
       return ds===String(fYearForTabs);
     });
   }
@@ -25323,7 +26235,8 @@ function renderFA(){
   // On compte les factures de l'année sélectionnée (ou toutes années si fYear vide)
   var statsYear=fYearForTabs||((typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear());
   var faStatsList=sourceWithClient.filter(function(f){
-    var ds=String(f.dateEnvoi||f.date||f.dateReceptionBC||'').substring(0,4);
+    // Ordre : dateEnvoi → _dateCreation (date comptable) → dateReceptionBC. Cf. règle métier.
+    var ds=String(f.dateEnvoi||f.date||f._dateCreation||f.dateReceptionBC||'').substring(0,4);
     return ds===String(statsYear);
   });
   var faStatsCount=faStatsList.length;
@@ -25375,7 +26288,8 @@ function renderFA(){
     // on ignore le filtre année. Car une facture peut être encaissée en
     // février 2026 mais émise en décembre 2025 — on veut quand même la voir.
     if(fYear && !fEncMonth){
-      var dateForYear=i.dateEnvoi||i.dateReceptionBC||'';
+      // Date comptable (_dateCreation) prime sur dateReceptionBC pour cohérence dashboard.
+      var dateForYear=i.dateEnvoi||i._dateCreation||i.dateReceptionBC||'';
       var m=String(dateForYear).match(/^(\d{4})/);
       if(!m || m[1]!==fYear) return false;
     }
@@ -28635,6 +29549,349 @@ function listAllDevisPdfMeta(){
       req.onerror=function(e){reject(e.target.error);};
     });
   });
+}
+
+// =============================================================================
+// exportAllDevisPdfs — BACKUP DE TOUS LES PDFs JOINTS AUX DEVIS
+// =============================================================================
+// Télécharge sur le disque local TOUS les PDFs stockés en IndexedDB pour TOUS
+// les devis. Utilisé comme backup de sécurité indépendant du JSON principal.
+//
+// Stratégie :
+//   - Liste tous les enregistrements (devisId, kind, filename, blob)
+//   - Pour chaque, déclenche un téléchargement avec un nom préfixé par le
+//     numéro du devis (récupéré depuis DB.devis) → ex : "SLN-DV128_emerson_29463159.pdf"
+//   - Petite pause (200ms) entre chaque téléchargement pour ne pas que le
+//     navigateur en saute (certains browsers bloquent les batches rapides)
+//
+// L'utilisateur garde le contrôle : si pop-up "Voulez-vous télécharger plusieurs
+// fichiers" apparaît, autoriser une fois pour ce site.
+//
+// Les PDFs originaux dans IndexedDB ne sont PAS touchés (lecture seule).
+// =============================================================================
+function exportAllDevisPdfs(){
+  if(!confirm('🗃 Backup PDFs joints\n\nCela va télécharger sur ton disque TOUS les PDFs (Emerson, ACT, PO Calinstrum, BC Client, Quote Emerson) attachés à tes devis.\n\nLes PDFs originaux dans le GRC ne sont PAS supprimés (lecture seule).\n\nLe navigateur peut te demander d\'autoriser le téléchargement multiple — cliquer Autoriser.\n\nContinuer ?')) return;
+  
+  // Récupérer la liste des PDFs avec blob (pas listAllDevisPdfMeta qui omet le blob)
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction(DEVIS_PDF_STORE,'readonly');
+      var store=tx.objectStore(DEVIS_PDF_STORE);
+      var req=store.getAll();
+      req.onsuccess=function(){resolve(req.result||[]);};
+      req.onerror=function(e){reject(e.target.error);};
+    });
+  }).then(function(records){
+    if(!records.length){
+      alert('⚠ Aucun PDF joint trouvé dans IndexedDB.');
+      return;
+    }
+    // Index DB.devis par id stringifié pour préfixer les noms de fichiers par le N° devis
+    var devisById = {};
+    (DB.devis||[]).forEach(function(d){devisById[String(d.id)] = d;});
+    
+    // Téléchargement séquentiel avec pause 200ms
+    var idx = 0;
+    var nbOK = 0;
+    function downloadNext(){
+      if(idx >= records.length){
+        alert('✅ Backup terminé\n\n' + nbOK + ' / ' + records.length + ' PDFs téléchargés dans ton dossier Downloads.\n\nVérifie que tu retrouves bien tous tes fichiers avant de continuer à utiliser le GRC.');
+        return;
+      }
+      var rec = records[idx];
+      idx++;
+      try {
+        if(!rec.blob){
+          console.warn('PDF sans blob (skip):', rec);
+          downloadNext();
+          return;
+        }
+        // Composer nom de fichier : {numDevis}__{kind}__{filename_original}
+        var dv = devisById[String(rec.devisId)];
+        var prefix = dv ? (String(dv.num||'devis')).replace(/[\\/:*?"<>|]/g,'_') : ('devisId_'+rec.devisId);
+        var origName = (rec.filename||'document.pdf').replace(/[\\/:*?"<>|]/g,'_');
+        // Si origName commence déjà par le N° devis, ne pas dupliquer
+        var safeName;
+        if(origName.toLowerCase().indexOf(String(prefix).toLowerCase()) === 0){
+          safeName = '__'+rec.kind+'__'+origName;
+        } else {
+          safeName = prefix + '__' + rec.kind + '__' + origName;
+        }
+        // Forcer extension .pdf si manquante
+        if(!/\.pdf$/i.test(safeName)) safeName += '.pdf';
+        
+        var url = URL.createObjectURL(rec.blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = safeName;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function(){URL.revokeObjectURL(url); a.remove();}, 500);
+        nbOK++;
+        console.log('[Backup PDFs]', (idx)+'/'+records.length, '→', safeName);
+      } catch(err){
+        console.error('Échec download PDF idx '+idx+':', err);
+      }
+      // Pause 200ms entre 2 téléchargements (sinon Chrome/Firefox bloquent les batches)
+      setTimeout(downloadNext, 200);
+    }
+    downloadNext();
+  }).catch(function(err){
+    alert('❌ Erreur backup : '+(err.message||err));
+    console.error('exportAllDevisPdfs failed:',err);
+  });
+}
+
+// ============================================================================
+// UTILITAIRE DE RÉPARATION DES LIENS dvlie (devis ↔ facture) — mai 2026
+// ============================================================================
+// Détecte les factures dont le champ dvlie est vide ou pointe vers un devis
+// introuvable. Propose des candidats par score multi-critères (montant, objet,
+// PO, dateReceptionBC) et permet d'appliquer les réparations validées.
+//
+// Cohérence : améliore le matching de _findLinkedFactures + élimine les
+// "factures orphelines" qui faussent les analyses de chiffre d'affaires.
+//
+// État runtime : window._dvlieRepairCandidates est rempli au moment de
+// l'ouverture de la modale et lu par _dvlieApplyRepairs.
+window._dvlieRepairCandidates=[];
+
+// Normalisation pour matcher des numéros DV avec variations (REV1, espace, etc.)
+function _dvlieNormDvNum(s){
+  return String(s||'').toUpperCase().replace(/\s+/g,'').replace(/REV\d*$/,'').replace(/-$/,'');
+}
+function _dvlieNormPo(s){
+  return String(s||'').toUpperCase().replace(/[\s_\/\-]/g,'');
+}
+function _dvlieEscHtml(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function _dvlieFmt(n){
+  return Number(n||0).toLocaleString('fr-FR').replace(/\u202f|\u00a0/g,' ');
+}
+
+// Score un candidat (devis) face à une facture. Plus élevé = meilleur match.
+// Critères (max ~120 points) :
+//   • Montant identique (±10 XPF)   : +60
+//   • Montant ≈ identique (±1%)     : +30
+//   • dvlie de la facture pointe vers ce devis (loose match)   : +40
+//   • Numéro DV présent dans objet/notes de la facture         : +25
+//   • PO de la facture = PO Calinstrum ou BC Client du devis   : +20
+//   • Préfixe client identique (SLN/PRNC)                      : +5
+function _dvlieScoreCandidate(fa,dv){
+  var score=0;
+  var reasons=[];
+  var faMt=Number(fa.ttc||fa.montant||0);
+  var dvMt=Number(dv.ttc||0);
+  if(faMt>0 && dvMt>0){
+    var diff=Math.abs(faMt-dvMt);
+    if(diff<10){score+=60;reasons.push('montant exact');}
+    else if(faMt>0 && diff/faMt<0.01){score+=30;reasons.push('montant ±1%');}
+  }
+  if(fa.dvlie){
+    var dvLooseK=_dvlieNormDvNum(dv.num);
+    var faParts=String(fa.dvlie).split(/[+,;\/]/).map(function(s){return _dvlieNormDvNum(s.trim());});
+    if(faParts.indexOf(dvLooseK)>=0){score+=40;reasons.push('dvlie pointe ici (loose)');}
+  }
+  var faText=(String(fa.objet||'')+' '+String(fa.notes||'')).toUpperCase();
+  var dvNumU=String(dv.num||'').toUpperCase();
+  if(dvNumU && faText.indexOf(dvNumU)>=0){score+=25;reasons.push('numéro DV dans objet');}
+  else {
+    var dvCoreLoose=_dvlieNormDvNum(dv.num);
+    if(dvCoreLoose && faText.replace(/[\s\-]/g,'').indexOf(dvCoreLoose)>=0){score+=15;reasons.push('numéro DV (loose) dans objet');}
+  }
+  // Similarité d'objet : compare les premiers mots significatifs (>3 chars).
+  // Si ≥3 mots du devis sont présents dans l'objet de la facture, c'est un signal fort.
+  var dvObjU=String(dv.objet||'').toUpperCase();
+  if(dvObjU && faText.length>5){
+    var dvWords=dvObjU.split(/[\s,.\/+\-:;]+/).filter(function(w){return w.length>=4;});
+    var common=0;
+    var seen={};
+    dvWords.forEach(function(w){
+      if(seen[w])return;
+      seen[w]=true;
+      if(faText.indexOf(w)>=0) common++;
+    });
+    if(common>=4){score+=25;reasons.push(common+' mots-clés communs');}
+    else if(common>=2){score+=12;reasons.push(common+' mots-clés communs');}
+  }
+  var faPo=_dvlieNormPo(fa._importPONum||'');
+  if(faPo){
+    if(_dvlieNormPo(dv.poCalinstrum||'')===faPo){score+=20;reasons.push('PO Calinstrum');}
+    else if(_dvlieNormPo(dv.bcClientSLN||'')===faPo){score+=20;reasons.push('BC Client');}
+  }
+  // Date BC : si la facture a une dateReceptionBC proche du bcClientSLNDate du devis,
+  // c'est un signal fort (le BC client a déclenché à la fois le devis et la facture).
+  if(fa.dateReceptionBC && dv.bcClientSLNDate){
+    try{
+      var dFa=new Date(fa.dateReceptionBC);
+      var dDv=new Date(dv.bcClientSLNDate);
+      if(!isNaN(dFa.getTime())&&!isNaN(dDv.getTime())){
+        var deltaDays=Math.abs((dFa-dDv)/(1000*60*60*24));
+        if(deltaDays<=2){score+=25;reasons.push('même date BC');}
+        else if(deltaDays<=14){score+=10;reasons.push('date BC proche ('+Math.round(deltaDays)+'j)');}
+      }
+    }catch(e){}
+  }
+  var faPrefix=String(fa.num||'').split('-')[0];
+  var dvPrefix=String(dv.num||'').split('-')[0];
+  if(faPrefix && faPrefix===dvPrefix){score+=5;}
+  else if(faPrefix && faPrefix!==dvPrefix){score-=20;reasons.push('préfixe client différent');}
+  return {score:score,reasons:reasons};
+}
+
+// Détecte toutes les factures orphelines + propose les meilleurs candidats.
+// Retourne [{fa, candidates:[{dv,score,reasons}], currentDv}]
+function _dvlieDetectOrphans(){
+  var devis=DB.devis||[];
+  var factures=DB.factures||[];
+  var idxByNumStrict={};
+  devis.forEach(function(d){
+    var k=String(d.num||'').toUpperCase().replace(/\s+/g,'');
+    if(k) idxByNumStrict[k]=d;
+  });
+  var results=[];
+  factures.forEach(function(fa){
+    var currentDv=null;
+    if(fa.dvlie){
+      var parts=String(fa.dvlie).split(/[+,;\/]/).map(function(s){return s.trim().toUpperCase().replace(/\s+/g,'');});
+      for(var i=0;i<parts.length;i++){
+        if(idxByNumStrict[parts[i]]){currentDv=idxByNumStrict[parts[i]];break;}
+      }
+    }
+    if(currentDv) return; // dvlie OK, on saute
+    // Orpheline ! Scorer tous les devis
+    var scored=[];
+    devis.forEach(function(dv){
+      var r=_dvlieScoreCandidate(fa,dv);
+      if(r.score>=50){scored.push({dv:dv,score:r.score,reasons:r.reasons});}
+    });
+    scored.sort(function(a,b){return b.score-a.score;});
+    results.push({fa:fa,candidates:scored.slice(0,3),currentDv:null});
+  });
+  return results;
+}
+
+// Ouvre la modale et lance la détection
+function openDvlieRepairTool(){
+  window._dvlieRepairCandidates=_dvlieDetectOrphans();
+  _dvlieRenderList();
+  om('mDvlieRepair');
+}
+
+// Re-render la liste selon le filtre score minimum
+function _dvlieRenderList(){
+  var minScoreEl=document.getElementById('dvlieMinScore');
+  var minScore=minScoreEl?Number(minScoreEl.value):70;
+  var all=window._dvlieRepairCandidates||[];
+  var withMatch=all.filter(function(r){return r.candidates.length>0 && r.candidates[0].score>=minScore;});
+  var withoutMatch=all.filter(function(r){return r.candidates.length===0 || r.candidates[0].score<minScore;});
+  var totalMt=all.reduce(function(s,r){return s+Number(r.fa.ttc||0);},0);
+  var matchableMt=withMatch.reduce(function(s,r){return s+Number(r.fa.ttc||0);},0);
+  var statsEl=document.getElementById('dvlieRepairStats');
+  if(statsEl){
+    statsEl.innerHTML=
+      '<span><strong style="color:var(--text)">'+all.length+'</strong> factures orphelines · <strong style="color:var(--text)">'+_dvlieFmt(totalMt)+' XPF</strong></span>'+
+      '<span style="color:var(--green)"><strong>'+withMatch.length+'</strong> avec match (≥'+minScore+') · '+_dvlieFmt(matchableMt)+' XPF</span>'+
+      '<span style="color:var(--amber)"><strong>'+withoutMatch.length+'</strong> sans match fiable</span>';
+  }
+  var listEl=document.getElementById('dvlieRepairList');
+  if(!listEl) return;
+  if(all.length===0){
+    listEl.innerHTML='<div style="padding:24px;text-align:center;color:var(--muted)">✅ Aucune facture orpheline détectée — toutes les factures ont un lien <code>dvlie</code> valide.</div>';
+    return;
+  }
+  var html='';
+  withMatch.forEach(function(r,idx){
+    var fa=r.fa;
+    var best=r.candidates[0];
+    var scoreClass=best.score>=90?'#10b981':(best.score>=70?'#fbbf24':'#ef4444');
+    var scoreBg=best.score>=90?'rgba(16,185,129,0.15)':(best.score>=70?'rgba(251,191,36,0.15)':'rgba(239,68,68,0.15)');
+    html+='<div class="dvlie-row" data-fa="'+_dvlieEscHtml(fa.num)+'" data-dv="'+_dvlieEscHtml(best.dv.num)+'" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;margin-bottom:8px">';
+    html+='<div style="display:grid;grid-template-columns:110px 1fr 110px 30px;gap:8px;align-items:center;font-size:12.5px">';
+    html+='<span style="font-family:JetBrains Mono,monospace;color:var(--text);font-weight:600">'+_dvlieEscHtml(fa.num)+'</span>';
+    html+='<span style="color:var(--muted-soft);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+_dvlieEscHtml(fa.objet||'')+'">'+_dvlieEscHtml(String(fa.objet||'').substring(0,70))+'</span>';
+    html+='<span style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:var(--text)">'+_dvlieFmt(fa.ttc||0)+' XPF</span>';
+    html+='<span style="text-align:right"><input type="checkbox" class="dvlie-cb" data-fa="'+_dvlieEscHtml(fa.num)+'" data-dv="'+_dvlieEscHtml(best.dv.num)+'" '+(best.score>=70?'checked':'')+' style="transform:scale(1.2);cursor:pointer"></span>';
+    html+='</div>';
+    html+='<div style="display:grid;grid-template-columns:18px 1fr 110px;gap:8px;align-items:center;margin-top:8px;padding-top:8px;border-top:0.5px dashed rgba(255,255,255,0.1);font-size:11.5px">';
+    html+='<span style="color:var(--muted-soft);text-align:center">↳</span>';
+    html+='<span><span style="font-family:JetBrains Mono,monospace;color:#7dd3fc;margin-right:8px">'+_dvlieEscHtml(best.dv.num)+'</span>';
+    html+='<span style="color:var(--muted)">'+_dvlieEscHtml(String(best.dv.objet||'').substring(0,55))+'</span></span>';
+    html+='<span style="text-align:right"><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600;background:'+scoreBg+';color:'+scoreClass+'" title="'+_dvlieEscHtml(best.reasons.join(' · '))+'">'+best.score+' · '+_dvlieEscHtml(best.reasons[0]||'')+'</span></span>';
+    html+='</div>';
+    if(r.candidates.length>1){
+      html+='<details style="margin-top:6px;font-size:11px"><summary style="cursor:pointer;color:var(--muted-soft)">+ '+(r.candidates.length-1)+' autre(s) candidat(s)</summary>';
+      r.candidates.slice(1).forEach(function(c){
+        html+='<div style="margin:4px 0 4px 24px;color:var(--muted)"><code>'+_dvlieEscHtml(c.dv.num)+'</code> · '+_dvlieFmt(c.dv.ttc||0)+' XPF · score '+c.score+' · '+_dvlieEscHtml(c.reasons.join(' · '))+' <button onclick="_dvlieSwapCandidate(\''+_dvlieEscHtml(fa.num)+'\',\''+_dvlieEscHtml(c.dv.num)+'\')" style="margin-left:8px;background:transparent;border:1px solid rgba(255,255,255,0.15);color:var(--text);font-size:10px;padding:1px 6px;border-radius:3px;cursor:pointer">Utiliser celui-ci</button></div>';
+      });
+      html+='</details>';
+    }
+    html+='</div>';
+  });
+  if(withoutMatch.length){
+    html+='<div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)">';
+    html+='<div style="font-size:11.5px;color:var(--muted);margin-bottom:8px">⚠️ '+withoutMatch.length+' facture(s) sans match fiable — à lier manuellement :</div>';
+    withoutMatch.forEach(function(r){
+      var fa=r.fa;
+      html+='<div style="background:rgba(239,68,68,0.04);border:1px solid rgba(239,68,68,0.15);border-radius:6px;padding:6px 10px;margin-bottom:4px;font-size:11.5px;display:grid;grid-template-columns:110px 1fr 110px;gap:8px;align-items:center">';
+      html+='<span style="font-family:JetBrains Mono,monospace;color:var(--text)">'+_dvlieEscHtml(fa.num)+'</span>';
+      html+='<span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_dvlieEscHtml(String(fa.objet||'').substring(0,80))+'</span>';
+      html+='<span style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text)">'+_dvlieFmt(fa.ttc||0)+' XPF</span>';
+      html+='</div>';
+    });
+    html+='</div>';
+  }
+  listEl.innerHTML=html;
+}
+
+// Permet de remplacer le candidat principal par un alternatif dans la liste
+function _dvlieSwapCandidate(faNum,newDvNum){
+  var entry=(window._dvlieRepairCandidates||[]).find(function(r){return r.fa.num===faNum;});
+  if(!entry) return;
+  var idx=entry.candidates.findIndex(function(c){return c.dv.num===newDvNum;});
+  if(idx<0) return;
+  var swapped=entry.candidates.splice(idx,1)[0];
+  entry.candidates.unshift(swapped);
+  _dvlieRenderList();
+}
+
+// Coche / décoche tout
+function _dvlieToggleAll(checked){
+  document.querySelectorAll('.dvlie-cb').forEach(function(cb){cb.checked=checked;});
+}
+
+// Applique les réparations cochées
+function _dvlieApplyRepairs(){
+  var checks=document.querySelectorAll('.dvlie-cb:checked');
+  if(checks.length===0){
+    if(typeof toast==='function') toast('Aucune réparation cochée','warn');
+    else alert('Aucune réparation cochée');
+    return;
+  }
+  if(!confirm('Appliquer '+checks.length+' réparation(s) ?\n\nLe champ dvlie de chaque facture sélectionnée sera réécrit pour pointer vers son devis match.')) return;
+  var applied=0;
+  checks.forEach(function(cb){
+    var faNum=cb.getAttribute('data-fa');
+    var dvNum=cb.getAttribute('data-dv');
+    if(!faNum||!dvNum) return;
+    var fa=(DB.factures||[]).find(function(f){return f.num===faNum;});
+    if(!fa) return;
+    fa.dvlie=dvNum;
+    fa._manuallyEditedAt=new Date().toISOString();
+    applied++;
+  });
+  if(applied){
+    if(typeof save==='function') save();
+    // Refresh affichage
+    window._dvlieRepairCandidates=_dvlieDetectOrphans();
+    _dvlieRenderList();
+    if(typeof toast==='function') toast('✓ '+applied+' lien(s) réparé(s)','ok');
+    else alert('✓ '+applied+' lien(s) réparé(s)');
+    if(typeof renderFA==='function') renderFA();
+    if(typeof renderDV==='function') renderDV();
+    if(typeof rDash==='function') rDash();
+  }
 }
 
 // Supprime le PDF (devisId, kind) s'il existe.
@@ -33829,125 +35086,130 @@ function bDV(d){
 function bFA(f){
   var isExo=isClientExo(f.client);
   var clientDetail=getClientDetail(f.client);
-  // === CONSTRUCTION DU CORPS DE LA TABLE — STRUCTURE SECTION-COHÉSIVE ===
-  // Stratégie : chaque SECTION COMPLÈTE (bandeau + toutes ses lignes) = 1 <tbody class="fa-section">
-  // Avec page-break-inside:avoid sur ce <tbody>, Chrome traite la section comme une unité :
-  // soit elle tient sur la page courante, soit elle bascule entièrement sur la suivante.
-  // Conséquence : si la section "WI-FI TEMPERATURE" + ses 4 lignes ne tient pas sur la page 1
-  // après les 3 sections précédentes, elle bascule entièrement en page 2 (avec son bandeau,
-  // sans coupure orpheline).
-  //
-  // Garde-fou : si une section dépasse 12 lignes (rare), on désactive la cohésion pour cette
-  // section précise (elle peut se couper) — sinon risque que la section déborde la page entière
-  // et reste coupée silencieusement.
-  //
-  // Les KIT (lignes avec subLines) restent dans le tbody de leur section et leurs subLines
-  // sont placées juste après la ligne porteuse — pas de tbody séparé pour les KITs.
-  var lines=f.lines||[];
-  var sections=[];   // Array<{rowsHtml: string, lineCount: number}>
-  var currentSection=null;
-  // Compteur d'items pour la colonne # (incrémenté UNIQUEMENT pour les lignes mères)
-  var _faItemNo=0;
-  function ensureSection(){
-    if(!currentSection){
-      currentSection={rowsHtml:'',lineCount:0};
-      sections.push(currentSection);
-    }
-    return currentSection;
-  }
-  lines.forEach(function(l){
+  // === CONSTRUCTION DU CORPS DE LA TABLE — CLONE EXACT DU DEVIS ===
+  // Stratégie (alignée sur bDV) : itération séquentielle sur f.lines (array plat) avec
+  // gestion des 4 types de lignes reconnus :
+  //   1. type='section_banner'  → bandeau gris pleine largeur (FOURNITURE / MAIN D'OEUVRE / FRET)
+  //   2. type='header'          → bandeau coloré (KIT violet ou TÂCHE orange) avec préfixe ▸ et badge
+  //   3. ligne KIT-main         → ligne chiffrée violette + sub-lignes "inclus" italique (6 cellules)
+  //   4. ligne TASK-main        → rowspan sur Item/Réf/Désignation, sub-lignes chiffrées en dessous
+  //   5. ligne normale          → 8 cellules standard
+  // Le rendu sortant est UNE SEULE <tbody> (pas de tbodies cohésifs séparés) pour matcher
+  // exactement le devis, qui s'appuie sur la pagination naturelle de Chrome.
+  var allL=f.lines||[];
+  // Fallback compat anciennes factures : si aucune ligne section_banner mais qu'il y a des _sec
+  // sur les lignes, on synthétise des banners virtuels au survol de chaque transition _sec.
+  // Mapping cohérent avec generateFactureFromDV (SEC_LABELS).
+  var _SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
+  var _hasBanner=allL.some(function(x){return x && x.type==='section_banner';});
+  var lastS='',itemNum=0,rows='';
+  var _lastSec='';
+  allL.forEach(function(l,i){
     if(!l)return;
-    if(l.type==='header'){
-      // Nouveau bandeau de section → démarrer un nouveau tbody
-      var sectionColor=l.mode==='kit'?'#3b82f6':l.mode==='task'?'#a78bfa':'#1e3a5f';
-      currentSection={rowsHtml:'',lineCount:0};
-      sections.push(currentSection);
-      currentSection.rowsHtml+='<tr><td colspan="8" style="background:#e8eef5;color:'+sectionColor+';font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-top:1px solid #c8d1de;border-bottom:1px solid #c8d1de">'+
-        escNL(l.desc||'')+
-        (l.mode==='kit'?' <span style="font-size:9px;color:#3b82f6;font-weight:600;text-transform:none;letter-spacing:0">— KIT (1 prix global)</span>':'')+
-        '</td></tr>';
+    // Fallback : insérer un section_banner virtuel à chaque changement de _sec si absent
+    if(!_hasBanner && l._sec && l._sec!==_lastSec && _SEC_LABELS[l._sec]){
+      rows+='<tr><td colspan="8" class="doc-sec-head">'+esc(_SEC_LABELS[l._sec])+'</td></tr>';
+      _lastSec=l._sec;
+    }
+    // === 1. Bandeau de section explicite (FOURNITURE / MAIN D'OEUVRE / FRET) ===
+    if(l.type==='section_banner'){
+      rows+='<tr><td colspan="8" class="doc-sec-head">'+esc(l.desc||'')+'</td></tr>';
+      lastS=l.desc||'';
       return;
     }
-    var sec=ensureSection();
-    var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
-    // === DÉTECTION TASK vs KIT ===
-    // Une ligne TASK : porteuse avec _isTaskMain=true ou qte=0+pu=0+subLines chiffrées.
-    // Ses sub-lignes sont valorisées (Hsup/Htech avec qte/pu réels).
-    // Une ligne KIT : porteuse chiffrée (qte=1, pu=120000) + sub-lignes descriptives à pu=0.
-    // Détection robuste : on remonte au header le plus proche s'il existe (mode='task'/'kit').
-    // Sinon on s'appuie sur _isTaskMain et la structure des subLines.
-    var isTaskMain = !!l._isTaskMain ||
-      (hasSubLines && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
-       l.subLines.some(function(sub){return (Number(sub.pu)||0)>0;}));
-    var tgcDisplay=(l.tgc||0)+'%';
-    // Pour TASK : la ligne mère affiche un total = somme des subLines chiffrées
-    // Pour ligne normale ou KIT : total = qte * pu (qte/pu de la ligne)
-    var tot;
-    if(isTaskMain){
-      tot=l.subLines.reduce(function(s,sub){
-        var subHt=(Number(sub.qte)||0)*(Number(sub.pu)||0);
-        return s+Math.round(subHt*(1+(isExo?0:Number(sub.tgc)||0)/100));
-      },0);
-    } else {
-      tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    // === 2. Header (KIT, TÂCHE, ou sous-titre simple) ===
+    if(l.type==='header'){
+      var isKit=l.mode==='kit';
+      var isTask=l.mode==='task';
+      var bg, col, bdr, badge;
+      if(isKit){
+        bg='#ede9fe'; col='#5b21b6'; bdr='#7c3aed';
+        badge=' <span style="display:inline-block;background:#7c3aed;color:#fff;padding:1px 5px;border-radius:3px;font-size:8.5px;margin-left:6px;font-weight:700">KIT — 1 prix global</span>';
+      } else if(isTask){
+        bg='#fef3c7'; col='#78350f'; bdr='#d97706';
+        badge=' <span style="display:inline-block;background:#d97706;color:#fff;padding:1px 5px;border-radius:3px;font-size:8.5px;margin-left:6px;font-weight:700">TÂCHE</span>';
+      } else {
+        bg='#dbeafe'; col='#1e3a5f'; bdr='#1e3a5f';
+        badge='';
+      }
+      rows+='<tr><td colspan="8" style="background:'+bg+';color:'+col+';padding:6px 10px;font-weight:700;font-size:10.5px;border-left:3px solid '+bdr+';text-transform:uppercase;letter-spacing:.05em">▸ '+esc(l.desc||'')+badge+'</td></tr>';
+      return;
     }
-    // Affichage de la ligne mère
-    _faItemNo++;
-    sec.rowsHtml+='<tr>'+
-      '<td style="text-align:center;font-weight:600;color:#64748b">'+_faItemNo+'</td>'+
-      '<td style="font-family:monospace;font-size:11px;color:#475569">'+esc(l.ref||'')+'</td>'+
-      '<td>'+escNL(l.designation||'')+'</td>'+
-      '<td style="text-align:center">'+(isTaskMain?'—':tgcDisplay)+'</td>'+
-      '<td style="text-align:center">'+(isTaskMain?'—':(l.unite||'U'))+'</td>'+
-      '<td style="text-align:center">'+(isTaskMain?'—':(l.qte||0))+'</td>'+
-      '<td style="text-align:right">'+(isTaskMain?'—':fN(l.pu))+'</td>'+
-      '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td>'+
-    '</tr>';
-    sec.lineCount++;
-    if(hasSubLines){
-      l.subLines.forEach(function(sub){
-        var subTgcDisplay=(sub.tgc||0)+'%';
-        if(isTaskMain){
-          // === SOUS-LIGNE TASK : chiffrée (qte, pu, total réels) ===
-          var subTot=Math.round((sub.qte||0)*(sub.pu||0)*(1+(isExo?0:Number(sub.tgc)||0)/100));
-          sec.rowsHtml+='<tr style="background:rgba(167,139,250,.04)">'+
-            '<td style="text-align:center;color:#94a3b8;font-size:10px">·</td>'+
-            '<td style="font-family:monospace;font-size:10px;color:#64748b">'+esc(sub.ref||'')+'</td>'+
-            '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
-              '<span style="color:#a78bfa;margin-right:4px">└</span>'+
-              escNL(sub.designation||'')+
-            '</td>'+
-            '<td style="text-align:center;font-size:10px">'+subTgcDisplay+'</td>'+
-            '<td style="text-align:center;font-size:10px">'+(sub.unite||'U')+'</td>'+
-            '<td style="text-align:center;font-size:10px">'+(sub.qte||0)+'</td>'+
-            '<td style="text-align:right;font-size:10px">'+fN(sub.pu)+'</td>'+
-            '<td style="text-align:right;font-weight:700;font-size:10.5px">'+fN(subTot)+'</td>'+
-          '</tr>';
-        } else {
-          // === SOUS-LIGNE KIT : descriptive ("inclus dans KIT") ===
-          sec.rowsHtml+='<tr style="background:rgba(59,130,246,.04)">'+
-            '<td style="text-align:center;color:#94a3b8;font-size:10px">·</td>'+
-            '<td style="font-family:monospace;font-size:10px;color:#64748b">'+esc(sub.ref||'')+'</td>'+
-            '<td style="padding-left:24px;font-size:10.5px;color:#475569">'+
-              '<span style="color:#3b82f6;margin-right:4px">└</span>'+
-              escNL(sub.designation||'')+
-            '</td>'+
-            '<td style="text-align:center;font-size:10px;color:#64748b">—</td>'+
-            '<td style="text-align:center;font-size:10px;color:#64748b">'+(sub.unite||'U')+'</td>'+
-            '<td style="text-align:center;font-size:10px;color:#475569">'+(sub.qte||0)+'</td>'+
-            '<td colspan="2" style="text-align:right;font-size:9.5px;color:#64748b;font-style:italic">inclus dans KIT</td>'+
-          '</tr>';
+    // === Détection KIT-main vs TASK-main ===
+    // Identique à bDV : on remonte au header le plus proche pour décider TASK.
+    // KIT-main : header précédent mode='kit' OU subLines présentes sans être TASK.
+    var prevIsKitHeader=(i>0 && allL[i-1] && allL[i-1].type==='header' && allL[i-1].mode==='kit');
+    var isTaskMain=(function(){
+      for(var k=i-1;k>=0;k--){
+        if(allL[k] && allL[k].type==='header'){
+          return allL[k].mode==='task';
         }
-        sec.lineCount++;
+        // Si on traverse un section_banner sans rencontrer de header, on s'arrête (pas de TASK)
+        if(allL[k] && allL[k].type==='section_banner') return false;
+      }
+      return false;
+    })();
+    var isKitMain=prevIsKitHeader || (Array.isArray(l.subLines) && !isTaskMain);
+
+    // === 3. TASK-main : rowspan sur Item/Réf/Désignation, sub-lignes chiffrées ===
+    if(isTaskMain){
+      if(Array.isArray(l.subLines) && l.subLines.length>0){
+        var subsArr=l.subLines;
+        var rowspan=subsArr.length;
+        itemNum++;
+        var firstSub=subsArr[0];
+        var firstTgc=(firstSub.tgc||0)+'%';
+        var firstTot=Math.round((firstSub.qte||0)*(firstSub.pu||0)*(1+(isExo?0:Number(firstSub.tgc)||0)/100));
+        rows+='<tr style="background:rgba(245,158,11,.03)">'+
+          '<td rowspan="'+rowspan+'" style="vertical-align:middle;text-align:center">'+itemNum+'</td>'+
+          '<td rowspan="'+rowspan+'" style="vertical-align:middle">'+escNL(l.ref||'')+'</td>'+
+          '<td rowspan="'+rowspan+'" style="vertical-align:middle">'+escNL(l.designation||'')+'</td>'+
+          '<td style="text-align:center">'+firstTgc+'</td>'+
+          '<td style="text-align:center">'+(firstSub.unite||'U')+'</td>'+
+          '<td style="text-align:center">'+(firstSub.qte||0)+'</td>'+
+          '<td style="text-align:right">'+fN(firstSub.pu)+'</td>'+
+          '<td style="text-align:right;font-weight:700">'+fN(firstTot)+'</td>'+
+          '</tr>';
+        for(var sIdx=1;sIdx<subsArr.length;sIdx++){
+          var sub_=subsArr[sIdx];
+          var subTgc_=(sub_.tgc||0)+'%';
+          var subTot_=Math.round((sub_.qte||0)*(sub_.pu||0)*(1+(isExo?0:Number(sub_.tgc)||0)/100));
+          rows+='<tr style="background:rgba(245,158,11,.03)">'+
+            '<td style="text-align:center">'+subTgc_+'</td>'+
+            '<td style="text-align:center">'+(sub_.unite||'U')+'</td>'+
+            '<td style="text-align:center">'+(sub_.qte||0)+'</td>'+
+            '<td style="text-align:right">'+fN(sub_.pu)+'</td>'+
+            '<td style="text-align:right;font-weight:700">'+fN(subTot_)+'</td>'+
+            '</tr>';
+        }
+      }
+      return;
+    }
+
+    // === 4. Ligne normale ou KIT-main (8 cellules) ===
+    itemNum++;
+    var tgcDisplay=(l.tgc||0)+'%';
+    var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    var rowStyle=isKitMain?' style="background:rgba(124,58,237,.06)"':'';
+    rows+='<tr'+rowStyle+'><td>'+itemNum+'</td><td>'+escNL(l.ref||'')+'</td><td>'+escNL(l.designation||'')+'</td>'+
+      '<td style="text-align:center">'+tgcDisplay+'</td><td style="text-align:center">'+(l.unite||'U')+'</td>'+
+      '<td style="text-align:center">'+(l.qte||0)+'</td><td style="text-align:right">'+fN(l.pu)+'</td>'+
+      '<td style="text-align:right;font-weight:700">'+fN(tot)+'</td></tr>';
+    // === 5. Sub-lignes KIT (descriptives, "inclus") ===
+    if(isKitMain && Array.isArray(l.subLines)){
+      l.subLines.forEach(function(sub){
+        rows+='<tr style="background:rgba(124,58,237,.025);color:#6b21a8">'+
+          '<td></td>'+
+          '<td style="font-style:italic">'+esc(sub.ref||'')+'</td>'+
+          '<td colspan="3" style="font-style:italic">↳ '+esc(sub.designation||'')+'</td>'+
+          '<td style="text-align:center;font-style:italic">'+(sub.qte||1)+'</td>'+
+          '<td colspan="2" style="text-align:center;font-style:italic;color:#9ca3af">inclus</td>'+
+          '</tr>';
       });
     }
   });
-  // Construire le HTML : un <tbody class="fa-section"> par section. Si trop long (>12 lignes),
-  // pas de classe cohésion → cette section peut se couper (garde-fou anti-débordement page).
-  var tbodiesHtml=sections.map(function(s){
-    var cls=s.lineCount<=12?'fa-section':'fa-section-loose';
-    return '<tbody class="'+cls+'">'+s.rowsHtml+'</tbody>';
-  }).join('');
+  // tbodiesHtml = juste le contenu (compat avec le reste de la fonction)
+  var tbodiesHtml='<tbody>'+rows+'</tbody>';
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   // === ADRESSE CLIENT — règle spéciale SLN ===
   // Pour le client SLN (Société Le Nickel - ERAMET), on utilise toujours l'adresse
@@ -33995,10 +35257,23 @@ function bFA(f){
   // Ligne 2 : adresse multi-lignes
   // Ligne 3 : Tél
   // Ligne 4 : Email
+  // Récupérer le N° de devis lié (priorité : dvlie, sinon trouver via devisLieId)
+  var devisNumLink=f.dvlie||'';
+  if(!devisNumLink && f.devisLieId){
+    var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
+    if(_dvObj) devisNumLink=_dvObj.num||'';
+  }
   return'<div class="doc">'+
     '<div class="doc-head">'+
       '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
       '<div style="width:50%;text-align:right"><div class="doc-title">FACTURE N° '+esc(f.num||'')+'</div><div class="doc-meta">Le : '+fD(f.date)+'</div></div>'+
+    '</div>'+
+    // Info-bar 4 colonnes (alignée sur celle du devis, mais avec champs facture-spécifiques)
+    '<div class="doc-info-bar">'+
+      '<div><span class="dlbl">Facture N°</span><strong>'+esc(f.num||'')+'</strong></div>'+
+      '<div><span class="dlbl">Type</span>'+esc(f.type||'')+'</div>'+
+      '<div><span class="dlbl">BC Client</span>'+esc(f.bcClientSLN||'—')+'</div>'+
+      '<div><span class="dlbl">Devis N°</span>'+esc(devisNumLink||'—')+'</div>'+
     '</div>'+
     '<div class="doc-parties">'+
       '<div class="doc-party">'+
@@ -34019,15 +35294,18 @@ function bFA(f){
         '</p>'+
       '</div>'+
     '</div>'+
-    '<p style="font-size:13px;margin-bottom:6px"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+
-    '<p style="font-size:11px;margin-bottom:8px"><strong>Facture N° :</strong> '+esc(f.num||'')+(f.dvlie?' — Devis N° '+esc(f.dvlie):'')+'</p>'+
-    '<table class="doc-tbl">'+
-      '<thead><tr><th style="text-align:center;width:30px">#</th><th style="width:110px">Réf.</th><th>Désignation</th><th>TGC%</th><th>Unité</th><th>Quantité</th><th style="text-align:right">Prix unitaire</th><th style="text-align:right">TOTAL HT</th></tr></thead>'+
-      tbodiesHtml+
+    '<p style="font-size:13px;margin-bottom:8px"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+
+    '<table class="doc-tbl" style="page-break-inside:auto">'+
+    '<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>'+
+    '<thead>'+
+      '<tr><th>Item</th><th>Réf.</th><th>Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th style="text-align:right">PU</th><th style="text-align:right">TOTAL HT</th></tr>'+
+    '</thead>'+
+    tbodiesHtml+
     '</table>'+
     // Bloc final groupé avec page-break-inside:avoid pour qu'il reste cohérent en bas de la dernière page
     '<div class="doc-final-block">'+
     buildFATotsHtml(f,isExo)+
+    // Bloc notes facture : uniquement Montant en lettres + Délai (pas de Validité/Paiement/Délai des travaux qui sont propres au devis)
     '<div class="doc-notes"><strong>Montant en lettres :</strong> '+toLtr(ttcDisp)+'<br>'+
       '<strong>Délai :</strong> '+esc(f.delai||'Paiement sous 30 jours à réception de la facture')+
     '</div>'+
@@ -34417,6 +35695,17 @@ function prvBC(id){var b=DB.bcs.find(function(x){return x.id===id;});if(b)showPr
 function prvBL(id){var b=DB.bls.find(function(x){return x.id===id;});if(b)showPrv('BL — '+b.num,bBL(b));}
 function previewDV(){var d=getDV();if(!d.num)return;showPrv('Devis — '+d.num,bDV(d));}
 function previewFA(){var f=getFA();if(!f.num)return;showPrv('Facture — '+f.num,bFA(f));}
+// Re-génère l'aperçu PDF facture (équivalent à previewFA mais avec confirmation visuelle
+// que la dernière version du code de rendu est utilisée — utile après mise à jour de la
+// mise en page pour rassurer l'utilisateur sur les anciennes factures).
+function regenerateFAPdf(){
+  var f=getFA();
+  if(!f.num){alert('⚠ Aucune facture à régénérer');return;}
+  showPrv('Facture — '+f.num,bFA(f));
+  if(typeof showBCSaveToast==='function'){
+    showBCSaveToast('🔄 PDF facture re-généré avec la dernière mise en page');
+  }
+}
 function previewBC(){var b=getBC();if(!b.num)return;showPrv(buildBCTitle(b),bBC(b));}
 function previewBL(){var b=getBL();if(!b.num)return;showPrv('BL — '+b.num,bBL(b));}
 
@@ -34576,19 +35865,19 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
           '<td rowspan="'+rspn+'" style="vertical-align:middle;text-align:center;padding:6px 5px">'+(item.idx||'')+'</td>'+
           '<td rowspan="'+rspn+'" style="vertical-align:middle;text-align:center;padding:6px 5px">'+esc(item.taskRef||'')+'</td>'+
           '<td rowspan="'+rspn+'" style="vertical-align:middle;padding:6px 5px">'+esc(item.taskDesignation||'')+'</td>'+
-          '<td style="text-align:center;padding:6px 5px">'+subTgcD+'</td>'+
-          '<td style="text-align:center;padding:6px 5px">'+(sub2.unite||'U')+'</td>'+
-          '<td style="text-align:center;padding:6px 5px">'+(sub2.qte||0)+'</td>'+
-          '<td style="text-align:right;padding:6px 5px">'+fN(sub2.pu)+'</td>'+
-          '<td style="text-align:right;font-weight:700;padding:6px 5px">'+fN(item.tot)+'</td></tr>';
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+subTgcD+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap;word-break:keep-all;overflow-wrap:normal">'+(sub2.unite||'U')+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+(sub2.qte||0)+'</td>'+
+          '<td style="text-align:right;padding:6px 5px;white-space:nowrap">'+fN(sub2.pu)+'</td>'+
+          '<td style="text-align:right;font-weight:700;padding:6px 5px;white-space:nowrap">'+fN(item.tot)+'</td></tr>';
       } else {
         // Sous-lignes 2 → N : seulement 5 cellules (TGC, Uté, Qté, PU, Total)
         hT='<tr style="background:rgba(245,158,11,.03);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
-          '<td style="text-align:center;padding:6px 5px">'+subTgcD+'</td>'+
-          '<td style="text-align:center;padding:6px 5px">'+(sub2.unite||'U')+'</td>'+
-          '<td style="text-align:center;padding:6px 5px">'+(sub2.qte||0)+'</td>'+
-          '<td style="text-align:right;padding:6px 5px">'+fN(sub2.pu)+'</td>'+
-          '<td style="text-align:right;font-weight:700;padding:6px 5px">'+fN(item.tot)+'</td></tr>';
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+subTgcD+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap;word-break:keep-all;overflow-wrap:normal">'+(sub2.unite||'U')+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+(sub2.qte||0)+'</td>'+
+          '<td style="text-align:right;padding:6px 5px;white-space:nowrap">'+fN(sub2.pu)+'</td>'+
+          '<td style="text-align:right;font-weight:700;padding:6px 5px;white-space:nowrap">'+fN(item.tot)+'</td></tr>';
       }
       // Marquer ce groupe TASK comme atomique pour la pagination : la 1ère sous-ligne et
       // toutes les suivantes doivent rester sur la même page (sinon le rowspan visuel
@@ -34785,8 +36074,366 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   return pagesHTML;
 }
 
+// =============================================================================
+// buildPaginatedFA — Pagination intelligente pour FACTURE (clone de buildPaginatedDV)
+// =============================================================================
+// Mêmes principes que buildPaginatedDV :
+//   - Décompose f.lines en lineData (section_banner, header KIT/TASK, rows normales, sub-lignes KIT/TASK)
+//   - Mesure les hauteurs réelles via un table DOM hors-écran
+//   - Distribue dans des pages avec budgets PAGE1_BUDGET / PAGE_N_BUDGET / LAST_EXTRA
+//   - Sous-total "Sous-total HT (XPF) — Report page suivante" en bas de chaque page intermédiaire
+// Différences avec le devis :
+//   - Source = f.lines (array PLAT déjà sectionné par {type:'section_banner'}) au lieu de d.lines.{fourniture,service,fret}
+//   - Header DEVIS N° → FACTURE N°
+//   - Info-bar : Facture N° / Type / BC Client / Devis N°
+//   - Bloc final : juste Délai (pas Validité, Paiement, Délai des travaux)
+//   - Tag de section géré via type='section_banner' (déjà inséré par generateFactureFromDV)
+// =============================================================================
+function buildPaginatedFA(f, logoSrc, sigSrc){
+  var isExo=isClientExo(f.client);
+  var clientDetail=getClientDetail(f.client);
+  // === Récup Devis lié pour info-bar ===
+  var devisNumLink=f.dvlie||'';
+  if(!devisNumLink && f.devisLieId){
+    var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
+    if(_dvObj) devisNumLink=_dvObj.num||'';
+  }
+  // === Préparation allL : array plat avec {sec} sur chaque ligne ===
+  // f.lines peut contenir des type='section_banner' explicites. On les utilise pour tracker
+  // la section courante. Fallback : si pas de section_banner mais des _sec, on traduit.
+  var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
+  var allL=[];
+  var currentSecLabel='';
+  (f.lines||[]).forEach(function(l){
+    if(!l) return;
+    if(l.type==='section_banner'){
+      currentSecLabel=l.desc||'';
+      return; // on consomme le banner, on n'ajoute pas la ligne (le label est tracké)
+    }
+    // Fallback _sec → label si pas de section_banner
+    if(l._sec && SEC_LABELS[l._sec] && !currentSecLabel){
+      currentSecLabel=SEC_LABELS[l._sec];
+    }
+    allL.push(Object.assign({},l,{sec:currentSecLabel||"MAIN D'OEUVRE"}));
+    // Pour les lignes suivantes : si on change de _sec, on doit re-changer le label
+    // (cas où plusieurs sections coexistent sans section_banner explicite)
+    // → géré par le test l.sec!==lastS dans la boucle lineData
+    if(l._sec && SEC_LABELS[l._sec]){
+      currentSecLabel=SEC_LABELS[l._sec];
+    }
+  });
+  // === Construction lineData (identique à buildPaginatedDV) ===
+  var lineData=[];
+  var lastS='';
+  var itemNum=0;
+  allL.forEach(function(l,i){
+    if(l.sec!==lastS){lineData.push({isSec:true,label:l.sec});lastS=l.sec;}
+    if(l.type==='header'){
+      lineData.push({isHeader:true,mode:l.mode||'items',desc:l.desc||''});
+      return;
+    }
+    var prevIsKitHeader=(i>0 && allL[i-1] && allL[i-1].type==='header' && allL[i-1].mode==='kit');
+    var isTaskMain=(function(){
+      for(var k=i-1;k>=0;k--){
+        if(allL[k] && allL[k].type==='header'){
+          return allL[k].mode==='task';
+        }
+      }
+      return false;
+    })();
+    var isKitMain=prevIsKitHeader || (Array.isArray(l.subLines) && !isTaskMain);
+    if(isTaskMain){
+      if(Array.isArray(l.subLines) && l.subLines.length>0){
+        var totalSubs=l.subLines.length;
+        l.subLines.forEach(function(sub,si){
+          var subPu=Number(sub.pu)||0;
+          var subQte=Number(sub.qte)||0;
+          var subTgc=Number(sub.tgc)||0;
+          var subTot=Math.round(subQte*subPu*(1+(isExo?0:subTgc)/100));
+          var thisIdx;
+          if(si===0){itemNum++;thisIdx=itemNum;}
+          lineData.push({
+            isTaskRow:true,
+            idx:thisIdx,
+            sub:sub,
+            tot:subTot,
+            taskDesignation:l.designation||'',
+            taskRef:l.ref||'',
+            isFirstOfTask:si===0,
+            taskRowspan:totalSubs
+          });
+        });
+      }
+      return;
+    }
+    // Ligne normale ou KIT main
+    var pu=l.pu||0;
+    if(!pu&&l.audPrice&&parseFloat(l.audPrice)>0){
+      var ap=parseFloat(l.audPrice)||0,ar=parseFloat(l.audRate)||74.5,am=parseFloat(l.audMargin)||1.2;
+      pu=Math.round(ap*ar*am);
+    }
+    var tot=Math.round((l.qte||0)*pu*(1+(isExo?0:Number(l.tgc)||0)/100));
+    itemNum++;
+    lineData.push({isSec:false,idx:itemNum,l:Object.assign({},l,{pu:pu}),tot:tot,isKitMain:isKitMain});
+    if(isKitMain && Array.isArray(l.subLines)){
+      l.subLines.forEach(function(sub){lineData.push({isSubLine:true,sub:sub});});
+    }
+  });
+  // === Adresse Client — règle spéciale SLN (héritée de bFA) ===
+  var ci_adr=CI.adresse.replace(/\n/g,'<br>');
+  var clientStr=String(f.client||'').trim();
+  var ctxStr=(clientStr+' '+(f.contact||'')+' '+(f.adresse||'')+' '+(f.email||'')+' '+(f.objet||'')).toLowerCase();
+  var isSLN=/(\bsln\b|\beramet\b|le\s+nickel|@eramet-sln\.com)/i.test(ctxStr);
+  var contactFromClient='';
+  if(isSLN&&!f.contact){
+    var mC=clientStr.match(/^SLN\s*[-\s]\s*(.+)$/i);
+    if(mC)contactFromClient=mC[1].trim();
+  }
+  var displayContact=f.contact||contactFromClient||'';
+  var cliAddr,cliTel,cliEmail,cliCompany;
+  if(isSLN){
+    cliCompany='SOCIETE LE NICKEL — ERAMET-SLN';
+    cliAddr='Magasin Général, 2 Rue Desjardins<br>Doniambo BP E5 98845 NOUMEA CEDEX<br>NOUVELLE-CALÉDONIE';
+    cliTel='+687 245446';
+    cliEmail=(f.email&&f.email.trim())?f.email:'gen_sct.dbo@eramet-sln.com';
+  } else {
+    var adr=(f.adresse||'').replace(/\n/g,'<br>');
+    cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
+    cliTel=clientDetail.tel||'';
+    cliEmail=(f.email&&f.email.trim())?f.email:(clientDetail.email||'');
+    cliCompany='';
+  }
+  var ttcDisp=isExo?(f.ht||0):(f.ttc||0);
+  var mention=getMention(isExo?f.tgcM:'tgc');
 
-var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;padding:10px;font-size:9px;color:#111}.doc{max-width:760px;margin:0 auto}.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:7px;border-bottom:2.5px solid #1e3a5f}.doc-title{font-size:18px;font-weight:900;color:#1e3a5f;text-align:right}.doc-meta{text-align:right;font-size:10px;color:#555}.doc-parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px}.doc-party h4{font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px}.doc-party p{font-size:13px;line-height:1.6;color:#333}.doc-info-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact;word-break:break-word}.bc-info-bar{background:#dbeafe!important;border-bottom:2px solid #1e3a5f!important;border-radius:3px 3px 0 0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.bc-info-bar-5col{grid-template-columns:repeat(5,1fr) !important;gap:8px;font-size:11px}.bc-info-bar-5col .dlbl{font-size:9.5px}.dlbl{font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block}.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px;table-layout:fixed}.doc-tbl col.c-num{width:28px}.doc-tbl col.c-ref{width:130px}.doc-tbl col.c-des{width:auto}.doc-tbl col.c-tgc{width:38px}.doc-tbl col.c-ute{width:32px}.doc-tbl col.c-qte{width:32px}.doc-tbl col.c-pu{width:78px}.doc-tbl col.c-ttc{width:82px}.doc-tbl thead th{background:#1e3a5f;color:#fff;padding:6px 5px;text-align:left;font-size:11.5px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact;overflow:hidden}.doc-tbl thead th:nth-child(1){text-align:center}.doc-tbl thead th:nth-child(n+4){text-align:center}.doc-tbl thead th:nth-child(7),.doc-tbl thead th:nth-child(8){text-align:right}.doc-tbl tbody td{padding:6px 5px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word;font-size:13px;overflow:hidden}.doc-tbl tbody td:nth-child(1){text-align:center}.doc-tbl tbody td:nth-child(2){word-break:keep-all;overflow-wrap:normal}.doc-tbl tbody td:nth-child(4),.doc-tbl tbody td:nth-child(5),.doc-tbl tbody td:nth-child(6){text-align:center;white-space:nowrap}.doc-tbl tbody td:nth-child(7),.doc-tbl tbody td:nth-child(8){text-align:right;white-space:nowrap;font-weight:600}.doc-tbl tfoot td{padding:5px 5px;font-weight:800;font-size:12.5px;color:#1e3a5f;border-top:2px solid #1e3a5f}.doc-tbl tfoot td:last-child{text-align:right}.doc-totals{margin-left:auto;width:270px;border-collapse:collapse;font-size:10.5px}.doc-totals td{padding:2px 6px}.doc-totals td:last-child{text-align:right;font-weight:600}.dtf td{font-size:12px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:8px 11px;font-size:13px;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank{background:#eef2f7;padding:7px 10px;border-radius:3px;margin-bottom:10px;font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px}.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:14px;padding-top:9px;border-top:1px solid #ddd;align-items:stretch}.doc-sign-box{text-align:center;font-size:11px;display:flex;flex-direction:column;min-height:195px}.doc-sign-box .dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f;flex-shrink:0}.doc-sign-box .ds-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:stretch}.doc-sign-box .ds-siglot{height:115px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:2px}.doc-sign-box .ds-siglot img{max-height:110px;max-width:260px;display:block;margin:0 auto}.doc-sign-box .dsline{height:0;border-bottom:1px solid #999;margin:0 0 3px 0}.doc-sign-box p{margin:0;line-height:1.3}.dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f}.dsline{height:0;border-bottom:1px solid #999;margin-bottom:2px}.doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:5px;font-size:9px;margin-top:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-legal{font-size:11px;color:#cc2200;font-style:italic;text-align:center;margin-top:4px}.doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-tbl{page-break-inside:auto}.doc-tbl tr{page-break-inside:avoid;page-break-after:auto}.doc-sec-head{page-break-after:avoid}.doc-totals-wrap{page-break-inside:avoid}.doc-repeat-header{display:none}.tbl-subtotal{display:none}.thead-repeat-header{display:none}@media print{.doc-repeat-header{display:block}.tbl-subtotal{display:table-row}.thead-repeat-header{display:table-row}}';
+  // === Mesure des hauteurs via DOM hors-écran (identique au devis) ===
+  var PAGE1_BUDGET=700, PAGE_N_BUDGET=900, LAST_EXTRA=600, FOOTER_H=45;
+  var measureDiv=document.createElement('div');
+  measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:14px;visibility:hidden';
+  document.body.appendChild(measureDiv);
+  var colgroup='<colgroup><col style="width:28px"><col style="width:130px"><col><col style="width:38px"><col style="width:46px"><col style="width:36px"><col style="width:78px"><col style="width:82px"></colgroup>';
+  function measureRow(html){var t=document.createElement('table');t.style.cssText='width:703px;border-collapse:collapse;table-layout:fixed;font-size:14px;font-family:Calibri,Arial,sans-serif';t.innerHTML=colgroup+'<tbody>'+html+'</tbody>';measureDiv.appendChild(t);var h=t.getBoundingClientRect().height;measureDiv.removeChild(t);return h;}
+  var rowItems=[];
+  lineData.forEach(function(item){
+    if(item.isSec){
+      var h='<tr><td colspan="8" style="background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+item.label+'</td></tr>';
+      rowItems.push({html:h,height:measureRow(h),isSec:true,tot:0});
+    } else if(item.isHeader){
+      var bg, col, bdr, badge;
+      if(item.mode==='kit'){
+        bg='#ede9fe'; col='#5b21b6'; bdr='#7c3aed';
+        badge=' <span style="display:inline-block;background:#7c3aed;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact">KIT — 1 prix global</span>';
+      } else if(item.mode==='task'){
+        bg='#fef3c7'; col='#78350f'; bdr='#d97706';
+        badge=' <span style="display:inline-block;background:#d97706;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact">TÂCHE</span>';
+      } else {
+        bg='#dbeafe'; col='#1e3a5f'; bdr='#1e3a5f';
+        badge='';
+      }
+      var hH='<tr><td colspan="8" style="background:'+bg+';color:'+col+';padding:5px 9px;font-weight:700;font-size:11px;border-left:3px solid '+bdr+';text-transform:uppercase;letter-spacing:.05em;-webkit-print-color-adjust:exact;print-color-adjust:exact">▸ '+esc(item.desc||'')+badge+'</td></tr>';
+      rowItems.push({html:hH,height:measureRow(hH),isSec:true,tot:0});
+    } else if(item.isSubLine){
+      var sub=item.sub;
+      var hS='<tr style="background:rgba(124,58,237,.04);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+        '<td></td>'+
+        '<td style="padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">'+esc(sub.ref||'')+'</td>'+
+        '<td colspan="3" style="padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">↳ '+esc(sub.designation||'')+'</td>'+
+        '<td style="text-align:center;padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">'+(sub.qte||1)+'</td>'+
+        '<td colspan="2" style="text-align:center;padding:5px 5px;font-style:italic;color:#9ca3af;font-size:10px">inclus</td>'+
+        '</tr>';
+      rowItems.push({html:hS,height:measureRow(hS),isSec:false,tot:0});
+    } else if(item.isTaskRow){
+      var sub2=item.sub;
+      var subTgcD=(sub2.tgc||0)+'%';
+      var hT;
+      if(item.isFirstOfTask){
+        var rspn=item.taskRowspan||1;
+        hT='<tr style="background:rgba(245,158,11,.05);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+          '<td rowspan="'+rspn+'" style="vertical-align:middle;text-align:center;padding:6px 5px">'+(item.idx||'')+'</td>'+
+          '<td rowspan="'+rspn+'" style="vertical-align:middle;text-align:center;padding:6px 5px">'+esc(item.taskRef||'')+'</td>'+
+          '<td rowspan="'+rspn+'" style="vertical-align:middle;padding:6px 5px">'+esc(item.taskDesignation||'')+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+subTgcD+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap;word-break:keep-all;overflow-wrap:normal">'+(sub2.unite||'U')+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+(sub2.qte||0)+'</td>'+
+          '<td style="text-align:right;padding:6px 5px;white-space:nowrap">'+fN(sub2.pu)+'</td>'+
+          '<td style="text-align:right;font-weight:700;padding:6px 5px;white-space:nowrap">'+fN(item.tot)+'</td></tr>';
+      } else {
+        hT='<tr style="background:rgba(245,158,11,.03);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+subTgcD+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap;word-break:keep-all;overflow-wrap:normal">'+(sub2.unite||'U')+'</td>'+
+          '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+(sub2.qte||0)+'</td>'+
+          '<td style="text-align:right;padding:6px 5px;white-space:nowrap">'+fN(sub2.pu)+'</td>'+
+          '<td style="text-align:right;font-weight:700;padding:6px 5px;white-space:nowrap">'+fN(item.tot)+'</td></tr>';
+      }
+      rowItems.push({html:hT,height:measureRow(hT),isSec:false,tot:item.tot,taskGroup:true,taskGroupStart:item.isFirstOfTask});
+    } else {
+      var l=item.l,tot=item.tot,tgcD=(l.tgc||0)+'%';
+      var rowBg=item.isKitMain?'background:rgba(124,58,237,.06);-webkit-print-color-adjust:exact;print-color-adjust:exact;':'';
+      var h='<tr style="'+rowBg+'"><td style="text-align:center;padding:6px 5px">'+item.idx+'</td><td style="text-align:center;padding:6px 5px">'+esc(l.ref||'')+'</td>'+
+        '<td style="padding:6px 5px">'+esc(l.designation||'')+'</td>'+
+        '<td style="text-align:center;padding:6px 5px">'+tgcD+'</td><td style="text-align:center;padding:6px 5px">'+(l.unite||'U')+'</td>'+
+        '<td style="text-align:center;padding:6px 5px">'+(l.qte||0)+'</td><td style="text-align:right;padding:6px 5px">'+fN(l.pu)+'</td>'+
+        '<td style="text-align:right;font-weight:700;padding:6px 5px">'+fN(tot)+'</td></tr>';
+      rowItems.push({html:h,height:measureRow(h),isSec:false,tot:tot});
+    }
+  });
+  document.body.removeChild(measureDiv);
+
+  // === Distribution dans les pages (identique au devis) ===
+  var pages=[],currentPage=[],usedHeight=0,budget=PAGE1_BUDGET,SUBTOTAL_H=30;
+  function nextNonSecHeight(fromIdx){
+    for(var j=fromIdx;j<rowItems.length;j++){
+      if(!rowItems[j].isSec) return rowItems[j].height;
+    }
+    return 0;
+  }
+  rowItems.forEach(function(item,i){
+    var tentativeHeight=usedHeight+item.height+SUBTOTAL_H;
+    if(item.isSec){
+      var nextLineH=nextNonSecHeight(i+1);
+      if(nextLineH>0 && usedHeight+item.height+nextLineH+SUBTOTAL_H>budget){
+        if(currentPage.length){pages.push(currentPage);currentPage=[];usedHeight=0;budget=PAGE_N_BUDGET;}
+      }
+      currentPage.push(item);
+      usedHeight+=item.height;
+      return;
+    }
+    if(item.taskGroupStart){
+      var groupHeight=item.height;
+      for(var gj=i+1;gj<rowItems.length;gj++){
+        var gi=rowItems[gj];
+        if(gi.taskGroup && !gi.taskGroupStart){
+          groupHeight+=gi.height;
+        } else {
+          break;
+        }
+      }
+      if(usedHeight+groupHeight+SUBTOTAL_H>budget){
+        if(currentPage.length){pages.push(currentPage);currentPage=[];usedHeight=0;budget=PAGE_N_BUDGET;}
+      }
+      currentPage.push(item);usedHeight+=item.height;
+      return;
+    }
+    if(item.taskGroup){
+      currentPage.push(item);usedHeight+=item.height;
+      return;
+    }
+    if(tentativeHeight>budget){
+      pages.push(currentPage);currentPage=[item];usedHeight=item.height;budget=PAGE_N_BUDGET;
+    } else {
+      currentPage.push(item);usedHeight+=item.height;
+    }
+  });
+  if(currentPage.length)pages.push(currentPage);
+  // Nettoyage headers orphelins en fin de page
+  for(var pi=0;pi<pages.length-1;pi++){
+    var pg=pages[pi];
+    var orphanStart=pg.length;
+    while(orphanStart>0 && pg[orphanStart-1].isSec){ orphanStart--; }
+    if(orphanStart<pg.length){
+      var orphans=pg.splice(orphanStart);
+      pages[pi+1]=orphans.concat(pages[pi+1]);
+    }
+  }
+  pages=pages.filter(function(p){return p.length>0;});
+  // Réserver LAST_EXTRA pour la dernière page (totals+notes+bank+signatures)
+  if(pages.length>=1){
+    var lastPage=pages[pages.length-1];
+    var lastHeight=lastPage.reduce(function(s,r){return s+r.height;},0);
+    var lastBudget=pages.length===1?PAGE1_BUDGET:PAGE_N_BUDGET;
+    while(lastHeight+LAST_EXTRA>lastBudget && lastPage.length>1){
+      var moved=[lastPage.pop()];
+      while(lastPage.length && lastPage[lastPage.length-1].isSec){
+        moved.unshift(lastPage.pop());
+      }
+      pages.push(moved);
+      lastPage=pages[pages.length-1];
+      lastHeight=moved.reduce(function(s,r){return s+r.height;},0);
+      lastBudget=PAGE_N_BUDGET;
+    }
+  }
+
+  var isMultiPage=pages.length>1;
+  var tblCols='<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>';
+  var tblHead='<thead><tr><th>#</th><th>Réf.</th><th>Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th style="text-align:right">PU</th><th style="text-align:right">TOTAL HT</th></tr></thead>';
+  // === Header de page (DIFFÉRENCES vs devis : titre FACTURE N°, info-bar 4 champs facture) ===
+  function buildPageHeader(pageNum,totalPages){
+    var isFirstPage=pageNum===1;
+    var logoBlock=
+      '<div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:8px;border-bottom:2.5px solid #1e3a5f;margin-bottom:14px">'+
+        '<div style="text-align:center"><img src="'+logoSrc+'" style="height:50px;width:auto;display:block;margin:0 auto 3px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px">CALINSTRUM</div></div>'+
+        '<div style="text-align:right;padding-bottom:4px">'+
+          '<div style="font-size:18px;font-weight:900;color:#1e3a5f">FACTURE N\u00b0 '+esc(f.num||'')+'</div>'+
+          '<div style="font-size:10px;color:#555;margin-top:3px">Le : '+fD(f.date)+'</div>'+
+        '</div>'+
+      '</div>';
+    if(!isFirstPage)return logoBlock;
+    return logoBlock+
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Facture N\u00b0</span><strong>'+esc(f.num||'')+'</strong></div>'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Type</span>'+esc(f.type||'')+'</div>'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">BC Client</span>'+esc(f.bcClientSLN||'\u2014')+'</div>'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Devis N\u00b0</span>'+esc(devisNumLink||'\u2014')+'</div>'+
+      '</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px">'+
+        '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CALINSTRUM SARL</h4><p style="font-size:13px;line-height:1.6;color:#333;margin:0">RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+'<br>'+CI.email+'</p></div>'+
+        '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CLIENT</h4>'+
+          '<p style="font-size:13px;line-height:1.6;color:#333;margin:0">'+
+            (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>À M. <strong>'+esc(displayContact)+'</strong><br>':'À M. <strong>'+esc(displayContact)+'</strong><br>')+
+            cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+
+          '</p></div>'+
+      '</div>'+
+      '<p style="font-size:13px;margin-bottom:8px;margin-top:0"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>';
+  }
+  var pagesHTML='',cumulSub=0;
+  pages.forEach(function(pageRows,pi){
+    var isLast=pi===pages.length-1;
+    var pageSub=0;
+    pageRows.forEach(function(r){if(!r.isSec)pageSub+=r.tot;});
+    cumulSub+=pageSub;
+    var rowsHTML=pageRows.map(function(r){return r.html;}).join('');
+    var subtotalRowHTML='';
+    if(isMultiPage && !isLast){
+      var stLabel='Sous-total HT (XPF) — Report page suivante',stValue=fN(cumulSub);
+      subtotalRowHTML='<tfoot><tr>'+
+        '<td colspan="6" style="text-align:left;font-weight:700;color:#1e3a5f;background:#dbeafe!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;border-top:2px solid #1e3a5f;padding:8px 12px;font-size:12px">'+stLabel+'</td>'+
+        '<td colspan="2" style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f;background:#dbeafe!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;border-top:2px solid #1e3a5f;padding:8px 12px">'+stValue+'</td>'+
+      '</tr></tfoot>';
+    }
+    var tableHTML='<table class="doc-tbl">'+tblCols+tblHead+'<tbody>'+rowsHTML+'</tbody>'+subtotalRowHTML+'</table>';
+    var pageFooterHTML=
+      '<div class="doc-page-footer">'+
+        '<div class="doc-footer-bar">'+CI.nom+' \u2014 '+CI.tel+' \u2014 '+CI.email+' \u2014 '+CI.rcs+'</div>'+
+        '<p class="doc-legal">'+mention+'</p>'+
+      '</div>';
+    var pageHTML='<div class="doc-page">';
+    pageHTML+=buildPageHeader(pi+1,pages.length);
+    pageHTML+=tableHTML;
+    if(isLast){
+      // === Bloc final FACTURE : différent du devis (pas Validité/Paiement, juste Délai) ===
+      pageHTML+=
+        '<div class="doc-page-final-block" style="margin-top:8px">'+
+        buildFATotsHtml(f,isExo)+
+        '<div class="doc-notes"><strong>Montant en lettres :</strong> '+toLtr(ttcDisp)+'<br>'+
+          '<strong>Délai :</strong> '+esc(f.delai||'Paiement sous 30 jours à réception de la facture')+
+        '</div>'+
+        bankHtml()+
+        '<div class="doc-sign">'+
+          '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de "lu et approuvé"</p></div></div>'+
+          '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot">'+
+            (sigSrc?'<img src="'+sigSrc+'">':'')+'</div><div class="dsline"></div><p>Signature</p></div></div>'+
+        '</div>'+
+        '</div>';
+    }
+    pageHTML+=pageFooterHTML;
+    pageHTML+='</div>';
+    pagesHTML+=pageHTML;
+  });
+  return pagesHTML;
+}
+
+
+var PRINT_CSS='body{font-family:Calibri,Trebuchet MS,Arial,sans-serif;margin:0;padding:10px;font-size:9px;color:#111}.doc{max-width:760px;margin:0 auto}.doc-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:7px;border-bottom:2.5px solid #1e3a5f}.doc-title{font-size:18px;font-weight:900;color:#1e3a5f;text-align:right}.doc-meta{text-align:right;font-size:10px;color:#555}.doc-parties{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px}.doc-party h4{font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px}.doc-party p{font-size:13px;line-height:1.6;color:#333}.doc-info-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact;word-break:break-word}.bc-info-bar{background:#dbeafe!important;border-bottom:2px solid #1e3a5f!important;border-radius:3px 3px 0 0!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.bc-info-bar-5col{grid-template-columns:repeat(5,1fr) !important;gap:8px;font-size:11px}.bc-info-bar-5col .dlbl{font-size:9.5px}.dlbl{font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block}.doc-tbl{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px;table-layout:fixed}.doc-tbl col.c-num{width:28px}.doc-tbl col.c-ref{width:130px}.doc-tbl col.c-des{width:auto}.doc-tbl col.c-tgc{width:38px}.doc-tbl col.c-ute{width:46px}.doc-tbl col.c-qte{width:36px}.doc-tbl col.c-pu{width:78px}.doc-tbl col.c-ttc{width:82px}.doc-tbl thead th{background:#1e3a5f;color:#fff;padding:6px 5px;text-align:left;font-size:11.5px;font-weight:700;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact;overflow:hidden}.doc-tbl thead th:nth-child(1){text-align:center}.doc-tbl thead th:nth-child(n+4){text-align:center}.doc-tbl thead th:nth-child(7),.doc-tbl thead th:nth-child(8){text-align:right}.doc-tbl tbody td{padding:6px 5px;border-bottom:1px solid #eee;vertical-align:top;word-break:break-word;font-size:13px;overflow:hidden}.doc-tbl tbody td:nth-child(1){text-align:center}.doc-tbl tbody td:nth-child(2){word-break:keep-all;overflow-wrap:normal}.doc-tbl tbody td:nth-child(4),.doc-tbl tbody td:nth-child(5),.doc-tbl tbody td:nth-child(6){text-align:center;white-space:nowrap}.doc-tbl tbody td:nth-child(7),.doc-tbl tbody td:nth-child(8){text-align:right;white-space:nowrap;font-weight:600}.doc-tbl tfoot td{padding:5px 5px;font-weight:800;font-size:12.5px;color:#1e3a5f;border-top:2px solid #1e3a5f}.doc-tbl tfoot td:last-child{text-align:right}.doc-totals{margin-left:auto;width:270px;border-collapse:collapse;font-size:10.5px}.doc-totals td{padding:2px 6px}.doc-totals td:last-child{text-align:right;font-weight:600}.dtf td{font-size:12px;font-weight:800;color:#1e3a5f;border-top:2px solid #1e3a5f;padding-top:4px}.doc-notes{background:#f8fafc;border-left:3px solid #1e3a5f;padding:8px 11px;font-size:13px;color:#444;margin-bottom:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank{background:#eef2f7;padding:7px 10px;border-radius:3px;margin-bottom:10px;font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-bank strong{display:block;color:#1e3a5f;margin-bottom:2px}.doc-sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:14px;padding-top:9px;border-top:1px solid #ddd;align-items:stretch}.doc-sign-box{text-align:center;font-size:11px;display:flex;flex-direction:column;min-height:195px}.doc-sign-box .dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f;flex-shrink:0}.doc-sign-box .ds-bottom{margin-top:auto;display:flex;flex-direction:column;align-items:stretch}.doc-sign-box .ds-siglot{height:115px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:2px}.doc-sign-box .ds-siglot img{max-height:110px;max-width:260px;display:block;margin:0 auto}.doc-sign-box .dsline{height:0;border-bottom:1px solid #999;margin:0 0 3px 0}.doc-sign-box p{margin:0;line-height:1.3}.dsl{font-weight:700;margin-bottom:2px;color:#1e3a5f}.dsline{height:0;border-bottom:1px solid #999;margin-bottom:2px}.doc-footer-bar{background:#1e3a5f;color:#fff;text-align:center;padding:5px;font-size:9px;margin-top:9px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-legal{font-size:11px;color:#cc2200;font-style:italic;text-align:center;margin-top:4px}.doc-sec-head{background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.doc-tbl{page-break-inside:auto}.doc-tbl tr{page-break-inside:avoid;page-break-after:auto}.doc-sec-head{page-break-after:avoid}.doc-totals-wrap{page-break-inside:avoid}.doc-repeat-header{display:none}.tbl-subtotal{display:none}.thead-repeat-header{display:none}@media print{.doc-repeat-header{display:block}.tbl-subtotal{display:table-row}.thead-repeat-header{display:table-row}}';
 
 // ========================================================================
 // TÉLÉCHARGEMENT PDF HAUTE DÉFINITION
@@ -34825,8 +36472,8 @@ function printPreviewBC(){
   var src=document.getElementById('prvBody');
   if(!src){alert('Aucun aperçu à imprimer.');return;}
 
-  // === DEVIS : déléguer à doPrint() qui utilise buildPaginatedDV ===
-  // Pourquoi : buildPaginatedDV calcule la pagination manuellement et insère
+  // === DEVIS ou FACTURE : déléguer à doPrint() qui utilise buildPaginatedDV/FA ===
+  // Pourquoi : buildPaginatedDV/FA calcule la pagination manuellement et insère
   // un "Sous-total HT (XPF) — Report page suivante" en bas de chaque page
   // sauf la dernière (somme cumulée des HT de toutes les lignes vues jusqu'ici).
   // C'est le rendu validé sur SLN-DV163. printPreviewBC ci-dessous ne sait
@@ -34837,7 +36484,7 @@ function printPreviewBC(){
   // explicitement via window.doPrint pour éviter le shadowing.
   var titleElEarly=document.getElementById('prvTitle');
   var docTitleEarly=titleElEarly?titleElEarly.textContent:'';
-  if(/^Devis\s/i.test(docTitleEarly)){
+  if(/^Devis\s/i.test(docTitleEarly) || /^Facture\s/i.test(docTitleEarly)){
     return window.doPrint();
   }
 
@@ -36062,6 +37709,8 @@ function doPrint(){
   var titleEl=document.getElementById('prvTitle');
   var docTitle=titleEl?titleEl.textContent:'CALINSTRUM';
   var isDevisDoc=docTitle && /^Devis\s/i.test(docTitle);
+  // Détection facture (titre commence par "Facture")
+  var isFactureDoc=docTitle && /^Facture\s/i.test(docTitle);
   // Détection d'un BC (Purchase Order) pour appliquer la police Arial globale
   var isBCDoc=docTitle && /^BC\s|Purchase\s*Order|^PO\s/i.test(docTitle);
 
@@ -36086,11 +37735,21 @@ function doPrint(){
     }
     var fileTitleRaw='DEVIS CALINSTRUM '+dvNumForFile+(objetForFile?' '+objetForFile:'');
     safeDocTitle=fileTitleRaw.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
+  } else if(isFactureDoc){
+    // Nom fichier facture : "FACTURE CALINSTRUM SLN-F098 BC743380" (numFA + BC client si dispo)
+    var faNumForFile=docTitle.replace(/^Facture\s*[\u2014\-]\s*/i,'').trim();
+    var bcSLNForFile='';
+    if(typeof DB!=='undefined' && Array.isArray(DB.factures)){
+      var faRec=DB.factures.find(function(x){return (x.num||'')===faNumForFile;});
+      if(faRec && faRec.bcClientSLN) bcSLNForFile='BC'+String(faRec.bcClientSLN).replace(/[\\\/:*?"<>|\s]+/g,'');
+    }
+    var fileTitleRawF='FACTURE CALINSTRUM '+faNumForFile+(bcSLNForFile?' '+bcSLNForFile:'');
+    safeDocTitle=fileTitleRawF.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
   }
 
-  // Pour les devis paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
+  // Pour les devis et factures paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
   // Pour les autres docs, on garde des marges A4 standard
-  var pageRule=isDevisDoc
+  var pageRule=(isDevisDoc||isFactureDoc)
     ? `@page{size:A4 portrait;margin:10mm 12mm 16mm 12mm;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}}`
     : `@page{size:A4 portrait;margin:8mm 10mm 20mm 10mm;@bottom-right{content: counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}} @page :first{ margin-top:8mm; }`;
 
@@ -36415,6 +38074,21 @@ function doPrint(){
     } else {
       content=c.innerHTML;
     }
+  } else if(isFactureDoc){
+    // === FACTURE : déléguer à buildPaginatedFA pour pagination intelligente ===
+    // Logique identique au devis : trouver f par num, récupérer logo+signature, déléguer.
+    var faNum=(docTitle||'').replace(/^Facture\s*\u2014\s*/,'').trim();
+    var fObj=(DB.factures||[]).find(function(x){return x.num===faNum;});
+    if(fObj){
+      var logoSrcF=document.querySelector('#prvBody img')?document.querySelector('#prvBody img').src:(typeof LG_PLACEHOLDER!=='undefined'?LG_PLACEHOLDER:'');
+      var sigSrcF=null;
+      var sigImgElF=document.querySelector('#prvBody .sig-img');
+      if(sigImgElF&&sigImgElF.src)sigSrcF=sigImgElF.src;
+      content=buildPaginatedFA(fObj,logoSrcF,sigSrcF);
+      didPaginate=true;
+    } else {
+      content=c.innerHTML;
+    }
   } else {
     content=c.innerHTML;
   }
@@ -36664,7 +38338,7 @@ function _toggleShortcutsHelpPanel(){
       '<div style="font-weight:600;font-size:10px;color:#a5b4fc;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:6px;margin-top:4px">Navigation</div>'+
       _kbdRow('Alt + W','Section suivante (descendre)')+
       _kbdRow('Alt + X','Section précédente (monter)')+
-      _kbdRow('Alt + P','Masquer/afficher les montants (mode privacy)')+
+      _kbdRow('Alt + P','Mode Privacy (masquer montants)')+
       '<div style="font-weight:600;font-size:10px;color:#a5b4fc;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:6px;margin-top:12px">Section active</div>'+
       _kbdRow('Ctrl + N','Nouveau document')+
       _kbdRow('Ctrl + F','Rechercher dans la section')+
@@ -36714,12 +38388,11 @@ document.addEventListener('keydown',function(e){
     var k=(e.key||'').toLowerCase();
     if(k==='w'){e.preventDefault();_navSidebarByDelta(+1);return;}
     if(k==='x'){e.preventDefault();_navSidebarByDelta(-1);return;}
-    // Alt+P : toggle mode Privacy (masquer/afficher montants)
+    // === Alt+P : bascule du mode Privacy (masquer/afficher les montants) ===
+    // Utile en réunion ou lors d'une démo publique.
     if(k==='p'){
       e.preventDefault();
-      if(typeof togglePrivacyMode==='function'){
-        togglePrivacyMode();
-      }
+      if(typeof togglePrivacyMode==='function') togglePrivacyMode();
       return;
     }
   }
@@ -37531,8 +39204,10 @@ function critProceed(){
   </div>
 </div>
 
-<!-- Bouton flottant '?' — Aide raccourcis clavier (toujours visible) -->
-<button id="shortcutsHelpBtn" onclick="_toggleShortcutsHelpPanel()" title="Afficher les raccourcis clavier (touche '?')" style="position:fixed;bottom:20px;left:20px;width:32px;height:32px;border-radius:50%;background:rgba(99,102,241,0.18);border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;font-size:14px;font-weight:700;cursor:pointer;z-index:9000;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:all .2s" onmouseover="this.style.background='rgba(99,102,241,0.3)';this.style.transform='scale(1.1)'" onmouseout="this.style.background='rgba(99,102,241,0.18)';this.style.transform='scale(1)'">?</button>
+<!-- Bouton flottant '?' — Aide raccourcis clavier (toujours visible)
+     Position : juste à droite du sidebar (largeur 200px) pour ne pas chevaucher
+     le footer "CALINSTRUM SARL / RIDET / RCS Nouméa" du sidebar. -->
+<button id="shortcutsHelpBtn" onclick="_toggleShortcutsHelpPanel()" title="Afficher les raccourcis clavier (touche '?')" style="position:fixed;bottom:20px;left:212px;width:32px;height:32px;border-radius:50%;background:rgba(99,102,241,0.18);border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;font-size:14px;font-weight:700;cursor:pointer;z-index:9000;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:all .2s" onmouseover="this.style.background='rgba(99,102,241,0.3)';this.style.transform='scale(1.1)'" onmouseout="this.style.background='rgba(99,102,241,0.18)';this.style.transform='scale(1)'">?</button>
 
 </body>
 </html>
