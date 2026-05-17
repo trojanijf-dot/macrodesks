@@ -10426,6 +10426,65 @@ function rDashPro(){
   // Devis récents (5 derniers)
   var recentDv=dv.slice().sort(function(a,b){return (b.date||'').localeCompare(a.date||'');}).slice(0,5);
 
+  // === DÉCOMPOSITION FLUX BOOKING/REVENUE/BACKLOG ===
+  // Trois angles distincts pour piloter l'activité (vue trader/CFO) :
+  // - Bookings : devis émis sur l'année (signature commerciale)
+  // - Revenue  : factures émises sur l'année (CA comptable)
+  // - Conversion intra-année : devis créés ET facturés la même année (cycle court)
+  // - Backlog forward : devis année non encore facturés (CA futur)
+  // - Backlog inbound : factures année issues de devis antérieurs (CA "rentré")
+  //
+  // Matching dvlie (CSV virgule) : on parcourt le champ et on trouve les devis liés.
+  // Une facture peut être liée à plusieurs devis (combo multi-devis).
+  function _normNumDv(s){return String(s||'').toUpperCase().replace(/\s+/g,'').replace(/REV\d*$/,'').replace(/-$/,'');}
+  var _dvIdxDecomp={};
+  dv.forEach(function(d){
+    var k1=String(d.num||'').toUpperCase().replace(/\s+/g,'');
+    if(k1) _dvIdxDecomp[k1]=d;
+    var k2=_normNumDv(d.num);
+    if(k2 && !_dvIdxDecomp[k2]) _dvIdxDecomp[k2]=d;
+  });
+  // Pour chaque facture 2026, identifier les devis liés et leur année
+  var faFromDv2026Sum=0, faFromDv2026Count=0;
+  var faFromPreSum=0, faFromPreCount=0;
+  var faOrphansSum=0, faOrphansCount=0;
+  var dvFacturedSet={}; // num devis 2026 ayant au moins une facture 2026
+  faFy.forEach(function(fa){
+    if(!fa.dvlie){
+      faOrphansSum+=Number(fa.ttc||fa.montant||0); faOrphansCount++; return;
+    }
+    var parts=String(fa.dvlie).split(/[,;\/+]/).map(function(s){return s.trim();}).filter(Boolean);
+    var foundDvis=[];
+    parts.forEach(function(p){
+      var k1=p.toUpperCase().replace(/\s+/g,'');
+      var d=_dvIdxDecomp[k1]||_dvIdxDecomp[_normNumDv(p)];
+      if(d) foundDvis.push(d);
+    });
+    if(foundDvis.length===0){
+      faOrphansSum+=Number(fa.ttc||fa.montant||0); faOrphansCount++; return;
+    }
+    // Classer la facture selon l'année du PREMIER devis trouvé (devis principal)
+    var primaryYear=String(foundDvis[0].date||'').substring(0,4);
+    if(primaryYear===String(fy)){
+      faFromDv2026Sum+=Number(fa.ttc||fa.montant||0); faFromDv2026Count++;
+    } else {
+      faFromPreSum+=Number(fa.ttc||fa.montant||0); faFromPreCount++;
+    }
+    // Marquer TOUS les devis 2026 liés comme "facturés" (pour le compte conversion)
+    foundDvis.forEach(function(d){
+      if(String(d.date||'').substring(0,4)===String(fy)) dvFacturedSet[d.num]=1;
+    });
+  });
+  // Devis 2026 facturés (clés uniques)
+  var dvFacturedList=Object.keys(dvFacturedSet).map(function(n){return dv.find(function(x){return x.num===n;});}).filter(Boolean);
+  var dvFacturedSum=dvFacturedList.reduce(function(s,d){return s+(Number(d.ttc)||0);},0);
+  var dvFacturedCount=dvFacturedList.length;
+  // Devis 2026 NON facturés (pipeline forward)
+  var dvPipelineList=dvFy.filter(function(d){return !dvFacturedSet[d.num];});
+  var dvPipelineSum=dvPipelineList.reduce(function(s,d){return s+(Number(d.ttc)||0);},0);
+  var dvPipelineCount=dvPipelineList.length;
+  var conversionPct=dvFy.length>0?Math.round(dvFacturedCount/dvFy.length*100):0;
+
   // Note : les alertes facturation sont calculées plus bas via getAlertData()
   // pour assurer la cohérence avec le pill "X alertes" du topbar.
 
@@ -10515,6 +10574,66 @@ function rDashPro(){
     '<div class="kpi-sub">XPF restants · '+nbLate+' en retard</div>'+
     sparkRest+
     '</div>';
+  html+='</div>';
+
+  // === DÉCOMPOSITION FLUX 2026 — Carte trader ===
+  // Visualise pourquoi Devis émis ≠ Factures émises, en séparant les 3 angles :
+  //   • Activité commerciale (devis émis sur l'année)
+  //   • CA comptable (factures émises sur l'année)
+  //   • Conversion intra-année (devis créés et facturés la même année)
+  // Et 2 flux : backlog rentrant (factures sur devis pré-année) + pipeline forward.
+  html+='<div class="card-pro" style="margin-bottom:12px">';
+  html+='<div class="card-pro-title" style="display:flex;justify-content:space-between;align-items:center">'+
+    '<span><i class="ti ti-arrows-shuffle"></i>Décomposition flux '+fy+'</span>'+
+    '<span style="font-size:10.5px;color:var(--muted-soft);font-weight:400">Devis émis ≠ Factures émises — vue trader/CFO</span>'+
+    '</div>';
+  // 3 KPI inline
+  html+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px;padding-top:6px">';
+  html+='<div style="padding:10px 12px;background:rgba(125,211,252,0.06);border:0.5px solid rgba(125,211,252,0.2);border-radius:8px">'+
+    '<div style="font-size:10px;color:#7dd3fc;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">📈 Bookings · activité commerciale</div>'+
+    '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(totalDevis)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
+    '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+dvFy.length+' devis émis en '+fy+'</div>'+
+    '</div>';
+  html+='<div style="padding:10px 12px;background:rgba(93,202,165,0.06);border:0.5px solid rgba(93,202,165,0.2);border-radius:8px">'+
+    '<div style="font-size:10px;color:#5dcaa5;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">💰 Revenue · CA comptable</div>'+
+    '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(totalFa)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
+    '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+faFy.length+' factures émises en '+fy+'</div>'+
+    '</div>';
+  html+='<div style="padding:10px 12px;background:rgba(167,139,250,0.06);border:0.5px solid rgba(167,139,250,0.2);border-radius:8px">'+
+    '<div style="font-size:10px;color:#a78bfa;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">🎯 Conversion '+fy+'→'+fy+'</div>'+
+    '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(dvFacturedSum)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
+    '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+dvFacturedCount+'/'+dvFy.length+' devis · '+conversionPct+'% facturés</div>'+
+    '</div>';
+  html+='</div>';
+  // Flux entrants/sortants
+  html+='<div style="padding-top:10px;border-top:0.5px dashed var(--border)">';
+  html+='<div style="font-size:11px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">D\'où vient le CA, où va le pipeline</div>';
+  // Ligne 1 : pipeline forward
+  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 0;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(255,255,255,0.02)\'" onmouseout="this.style.background=\'\'" onclick="nav(\'devis\');setTimeout(function(){var i=document.getElementById(\'fDVst\');if(i){i.value=\'Accepté\';if(typeof renderDV===\'function\')renderDV();}},150)" title="Cliquer pour voir le pipeline">'+
+    '<div style="width:22px;height:22px;border-radius:50%;background:rgba(251,191,36,0.15);color:#fbbf24;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">→</div>'+
+    '<span><strong style="color:var(--text)">Backlog forward</strong> · devis '+fy+' <strong>pas encore facturés</strong> ('+dvPipelineCount+' devis · CA futur)</span>'+
+    '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#fbbf24" data-money>+ '+fNloc(dvPipelineSum)+'</span>'+
+    '</div>';
+  // Ligne 2 : backlog inbound
+  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 0;font-size:12.5px">'+
+    '<div style="width:22px;height:22px;border-radius:50%;background:rgba(167,139,250,0.15);color:#a78bfa;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">←</div>'+
+    '<span><strong style="color:var(--text)">Backlog rentrant</strong> · factures '+fy+' issues de <strong>devis '+(fy-1)+'/'+(fy-2)+'</strong> ('+faFromPreCount+' factures · CA "rentré")</span>'+
+    '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#a78bfa" data-money>+ '+fNloc(faFromPreSum)+'</span>'+
+    '</div>';
+  // Ligne 3 : factures sur devis 2026
+  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 0;font-size:12.5px">'+
+    '<div style="width:22px;height:22px;border-radius:50%;background:rgba(93,202,165,0.15);color:#5dcaa5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">=</div>'+
+    '<span><strong style="color:var(--text)">Cycle court</strong> · factures '+fy+' sur devis '+fy+' ('+faFromDv2026Count+' factures)</span>'+
+    '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#5dcaa5" data-money>+ '+fNloc(faFromDv2026Sum)+'</span>'+
+    '</div>';
+  if(faOrphansCount>0){
+    html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 0;font-size:12.5px;cursor:pointer" onclick="openDvlieRepairTool()" title="Cliquer pour ouvrir l\'outil de réparation des liens dvlie">'+
+      '<div style="width:22px;height:22px;border-radius:50%;background:rgba(239,68,68,0.15);color:#ef4444;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">⚠</div>'+
+      '<span><strong style="color:var(--text)">Factures orphelines</strong> · '+faOrphansCount+' factures sans devis lié (data quality)</span>'+
+      '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#ef4444" data-money>+ '+fNloc(faOrphansSum)+'</span>'+
+      '</div>';
+  }
+  html+='</div>';
   html+='</div>';
 
   // Sous-grille : 3 KPIs par type d'activité
