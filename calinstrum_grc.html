@@ -2848,6 +2848,26 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
 </div></div>
 
 <!-- ============================================================ -->
+<!-- MODALE : Drill-down de la carte décomposition flux dashboard -->
+<!-- ============================================================ -->
+<div class="modal-overlay" id="mDecompDrilldown">
+<div class="modal" style="max-width:640px">
+  <div class="modal-header">
+    <h3 id="decompDrillTitle">Drill-down</h3>
+    <button class="modal-close" onclick="cm('mDecompDrilldown')">✕</button>
+  </div>
+  <div class="modal-body">
+    <p id="decompDrillSub" style="font-size:12px;color:var(--muted);margin:0 0 10px"></p>
+    <div id="decompDrillTotal"></div>
+    <input type="text" id="decompDrillSearch" placeholder="🔍 Rechercher par n°, client, objet…" oninput="_renderDecompDrillList()" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid var(--border);color:var(--text);padding:7px 11px;border-radius:6px;font-size:12.5px;margin-bottom:10px;outline:none">
+    <div id="decompDrillList" style="max-height:440px;overflow-y:auto"></div>
+  </div>
+  <div class="modal-footer no-print">
+    <button class="btn btn-ghost" onclick="cm('mDecompDrilldown')">Fermer</button>
+  </div>
+</div></div>
+
+<!-- ============================================================ -->
 <!-- MODALE : Choix du client pour nouveau devis / nouvelle facture -->
 <!-- ============================================================ -->
 <div class="modal-overlay" id="mClientPicker">
@@ -10608,47 +10628,47 @@ function rDashPro(){
     '<span><i class="ti ti-arrows-shuffle"></i>Décomposition flux '+fy+'</span>'+
     '<span style="font-size:10.5px;color:var(--muted-soft);font-weight:400">Devis émis ≠ Factures émises — vue trader/CFO</span>'+
     '</div>';
-  // 3 KPI inline
+  // 3 KPI inline — tous cliquables (drill-down)
   html+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px;padding-top:6px">';
-  html+='<div style="padding:10px 12px;background:rgba(125,211,252,0.06);border:0.5px solid rgba(125,211,252,0.2);border-radius:8px">'+
+  html+='<div onclick="openDecompDrilldown(\'bookings\')" title="Cliquer pour voir la liste des devis émis" style="padding:10px 12px;background:rgba(125,211,252,0.06);border:0.5px solid rgba(125,211,252,0.2);border-radius:8px;cursor:pointer;transition:all .15s" onmouseover="this.style.background=\'rgba(125,211,252,0.12)\';this.style.borderColor=\'rgba(125,211,252,0.4)\'" onmouseout="this.style.background=\'rgba(125,211,252,0.06)\';this.style.borderColor=\'rgba(125,211,252,0.2)\'">'+
     '<div style="font-size:10px;color:#7dd3fc;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">📈 Bookings · activité commerciale</div>'+
     '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(totalDevis)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
     '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+dvFy.length+' devis émis en '+fy+'</div>'+
     '</div>';
-  html+='<div style="padding:10px 12px;background:rgba(93,202,165,0.06);border:0.5px solid rgba(93,202,165,0.2);border-radius:8px">'+
+  html+='<div onclick="openDecompDrilldown(\'revenue\')" title="Cliquer pour voir la liste des factures émises" style="padding:10px 12px;background:rgba(93,202,165,0.06);border:0.5px solid rgba(93,202,165,0.2);border-radius:8px;cursor:pointer;transition:all .15s" onmouseover="this.style.background=\'rgba(93,202,165,0.12)\';this.style.borderColor=\'rgba(93,202,165,0.4)\'" onmouseout="this.style.background=\'rgba(93,202,165,0.06)\';this.style.borderColor=\'rgba(93,202,165,0.2)\'">'+
     '<div style="font-size:10px;color:#5dcaa5;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">💰 Revenue · CA comptable</div>'+
     '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(totalFa)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
     '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+faFy.length+' factures émises en '+fy+'</div>'+
     '</div>';
-  html+='<div style="padding:10px 12px;background:rgba(167,139,250,0.06);border:0.5px solid rgba(167,139,250,0.2);border-radius:8px">'+
+  html+='<div onclick="openDecompDrilldown(\'conversion\')" title="Cliquer pour voir la liste des devis '+fy+' facturés" style="padding:10px 12px;background:rgba(167,139,250,0.06);border:0.5px solid rgba(167,139,250,0.2);border-radius:8px;cursor:pointer;transition:all .15s" onmouseover="this.style.background=\'rgba(167,139,250,0.12)\';this.style.borderColor=\'rgba(167,139,250,0.4)\'" onmouseout="this.style.background=\'rgba(167,139,250,0.06)\';this.style.borderColor=\'rgba(167,139,250,0.2)\'">'+
     '<div style="font-size:10px;color:#a78bfa;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">🎯 Conversion '+fy+'→'+fy+'</div>'+
     '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(dvFacturedSum)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
     '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+dvFacturedCount+'/'+dvFy.length+' devis · '+conversionPct+'% facturés</div>'+
     '</div>';
   html+='</div>';
-  // Flux entrants/sortants
+  // Flux entrants/sortants — tous cliquables (drill-down)
   html+='<div style="padding-top:10px;border-top:0.5px dashed var(--border)">';
   html+='<div style="font-size:11px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">D\'où vient le CA, où va le pipeline</div>';
   // Ligne 1 : pipeline forward
-  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 0;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(255,255,255,0.02)\'" onmouseout="this.style.background=\'\'" onclick="nav(\'devis\');setTimeout(function(){var i=document.getElementById(\'fDVst\');if(i){i.value=\'Accepté\';if(typeof renderDV===\'function\')renderDV();}},150)" title="Cliquer pour voir le pipeline">'+
+  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(251,191,36,0.06)\'" onmouseout="this.style.background=\'\'" onclick="openDecompDrilldown(\'forward\')" title="Cliquer pour voir les devis non facturés">'+
     '<div style="width:22px;height:22px;border-radius:50%;background:rgba(251,191,36,0.15);color:#fbbf24;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">→</div>'+
     '<span><strong style="color:var(--text)">Backlog forward</strong> · devis '+fy+' <strong>pas encore facturés</strong> ('+dvPipelineCount+' devis · CA futur)</span>'+
     '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#fbbf24" data-money>+ '+fNloc(dvPipelineSum)+'</span>'+
     '</div>';
   // Ligne 2 : backlog inbound
-  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 0;font-size:12.5px">'+
+  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(167,139,250,0.06)\'" onmouseout="this.style.background=\'\'" onclick="openDecompDrilldown(\'inbound\')" title="Cliquer pour voir les factures issues de devis antérieurs">'+
     '<div style="width:22px;height:22px;border-radius:50%;background:rgba(167,139,250,0.15);color:#a78bfa;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">←</div>'+
     '<span><strong style="color:var(--text)">Backlog rentrant</strong> · factures '+fy+' issues de <strong>devis '+(fy-1)+'/'+(fy-2)+'</strong> ('+faFromPreCount+' factures · CA "rentré")</span>'+
     '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#a78bfa" data-money>+ '+fNloc(faFromPreSum)+'</span>'+
     '</div>';
   // Ligne 3 : factures sur devis 2026
-  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 0;font-size:12.5px">'+
+  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(93,202,165,0.06)\'" onmouseout="this.style.background=\'\'" onclick="openDecompDrilldown(\'short\')" title="Cliquer pour voir les factures cycle court">'+
     '<div style="width:22px;height:22px;border-radius:50%;background:rgba(93,202,165,0.15);color:#5dcaa5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">=</div>'+
     '<span><strong style="color:var(--text)">Cycle court</strong> · factures '+fy+' sur devis '+fy+' ('+faFromDv2026Count+' factures)</span>'+
     '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#5dcaa5" data-money>+ '+fNloc(faFromDv2026Sum)+'</span>'+
     '</div>';
   if(faOrphansCount>0){
-    html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 0;font-size:12.5px;cursor:pointer" onclick="openDvlieRepairTool()" title="Cliquer pour ouvrir l\'outil de réparation des liens dvlie">'+
+    html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(239,68,68,0.06)\'" onmouseout="this.style.background=\'\'" onclick="openDecompDrilldown(\'orphans\')" title="Cliquer pour voir la liste des factures orphelines">'+
       '<div style="width:22px;height:22px;border-radius:50%;background:rgba(239,68,68,0.15);color:#ef4444;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">⚠</div>'+
       '<span><strong style="color:var(--text)">Factures orphelines</strong> · '+faOrphansCount+' factures sans devis lié (data quality)</span>'+
       '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#ef4444" data-money>+ '+fNloc(faOrphansSum)+'</span>'+
@@ -30439,6 +30459,216 @@ function _clientPickerNewClient(){
   } else if(typeof om==='function'){
     om('mNEWCLI');
   }
+}
+
+// ============================================================================
+// DRILL-DOWN — Carte décomposition flux dashboard
+// ============================================================================
+// Permet de cliquer sur chaque KPI / ligne de la carte décomposition pour voir
+// la liste détaillée des documents qui composent ce chiffre. Pattern "vue trader"
+// classique : agrégat → détail → action (clic sur ligne ouvre le doc).
+//
+// État runtime : window._decompDrillState = {mode, items, title, sub, color}
+window._decompDrillState=null;
+
+// Mapping mode → titre + sous-titre + couleur d'accent
+var _DECOMP_DRILL_CONFIG={
+  bookings:    {title:'📈 Bookings — devis émis 2026',           color:'#7dd3fc', kind:'dv'},
+  revenue:     {title:'💰 Revenue — factures émises 2026',       color:'#5dcaa5', kind:'fa'},
+  conversion:  {title:'🎯 Conversion — devis 2026 facturés',     color:'#a78bfa', kind:'dv'},
+  forward:     {title:'→ Backlog forward — devis 2026 non facturés', color:'#fbbf24', kind:'dv'},
+  inbound:     {title:'← Backlog rentrant — factures 2026 sur devis pré-2026', color:'#a78bfa', kind:'fa'},
+  short:       {title:'= Cycle court — factures 2026 sur devis 2026', color:'#5dcaa5', kind:'fa'},
+  orphans:     {title:'⚠ Factures 2026 orphelines',              color:'#ef4444', kind:'fa'}
+};
+
+// Construit la liste d'items à afficher selon le mode
+function _decompDrillBuildItems(mode){
+  var fy=String((new Date()).getFullYear()); // année courante = 2026 par défaut
+  // Récupérer l'année sélectionnée du filtre dashboard si dispo
+  var yearSel=document.getElementById('dash-year-filter');
+  if(yearSel && yearSel.value) fy=String(yearSel.value);
+  var devis=DB.devis||[], factures=DB.factures||[];
+
+  function _normNumDv(s){return String(s||'').toUpperCase().replace(/\s+/g,'').replace(/REV\d*$/,'').replace(/-$/,'');}
+  var dvIdx={};
+  devis.forEach(function(d){
+    var k1=String(d.num||'').toUpperCase().replace(/\s+/g,'');
+    if(k1) dvIdx[k1]=d;
+    var k2=_normNumDv(d.num);
+    if(k2 && !dvIdx[k2]) dvIdx[k2]=d;
+  });
+
+  var dvFy=devis.filter(function(d){return String(d.date||'').substring(0,4)===fy;});
+  var faFy=factures.filter(function(f){
+    var y=String(f.dateEnvoi||f.date||f.dateReceptionBC||'').substring(0,4);
+    return y===fy;
+  });
+
+  // Pour chaque facture, trouver son premier devis lié + classer par année
+  function findLinkedDvs(fa){
+    if(!fa.dvlie) return [];
+    var parts=String(fa.dvlie).split(/[,;\/+]/).map(function(s){return s.trim();}).filter(Boolean);
+    var found=[];
+    parts.forEach(function(p){
+      var k1=p.toUpperCase().replace(/\s+/g,'');
+      var d=dvIdx[k1]||dvIdx[_normNumDv(p)];
+      if(d) found.push(d);
+    });
+    return found;
+  }
+
+  var items=[];
+  if(mode==='bookings'){
+    items=dvFy.map(function(d){return {type:'dv',obj:d,num:d.num+(d.rev||''),date:d.date,client:d.client,objet:d.objet,montant:Number(d.ttc||0),status:d.status};});
+  } else if(mode==='revenue'){
+    items=faFy.map(function(f){return {type:'fa',obj:f,num:f.num,date:f.date||f.dateEnvoi,client:f.client,objet:f.objet,montant:Number(f.ttc||f.montant||0),status:f.status};});
+  } else if(mode==='conversion'){
+    // Devis 2026 qui ont au moins une facture liée
+    var dvFacturedSet={};
+    faFy.forEach(function(fa){
+      findLinkedDvs(fa).forEach(function(d){
+        if(String(d.date||'').substring(0,4)===fy) dvFacturedSet[d.num]=1;
+      });
+    });
+    items=dvFy.filter(function(d){return dvFacturedSet[d.num];})
+              .map(function(d){return {type:'dv',obj:d,num:d.num+(d.rev||''),date:d.date,client:d.client,objet:d.objet,montant:Number(d.ttc||0),status:d.status};});
+  } else if(mode==='forward'){
+    // Devis 2026 sans facture liée
+    var dvFacturedSet2={};
+    faFy.forEach(function(fa){
+      findLinkedDvs(fa).forEach(function(d){
+        if(String(d.date||'').substring(0,4)===fy) dvFacturedSet2[d.num]=1;
+      });
+    });
+    items=dvFy.filter(function(d){return !dvFacturedSet2[d.num];})
+              .map(function(d){return {type:'dv',obj:d,num:d.num+(d.rev||''),date:d.date,client:d.client,objet:d.objet,montant:Number(d.ttc||0),status:d.status};});
+  } else if(mode==='inbound'){
+    // Factures 2026 dont le 1er devis lié est en pré-2026
+    faFy.forEach(function(fa){
+      var linked=findLinkedDvs(fa);
+      if(linked.length===0) return;
+      var primaryYear=String(linked[0].date||'').substring(0,4);
+      if(primaryYear<fy){
+        items.push({type:'fa',obj:fa,num:fa.num,date:fa.date||fa.dateEnvoi,client:fa.client,objet:fa.objet,montant:Number(fa.ttc||fa.montant||0),status:fa.status,
+          extra:'↗ '+linked[0].num+' ('+(linked[0].date||'').substring(0,7)+')'});
+      }
+    });
+  } else if(mode==='short'){
+    // Factures 2026 dont le 1er devis lié est en 2026
+    faFy.forEach(function(fa){
+      var linked=findLinkedDvs(fa);
+      if(linked.length===0) return;
+      var primaryYear=String(linked[0].date||'').substring(0,4);
+      if(primaryYear===fy){
+        items.push({type:'fa',obj:fa,num:fa.num,date:fa.date||fa.dateEnvoi,client:fa.client,objet:fa.objet,montant:Number(fa.ttc||fa.montant||0),status:fa.status,
+          extra:'↗ '+linked[0].num});
+      }
+    });
+  } else if(mode==='orphans'){
+    // Factures 2026 sans devis lié
+    faFy.forEach(function(fa){
+      if(findLinkedDvs(fa).length===0){
+        items.push({type:'fa',obj:fa,num:fa.num,date:fa.date||fa.dateEnvoi,client:fa.client,objet:fa.objet,montant:Number(fa.ttc||fa.montant||0),status:fa.status});
+      }
+    });
+  }
+  // Trier par montant desc
+  items.sort(function(a,b){return b.montant-a.montant;});
+  return items;
+}
+
+function openDecompDrilldown(mode){
+  var cfg=_DECOMP_DRILL_CONFIG[mode];
+  if(!cfg) return;
+  var items=_decompDrillBuildItems(mode);
+  var total=items.reduce(function(s,it){return s+it.montant;},0);
+  window._decompDrillState={mode:mode,items:items,total:total,color:cfg.color,kind:cfg.kind};
+  // Titre
+  var titleEl=document.getElementById('decompDrillTitle');
+  if(titleEl) titleEl.textContent=cfg.title;
+  // Sous-titre (description du mode)
+  var subEl=document.getElementById('decompDrillSub');
+  if(subEl){
+    var explainMap={
+      bookings:'Tous les devis créés cette année — activité commerciale.',
+      revenue:'Toutes les factures émises cette année — CA comptable.',
+      conversion:'Devis créés ET facturés cette année — cycle court complet.',
+      forward:'Devis créés cette année, pas encore facturés — CA futur.',
+      inbound:'Factures émises cette année sur devis antérieurs — backlog converti.',
+      short:'Factures émises cette année sur devis de cette année — cycle court.',
+      orphans:'Factures sans lien devis identifié — data quality à corriger.'
+    };
+    subEl.textContent=explainMap[mode]||'';
+  }
+  // Reset recherche
+  var searchEl=document.getElementById('decompDrillSearch');
+  if(searchEl) searchEl.value='';
+  _renderDecompDrillList();
+  om('mDecompDrilldown');
+  setTimeout(function(){if(searchEl)searchEl.focus();},80);
+}
+
+function _renderDecompDrillList(){
+  var st=window._decompDrillState;
+  if(!st) return;
+  var totalEl=document.getElementById('decompDrillTotal');
+  var listEl=document.getElementById('decompDrillList');
+  if(!totalEl||!listEl) return;
+  var search=((document.getElementById('decompDrillSearch')||{}).value||'').toLowerCase().trim();
+  var items=st.items.filter(function(it){
+    if(!search) return true;
+    return (String(it.num||'')+' '+String(it.client||'')+' '+String(it.objet||'')).toLowerCase().indexOf(search)>=0;
+  });
+  var filteredTotal=items.reduce(function(s,it){return s+it.montant;},0);
+  var col=st.color;
+  function fNloc(n){return Math.round(Number(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
+  // Bandeau total
+  totalEl.innerHTML='<div style="display:flex;justify-content:space-between;padding:8px 12px;background:rgba(255,255,255,0.02);border-left:2px solid '+col+';border-radius:0 6px 6px 0;margin-bottom:10px;font-size:12.5px">'+
+    '<span style="color:var(--muted-soft)">Total'+(search?' filtré':'')+'</span>'+
+    '<span style="color:'+col+';font-weight:600;font-variant-numeric:tabular-nums">'+fNloc(filteredTotal)+' XPF · '+items.length+' '+(st.kind==='dv'?'devis':'factures')+'</span>'+
+    '</div>';
+  // Liste
+  if(items.length===0){
+    listEl.innerHTML='<div style="padding:24px;text-align:center;color:var(--muted);font-size:12.5px">Aucun document'+(search?' ne correspond à la recherche':'')+'.</div>';
+    return;
+  }
+  var html='';
+  items.forEach(function(it){
+    var dateShort=String(it.date||'').substring(0,10);
+    var clientShort=String(it.client||'').substring(0,28);
+    var objetShort=String(it.objet||'').substring(0,55);
+    var statusBadge=it.status?'<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:rgba(255,255,255,0.06);color:var(--muted-soft);font-size:10px;margin-left:4px">'+esc(it.status)+'</span>':'';
+    html+='<div class="dec-drill-row" onclick="_decompDrillOpenItem(\''+esc(it.type)+'\',\''+esc(String(it.obj.id||it.obj.num).replace(/\'/g,"\\\\'"))+'\')" '+
+      'style="display:grid;grid-template-columns:110px 1fr 110px;gap:10px;align-items:center;padding:8px 10px;border-radius:5px;font-size:12.5px;cursor:pointer;transition:background .12s;margin-bottom:2px" '+
+      'onmouseover="this.style.background=\'rgba(255,255,255,0.04)\'" onmouseout="this.style.background=\'\'">'+
+      '<div>'+
+        '<div style="font-family:JetBrains Mono,monospace;font-weight:600;color:'+col+';font-size:11.5px">'+esc(it.num)+'</div>'+
+        '<div style="color:var(--muted-soft);font-size:10px">'+esc(dateShort)+'</div>'+
+      '</div>'+
+      '<div style="overflow:hidden">'+
+        '<div style="color:var(--text);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(it.client||'')+'">'+esc(clientShort)+statusBadge+'</div>'+
+        '<div style="color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(it.objet||'')+'">'+esc(objetShort)+(it.extra?' · <span style="color:'+col+'">'+esc(it.extra)+'</span>':'')+'</div>'+
+      '</div>'+
+      '<div style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:var(--text)" data-money>'+fNloc(it.montant)+'</div>'+
+      '</div>';
+  });
+  listEl.innerHTML=html;
+}
+
+// Clic sur une ligne → ferme drill-down + ouvre le devis/facture concerné
+function _decompDrillOpenItem(type,idOrNum){
+  cm('mDecompDrilldown');
+  setTimeout(function(){
+    if(type==='dv'){
+      // Trouver le devis par id ou par num
+      var d=(DB.devis||[]).find(function(x){return String(x.id)===String(idOrNum) || x.num===idOrNum || (x.num+(x.rev||''))===idOrNum;});
+      if(d && typeof openDV==='function') openDV(d.id);
+    } else {
+      var f=(DB.factures||[]).find(function(x){return String(x.id)===String(idOrNum) || x.num===idOrNum;});
+      if(f && typeof openFA==='function') openFA(f.id);
+    }
+  },80);
 }
 
 // Supprime le PDF (devisId, kind) s'il existe.
