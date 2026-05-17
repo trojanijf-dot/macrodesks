@@ -700,6 +700,20 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
 .req{color:var(--red)}
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
 .modal-overlay.open{display:flex}
+@keyframes modalShake{
+  0%,100%{transform:translateX(0)}
+  20%{transform:translateX(-6px)}
+  40%{transform:translateX(6px)}
+  60%{transform:translateX(-4px)}
+  80%{transform:translateX(4px)}
+}
+.modal-shake{animation:modalShake .35s ease-out}
+@keyframes modalLockBadge{
+  0%{opacity:0;transform:translateX(-50%) translateY(-8px)}
+  10%{opacity:1;transform:translateX(-50%) translateY(0)}
+  80%{opacity:1;transform:translateX(-50%) translateY(0)}
+  100%{opacity:0;transform:translateX(-50%) translateY(-4px)}
+}
 .modal{background:var(--bg2);border:1px solid rgba(45,212,191,.15);border-radius:10px;width:94%;max-width:860px;max-height:93vh;overflow-y:auto;box-shadow:0 24px 80px rgba(0,0,0,.5)}
 .modal-lg{max-width:1020px}
 .modal-header{padding:14px 18px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--bg2);z-index:2}
@@ -981,6 +995,10 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
   <button class="sb-item" onclick="openDvlieRepairTool()" title="Détecte les factures sans dvlie ou avec dvlie cassé, propose des matchs par montant + objet + PO, et applique les réparations validées. Cohérence Dashboard ↔ Section Factures."><span class="ico"><span class="ico-classic">🔧</span><i class="ti ti-link ico-pro"></i></span>Réparer liens DV/FA</button>
   <button class="sb-item" onclick="loadDossierPRNC()" title="Crée le BC Emerson 12112025/063-001 (114 998 AUD, taux 74.5) et le lie automatiquement aux factures PRNC-F037, F040, F041"><span class="ico"><span class="ico-classic">⚡</span><i class="ti ti-bolt ico-pro"></i></span>Charger dossier PRNC</button>
   <div class="sb-footer">CALINSTRUM SARL<br>RIDET 1 490 804.001<br>1 490 804 RCS Nouméa</div>
+  <div class="sb-tools" style="padding:10px 12px;display:flex;gap:8px;align-items:center;border-top:1px solid var(--border)">
+    <button id="shortcutsHelpBtn" onclick="_toggleShortcutsHelpPanel()" title="Afficher les raccourcis clavier (touche '?')" style="width:30px;height:30px;border-radius:50%;background:rgba(99,102,241,0.18);border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;padding:0" onmouseover="this.style.background='rgba(99,102,241,0.3)';this.style.transform='scale(1.08)'" onmouseout="this.style.background='rgba(99,102,241,0.18)';this.style.transform='scale(1)'">?</button>
+    <button id="fabTheme" onclick="toggleProTheme()" aria-label="Changer de thème" title="Changer de thème" style="width:30px;height:30px;border-radius:50%;background:var(--bg2);border:1px solid var(--border);color:var(--muted);font-size:14px;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;padding:0" onmouseover="this.style.background='rgba(45,212,191,0.15)';this.style.borderColor='rgba(45,212,191,0.4)';this.style.color='var(--teal)';this.style.transform='scale(1.08)'" onmouseout="this.style.background='var(--bg2)';this.style.borderColor='var(--border)';this.style.color='var(--muted)';this.style.transform='scale(1)'"><i class="ti ti-palette"></i></button>
+  </div>
 </nav>
 
 <div id="main">
@@ -3438,7 +3456,7 @@ function _privacyShouldSkipNode(node){
   // Skip les zones de saisie
   if(p.closest('input,textarea,select,option,[contenteditable]')) return true;
   // Skip les boutons et les nav (généralement pas de montants sensibles)
-  if(p.closest('button.fab-btn,#themeFab,.fab-label')) return true;
+  if(p.closest('button.fab-btn,#fabTheme,#shortcutsHelpBtn,.sb-tools,.fab-label')) return true;
   // Skip ce qui est explicitement marqué
   if(p.closest('.no-pm-blur')) return true;
   // Si déjà dans un .pm-blur (ne pas re-créer un span imbriqué)
@@ -4319,8 +4337,68 @@ function escNL(s){return esc(s).replace(/\n/g,'<br>');}
 function gv(id,v){var e=document.getElementById(id);if(e)e.value=String(v==null?'':v);}
 function gvg(id){var e=document.getElementById(id);return e?e.value:'';}
 function sv(id,v){var e=document.getElementById(id);if(e)e.textContent=String(v==null?'':v);}
-function cm(id){var e=document.getElementById(id);if(e)e.classList.remove('open');_onModalClose(id);}
-function om(id){var e=document.getElementById(id);if(e)e.classList.add('open');_onModalOpen(id);}
+
+// =============================================================================
+// VERROUILLAGE ANTI-FERMETURE ACCIDENTELLE DES MODALES D'ÉDITION
+// =============================================================================
+// Problème UX : un clic accidentel sur le pavé tactile en dehors de la modale
+// fermait la fenêtre et perdait toutes les données saisies (parfois des dizaines
+// de lignes). Solution : tant qu'une modale d'édition n'a pas été VALIDÉE par
+// une action explicite (Enregistrer / Annuler / ✕), un clic extérieur est
+// ignoré (avec toast d'avertissement). Une fois validée, le clic extérieur
+// fonctionne normalement.
+//
+// Whitelist : seules les modales contenant des données saisies par l'utilisateur
+// sont protégées. Les modales d'aperçu/utilitaires (mPRV, mDvlieRepair, mSTAMP,
+// mBCLINK, mSAVE_BL...) ne sont PAS protégées pour ne pas gêner.
+var _MODAL_EDIT_LOCK_WHITELIST={
+  'mDV':1,'mFA':1,'mBC':1,'mBL':1,'mBCCALI':1,'mCLI':1,'mART':1,
+  'mNEWCLI':1,'mSUIVI':1,'mAcompte':1,'mAvisReg':1,'mImportFA':1
+};
+
+function cm(id){
+  var e=document.getElementById(id);
+  if(e){
+    e.removeAttribute('data-edit-locked');
+    e.classList.remove('open');
+  }
+  _onModalClose(id);
+}
+function om(id){
+  var e=document.getElementById(id);
+  if(e){
+    e.classList.add('open');
+    // Marque la modale comme verrouillée si elle est dans la whitelist d'édition.
+    // L'attribut est lu par le handler de clic backdrop pour bloquer la fermeture
+    // accidentelle (cf. setupModalBackdropProtection ci-dessous).
+    if(_MODAL_EDIT_LOCK_WHITELIST[id]){
+      e.setAttribute('data-edit-locked','1');
+    }
+  }
+  _onModalOpen(id);
+}
+
+// Feedback visuel quand l'utilisateur tente de fermer une modale verrouillée
+// par clic accidentel à l'extérieur : (1) shake de la modale, (2) badge éphémère.
+// Pas de toast global pour rester contextuel à la modale concernée.
+function _flashModalLocked(overlay){
+  if(!overlay) return;
+  var content=overlay.querySelector('.modal');
+  if(content){
+    content.classList.remove('modal-shake');
+    void content.offsetWidth; // force reflow pour rejouer l'animation
+    content.classList.add('modal-shake');
+  }
+  // Badge éphémère "Verrouillé — utilise Enregistrer ou Annuler"
+  var existing=overlay.querySelector('.modal-lock-badge');
+  if(existing) existing.remove();
+  var badge=document.createElement('div');
+  badge.className='modal-lock-badge';
+  badge.style.cssText='position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(251,191,36,0.95);color:#1a1208;font-size:11.5px;font-weight:600;padding:6px 12px;border-radius:14px;box-shadow:0 4px 14px rgba(0,0,0,0.35);pointer-events:none;z-index:10001;font-family:Inter,sans-serif;letter-spacing:0.01em;white-space:nowrap;animation:modalLockBadge 2s ease-out forwards';
+  badge.innerHTML='🔒 Utilise <strong>Enregistrer</strong> ou <strong>Annuler</strong> pour fermer';
+  overlay.appendChild(badge);
+  setTimeout(function(){if(badge.parentNode)badge.remove();},2100);
+}
 
 // =============================================================================
 // Surbrillance "ligne en édition" — derrière une modale ouverte
@@ -29740,8 +29818,50 @@ function _dvlieScoreCandidate(fa,dv){
   return {score:score,reasons:reasons};
 }
 
+// Cherche des combinaisons de 2 ou 3 devis dont la somme TTC = montant facture
+// (tolérance ±10 XPF). Retourne les meilleures combinaisons scorées.
+// Limitation : pool restreint aux devis du même client (préfixe SLN/PRNC) et du
+// même type (Fourniture/Prestation), avec montant ≤ montant facture.
+function _dvlieFindAdditiveCombos(fa,devisPool){
+  var combos=[];
+  var faMt=Number(fa.ttc||fa.montant||0);
+  if(faMt<=0) return combos;
+  var faPrefix=String(fa.num||'').split('-')[0];
+  // Filtrer le pool : préfixe identique, montant utile (<faMt, >0)
+  var pool=devisPool.filter(function(d){
+    var dMt=Number(d.ttc||0);
+    if(dMt<=0 || dMt>=faMt) return false;
+    var dPrefix=String(d.num||'').split('-')[0];
+    if(faPrefix && dPrefix && faPrefix!==dPrefix) return false;
+    return true;
+  });
+  // Combinaisons 2 devis (O(n²) — acceptable pour pools ≤ 50)
+  for(var i=0;i<pool.length;i++){
+    for(var j=i+1;j<pool.length;j++){
+      var s=Number(pool[i].ttc||0)+Number(pool[j].ttc||0);
+      if(Math.abs(s-faMt)<10){
+        combos.push({devis:[pool[i],pool[j]],sum:s,delta:Math.abs(s-faMt)});
+      }
+    }
+  }
+  // Combinaisons 3 devis (limité aux pools ≤30 pour rester rapide)
+  if(pool.length<=30 && combos.length===0){
+    for(var a=0;a<pool.length;a++){
+      for(var b=a+1;b<pool.length;b++){
+        for(var c=b+1;c<pool.length;c++){
+          var s3=Number(pool[a].ttc||0)+Number(pool[b].ttc||0)+Number(pool[c].ttc||0);
+          if(Math.abs(s3-faMt)<10){
+            combos.push({devis:[pool[a],pool[b],pool[c]],sum:s3,delta:Math.abs(s3-faMt)});
+          }
+        }
+      }
+    }
+  }
+  return combos;
+}
+
 // Détecte toutes les factures orphelines + propose les meilleurs candidats.
-// Retourne [{fa, candidates:[{dv,score,reasons}], currentDv}]
+// Retourne [{fa, candidates:[{dv,score,reasons}|{devis:[],score,reasons,isCombo}], currentDv}]
 function _dvlieDetectOrphans(){
   var devis=DB.devis||[];
   var factures=DB.factures||[];
@@ -29760,14 +29880,55 @@ function _dvlieDetectOrphans(){
       }
     }
     if(currentDv) return; // dvlie OK, on saute
-    // Orpheline ! Scorer tous les devis
+    // Orpheline ! Scorer tous les devis (matchs simples)
     var scored=[];
     devis.forEach(function(dv){
       var r=_dvlieScoreCandidate(fa,dv);
-      if(r.score>=50){scored.push({dv:dv,score:r.score,reasons:r.reasons});}
+      if(r.score>=50){scored.push({dv:dv,score:r.score,reasons:r.reasons,isCombo:false});}
     });
     scored.sort(function(a,b){return b.score-a.score;});
-    results.push({fa:fa,candidates:scored.slice(0,3),currentDv:null});
+    // Détection multi-devis additif : si le meilleur match simple ne montre PAS
+    // de montant exact (score < 60 sur ce critère seul), on cherche des combinaisons.
+    var bestSimpleMontant=scored.length && scored[0].reasons.indexOf('montant exact')>=0;
+    var candidates=scored.slice(0,3);
+    if(!bestSimpleMontant){
+      var combos=_dvlieFindAdditiveCombos(fa,devis);
+      combos.forEach(function(combo){
+        // Score combo : base 70 (somme exacte) + bonus selon contexte
+        var comboScore=70;
+        var reasons=['somme exacte ('+combo.devis.length+' devis)'];
+        // Stratégie cohérence : compter l'UNION des mots-clés des devis combinés
+        // qui apparaissent dans l'objet de la facture. C'est plus pertinent que
+        // d'exiger 2+ mots par devis (impossible si chaque devis est unitaire).
+        var faText=(String(fa.objet||'')+' '+String(fa.notes||'')).toUpperCase();
+        var unionCommon=0;
+        var seenWords={};
+        combo.devis.forEach(function(d){
+          var dvWords=String(d.objet||'').toUpperCase().split(/[\s,.\/+\-:;]+/).filter(function(w){return w.length>=4;});
+          dvWords.forEach(function(w){
+            if(seenWords[w])return;
+            seenWords[w]=1;
+            if(faText.indexOf(w)>=0) unionCommon++;
+          });
+        });
+        if(unionCommon>=4){comboScore+=25;reasons.push(unionCommon+' mots-clés (union)');}
+        else if(unionCommon>=2){comboScore+=15;reasons.push(unionCommon+' mots-clés (union)');}
+        // Bonus si même préfixe client pour tous
+        var faPrefix=String(fa.num||'').split('-')[0];
+        var allSamePrefix=combo.devis.every(function(d){return String(d.num||'').split('-')[0]===faPrefix;});
+        if(allSamePrefix){comboScore+=10;reasons.push('même client');}
+        candidates.push({
+          devis:combo.devis,
+          score:comboScore,
+          reasons:reasons,
+          isCombo:true
+        });
+      });
+      // Re-trier candidats simples + combos par score
+      candidates.sort(function(a,b){return b.score-a.score;});
+      candidates=candidates.slice(0,4);
+    }
+    results.push({fa:fa,candidates:candidates,currentDv:null});
   });
   return results;
 }
@@ -29807,23 +29968,57 @@ function _dvlieRenderList(){
     var best=r.candidates[0];
     var scoreClass=best.score>=90?'#10b981':(best.score>=70?'#fbbf24':'#ef4444');
     var scoreBg=best.score>=90?'rgba(16,185,129,0.15)':(best.score>=70?'rgba(251,191,36,0.15)':'rgba(239,68,68,0.15)');
-    html+='<div class="dvlie-row" data-fa="'+_dvlieEscHtml(fa.num)+'" data-dv="'+_dvlieEscHtml(best.dv.num)+'" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:10px 12px;margin-bottom:8px">';
+    // === Représentation du candidat (simple ou combo) ===
+    // Pour les combos, on stocke les N nums séparés par '|' dans data-dv (échappement HTML-safe)
+    // À l'application, on les convertit en CSV virgule (format attendu par _processDvlieCSV).
+    var dvNumsArr=best.isCombo?best.devis.map(function(d){return d.num;}):[best.dv.num];
+    var dvNumsAttr=dvNumsArr.join('|');
+    var dvSumTtc=best.isCombo?best.devis.reduce(function(s,d){return s+(Number(d.ttc)||0);},0):(Number(best.dv.ttc)||0);
+    var dvDisplay=best.isCombo
+      ?best.devis.map(function(d){return d.num;}).join(' + ')
+      :best.dv.num;
+    var dvObjet=best.isCombo
+      ?(best.devis.length+' devis · ∑ '+_dvlieFmt(dvSumTtc)+' XPF')
+      :String(best.dv.objet||'').substring(0,55);
+    html+='<div class="dvlie-row" data-fa="'+_dvlieEscHtml(fa.num)+'" data-dv="'+_dvlieEscHtml(dvNumsAttr)+'" style="background:'+(best.isCombo?'rgba(167,139,250,0.04)':'rgba(255,255,255,0.02)')+';border:1px solid '+(best.isCombo?'rgba(167,139,250,0.25)':'rgba(255,255,255,0.06)')+';border-radius:8px;padding:10px 12px;margin-bottom:8px">';
     html+='<div style="display:grid;grid-template-columns:110px 1fr 110px 30px;gap:8px;align-items:center;font-size:12.5px">';
-    html+='<span style="font-family:JetBrains Mono,monospace;color:var(--text);font-weight:600">'+_dvlieEscHtml(fa.num)+'</span>';
+    html+='<span style="font-family:JetBrains Mono,monospace;color:var(--text);font-weight:600">'+_dvlieEscHtml(fa.num)+(best.isCombo?' <span style="display:inline-block;margin-left:4px;padding:1px 5px;border-radius:4px;background:rgba(167,139,250,0.2);color:#c4b5fd;font-size:9px;font-weight:600;letter-spacing:0.04em">MULTI</span>':'')+'</span>';
     html+='<span style="color:var(--muted-soft);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+_dvlieEscHtml(fa.objet||'')+'">'+_dvlieEscHtml(String(fa.objet||'').substring(0,70))+'</span>';
     html+='<span style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:var(--text)">'+_dvlieFmt(fa.ttc||0)+' XPF</span>';
-    html+='<span style="text-align:right"><input type="checkbox" class="dvlie-cb" data-fa="'+_dvlieEscHtml(fa.num)+'" data-dv="'+_dvlieEscHtml(best.dv.num)+'" '+(best.score>=70?'checked':'')+' style="transform:scale(1.2);cursor:pointer"></span>';
+    html+='<span style="text-align:right"><input type="checkbox" class="dvlie-cb" data-fa="'+_dvlieEscHtml(fa.num)+'" data-dv="'+_dvlieEscHtml(dvNumsAttr)+'" '+(best.score>=70?'checked':'')+' style="transform:scale(1.2);cursor:pointer"></span>';
     html+='</div>';
-    html+='<div style="display:grid;grid-template-columns:18px 1fr 110px;gap:8px;align-items:center;margin-top:8px;padding-top:8px;border-top:0.5px dashed rgba(255,255,255,0.1);font-size:11.5px">';
-    html+='<span style="color:var(--muted-soft);text-align:center">↳</span>';
-    html+='<span><span style="font-family:JetBrains Mono,monospace;color:#7dd3fc;margin-right:8px">'+_dvlieEscHtml(best.dv.num)+'</span>';
-    html+='<span style="color:var(--muted)">'+_dvlieEscHtml(String(best.dv.objet||'').substring(0,55))+'</span></span>';
-    html+='<span style="text-align:right"><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600;background:'+scoreBg+';color:'+scoreClass+'" title="'+_dvlieEscHtml(best.reasons.join(' · '))+'">'+best.score+' · '+_dvlieEscHtml(best.reasons[0]||'')+'</span></span>';
-    html+='</div>';
+    if(best.isCombo){
+      html+='<div style="margin-top:8px;padding-top:8px;border-top:0.5px dashed rgba(167,139,250,0.25);font-size:11.5px">';
+      best.devis.forEach(function(d){
+        html+='<div style="display:grid;grid-template-columns:18px 110px 1fr 110px;gap:8px;align-items:center;padding:2px 0">';
+        html+='<span style="color:#c4b5fd;text-align:center">+</span>';
+        html+='<span style="font-family:JetBrains Mono,monospace;color:#c4b5fd">'+_dvlieEscHtml(d.num)+'</span>';
+        html+='<span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_dvlieEscHtml(String(d.objet||'').substring(0,55))+'</span>';
+        html+='<span style="text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)">'+_dvlieFmt(d.ttc||0)+'</span>';
+        html+='</div>';
+      });
+      html+='<div style="display:grid;grid-template-columns:18px 110px 1fr 110px;gap:8px;align-items:center;padding:4px 0 0;margin-top:4px;border-top:0.5px dashed rgba(167,139,250,0.2);font-size:11px">';
+      html+='<span></span><span style="color:#c4b5fd;font-weight:600">∑ TOTAL</span><span></span>';
+      html+='<span style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:#a78bfa">'+_dvlieFmt(dvSumTtc)+' XPF ≡ facture</span>';
+      html+='</div>';
+      html+='<div style="margin-top:6px;text-align:right"><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600;background:'+scoreBg+';color:'+scoreClass+'" title="'+_dvlieEscHtml(best.reasons.join(' · '))+'">'+best.score+' · '+_dvlieEscHtml(best.reasons[0]||'')+'</span></div>';
+      html+='</div>';
+    } else {
+      html+='<div style="display:grid;grid-template-columns:18px 1fr 110px;gap:8px;align-items:center;margin-top:8px;padding-top:8px;border-top:0.5px dashed rgba(255,255,255,0.1);font-size:11.5px">';
+      html+='<span style="color:var(--muted-soft);text-align:center">↳</span>';
+      html+='<span><span style="font-family:JetBrains Mono,monospace;color:#7dd3fc;margin-right:8px">'+_dvlieEscHtml(best.dv.num)+'</span>';
+      html+='<span style="color:var(--muted)">'+_dvlieEscHtml(dvObjet)+'</span></span>';
+      html+='<span style="text-align:right"><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:600;background:'+scoreBg+';color:'+scoreClass+'" title="'+_dvlieEscHtml(best.reasons.join(' · '))+'">'+best.score+' · '+_dvlieEscHtml(best.reasons[0]||'')+'</span></span>';
+      html+='</div>';
+    }
     if(r.candidates.length>1){
       html+='<details style="margin-top:6px;font-size:11px"><summary style="cursor:pointer;color:var(--muted-soft)">+ '+(r.candidates.length-1)+' autre(s) candidat(s)</summary>';
       r.candidates.slice(1).forEach(function(c){
-        html+='<div style="margin:4px 0 4px 24px;color:var(--muted)"><code>'+_dvlieEscHtml(c.dv.num)+'</code> · '+_dvlieFmt(c.dv.ttc||0)+' XPF · score '+c.score+' · '+_dvlieEscHtml(c.reasons.join(' · '))+' <button onclick="_dvlieSwapCandidate(\''+_dvlieEscHtml(fa.num)+'\',\''+_dvlieEscHtml(c.dv.num)+'\')" style="margin-left:8px;background:transparent;border:1px solid rgba(255,255,255,0.15);color:var(--text);font-size:10px;padding:1px 6px;border-radius:3px;cursor:pointer">Utiliser celui-ci</button></div>';
+        var cIsCombo=c.isCombo;
+        var cKey=cIsCombo?c.devis.map(function(d){return d.num;}).join('|'):c.dv.num;
+        var cLabel=cIsCombo?c.devis.map(function(d){return d.num;}).join(' + '):c.dv.num;
+        var cMt=cIsCombo?c.devis.reduce(function(s,d){return s+(Number(d.ttc)||0);},0):(Number(c.dv.ttc)||0);
+        html+='<div style="margin:4px 0 4px 24px;color:var(--muted)"><code>'+_dvlieEscHtml(cLabel)+'</code> · '+_dvlieFmt(cMt)+' XPF · score '+c.score+' · '+_dvlieEscHtml(c.reasons.join(' · '))+' <button onclick="_dvlieSwapCandidate(\''+_dvlieEscHtml(fa.num)+'\',\''+_dvlieEscHtml(cKey)+'\')" style="margin-left:8px;background:transparent;border:1px solid rgba(255,255,255,0.15);color:var(--text);font-size:10px;padding:1px 6px;border-radius:3px;cursor:pointer">Utiliser celui-ci</button></div>';
       });
       html+='</details>';
     }
@@ -29845,11 +30040,20 @@ function _dvlieRenderList(){
   listEl.innerHTML=html;
 }
 
-// Permet de remplacer le candidat principal par un alternatif dans la liste
-function _dvlieSwapCandidate(faNum,newDvNum){
+// Permet de remplacer le candidat principal par un alternatif dans la liste.
+// newKey peut être un seul num ('SLN-DV126') ou une combinaison 'SLN-DV126|SLN-DV128'
+function _dvlieSwapCandidate(faNum,newKey){
   var entry=(window._dvlieRepairCandidates||[]).find(function(r){return r.fa.num===faNum;});
   if(!entry) return;
-  var idx=entry.candidates.findIndex(function(c){return c.dv.num===newDvNum;});
+  var keys=String(newKey||'').split('|').map(function(s){return s.trim();}).filter(Boolean);
+  var idx=entry.candidates.findIndex(function(c){
+    if(c.isCombo){
+      var cKeys=c.devis.map(function(d){return d.num;});
+      if(cKeys.length!==keys.length) return false;
+      return cKeys.every(function(k,i){return k===keys[i];});
+    }
+    return keys.length===1 && c.dv.num===keys[0];
+  });
   if(idx<0) return;
   var swapped=entry.candidates.splice(idx,1)[0];
   entry.candidates.unshift(swapped);
@@ -29861,7 +30065,11 @@ function _dvlieToggleAll(checked){
   document.querySelectorAll('.dvlie-cb').forEach(function(cb){cb.checked=checked;});
 }
 
-// Applique les réparations cochées
+// Applique les réparations cochées.
+// Le champ data-dv peut contenir 1 ou plusieurs nums séparés par '|' (cas combo
+// multi-devis). À l'écriture, on les convertit en CSV virgule ', ' qui est le
+// format attendu par _processDvlieCSV (cf. ligne 11712) pour résoudre toutes
+// les liaisons côté _findLinkedFactures.
 function _dvlieApplyRepairs(){
   var checks=document.querySelectorAll('.dvlie-cb:checked');
   if(checks.length===0){
@@ -29869,21 +30077,22 @@ function _dvlieApplyRepairs(){
     else alert('Aucune réparation cochée');
     return;
   }
-  if(!confirm('Appliquer '+checks.length+' réparation(s) ?\n\nLe champ dvlie de chaque facture sélectionnée sera réécrit pour pointer vers son devis match.')) return;
+  if(!confirm('Appliquer '+checks.length+' réparation(s) ?\n\nLe champ dvlie de chaque facture sélectionnée sera réécrit pour pointer vers son(ses) devis match.\nLes factures multi-devis seront écrites au format CSV virgule (format natif du système).')) return;
   var applied=0;
   checks.forEach(function(cb){
     var faNum=cb.getAttribute('data-fa');
-    var dvNum=cb.getAttribute('data-dv');
-    if(!faNum||!dvNum) return;
+    var dvKey=cb.getAttribute('data-dv');
+    if(!faNum||!dvKey) return;
     var fa=(DB.factures||[]).find(function(f){return f.num===faNum;});
     if(!fa) return;
-    fa.dvlie=dvNum;
+    // Conversion '|' (clé interne) → ', ' (format de stockage CSV)
+    var nums=String(dvKey).split('|').map(function(s){return s.trim();}).filter(Boolean);
+    fa.dvlie=nums.join(', ');
     fa._manuallyEditedAt=new Date().toISOString();
     applied++;
   });
   if(applied){
     if(typeof save==='function') save();
-    // Refresh affichage
     window._dvlieRepairCandidates=_dvlieDetectOrphans();
     _dvlieRenderList();
     if(typeof toast==='function') toast('✓ '+applied+' lien(s) réparé(s)','ok');
@@ -38155,9 +38364,20 @@ document.addEventListener('DOMContentLoaded',function(){
   if(typeof _initDevisPdfDropZones==='function'){
     try{ _initDevisPdfDropZones(); }catch(e){ console.warn('Init drop zones failed:',e); }
   }
-  // Close modal on backdrop click
+  // Close modal on backdrop click — avec respect du verrou anti-fermeture
+  // accidentelle. Si data-edit-locked="1", on bloque la fermeture et on affiche
+  // un feedback visuel (shake + badge). L'attribut est posé par om() pour les
+  // modales d'édition de la whitelist (_MODAL_EDIT_LOCK_WHITELIST) et retiré
+  // par cm() (action explicite via Enregistrer/Annuler/✕).
   document.querySelectorAll('.modal-overlay').forEach(function(o){
-    o.addEventListener('click',function(e){if(e.target===o)o.classList.remove('open');});
+    o.addEventListener('click',function(e){
+      if(e.target!==o) return; // clic à l'intérieur de la modale = ignoré
+      if(o.getAttribute('data-edit-locked')==='1'){
+        _flashModalLocked(o);
+        return;
+      }
+      o.classList.remove('open');
+    });
   });
   // ===== AUTO-SAVE + UNDO init =====
   setInterval(autoSaveTick,AUTOSAVE_INTERVAL);
@@ -39191,23 +39411,7 @@ function critProceed(){
   </div>
 </div>
 
-<!-- ============================================================================
-     FAB : bouton flottant en bas-droite pour basculer le thème
-     (Privacy a été déplacé dans le topbar à côté de Verrouiller — cf. mockup)
-     ============================================================================ -->
-<div id="themeFab">
-  <div class="fab-wrapper">
-    <button class="fab-btn" id="fabTheme" onclick="toggleProTheme()" aria-label="Changer de thème">
-      <i class="ti ti-palette"></i>
-      <span class="fab-label">Thème</span>
-    </button>
-  </div>
-</div>
 
-<!-- Bouton flottant '?' — Aide raccourcis clavier (toujours visible)
-     Position : juste à droite du sidebar (largeur 200px) pour ne pas chevaucher
-     le footer "CALINSTRUM SARL / RIDET / RCS Nouméa" du sidebar. -->
-<button id="shortcutsHelpBtn" onclick="_toggleShortcutsHelpPanel()" title="Afficher les raccourcis clavier (touche '?')" style="position:fixed;bottom:20px;left:212px;width:32px;height:32px;border-radius:50%;background:rgba(99,102,241,0.18);border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;font-size:14px;font-weight:700;cursor:pointer;z-index:9000;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:all .2s" onmouseover="this.style.background='rgba(99,102,241,0.3)';this.style.transform='scale(1.1)'" onmouseout="this.style.background='rgba(99,102,241,0.18)';this.style.transform='scale(1)'">?</button>
 
 </body>
 </html>
