@@ -7010,6 +7010,32 @@ function getAlertData(){
     else if(d===0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'today',message:'GRC — Echeance AUJOURD\'HUI, reste '+fN(reste)+' XPF',_factureId:f.id,dateButoir:bd.toISOString().slice(0,10),_source:'facture'});
     else if(d<=7) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'soon',message:'GRC — Echeance dans '+d+'j, reste '+fN(reste)+' XPF',_factureId:f.id,dateButoir:bd.toISOString().slice(0,10),_source:'facture'});
   });
+  // === ALERTES PRÉ-FACTURATION 60/90j ===
+  // Devis Acceptés (BC client reçu) en attente depuis trop longtemps : 60j = proche limite, 90j = dépassé.
+  // Date de référence = bcClientSLNDate, fallback phaseHistory[bc_recu], puis d.date.
+  var PREFACT_WARN_DAYS_AL=60, PREFACT_LIMIT_DAYS_AL=90;
+  (DB.devis||[]).forEach(function(d){
+    if(!d || d.status!=='Accepté') return;
+    var ref=d.bcClientSLNDate;
+    if(!ref && Array.isArray(d.phaseHistory)){
+      var bc=d.phaseHistory.find(function(e){return e && e.phase==='bc_recu';});
+      if(bc && bc.date) ref=bc.date;
+    }
+    if(!ref) ref=d.date;
+    if(!ref) return;
+    var dt=new Date(ref);
+    if(isNaN(dt.getTime())) return;
+    var ageDays=Math.floor((Date.now()-dt.getTime())/(1000*60*60*24));
+    if(ageDays>PREFACT_LIMIT_DAYS_AL){
+      alerts.push({num:d.num,intitule:d.objet||'Devis Accepté',montant:Number(d.ttc)||0,client:d.client,
+        type:'late',message:'Pré-facture — dépassée de '+(ageDays-PREFACT_LIMIT_DAYS_AL)+'j (âge '+ageDays+'j, limite '+PREFACT_LIMIT_DAYS_AL+'j)',
+        _source:'prefact', _devisId:d.id, _ageDays:ageDays});
+    } else if(ageDays>=PREFACT_WARN_DAYS_AL){
+      alerts.push({num:d.num,intitule:d.objet||'Devis Accepté',montant:Number(d.ttc)||0,client:d.client,
+        type:'soon',message:'Pré-facture — '+(PREFACT_LIMIT_DAYS_AL-ageDays)+'j restants (âge '+ageDays+'j)',
+        _source:'prefact', _devisId:d.id, _ageDays:ageDays});
+    }
+  });
   // === DÉDUPLICATION par num ===
   // Une même facture peut exister dans DB.factures (GRC) ET dans DB.invoices (suivi).
   // On préfère la version DB.factures car elle a le client complet, le delai détaillé
@@ -10504,7 +10530,8 @@ function rDashPro(){
   var faFromDv2026Sum=0, faFromDv2026Count=0;
   var faFromPreSum=0, faFromPreCount=0;
   var faOrphansSum=0, faOrphansCount=0;
-  var dvFacturedSet={}; // num devis 2026 ayant au moins une facture 2026
+  // dvLinkedSet = lien souple (au moins une facture liée, statut indifférent) — gardé pour compat
+  var dvLinkedSet={};
   faFy.forEach(function(fa){
     if(!fa.dvlie){
       faOrphansSum+=Number(fa.ttc||fa.montant||0); faOrphansCount++; return;
@@ -10526,17 +10553,76 @@ function rDashPro(){
     } else {
       faFromPreSum+=Number(fa.ttc||fa.montant||0); faFromPreCount++;
     }
-    // Marquer TOUS les devis 2026 liés comme "facturés" (pour le compte conversion)
+    // Marquer TOUS les devis 2026 liés comme "ayant une facture liée"
     foundDvis.forEach(function(d){
-      if(String(d.date||'').substring(0,4)===String(fy)) dvFacturedSet[d.num]=1;
+      if(String(d.date||'').substring(0,4)===String(fy)) dvLinkedSet[d.num]=1;
     });
   });
-  // Devis 2026 facturés (clés uniques)
-  var dvFacturedList=Object.keys(dvFacturedSet).map(function(n){return dv.find(function(x){return x.num===n;});}).filter(Boolean);
+  // === DEVIS FACTURÉS STRICT === (correction bug 22 vs 21)
+  // Définition propre : status === 'Facturé' (le statut métier fait foi).
+  // Ce n'est plus "au moins une facture liée" (qui pouvait surcompter quand
+  // une facture multi-devis liait 2 devis → 2 marques pour 1 facture).
+  var dvFacturedList=dvFy.filter(function(d){return d.status==='Facturé';});
   var dvFacturedSum=dvFacturedList.reduce(function(s,d){return s+(Number(d.ttc)||0);},0);
   var dvFacturedCount=dvFacturedList.length;
-  // Devis 2026 NON facturés (pipeline forward)
-  var dvPipelineList=dvFy.filter(function(d){return !dvFacturedSet[d.num];});
+  // === PRÉ-FACTURATION === (nouveau)
+  // Devis 2026 avec status === 'Accepté' (BC client reçu, en attente livraison
+  // marchandise + émission facture). Ce sont des engagements fermes du client
+  // qui ne sont pas encore convertis en CA comptable.
+  var dvPrefactList=dvFy.filter(function(d){return d.status==='Accepté';});
+  var dvPrefactSum=dvPrefactList.reduce(function(s,d){return s+(Number(d.ttc)||0);},0);
+  var dvPrefactCount=dvPrefactList.length;
+  // Calcul de l'âge pour chaque pré-facture + classification urgence
+  // Constante validité pré-facture (modifiable en un seul point)
+  var PREFACT_WARN_DAYS=60;
+  var PREFACT_LIMIT_DAYS=90;
+  function _prefactRefDate(d){
+    // 3 sources possibles, par ordre de préférence :
+    // 1) date réception BC client (le plus précis)
+    if(d.bcClientSLNDate) return d.bcClientSLNDate;
+    // 2) phase 'bc_recu' dans phaseHistory
+    if(Array.isArray(d.phaseHistory)){
+      var bc=d.phaseHistory.find(function(e){return e && e.phase==='bc_recu';});
+      if(bc && bc.date) return bc.date;
+    }
+    // 3) fallback sur date devis (peu précis mais évite undefined)
+    return d.date||null;
+  }
+  function _prefactAgeDays(d){
+    var ref=_prefactRefDate(d);
+    if(!ref) return null;
+    var dt=new Date(ref);
+    if(isNaN(dt.getTime())) return null;
+    return Math.floor((Date.now()-dt.getTime())/(1000*60*60*24));
+  }
+  var dvPrefactWarn=0, dvPrefactWarnSum=0; // 60-90j
+  var dvPrefactAlert=0, dvPrefactAlertSum=0; // >90j
+  var dvPrefactAgeSum=0, dvPrefactAgeCount=0;
+  dvPrefactList.forEach(function(d){
+    var age=_prefactAgeDays(d);
+    if(age==null) return;
+    dvPrefactAgeSum+=age; dvPrefactAgeCount++;
+    if(age>PREFACT_LIMIT_DAYS){dvPrefactAlert++; dvPrefactAlertSum+=Number(d.ttc)||0;}
+    else if(age>=PREFACT_WARN_DAYS){dvPrefactWarn++; dvPrefactWarnSum+=Number(d.ttc)||0;}
+  });
+  var dvPrefactAgeAvg=dvPrefactAgeCount>0?Math.round(dvPrefactAgeSum/dvPrefactAgeCount):0;
+  // Couleur progressive de la ligne pré-facturation (levier 1)
+  var prefactColor='#BA7517'; // ambré normal par défaut
+  var prefactBg='rgba(186,117,23,0.06)';
+  var prefactBgHover='rgba(186,117,23,0.12)';
+  if(dvPrefactAlert>0){
+    prefactColor='#791F1F'; // rouge si >90j
+    prefactBg='rgba(239,68,68,0.06)';
+    prefactBgHover='rgba(239,68,68,0.12)';
+  } else if(dvPrefactWarn>0){
+    prefactColor='#CE6D20'; // orange si 60-90j
+    prefactBg='rgba(206,109,32,0.06)';
+    prefactBgHover='rgba(206,109,32,0.12)';
+  }
+  // === BACKLOG FORWARD === (devis 2026 non engagés)
+  // Maintenant on exclut les Facturé ET les Accepté (qui sont en pré-facturation).
+  // Restent : Brouillon, Envoyé, Cadre, Refusé, Obsolète → vrai pipeline non engagé
+  var dvPipelineList=dvFy.filter(function(d){return d.status!=='Facturé' && d.status!=='Accepté';});
   var dvPipelineSum=dvPipelineList.reduce(function(s,d){return s+(Number(d.ttc)||0);},0);
   var dvPipelineCount=dvPipelineList.length;
   var conversionPct=dvFy.length>0?Math.round(dvFacturedCount/dvFy.length*100):0;
@@ -10727,21 +10813,33 @@ function rDashPro(){
     '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(totalFa)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
     '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+faFy.length+' factures émises en '+fy+'</div>'+
     '</div>';
-  html+='<div onclick="openDecompDrilldown(\'conversion\')" title="Cliquer pour voir la liste des devis '+fy+' facturés" style="padding:10px 12px;background:rgba(167,139,250,0.06);border:0.5px solid rgba(167,139,250,0.2);border-radius:8px;cursor:pointer;transition:all .15s" onmouseover="this.style.background=\'rgba(167,139,250,0.12)\';this.style.borderColor=\'rgba(167,139,250,0.4)\'" onmouseout="this.style.background=\'rgba(167,139,250,0.06)\';this.style.borderColor=\'rgba(167,139,250,0.2)\'">'+
+  html+='<div onclick="openDecompDrilldown(\'conversion\')" title="Cliquer pour voir la liste des devis '+fy+' au statut Facturé" style="padding:10px 12px;background:rgba(167,139,250,0.06);border:0.5px solid rgba(167,139,250,0.2);border-radius:8px;cursor:pointer;transition:all .15s" onmouseover="this.style.background=\'rgba(167,139,250,0.12)\';this.style.borderColor=\'rgba(167,139,250,0.4)\'" onmouseout="this.style.background=\'rgba(167,139,250,0.06)\';this.style.borderColor=\'rgba(167,139,250,0.2)\'">'+
     '<div style="font-size:10px;color:#a78bfa;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">🎯 Conversion '+fy+'→'+fy+'</div>'+
     '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(dvFacturedSum)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
-    '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+dvFacturedCount+'/'+dvFy.length+' devis · '+conversionPct+'% facturés</div>'+
+    '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+dvFacturedCount+'/'+dvFy.length+' devis facturés · '+conversionPct+'%</div>'+
     '</div>';
   html+='</div>';
   // Flux entrants/sortants — tous cliquables (drill-down)
   html+='<div style="padding-top:10px;border-top:0.5px dashed var(--border)">';
   html+='<div style="font-size:11px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px">D\'où vient le CA, où va le pipeline</div>';
   // Ligne 1 : pipeline forward
-  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(251,191,36,0.06)\'" onmouseout="this.style.background=\'\'" onclick="openDecompDrilldown(\'forward\')" title="Cliquer pour voir les devis non facturés">'+
+  html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(251,191,36,0.06)\'" onmouseout="this.style.background=\'\'" onclick="openDecompDrilldown(\'forward\')" title="Cliquer pour voir les devis non engagés">'+
     '<div style="width:22px;height:22px;border-radius:50%;background:rgba(251,191,36,0.15);color:#fbbf24;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">→</div>'+
-    '<span><strong style="color:var(--text)">Backlog forward</strong> · devis '+fy+' <strong>pas encore facturés</strong> ('+dvPipelineCount+' devis · CA futur)</span>'+
+    '<span><strong style="color:var(--text)">Backlog forward</strong> · devis '+fy+' <strong>Brouillon/Envoyé/Cadre</strong> ('+dvPipelineCount+' devis · pipeline non engagé)</span>'+
     '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#fbbf24" data-money>+ '+fNloc(dvPipelineSum)+'</span>'+
     '</div>';
+  // Ligne 1bis : PRÉ-FACTURATION (NOUVEAU) — entre forward et inbound
+  if(dvPrefactCount>0){
+    var prefactSubText='âge moyen '+dvPrefactAgeAvg+'j';
+    if(dvPrefactAlert>0) prefactSubText+=' · <span style="color:#791F1F;font-weight:600">'+dvPrefactAlert+' devis > 90j</span>';
+    if(dvPrefactWarn>0) prefactSubText+=' · <span style="color:#CE6D20;font-weight:600">'+dvPrefactWarn+' devis > 60j</span>';
+    var prefactIcon=dvPrefactAlert>0?'!':(dvPrefactWarn>0?'⚠':'⏳');
+    html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s;background:'+prefactBg+'" onmouseover="this.style.background=\''+prefactBgHover+'\'" onmouseout="this.style.background=\''+prefactBg+'\'" onclick="openDecompDrilldown(\'prefact\')" title="Cliquer pour voir les pré-factures (devis Acceptés en attente)">'+
+      '<div style="width:22px;height:22px;border-radius:50%;background:'+prefactBg.replace('0.06','0.18')+';color:'+prefactColor+';display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">'+prefactIcon+'</div>'+
+      '<span><strong style="color:var(--text)">Pré-facturation</strong> · '+dvPrefactCount+' devis <strong>Acceptés</strong> en attente livraison · <span style="color:var(--muted-soft);font-size:11px">'+prefactSubText+'</span></span>'+
+      '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:'+prefactColor+'" data-money>+ '+fNloc(dvPrefactSum)+'</span>'+
+      '</div>';
+  }
   // Ligne 2 : backlog inbound
   html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(167,139,250,0.06)\'" onmouseout="this.style.background=\'\'" onclick="openDecompDrilldown(\'inbound\')" title="Cliquer pour voir les factures issues de devis antérieurs">'+
     '<div style="width:22px;height:22px;border-radius:50%;background:rgba(167,139,250,0.15);color:#a78bfa;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">←</div>'+
@@ -10751,7 +10849,7 @@ function rDashPro(){
   // Ligne 3 : factures sur devis 2026
   html+='<div style="display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 8px;font-size:12.5px;cursor:pointer;border-radius:4px;transition:background .15s" onmouseover="this.style.background=\'rgba(93,202,165,0.06)\'" onmouseout="this.style.background=\'\'" onclick="openDecompDrilldown(\'short\')" title="Cliquer pour voir les factures cycle court">'+
     '<div style="width:22px;height:22px;border-radius:50%;background:rgba(93,202,165,0.15);color:#5dcaa5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600">=</div>'+
-    '<span><strong style="color:var(--text)">Cycle court</strong> · factures '+fy+' sur devis '+fy+' ('+faFromDv2026Count+' factures)</span>'+
+    '<span><strong style="color:var(--text)">Cycle court</strong> · factures '+fy+' sur devis '+fy+' ('+faFromDv2026Count+' factures · CA réalisé)</span>'+
     '<span style="font-variant-numeric:tabular-nums;font-weight:600;color:#5dcaa5" data-money>+ '+fNloc(faFromDv2026Sum)+'</span>'+
     '</div>';
   if(faOrphansCount>0){
@@ -30969,7 +31067,8 @@ var _DECOMP_DRILL_CONFIG={
   bookings:    {title:'📈 Bookings — devis émis 2026',           color:'#7dd3fc', kind:'dv'},
   revenue:     {title:'💰 Revenue — factures émises 2026',       color:'#5dcaa5', kind:'fa'},
   conversion:  {title:'🎯 Conversion — devis 2026 facturés',     color:'#a78bfa', kind:'dv'},
-  forward:     {title:'→ Backlog forward — devis 2026 non facturés', color:'#fbbf24', kind:'dv'},
+  forward:     {title:'→ Backlog forward — devis 2026 non engagés', color:'#fbbf24', kind:'dv'},
+  prefact:     {title:'⏳ Pré-facturation — devis Acceptés en attente', color:'#BA7517', kind:'dv'},
   inbound:     {title:'← Backlog rentrant — factures 2026 sur devis pré-2026', color:'#a78bfa', kind:'fa'},
   short:       {title:'= Cycle court — factures 2026 sur devis 2026', color:'#5dcaa5', kind:'fa'},
   orphans:     {title:'⚠ Factures 2026 orphelines',              color:'#ef4444', kind:'fa'}
@@ -31017,25 +31116,60 @@ function _decompDrillBuildItems(mode){
   } else if(mode==='revenue'){
     items=faFy.map(function(f){return {type:'fa',obj:f,num:f.num,date:f.date||f.dateEnvoi,client:f.client,objet:f.objet,montant:Number(f.ttc||f.montant||0),status:f.status};});
   } else if(mode==='conversion'){
-    // Devis 2026 qui ont au moins une facture liée
-    var dvFacturedSet={};
-    faFy.forEach(function(fa){
-      findLinkedDvs(fa).forEach(function(d){
-        if(String(d.date||'').substring(0,4)===fy) dvFacturedSet[d.num]=1;
-      });
-    });
-    items=dvFy.filter(function(d){return dvFacturedSet[d.num];})
+    // Devis 2026 au statut Facturé STRICT (correction bug 22/21)
+    items=dvFy.filter(function(d){return d.status==='Facturé';})
               .map(function(d){return {type:'dv',obj:d,num:d.num+(d.rev||''),date:d.date,client:d.client,objet:d.objet,montant:Number(d.ttc||0),status:d.status};});
   } else if(mode==='forward'){
-    // Devis 2026 sans facture liée
-    var dvFacturedSet2={};
-    faFy.forEach(function(fa){
-      findLinkedDvs(fa).forEach(function(d){
-        if(String(d.date||'').substring(0,4)===fy) dvFacturedSet2[d.num]=1;
-      });
-    });
-    items=dvFy.filter(function(d){return !dvFacturedSet2[d.num];})
+    // Devis 2026 non engagés : ni Facturé ni Accepté
+    items=dvFy.filter(function(d){return d.status!=='Facturé' && d.status!=='Accepté';})
               .map(function(d){return {type:'dv',obj:d,num:d.num+(d.rev||''),date:d.date,client:d.client,objet:d.objet,montant:Number(d.ttc||0),status:d.status};});
+  } else if(mode==='prefact'){
+    // Devis 2026 Acceptés (BC client reçu, en attente livraison + émission facture)
+    // Avec calcul de l'âge depuis la date BC client (ou fallback phaseHistory/date devis)
+    var PREFACT_WARN=60, PREFACT_LIMIT=90;
+    function _refDate(d){
+      if(d.bcClientSLNDate) return d.bcClientSLNDate;
+      if(Array.isArray(d.phaseHistory)){
+        var bc=d.phaseHistory.find(function(e){return e && e.phase==='bc_recu';});
+        if(bc && bc.date) return bc.date;
+      }
+      return d.date||null;
+    }
+    items=dvFy.filter(function(d){return d.status==='Accepté';})
+              .map(function(d){
+                var ref=_refDate(d);
+                var age=null;
+                if(ref){
+                  var dt=new Date(ref);
+                  if(!isNaN(dt.getTime())) age=Math.floor((Date.now()-dt.getTime())/(1000*60*60*24));
+                }
+                var urgency='ok';
+                if(age!=null){
+                  if(age>PREFACT_LIMIT) urgency='alert';
+                  else if(age>=PREFACT_WARN) urgency='warn';
+                }
+                // Sous-titre enrichi pour affichage : âge + marge ou dépassement
+                var ageLabel='';
+                if(age==null){
+                  ageLabel='âge inconnu';
+                } else if(urgency==='alert'){
+                  ageLabel=age+'j · ! +'+(age-PREFACT_LIMIT)+'j';
+                } else if(urgency==='warn'){
+                  ageLabel=age+'j · ⚠ '+(PREFACT_LIMIT-age)+'j restants';
+                } else {
+                  ageLabel=age+'j · marge '+(PREFACT_LIMIT-age)+'j';
+                }
+                return {type:'dv',obj:d,num:d.num+(d.rev||''),date:d.date,client:d.client,objet:d.objet,montant:Number(d.ttc||0),status:d.status,
+                        extra:ageLabel, _ageDays:age, _urgency:urgency, _refDate:ref};
+              });
+    // Tri spécial : urgents en premier, puis par âge décroissant
+    items.sort(function(a,b){
+      var ord={alert:0,warn:1,ok:2};
+      var diff=(ord[a._urgency]||3)-(ord[b._urgency]||3);
+      if(diff!==0) return diff;
+      return (b._ageDays||0)-(a._ageDays||0);
+    });
+    return items; // skip the generic sort below
   } else if(mode==='inbound'){
     // Factures 2026 dont le 1er devis lié est en pré-2026
     faFy.forEach(function(fa){
@@ -31086,8 +31220,9 @@ function openDecompDrilldown(mode){
     var explainMap={
       bookings:'Tous les devis créés cette année — activité commerciale.',
       revenue:'Toutes les factures émises cette année — CA comptable.',
-      conversion:'Devis créés ET facturés cette année — cycle court complet.',
-      forward:'Devis créés cette année, pas encore facturés — CA futur.',
+      conversion:'Devis '+fy+' au statut Facturé — CA effectivement converti.',
+      forward:'Devis '+fy+' Brouillon/Envoyé/Cadre — pipeline non engagé.',
+      prefact:'Devis '+fy+' Acceptés (BC client reçu) en attente livraison + émission facture. Délai max 90j.',
       inbound:'Factures émises cette année sur devis antérieurs — backlog converti.',
       short:'Factures émises cette année sur devis de cette année — cycle court.',
       orphans:'Factures sans lien devis identifié — data quality à corriger.'
@@ -31132,6 +31267,18 @@ function _renderDecompDrillList(){
     var clientShort=String(it.client||'').substring(0,28);
     var objetShort=String(it.objet||'').substring(0,55);
     var statusBadge=it.status?'<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:rgba(255,255,255,0.06);color:var(--muted-soft);font-size:10px;margin-left:4px">'+esc(it.status)+'</span>':'';
+    // === MODE PREFACT : badge urgence couleur sur l'âge ===
+    var extraDisplay='';
+    if(it.extra){
+      if(st.mode==='prefact' && it._urgency){
+        var urgColor='#085041', urgBg='rgba(15,110,86,0.12)';
+        if(it._urgency==='alert'){urgColor='#791F1F'; urgBg='rgba(239,68,68,0.18)';}
+        else if(it._urgency==='warn'){urgColor='#854F0B'; urgBg='rgba(186,117,23,0.22)';}
+        extraDisplay=' · <span style="background:'+urgBg+';color:'+urgColor+';padding:1px 6px;border-radius:3px;font-family:JetBrains Mono,monospace;font-size:10px;font-weight:500;letter-spacing:0.03em">'+esc(it.extra)+'</span>';
+      } else {
+        extraDisplay=' · <span style="color:'+col+'">'+esc(it.extra)+'</span>';
+      }
+    }
     html+='<div class="dec-drill-row" onclick="_decompDrillOpenItem(\''+esc(it.type)+'\',\''+esc(String(it.obj.id||it.obj.num).replace(/\'/g,"\\\\'"))+'\')" '+
       'style="display:grid;grid-template-columns:110px 1fr 110px;gap:10px;align-items:center;padding:8px 10px;border-radius:5px;font-size:12.5px;cursor:pointer;transition:background .12s;margin-bottom:2px" '+
       'onmouseover="this.style.background=\'rgba(255,255,255,0.04)\'" onmouseout="this.style.background=\'\'">'+
@@ -31141,7 +31288,7 @@ function _renderDecompDrillList(){
       '</div>'+
       '<div style="overflow:hidden">'+
         '<div style="color:var(--text);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(it.client||'')+'">'+esc(clientShort)+statusBadge+'</div>'+
-        '<div style="color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(it.objet||'')+'">'+esc(objetShort)+(it.extra?' · <span style="color:'+col+'">'+esc(it.extra)+'</span>':'')+'</div>'+
+        '<div style="color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(it.objet||'')+'">'+esc(objetShort)+extraDisplay+'</div>'+
       '</div>'+
       '<div style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:var(--text)" data-money>'+fNloc(it.montant)+'</div>'+
       '</div>';
