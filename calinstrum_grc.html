@@ -1556,6 +1556,21 @@ textarea:not(:disabled):not([readonly]):focus{box-shadow:0 0 0 1px rgba(45,212,1
       <button class="tab" onclick="st('dvt','meta');renderDVMeta()"><span class="ico-classic">🔍</span><i class="ti ti-search ico-pro"></i> Traçabilité</button>
     </div>
     <div class="tab-pane active" id="dvt-info">
+      <!-- Champ "Copier depuis" — visible uniquement pour les NOUVEAUX devis (renouvellement).
+           Masqué automatiquement à l'édition d'un devis existant via openDV(). -->
+      <div id="dv-renewal-block" class="form-group" style="display:none;padding:10px 12px;background:rgba(255,255,255,0.02);border:0.5px dashed var(--border);border-radius:6px;margin-bottom:12px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+          <i class="ti ti-refresh" style="font-size:13px;color:var(--muted-soft)"></i>
+          Copier depuis un devis existant
+          <span style="color:var(--muted-soft);font-style:italic;margin-left:auto;font-size:10.5px">optionnel · renouvellement</span>
+        </label>
+        <div id="dv-renewal-input-wrap" style="position:relative;margin-top:5px">
+          <input type="text" id="dv-renewal-input" class="form-input" placeholder="Taper un n° (ex: SLN-DV165) ou laisser vide pour partir d'un devis vierge..." autocomplete="off" oninput="_populateRenewalDropdown()" onfocus="_populateRenewalDropdown()" style="font-family:JetBrains Mono,monospace;font-size:12px">
+          <div id="dv-renewal-suggestions" style="display:none;position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--bg2,#0f1216);border:0.5px solid var(--border);border-radius:6px;padding:4px;max-height:240px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.3)"></div>
+        </div>
+        <div id="dv-renewal-chip-wrap" style="display:none;flex-wrap:wrap;gap:5px;padding:5px 8px;min-height:36px;align-items:center;border:0.5px solid var(--border);border-radius:6px;background:var(--bg2,rgba(255,255,255,0.03));margin-top:5px"></div>
+        <div id="dv-renewal-hint" style="font-size:10px;color:var(--muted-soft);margin-top:6px;line-height:1.45;font-style:italic">Si renseigné : copie automatique du client, de l'objet et des lignes. Pose un lien « Reprise DVxxx » en traçabilité. Utilisé pour les renouvellements après expiration.</div>
+      </div>
       <div class="form-row">
         <div class="form-group"><label>N° Devis <span class="req">*</span></label><input class="form-input" id="dv-num"></div>
         <div class="form-group"><label>Révision</label><input class="form-input" id="dv-rev" placeholder="REV1"></div>
@@ -14872,41 +14887,121 @@ function renderDVPro(){
       '<th style="width:70px;padding:10px 14px"></th>'+
       '</tr></thead><tbody>';
 
+    // === HIÉRARCHIE PARENT / RÉVISIONS (mode pro) ===
+    // Regrouper les révisions sous leur parent racine.
+    var revisionsByParent={};
     sorted.forEach(function(d){
+      if(d._parentDevisId){
+        if(!revisionsByParent[d._parentDevisId]) revisionsByParent[d._parentDevisId]=[];
+        revisionsByParent[d._parentDevisId].push(d);
+      }
+    });
+    Object.keys(revisionsByParent).forEach(function(pid){
+      revisionsByParent[pid].sort(function(a,b){return (a._revisionNumber||0)-(b._revisionNumber||0);});
+    });
+    // État d'expansion (réutilise window._dvExpanded, partagé avec mode classique)
+    if(!window._dvExpanded) window._dvExpanded={};
+    // Sources finales = racines seulement (les révisions sont injectées sous leur parent)
+    var rootsOnly=sorted.filter(function(d){return !d._parentDevisId;});
+
+    // Helper local : rend une ligne (racine OU révision) avec contexte
+    function _renderDVProRow(d, isRev){
       var meta=DV_STATUS_META[d.status]||DV_STATUS_META['Brouillon'];
       var ttc=getDvTTC(d);
       var typeColor={Fourniture:'#88aae0',Prestation:'#5dcaa5',Mixte:'#a78bfa'}[d.type]||'#a3a39a';
       var clientShort=esc((d.client||'').substring(0,40));
       var objet=esc((d.objet||d.intitule||'').replace(/\n/g,' ').substring(0,60));
       var dateF=(typeof fD==='function')?fD(d.date):(d.date||'');
-      // Indicateur révision si présent :
-      //   - d.rev = champ texte "REV1" / "REV2"... (modèle courant, saisie manuelle)
-      //   - d._revisionNumber = entier (modèle parent/enfant)
+      // Indicateur révision
       var revLabel='';
       if(d.rev && String(d.rev).trim()){
         revLabel=String(d.rev).trim().toUpperCase();
-        if(!/^REV/i.test(revLabel)) revLabel='REV'+revLabel; // tolère "1" → "REV1"
+        if(!/^REV/i.test(revLabel)) revLabel='REV'+revLabel;
       } else if(d._revisionNumber){
         revLabel='REV'+d._revisionNumber;
       }
-      var revBadge=revLabel?' <span style="background:rgba(251,191,36,0.15);color:#fbbf24;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:500;margin-left:4px;letter-spacing:0.04em">'+esc(revLabel)+'</span>':'';
-      // Date selon statut (Accepté → date BC, Facturé → date facture, etc.)
+      var revBadge=revLabel?' <span style="background:rgba(186,117,23,0.18);color:#fbbf24;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:500;margin-left:4px;letter-spacing:0.04em;font-family:JetBrains Mono,monospace">'+esc(revLabel)+'</span>':'';
+      // Date selon statut
       var statusDate=(typeof _getStatusDate==='function')?_getStatusDate(d):null;
+      // Hiérarchie : ce devis a-t-il des révisions enfants ?
+      var hasRevs=!isRev && Array.isArray(revisionsByParent[d.id]) && revisionsByParent[d.id].length>0;
+      var expanded=hasRevs?(window._dvExpanded[d.id]!==false):false;
 
-      html+='<tr class="dvpro-row" style="border-bottom:0.5px solid rgba(255,255,250,0.06);transition:background .12s;cursor:pointer" onclick="openDV('+d.id+')" onmouseover="this.style.background=\'rgba(255,255,250,0.025)\'" onmouseout="this.style.background=\'\'">';
+      // === Pill statut spécialisé ===
+      // 3 cas spéciaux : "Remplacé par REVn" (parent qui a une REV), "Obsolète" (ghost), "Refusé" (rouge clair)
+      var statusPillHtml='';
+      var statusDateHtml='';
+      if(hasRevs){
+        // Parent avec REV → pill "Remplacé par REVn" cliquable
+        var lastRev=revisionsByParent[d.id][revisionsByParent[d.id].length-1];
+        var lastRevLabel=lastRev.rev||('REV'+(lastRev._revisionNumber||revisionsByParent[d.id].length));
+        statusPillHtml='<span onclick="event.stopPropagation();scrollToDVRev('+d.id+')" title="Aller à '+esc(lastRevLabel)+'" style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:10px;font-size:10.5px;font-weight:500;color:#854F0B;background:rgba(186,117,23,0.18);border:0.5px solid rgba(186,117,23,0.4);cursor:pointer;font-family:JetBrains Mono,monospace"><i class="ti ti-arrow-down-right" style="font-size:11px"></i>Remplacé par '+esc(lastRevLabel)+'</span>';
+      } else if(d.status==='Obsolète'){
+        // Ghost outline + icône archive
+        statusPillHtml='<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:10px;font-size:10.5px;font-weight:500;color:var(--muted-soft);border:0.5px solid var(--border);background:transparent"><i class="ti ti-archive" style="font-size:11px;opacity:0.7"></i>Obsolète</span>';
+        // Date d'expiration si auto-obsolète
+        if(d._autoObsoleteExpiredOn){
+          var fexp=(typeof fD==='function')?fD(d._autoObsoleteExpiredOn):d._autoObsoleteExpiredOn;
+          statusDateHtml='<div style="font-size:10px;color:var(--muted-soft);margin-top:4px;font-family:JetBrains Mono,monospace">expiré '+esc(fexp)+'</div>';
+        }
+      } else if(d.status==='Refusé'){
+        statusPillHtml='<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:10px;font-size:10.5px;font-weight:500;color:#f09595;background:rgba(240,149,149,0.12);border:0.5px solid rgba(240,149,149,0.3)"><i class="ti ti-x" style="font-size:11px"></i>Refusé</span>';
+        if(statusDate){
+          var sdLbl=(typeof fD==='function')?fD(statusDate.date):statusDate.date;
+          statusDateHtml='<div style="font-size:10px;color:var(--muted-soft);margin-top:4px;font-family:JetBrains Mono,monospace">'+esc(sdLbl)+'</div>';
+        }
+      } else {
+        // Statut standard
+        statusPillHtml='<span class="pill-pro '+meta.pill+'">'+meta.label+'</span>';
+        if(statusDate){
+          var sdLbl2=(typeof fD==='function')?fD(statusDate.date):statusDate.date;
+          statusDateHtml='<div style="font-size:10px;color:var(--muted-soft);margin-top:4px;font-family:JetBrains Mono,monospace">'+esc(sdLbl2)+'</div>';
+        } else if(d.status==='Envoyé'){
+          statusDateHtml='<div style="font-size:10px;color:var(--muted-soft);margin-top:4px;font-style:italic">en cours</div>';
+        }
+      }
+
+      // === Numéro + toggle hiérarchie (uniquement sur racines avec REV) ===
+      var togglePart='';
+      if(hasRevs){
+        togglePart='<button type="button" onclick="event.stopPropagation();toggleDVRevisionGroup('+d.id+')" title="'+(expanded?'Replier':'Déplier')+' les révisions" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:0.5px solid var(--border);border-radius:4px;background:transparent;cursor:pointer;color:var(--muted);font-size:11px;margin-right:6px;vertical-align:-2px;padding:0">'+(expanded?'−':'+')+'</button>';
+      }
+      var revIndent=isRev?'<span style="display:inline-block;width:22px;color:#fbbf24;font-family:JetBrains Mono,monospace;font-size:11px;text-align:center">└─</span>':'';
+      var numColor=isRev?'#fbbf24':'var(--blue)';
+
+      // Row styling : si REV, fond ambré léger
+      var rowStyle='border-bottom:0.5px solid rgba(255,255,250,0.06);transition:background .12s;cursor:pointer';
+      if(isRev) rowStyle='background:rgba(186,117,23,0.04);border-bottom:0.5px solid rgba(255,255,250,0.06);border-left:3px solid rgba(186,117,23,0.5);transition:background .12s;cursor:pointer';
+      var rowDataAttr=isRev?' data-dvprorev="'+d.id+'"':'';
+
+      // === Bouton REV (création) ===
+      // Conditions : statut ∈ Envoyé/Accepté/Refusé/Facturé/Obsolète ET (racine sans REV OU dernière REV)
+      var revEligibleStatus=['Envoyé','Accepté','Refusé','Facturé','Obsolète'].indexOf(d.status)>=0;
+      var showRevBtn=false;
+      if(revEligibleStatus){
+        if(!isRev && !hasRevs) showRevBtn=true; // racine sans REV
+        else if(isRev){
+          // Dernière REV uniquement
+          var revs=revisionsByParent[d._parentDevisId]||[];
+          var isLast=revs.length>0 && revs[revs.length-1].id===d.id;
+          if(isLast) showRevBtn=true;
+        }
+      }
+      var revBtnHtml=showRevBtn?
+        ' <button class="btn btn-ghost btn-sm" onclick="createDVRevision('+d.id+')" title="Créer '+(isRev?'la révision suivante':'une révision (REV1)')+'" style="padding:4px 8px;border:0.5px solid #BA7517;background:rgba(186,117,23,0.08);color:#854F0B;font-family:JetBrains Mono,monospace;font-size:10px;font-weight:500;letter-spacing:0.04em">REV</button>':'';
+
+      var rowHtml='<tr class="dvpro-row"'+rowDataAttr+' style="'+rowStyle+'" onclick="openDV('+d.id+')" onmouseover="this.style.background=\''+(isRev?'rgba(186,117,23,0.08)':'rgba(255,255,250,0.025)')+'\'" onmouseout="this.style.background=\''+(isRev?'rgba(186,117,23,0.04)':'')+'\'">';
       // N° / Date
-      html+='<td style="padding:12px 14px;vertical-align:top">'+
-        '<div class="ref" style="font-family:JetBrains Mono,monospace;font-size:12px;color:var(--blue);font-weight:500">'+esc(d.num||'?')+revBadge+'</div>'+
-        '<div style="font-size:10.5px;color:var(--muted-soft);margin-top:2px">'+esc(dateF)+'</div>'+
+      rowHtml+='<td style="padding:12px 14px;vertical-align:top">'+
+        '<div class="ref" style="font-family:JetBrains Mono,monospace;font-size:12px;color:'+numColor+';font-weight:500">'+revIndent+togglePart+esc(d.num||'?')+revBadge+'</div>'+
+        '<div style="font-size:10.5px;color:var(--muted-soft);margin-top:2px'+(isRev?';margin-left:22px':(hasRevs?';margin-left:24px':''))+'">'+esc(dateF)+'</div>'+
         '</td>';
       // Client / Objet
-      html+='<td style="padding:12px 14px;vertical-align:top;max-width:340px">'+
+      rowHtml+='<td style="padding:12px 14px;vertical-align:top;max-width:340px">'+
         '<div style="font-size:13px;color:var(--text);font-weight:500">'+clientShort+'</div>'+
         '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+objet+'</div>'+
         '</td>';
-      // Type + BC Client (sous-ligne)
-      // - Type raccourci : "Prestation de service" → "Prestation" (cohérence avec "Fourniture")
-      // - BC Client affiché sous le type si renseigné, ellipsis pour les cas longs avec tooltip complet
+      // Type + BC Client
       var typeLabel=esc(d.type||'—').replace(/Prestation de service/i,'Prestation');
       var bcClient=String(d.bcClientSLN||'').trim();
       var bcClientHtml='';
@@ -14914,7 +15009,7 @@ function renderDVPro(){
         var bcClientFull=esc(bcClient);
         bcClientHtml='<div title="BC Client : '+bcClientFull+'" style="font-size:10px;color:var(--muted-soft);margin-top:3px;padding-left:13px;font-family:JetBrains Mono,monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">BC: '+bcClientFull+'</div>';
       }
-      html+='<td style="padding:12px 14px;vertical-align:top">'+
+      rowHtml+='<td style="padding:12px 14px;vertical-align:top">'+
         '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)">'+
         '<span style="width:7px;height:7px;border-radius:50%;background:'+typeColor+'"></span>'+
         typeLabel+
@@ -14922,37 +15017,45 @@ function renderDVPro(){
         bcClientHtml+
         '</td>';
       // TTC
-      html+='<td style="padding:12px 14px;text-align:right;vertical-align:top">'+
+      rowHtml+='<td style="padding:12px 14px;text-align:right;vertical-align:top">'+
         '<div class="num" data-money style="font-family:JetBrains Mono,monospace;font-size:13px;color:var(--text);font-weight:500">'+fNloc(ttc)+'</div>'+
         '<div style="font-size:10px;color:var(--muted-soft);margin-top:2px">XPF</div>'+
         '</td>';
-      // Statut + date (la date est en dessous du badge, ton sur ton)
-      var statusDateHtml='';
-      if(statusDate){
-        var sdLbl=(typeof fD==='function')?fD(statusDate.date):statusDate.date;
-        statusDateHtml='<div style="font-size:10px;color:var(--muted-soft);margin-top:4px;font-family:JetBrains Mono,monospace">'+esc(sdLbl)+'</div>';
-      } else if(d.status==='Envoyé'){
-        // En attente client → pas de date affichée volontairement
-        statusDateHtml='<div style="font-size:10px;color:var(--muted-soft);margin-top:4px;font-style:italic">en cours</div>';
-      }
-      html+='<td style="padding:12px 14px;vertical-align:top">'+
-        '<span class="pill-pro '+meta.pill+'">'+meta.label+'</span>'+
+      // Statut + date
+      rowHtml+='<td style="padding:12px 14px;vertical-align:top">'+
+        statusPillHtml+
         statusDateHtml+
         '</td>';
-      // Traçabilité : 4 mini-pills inline (Phase / Emerson / ACT / PO Cali)
-      html+='<td style="padding:12px 8px;vertical-align:top;max-width:340px">'+
+      // Traçabilité
+      rowHtml+='<td style="padding:12px 8px;vertical-align:top;max-width:340px">'+
         ((typeof _renderTraca==='function')?_renderTraca(d):'')+
         '</td>';
-      // Facture : pill cliquable (1 facture, cadre, ou "Pas de facture")
-      html+='<td style="padding:12px 8px;vertical-align:top">'+
+      // Facture
+      rowHtml+='<td style="padding:12px 8px;vertical-align:top">'+
         ((typeof _renderFactureCell==='function')?_renderFactureCell(d):'')+
         '</td>';
-      // Actions
-      html+='<td style="padding:12px 14px;vertical-align:top;text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+
+      // Actions (avec bouton REV conditionnel)
+      rowHtml+='<td style="padding:12px 14px;vertical-align:top;text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+
         '<button class="btn btn-ghost btn-sm" onclick="openDV('+d.id+')" title="Éditer" style="padding:5px 8px;border:0.5px solid var(--border)"><i class="ti ti-pencil" style="font-size:12px"></i></button>'+
+        revBtnHtml+
         ' <button class="btn btn-ghost btn-sm" onclick="deleteDV('+d.id+')" title="Supprimer ce devis (annulable via Ctrl+Z)" style="padding:5px 8px;border:0.5px solid rgba(239,68,68,.3);color:#ef4444"><i class="ti ti-trash" style="font-size:12px"></i></button>'+
         '</td>';
-      html+='</tr>';
+      rowHtml+='</tr>';
+      return rowHtml;
+    }
+
+    // Itération sur racines uniquement, injection conditionnelle des révisions
+    rootsOnly.forEach(function(d){
+      html+=_renderDVProRow(d, false);
+      var revs=revisionsByParent[d.id];
+      if(revs && revs.length>0){
+        var isExpanded=(window._dvExpanded[d.id]!==false);
+        if(isExpanded){
+          revs.forEach(function(r){
+            html+=_renderDVProRow(r, true);
+          });
+        }
+      }
     });
     html+='</tbody></table>';
   }
@@ -17074,6 +17177,9 @@ function openDV(id, preSelectedClient){
   eDVid=id||null;dvL={fourniture:[],service:[],fret:[]};rebuildAllParamSelects();
   buildClientOptions('dv-client',preSelectedClient||'');
   if(id){
+    // Masquer le bloc "Copier depuis" — réservé aux nouveaux devis
+    var renewBlockEdit=document.getElementById('dv-renewal-block');
+    if(renewBlockEdit) renewBlockEdit.style.display='none';
     var d=DB.devis.find(function(x){return x.id===id;});
     if(d){
       // === LOGIQUE DATE ===
@@ -17233,6 +17339,26 @@ function openDV(id, preSelectedClient){
     var infoElNew=document.getElementById('dv-date-info');
     if(infoElNew)infoElNew.innerHTML='✨ Nouveau devis — date par défaut = aujourd\'hui (modifiable).';
     sv('mDVtitle','Nouveau Devis');
+    // === BLOC "COPIER DEPUIS" — visible UNIQUEMENT pour les nouveaux devis ===
+    var renewBlockNew=document.getElementById('dv-renewal-block');
+    if(renewBlockNew) renewBlockNew.style.display='block';
+    // Reset état renewal (au cas où une modale précédente avait sélectionné un source)
+    window._dvRenewalFromId=null;
+    window._dvRenewalFromNum=null;
+    var renInputWrap=document.getElementById('dv-renewal-input-wrap');
+    var renChipWrap=document.getElementById('dv-renewal-chip-wrap');
+    var renInput=document.getElementById('dv-renewal-input');
+    var renPop=document.getElementById('dv-renewal-suggestions');
+    var renHint=document.getElementById('dv-renewal-hint');
+    if(renInputWrap) renInputWrap.style.display='block';
+    if(renChipWrap){renChipWrap.style.display='none';renChipWrap.innerHTML='';}
+    if(renInput) renInput.value='';
+    if(renPop){renPop.style.display='none';renPop.innerHTML='';}
+    if(renHint){
+      renHint.style.color='';
+      renHint.style.fontStyle='italic';
+      renHint.innerHTML='Si renseigné : copie automatique du client, de l\'objet et des lignes. Pose un lien « Reprise DVxxx » en traçabilité. Utilisé pour les renouvellements après expiration.';
+    }
     // === CLIENT PICKER : si client présélectionné, déclencher fillCCFromSelect ===
     // pour : (1) recalculer le N° avec le bon préfixe via nxt('dv', clientPrefix)
     //        (2) pré-remplir contact/email/adresse depuis le client choisi.
@@ -18275,9 +18401,33 @@ function getDV(){
     if(existing._sourceDevisId)preservedFlags._sourceDevisId=existing._sourceDevisId;
     if(existing._hasRevisions)preservedFlags._hasRevisions=existing._hasRevisions;
     if(existing._previousStatus)preservedFlags._previousStatus=existing._previousStatus;
+    // Préserver les flags de renouvellement (devis créé depuis "Copier depuis")
+    if(existing._renewalFromId)preservedFlags._renewalFromId=existing._renewalFromId;
+    if(existing._renewalFromNum)preservedFlags._renewalFromNum=existing._renewalFromNum;
+    if(existing._renewalCreatedAt)preservedFlags._renewalCreatedAt=existing._renewalCreatedAt;
+    // === OVERRIDE OBSOLÈTE ===
+    // Si le devis a été auto-basculé en Obsolète et que l'utilisateur change manuellement
+    // le statut (ex: client a finalement donné signe → repasse à Envoyé), on pose un flag
+    // pour empêcher la bascule auto au prochain renderDV().
+    var newStatus=gvg('dv-status');
+    var wasAutoObsolete=(existing._autoObsoleteAt && existing.status==='Obsolète');
+    if(wasAutoObsolete && newStatus!=='Obsolète'){
+      preservedFlags._overrideObsolete=true;
+    } else if(existing._overrideObsolete){
+      // Conserver l'override déjà posé (sauf si l'utilisateur le repasse explicitement en Obsolète)
+      if(newStatus!=='Obsolète') preservedFlags._overrideObsolete=true;
+    }
   } else {
     // Nouveau devis créé via "+ Nouveau devis" → natif GRC
     preservedFlags._isNativeGRC=true;
+    // === RENOUVELLEMENT ===
+    // Si l'utilisateur a sélectionné un "Copier depuis", on persiste le lien.
+    // Note : pas de _parentDevisId (≠ révision), juste un lien sémantique léger.
+    if(window._dvRenewalFromId){
+      preservedFlags._renewalFromId=window._dvRenewalFromId;
+      preservedFlags._renewalFromNum=window._dvRenewalFromNum||'';
+      preservedFlags._renewalCreatedAt=td();
+    }
   }
   var result={id:eDVid||Date.now(),num:gvg('dv-num'),rev:gvg('dv-rev'),date:gvg('dv-date'),type:gvg('dv-type'),
     client:gvg('dv-client'),contact:gvg('dv-contact'),email:gvg('dv-email'),adresse:gvg('dv-adresse'),
@@ -18996,6 +19146,9 @@ function saveDV(){
   }
   // Feedback bouton (helper unifié)
   flashSaveBtn('mDV');
+  // Clear l'état renewal après sauvegarde (évite de réutiliser le même source au prochain nouveau devis)
+  window._dvRenewalFromId=null;
+  window._dvRenewalFromNum=null;
 }
 
 // === SYNCHRONISATION DEVIS CADRE → CATALOGUE ARTICLES ===
@@ -22773,6 +22926,11 @@ function showEmersonDevisPreview(emersonData,rateInfo,fileName){
     rateInfo:rateInfo
   };
 
+  // Pré-générer le N° devis avec préfixe SLN par défaut (le client n'est pas
+  // encore sélectionné à l'ouverture, donc on tape sur SLN). À chaque changement
+  // de client, onEmersonDevisClientChange() recalculera ce N° si l'utilisateur
+  // ne l'a pas édité manuellement (détection via data-auto-value).
+  var _edAutoNumInit=nxt('dv');
   // Construire la liste des clients pour le select
   var clientsOpts='<option value="">— Choisir le client final —</option>'+
     DB.clients.map(function(c){
@@ -22875,7 +23033,7 @@ function showEmersonDevisPreview(emersonData,rateInfo,fileName){
             '</div>'+
             '<div class="form-group">'+
               '<label>N° Devis CALINSTRUM <span class="req">*</span></label>'+
-              '<input class="form-input" id="ed-num" value="'+esc(nxt('dv'))+'">'+
+              '<input class="form-input" id="ed-num" value="'+esc(_edAutoNumInit)+'" data-auto-value="'+esc(_edAutoNumInit)+'" oninput="this.setAttribute(\'data-auto-value\',\'\')">'+
             '</div>'+
           '</div>'+
           '<div class="form-row">'+
@@ -22959,6 +23117,23 @@ function onEmersonDevisClientChange(){
   var opt=sel.options[sel.selectedIndex];
   if(!opt)return;
   var isExo=opt.getAttribute('data-exo')==='oui';
+  // === RECALCUL DU N° DEVIS SELON LE PRÉFIXE DU CLIENT ===
+  // Si l'utilisateur n'a pas édité manuellement le N° (data-auto-value non vide
+  // = valeur encore auto-générée), on recalcule avec le bon préfixe.
+  // Si édité manuellement, on respecte sa saisie.
+  var numInp=document.getElementById('ed-num');
+  if(numInp){
+    var autoVal=numInp.getAttribute('data-auto-value')||'';
+    var currentVal=numInp.value||'';
+    // Le N° est "auto" si la valeur actuelle correspond au data-auto-value mémorisé
+    if(autoVal && currentVal===autoVal){
+      var clientName=sel.value||'';
+      var newPrefix=(typeof getClientPrefix==='function')?getClientPrefix(clientName):'SLN';
+      var newNum=nxt('dv', newPrefix);
+      numInp.value=newNum;
+      numInp.setAttribute('data-auto-value', newNum);
+    }
+  }
   // Si exo : forcer toutes les TGC% à 0
   if(isExo){
     _emersonImportState.emersonItems.forEach(function(l,idx){
@@ -23043,6 +23218,20 @@ function confirmEmersonDevisImport(){
   // Vérifier doublon
   if(DB.devis.some(function(d){return d.num===num;})){
     if(!confirm('Un devis avec le numéro « '+num+' » existe déjà.\n\nContinuer quand même ?'))return;
+  }
+
+  // === SÉCURITÉ : cohérence préfixe N° devis vs préfixe client ===
+  // Si le N° de devis a un préfixe différent de celui du client final,
+  // demander confirmation. Évite les erreurs type "PRNC choisi mais N° SLN-DVxxx".
+  var clientPrefix=(typeof getClientPrefix==='function')?getClientPrefix(clientNom):'SLN';
+  var numPrefix=String(num).split('-')[0]||'';
+  if(numPrefix && clientPrefix && numPrefix.toUpperCase()!==clientPrefix.toUpperCase()){
+    if(!confirm('⚠ Le N° de devis « '+num+' » ne correspond pas au préfixe du client.\n\n'+
+                'Client final : '+clientNom+' (préfixe attendu : '+clientPrefix+')\n'+
+                'N° saisi : '+num+' (préfixe : '+numPrefix+')\n\n'+
+                'Créer le devis quand même avec ce numéro ?')){
+      return;
+    }
   }
 
   // Récupérer le client (pour exo info)
@@ -23854,6 +24043,9 @@ function _refreshDVStatusSelect(pool){
 }
 
 function renderDV(){
+  // Bascule automatique en "Obsolète" pour les devis Envoyé > 30 jours sans REV
+  // (idempotent, n'impacte que les devis concernés)
+  try{autoFlagObsoleteDevis();}catch(e){console.warn('autoFlagObsoleteDevis failed',e);}
   // Si on est en mode pro, on délègue au rendu fintech (renderDVPro)
   // qui réécrit complètement le contenu de #page-devis.
   if(document.body.classList.contains('theme-pro')){
@@ -24012,6 +24204,235 @@ function toggleDVRevisionGroup(parentId){
   window._dvExpanded[parentId]=!current;
   renderDV();
 }
+
+// === AUTO-OBSOLESCENCE 30 JOURS ===
+// Règles (cf. discussion produit) :
+//   1. Cible UNIQUEMENT les devis en statut "Envoyé"
+//   2. Date de référence = phaseHistory[phase=envoye].date, fallback sur d.date
+//   3. Si une REV existe pour ce devis (parent ou si lui-même est parent), on NE BASCULE PAS
+//      (le pill "Remplacé par" prend le dessus)
+//   4. Override manuel : si _overrideObsolete=true, on respecte la décision utilisateur
+//   5. Cadre exclu (statut Cadre OU num contenant "CADRE")
+// Idempotent : appelable à chaque renderDV() sans coût.
+var DV_VALIDITY_DAYS=30;
+function _getDevisSentDate(d){
+  // Cherche la date où le devis est passé en "Envoyé"
+  if(d && Array.isArray(d.phaseHistory)){
+    var entry=d.phaseHistory.find(function(e){return e && e.phase==='envoye';});
+    if(entry && entry.date) return entry.date;
+  }
+  // Fallback : date du devis
+  return (d && d.date) || null;
+}
+function _isDevisExpired(d){
+  if(!d) return false;
+  var sentDate=_getDevisSentDate(d);
+  if(!sentDate) return false;
+  // Parse YYYY-MM-DD → Date
+  var dt=new Date(sentDate);
+  if(isNaN(dt.getTime())) return false;
+  var now=new Date();
+  var diffDays=Math.floor((now.getTime()-dt.getTime())/(1000*60*60*24));
+  return diffDays>DV_VALIDITY_DAYS;
+}
+function _getDevisExpirationDate(d){
+  var sentDate=_getDevisSentDate(d);
+  if(!sentDate) return null;
+  var dt=new Date(sentDate);
+  if(isNaN(dt.getTime())) return null;
+  dt.setDate(dt.getDate()+DV_VALIDITY_DAYS);
+  // Format YYYY-MM-DD
+  return dt.toISOString().substring(0,10);
+}
+// Bascule auto idempotente : à appeler avant chaque rendu de la liste devis.
+// Retourne true si au moins une bascule a eu lieu (pour saveDB conditionnel).
+function autoFlagObsoleteDevis(){
+  if(!Array.isArray(DB.devis)) return false;
+  var changed=false;
+  DB.devis.forEach(function(d){
+    if(!d || d.status!=='Envoyé') return;
+    if(d._overrideObsolete===true) return;
+    // Cadre exclu
+    if(d.status==='Cadre') return;
+    if(String(d.num||'').toUpperCase().indexOf('CADRE')>=0) return;
+    // Si une REV existe sur ce devis (lui-même parent), on ne bascule pas
+    var hasRev=DB.devis.some(function(x){return x._parentDevisId===d.id;});
+    if(hasRev) return;
+    // Expiration ?
+    if(_isDevisExpired(d)){
+      d.status='Obsolète';
+      d._autoObsoleteAt=td();
+      d._autoObsoleteExpiredOn=_getDevisExpirationDate(d);
+      // Sauvegarder l'ancien statut pour traçabilité (et override manuel possible)
+      if(!d._previousStatus) d._previousStatus='Envoyé';
+      changed=true;
+    }
+  });
+  if(changed){
+    try{saveDB();}catch(e){console.warn('autoFlagObsoleteDevis save failed',e);}
+  }
+  return changed;
+}
+
+// === RENOUVELLEMENT : copier depuis un devis existant ===
+// Appelé depuis la modale "Nouveau devis" quand l'utilisateur sélectionne
+// un devis dans le champ "Copier depuis". Copie client/objet/lignes et pose
+// _renewalFromId pour traçabilité (≠ révision : pas de _parentDevisId).
+function applyRenewalFromDevis(sourceDevisId){
+  var source=DB.devis.find(function(x){return x.id===sourceDevisId;});
+  if(!source){alert('Devis source introuvable');return false;}
+  // Pré-remplir les champs de la modale Nouveau Devis
+  gv('dv-client',source.client||'');
+  // Déclencher fillCCFromSelect pour propager le bon préfixe + adresse/contact/email
+  if(typeof fillCCFromSelect==='function') fillCCFromSelect('dv');
+  // Si fillCCFromSelect n'a pas rempli (cas où le client n'est plus en DB), on force depuis source
+  setTimeout(function(){
+    if(!(document.getElementById('dv-contact')||{}).value) gv('dv-contact',source.contact||'');
+    if(!(document.getElementById('dv-email')||{}).value) gv('dv-email',source.email||'');
+    if(!(document.getElementById('dv-adresse')||{}).value) gv('dv-adresse',source.adresse||'');
+  },50);
+  gv('dv-objet',source.objet||'');
+  gv('dv-type',source.type||'Fourniture');
+  gv('dv-incoterms',source.incoterms||'');
+  gv('dv-transport',source.transport||'');
+  gv('dv-freight',source.freight||'');
+  gv('dv-danger',source.danger||'Non');
+  gv('dv-validite',source.validite||'1 mois');
+  gv('dv-delai',source.delai||'');
+  gv('dv-paiement',source.paiement||'100% à la réception de la marchandise');
+  gv('dv-tgc-mention',source.tgcM||'506-2');
+  // Copier les lignes (deep copy via JSON pour éviter les références partagées)
+  if(typeof dvL!=='undefined'){
+    try{
+      dvL.fourniture=JSON.parse(JSON.stringify(source.lignes&&source.lignes.fourniture||source.lignesFourniture||[]));
+      dvL.service=JSON.parse(JSON.stringify(source.lignes&&source.lignes.service||source.lignesService||[]));
+      dvL.fret=JSON.parse(JSON.stringify(source.lignes&&source.lignes.fret||source.lignesFret||[]));
+    }catch(e){console.warn('Copie lignes renewal failed',e);}
+    if(typeof rDVlines==='function') rDVlines();
+  }
+  // Mémoriser le lien _renewalFromId pour qu'il soit posé à saveDV()
+  window._dvRenewalFromId=source.id;
+  window._dvRenewalFromNum=source.num;
+  return true;
+}
+// Construit le dropdown custom de suggestions pour le champ "Copier depuis".
+// Filtré sur statuts "morts" (Obsolète/Envoyé/Refusé), tri date desc.
+function _populateRenewalDropdown(){
+  var pop=document.getElementById('dv-renewal-suggestions');
+  var input=document.getElementById('dv-renewal-input');
+  if(!pop||!input) return;
+  var q=(input.value||'').toLowerCase().trim();
+  var dvAll=Array.isArray(DB.devis)?DB.devis:[];
+  var validStatus={'Obsolète':1,'Envoyé':1,'Refusé':1};
+  var candidates=dvAll.filter(function(d){
+    if(!validStatus[d.status]) return false;
+    if(d._parentDevisId) return false; // les révisions ne sont pas des sources de renouvellement
+    if(!q) return true;
+    var hay=((d.num||'')+' '+(d.client||'')+' '+(d.objet||'')).toLowerCase();
+    return hay.indexOf(q)>=0;
+  });
+  candidates.sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));});
+  candidates=candidates.slice(0,8); // max 8 suggestions
+  var html='';
+  if(candidates.length===0){
+    html='<div style="padding:10px 12px;font-size:11px;color:var(--muted-soft);font-style:italic">Aucun devis correspondant</div>';
+  } else {
+    candidates.forEach(function(d){
+      var st=d.status||'';
+      var stColor=st==='Obsolète'?'#9ca3af':(st==='Refusé'?'#f09595':'#88aae0');
+      var stBg=st==='Obsolète'?'rgba(156,163,175,0.12)':(st==='Refusé'?'rgba(240,149,149,0.12)':'rgba(136,170,224,0.12)');
+      var fdate=(typeof fD==='function')?fD(d.date):(d.date||'');
+      var cli=esc((d.client||'').substring(0,28));
+      var obj=esc((d.objet||'').substring(0,40));
+      html+='<div class="dv-renewal-item" data-dvid="'+d.id+'" onclick="_selectRenewalSource('+d.id+')" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;transition:background 0.1s" onmouseover="this.style.background=\'rgba(255,255,255,0.04)\'" onmouseout="this.style.background=\'\'">'+
+        '<span style="font-family:var(--mono,monospace);font-size:11.5px;color:#38bdf8;font-weight:500;min-width:100px">'+esc(d.num||'')+'</span>'+
+        '<span style="flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+cli+' · '+obj+' · '+esc(fdate)+'</span>'+
+        '<span style="font-size:9.5px;padding:1px 6px;border-radius:3px;font-family:var(--mono,monospace);letter-spacing:0.03em;background:'+stBg+';color:'+stColor+'">'+esc(st)+'</span>'+
+        '</div>';
+    });
+  }
+  pop.innerHTML=html;
+  pop.style.display=candidates.length>0||q?'block':'none';
+}
+// Sélection d'un devis source depuis le dropdown
+function _selectRenewalSource(devisId){
+  var source=DB.devis.find(function(x){return x.id===devisId;});
+  if(!source) return;
+  applyRenewalFromDevis(devisId);
+  // Cacher le dropdown
+  var pop=document.getElementById('dv-renewal-suggestions');
+  if(pop) pop.style.display='none';
+  // Cacher l'input + afficher le chip
+  var inputWrap=document.getElementById('dv-renewal-input-wrap');
+  var chipWrap=document.getElementById('dv-renewal-chip-wrap');
+  if(inputWrap) inputWrap.style.display='none';
+  if(chipWrap){
+    chipWrap.style.display='flex';
+    chipWrap.innerHTML='<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 4px 2px 9px;background:rgba(93,202,165,0.12);border:0.5px solid rgba(93,202,165,0.3);border-radius:10px;font-size:11px;color:#5dcaa5;font-family:var(--mono,monospace);font-weight:500;line-height:1.6">'+
+      esc(source.num)+'<button type="button" tabindex="-1" title="Retirer" onclick="_clearRenewalSource()" style="border:none;background:transparent;color:#5dcaa5;cursor:pointer;padding:0 3px;font-size:14px;line-height:1;opacity:0.6" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.6">×</button></span>';
+  }
+  // Hint vert
+  var hint=document.getElementById('dv-renewal-hint');
+  if(hint){
+    hint.style.color='#5dcaa5';
+    hint.style.fontStyle='normal';
+    var nbLignes=(source.lignes?(source.lignes.fourniture||[]).length+(source.lignes.service||[]).length+(source.lignes.fret||[]).length:0);
+    hint.innerHTML='✓ Client, objet et '+nbLignes+' ligne(s) copiés depuis '+esc(source.num)+'. Lien « Reprise '+esc(source.num)+' » sera posé à la sauvegarde.';
+  }
+}
+// Retirer le chip et réafficher l'input
+function _clearRenewalSource(){
+  window._dvRenewalFromId=null;
+  window._dvRenewalFromNum=null;
+  var inputWrap=document.getElementById('dv-renewal-input-wrap');
+  var chipWrap=document.getElementById('dv-renewal-chip-wrap');
+  if(inputWrap) inputWrap.style.display='block';
+  if(chipWrap){chipWrap.style.display='none';chipWrap.innerHTML='';}
+  var input=document.getElementById('dv-renewal-input');
+  if(input){input.value='';input.focus();}
+  var hint=document.getElementById('dv-renewal-hint');
+  if(hint){
+    hint.style.color='';
+    hint.style.fontStyle='italic';
+    hint.innerHTML='Si renseigné : copie automatique du client, de l\'objet et des lignes. Pose un lien « Reprise DVxxx » en traçabilité. Utilisé pour les renouvellements après expiration.';
+  }
+}
+// Scroll vers une REV (pour la pill "Remplacé par REV1" cliquable)
+function scrollToDVRev(parentId){
+  var revs=(DB.devis||[]).filter(function(x){return x._parentDevisId===parentId;});
+  if(revs.length===0) return;
+  revs.sort(function(a,b){return (b._revisionNumber||0)-(a._revisionNumber||0);});
+  var lastRev=revs[0];
+  // S'assurer que le groupe est déplié
+  if(!window._dvExpanded)window._dvExpanded={};
+  if(window._dvExpanded[parentId]===false){
+    window._dvExpanded[parentId]=true;
+    renderDV();
+  }
+  // Scroll après le prochain frame (DOM mis à jour)
+  setTimeout(function(){
+    var row=document.querySelector('[data-dvrow-rev="'+lastRev.id+'"], [data-dvprorev="'+lastRev.id+'"]');
+    if(row){
+      row.scrollIntoView({behavior:'smooth',block:'center'});
+      row.style.transition='background 0.3s';
+      var origBg=row.style.background;
+      row.style.background='rgba(93,202,165,0.18)';
+      setTimeout(function(){row.style.background=origBg;},900);
+    }
+  },50);
+}
+// Click hors du dropdown renewal → fermer
+(function attachRenewalOutsideClick(){
+  if(window._dvRenewalOutsideAttached) return;
+  document.addEventListener('click',function(e){
+    var pop=document.getElementById('dv-renewal-suggestions');
+    var input=document.getElementById('dv-renewal-input');
+    if(!pop||pop.style.display==='none') return;
+    if(e.target===input||pop.contains(e.target)) return;
+    pop.style.display='none';
+  },true);
+  window._dvRenewalOutsideAttached=true;
+})();
 
 // Crée une révision d'un devis :
 // - sourceDevisId est l'ID du devis depuis lequel on copie (parent racine OU dernière révision)
