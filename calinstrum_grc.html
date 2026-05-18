@@ -31266,11 +31266,30 @@ function _renderDecompDrillList(){
     return;
   }
   var html='';
+  // Helper : couleur du badge statut selon la valeur (factures + devis)
+  function _statusBadgeStyle(status){
+    var s=String(status||'').toLowerCase().trim();
+    // Payé (vert teal)
+    if(s==='payée' || s==='paid' || s==='payee') return {bg:'rgba(93,202,165,0.14)', color:'#5dcaa5'};
+    // En retard / Refusé (rouge clair)
+    if(s==='en retard' || s==='late' || s==='refusé' || s==='refuse') return {bg:'rgba(240,149,149,0.14)', color:'#f09595'};
+    // En attente / Partiel / Émise (ambré)
+    if(s==='en attente' || s==='pending' || s==='partiel' || s==='partial' || s==='émise' || s==='emise') return {bg:'rgba(251,191,36,0.16)', color:'#fbbf24'};
+    // Facturé (violet, cohérent avec la couleur Conversion)
+    if(s==='facturé' || s==='facture') return {bg:'rgba(167,139,250,0.14)', color:'#a78bfa'};
+    // Accepté (bleu teal légèrement différent — engagement client)
+    if(s==='accepté' || s==='accepte') return {bg:'rgba(93,202,165,0.10)', color:'#5dcaa5'};
+    // Envoyé / Cadre (bleu doux)
+    if(s==='envoyé' || s==='envoye' || s==='cadre') return {bg:'rgba(136,170,224,0.14)', color:'#88aae0'};
+    // Brouillon / Obsolète (gris discret — comportement par défaut)
+    return {bg:'rgba(255,255,255,0.06)', color:'var(--muted-soft)'};
+  }
   items.forEach(function(it){
     var dateShort=String(it.date||'').substring(0,10);
     var clientShort=String(it.client||'').substring(0,28);
     var objetShort=String(it.objet||'').substring(0,55);
-    var statusBadge=it.status?'<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:rgba(255,255,255,0.06);color:var(--muted-soft);font-size:10px;margin-left:4px">'+esc(it.status)+'</span>':'';
+    var sbStyle=_statusBadgeStyle(it.status);
+    var statusBadge=it.status?'<span style="display:inline-block;padding:1px 7px;border-radius:8px;background:'+sbStyle.bg+';color:'+sbStyle.color+';font-size:10px;margin-left:5px;font-weight:500;letter-spacing:0.02em">'+esc(it.status)+'</span>':'';
     // === MODE PREFACT : badge urgence couleur sur l'âge ===
     var extraDisplay='';
     if(it.extra){
