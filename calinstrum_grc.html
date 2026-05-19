@@ -37129,25 +37129,33 @@ function buildBCTitle(b){
   if(cref) parts.push('Customer Ref '+cref);
   return parts.join(' ');
 }
-function prvDV(id){var d=DB.devis.find(function(x){return x.id===id;});if(d)showPrv('Devis — '+d.num,bDV(d));}
-function prvFA(id){var f=DB.factures.find(function(x){return x.id===id;});if(f)showPrv('Facture — '+f.num,bFA(f));}
-function prvBC(id){var b=DB.bcs.find(function(x){return x.id===id;});if(b)showPrv(buildBCTitle(b),bBC(b));}
-function prvBL(id){var b=DB.bls.find(function(x){return x.id===id;});if(b)showPrv('BL — '+b.num,bBL(b));}
-function previewDV(){var d=getDV();if(!d.num)return;showPrv('Devis — '+d.num,bDV(d));}
-function previewFA(){var f=getFA();if(!f.num)return;showPrv('Facture — '+f.num,bFA(f));}
+// Variables globales partagées entre previewDV/prvDV/previewFA/prvFA et doPrint() :
+// quand on prévisualise un devis, on mémorise son id exact pour que doPrint()
+// retrouve le BON devis et pas un homonyme (cas révision : parent et REV
+// partagent le même `num`, seul l'`id` les distingue). Idem pour les factures.
+window._prvDvSourceId=null;
+window._prvFaSourceId=null;
+function prvDV(id){var d=DB.devis.find(function(x){return x.id===id;});if(d){window._prvDvSourceId=d.id;window._prvFaSourceId=null;showPrv('Devis — '+d.num,bDV(d));}}
+function prvFA(id){var f=DB.factures.find(function(x){return x.id===id;});if(f){window._prvFaSourceId=f.id;window._prvDvSourceId=null;showPrv('Facture — '+f.num,bFA(f));}}
+function prvBC(id){var b=DB.bcs.find(function(x){return x.id===id;});if(b){window._prvDvSourceId=null;window._prvFaSourceId=null;showPrv(buildBCTitle(b),bBC(b));}}
+function prvBL(id){var b=DB.bls.find(function(x){return x.id===id;});if(b){window._prvDvSourceId=null;window._prvFaSourceId=null;showPrv('BL — '+b.num,bBL(b));}}
+function previewDV(){var d=getDV();if(!d.num)return;window._prvDvSourceId=d.id||null;window._prvFaSourceId=null;showPrv('Devis — '+d.num,bDV(d));}
+function previewFA(){var f=getFA();if(!f.num)return;window._prvFaSourceId=f.id||null;window._prvDvSourceId=null;showPrv('Facture — '+f.num,bFA(f));}
 // Re-génère l'aperçu PDF facture (équivalent à previewFA mais avec confirmation visuelle
 // que la dernière version du code de rendu est utilisée — utile après mise à jour de la
 // mise en page pour rassurer l'utilisateur sur les anciennes factures).
 function regenerateFAPdf(){
   var f=getFA();
   if(!f.num){alert('⚠ Aucune facture à régénérer');return;}
+  window._prvFaSourceId=f.id||null;
+  window._prvDvSourceId=null;
   showPrv('Facture — '+f.num,bFA(f));
   if(typeof showBCSaveToast==='function'){
     showBCSaveToast('🔄 PDF facture re-généré avec la dernière mise en page');
   }
 }
-function previewBC(){var b=getBC();if(!b.num)return;showPrv(buildBCTitle(b),bBC(b));}
-function previewBL(){var b=getBL();if(!b.num)return;showPrv('BL — '+b.num,bBL(b));}
+function previewBC(){var b=getBC();if(!b.num)return;window._prvDvSourceId=null;window._prvFaSourceId=null;showPrv(buildBCTitle(b),bBC(b));}
+function previewBL(){var b=getBL();if(!b.num)return;window._prvDvSourceId=null;window._prvFaSourceId=null;showPrv('BL — '+b.num,bBL(b));}
 
 
 // ===== JS PAGINATOR FOR DEVIS PRINT =====
@@ -39170,8 +39178,22 @@ function doPrint(){
     var dvNumForFile=docTitle.replace(/^Devis\s*[\u2014\-]\s*/i,'').trim();
     var objetForFile='';
     if(typeof DB!=='undefined' && Array.isArray(DB.devis)){
-      var dvRec=DB.devis.find(function(x){return (x.num||'')===dvNumForFile;});
-      if(dvRec && dvRec.objet) objetForFile=String(dvRec.objet).replace(/\s+/g,' ').trim();
+      // Recherche prioritaire par id (cas révision : parent et REV partagent le même num)
+      var dvRec=null;
+      if(window._prvDvSourceId!=null){
+        dvRec=DB.devis.find(function(x){return x.id===window._prvDvSourceId;});
+      }
+      // Fallback : par num (rétrocompat)
+      if(!dvRec) dvRec=DB.devis.find(function(x){return (x.num||'')===dvNumForFile;});
+      if(dvRec){
+        if(dvRec.objet) objetForFile=String(dvRec.objet).replace(/\s+/g,' ').trim();
+        // Si le devis est une révision, on l'indique dans le nom de fichier
+        if(dvRec.rev){
+          var revLab=String(dvRec.rev).toUpperCase();
+          if(!/^REV/i.test(revLab)) revLab='REV'+revLab;
+          dvNumForFile=dvNumForFile+' '+revLab;
+        }
+      }
     }
     var fileTitleRaw='DEVIS CALINSTRUM '+dvNumForFile+(objetForFile?' '+objetForFile:'');
     safeDocTitle=fileTitleRaw.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
@@ -39180,7 +39202,12 @@ function doPrint(){
     var faNumForFile=docTitle.replace(/^Facture\s*[\u2014\-]\s*/i,'').trim();
     var bcSLNForFile='';
     if(typeof DB!=='undefined' && Array.isArray(DB.factures)){
-      var faRec=DB.factures.find(function(x){return (x.num||'')===faNumForFile;});
+      // Recherche prioritaire par id (cohérence)
+      var faRec=null;
+      if(window._prvFaSourceId!=null){
+        faRec=DB.factures.find(function(x){return x.id===window._prvFaSourceId;});
+      }
+      if(!faRec) faRec=DB.factures.find(function(x){return (x.num||'')===faNumForFile;});
       if(faRec && faRec.bcClientSLN) bcSLNForFile='BC'+String(faRec.bcClientSLN).replace(/[\\\/:*?"<>|\s]+/g,'');
     }
     var fileTitleRawF='FACTURE CALINSTRUM '+faNumForFile+(bcSLNForFile?' '+bcSLNForFile:'');
@@ -39503,7 +39530,13 @@ function doPrint(){
   var didPaginate=false;
   if(isDevisDoc){
     var dvNum=(docTitle||'').replace(/^Devis\s*\u2014\s*/,'').trim();
-    var dObj=DB.devis.find(function(x){return x.num===dvNum;});
+    // Recherche prioritaire par id (cas révision : parent et REV partagent le même num,
+    // sans ce fix le PDF imprimait toujours le premier trouvé = le parent)
+    var dObj=null;
+    if(window._prvDvSourceId!=null){
+      dObj=DB.devis.find(function(x){return x.id===window._prvDvSourceId;});
+    }
+    if(!dObj) dObj=DB.devis.find(function(x){return x.num===dvNum;});
     if(dObj){
       var logoSrc=document.querySelector('#prvBody img')?document.querySelector('#prvBody img').src:(typeof LG_PLACEHOLDER!=='undefined'?LG_PLACEHOLDER:'');
       var sigSrc=null;
@@ -39516,9 +39549,13 @@ function doPrint(){
     }
   } else if(isFactureDoc){
     // === FACTURE : déléguer à buildPaginatedFA pour pagination intelligente ===
-    // Logique identique au devis : trouver f par num, récupérer logo+signature, déléguer.
+    // Logique identique au devis : trouver f par id en priorité (cohérence), fallback num.
     var faNum=(docTitle||'').replace(/^Facture\s*\u2014\s*/,'').trim();
-    var fObj=(DB.factures||[]).find(function(x){return x.num===faNum;});
+    var fObj=null;
+    if(window._prvFaSourceId!=null){
+      fObj=(DB.factures||[]).find(function(x){return x.id===window._prvFaSourceId;});
+    }
+    if(!fObj) fObj=(DB.factures||[]).find(function(x){return x.num===faNum;});
     if(fObj){
       var logoSrcF=document.querySelector('#prvBody img')?document.querySelector('#prvBody img').src:(typeof LG_PLACEHOLDER!=='undefined'?LG_PLACEHOLDER:'');
       var sigSrcF=null;
