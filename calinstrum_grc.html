@@ -39384,8 +39384,11 @@ function doPrint(){
   // Pour les devis et factures paginés, on utilise .doc-page avec dimensions fixes (margin:0 sur @page)
   // Pour les autres docs, on garde des marges A4 standard
   // [20/05/2026] Restauration "Page X / Y" (le mot "Page" avait disparu)
+  // [20/05/2026] Marge bottom @page : 16mm → 12mm pour gagner ~15px de zone utile,
+  //   nécessaire pour que le footer (bandeau bleu + mention rouge) ne soit pas clippé
+  //   par overflow:hidden de .doc-page (cf fix footer visibility ci-dessous).
   var pageRule=(isDevisDoc||isFactureDoc)
-    ? `@page{size:A4 portrait;margin:10mm 12mm 16mm 12mm;@bottom-right{content: "Page " counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}}`
+    ? `@page{size:A4 portrait;margin:10mm 12mm 12mm 12mm;@bottom-right{content: "Page " counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}}`
     : `@page{size:A4 portrait;margin:8mm 10mm 20mm 10mm;@bottom-right{content: "Page " counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}} @page :first{ margin-top:8mm; }`;
 
   // Règles spéciales BC : Arial uniforme + rendu haute résolution sur TOUT le document
@@ -39573,6 +39576,29 @@ function doPrint(){
       -webkit-print-color-adjust:exact!important;
       print-color-adjust:exact!important;
     }
+
+    /* === FIX FOOTER VISIBILITY (20/05/2026) ============================
+       BUG OBSERVÉ : sur DEVIS paginés, le bandeau bleu CALINSTRUM et la
+       mention rouge étaient INVISIBLES à l'impression alors qu'ils étaient
+       bien dans le DOM. Cause : .doc-page a height:268mm + overflow:hidden,
+       et le bloc final (totaux+notes+bank+signatures+footer) dépassait
+       systématiquement de 30-80px → footer clippé par overflow:hidden.
+       MESURÉ EN HEADLESS : footer.top=1034px vs page.bottom=1012.9px.
+
+       FIX : agrandir légèrement la zone utile (height:271mm) + compacter
+       les signatures et marges du bloc final pour gagner ~50px et laisser
+       une marge de sécurité de ~6-8px en bas du footer.
+       ⚠️ NE PAS DÉSACTIVER ce bloc sans retester avec headless (Puppeteer)
+       sur PRNC-DV030 (2 lignes + 1 section) ET SLN-DV164 (notes longues). */
+    .doc-page{height:271mm!important;}
+    .doc-sign-box{min-height:120px!important;}
+    .doc-sign-box .ds-siglot{height:65px!important;}
+    .doc-sign-box .ds-siglot img{max-height:60px!important;}
+    .doc-sign{margin-top:6px!important;padding-top:5px!important;gap:18px!important;}
+    .doc-notes{padding:5px 9px!important;margin-bottom:5px!important;font-size:12px!important;}
+    .doc-bank{padding:5px 9px!important;margin-bottom:5px!important;font-size:12px!important;}
+    .doc-page-final-block{margin-top:4px!important;}
+    /* ==================================================================== */
 
     /* FIXED FOOTER (legacy, pour docs non-paginés) */
     .doc-fixed-footer{
