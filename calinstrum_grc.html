@@ -37352,9 +37352,16 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   // entre l'écran (rendu Calibri/Arial AA) et l'impression (rendu vectoriel).
   // Avant : 16px → sur-estimation ~20% → items basculaient prématurément sur page 2.
   // LAST_EXTRA = hauteur réservée pour totals+notes+bank+signatures sur la dernière page.
-  //   doc-totals ~95px + doc-notes ~95px + doc-bank ~70px + doc-sign 170px
-  //   + gaps/borders ~25px + marge sécurité ~75px = 530px → arrondi à 600 (cf historique)
-  var PAGE1_BUDGET=700, PAGE_N_BUDGET=900, LAST_EXTRA=600, FOOTER_H=45;
+  // [20/05/2026] Retour aux valeurs avril 2026 (LAST_EXTRA=360, PAGE1_BUDGET=760)
+  // qui empêchent les pages 2 fantômes sur les petits devis (cas PRNC-DV030 : 2 lignes
+  // splittées en 2 pages avec sous-total absurde "0").
+  // ⚠️ ZONE FRAGILE — historique de régressions :
+  //   - 23/04 : LAST_EXTRA=420 → page 2 vide sur devis court
+  //   - 26/04 : LAST_EXTRA=280 puis 360 + GARDE ABSOLUE 1-page → OK
+  //   - 15/05 : LAST_EXTRA=600 (corrige débordement SLN-DV163) MAIS supprime garde → bug petits devis
+  //   - 20/05 : retour 360 + restauration garde absolue ci-dessous.
+  // Ne PAS modifier sans tester : devis 2 lignes (PRNC-DV030) + devis 1 page dense (SLN-DV163).
+  var PAGE1_BUDGET=760, PAGE_N_BUDGET=900, LAST_EXTRA=360, FOOTER_H=45;
   var measureDiv=document.createElement('div');
   measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:14px;visibility:hidden';
   document.body.appendChild(measureDiv);
@@ -37512,6 +37519,18 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   // Retirer les pages vides éventuellement créées
   pages=pages.filter(function(p){return p.length>0;});
 
+  // GARDE ABSOLUE 1-PAGE (restaurée 20/05/2026 — cf historique avril 2026)
+  // Si tout le contenu (lignes + bloc final) tient confortablement sur 1 page A4,
+  // force 1 seule page peu importe ce que la pagination a calculé.
+  // Empêche les pages 2 fantômes avec sous-total absurde "0" sur les petits devis
+  // (cas PRNC-DV030 : 2 lignes splittées en 2 pages parce que LAST_EXTRA était trop gros).
+  if(pages.length>1){
+    var totalRowsH=rowItems.reduce(function(s,r){return s+r.height;},0);
+    if(totalRowsH+LAST_EXTRA<=PAGE1_BUDGET){
+      pages=[rowItems.slice()];
+    }
+  }
+
   // Vérifier que la DERNIÈRE page a la place pour le bloc totals+notes+bank+signatures (LAST_EXTRA)
   if(pages.length>=1){
     var lastPage=pages[pages.length-1];
@@ -37529,6 +37548,52 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       lastHeight=moved.reduce(function(s,r){return s+r.height;},0);
       lastBudget=PAGE_N_BUDGET;
     }
+  }
+
+  // =========================================================================
+  // NETTOYAGE FINAL : éviter les sous-totaux trompeurs / pages vides en queue
+  // =========================================================================
+  // Problème observé sur SLN-DV179 : la page d'avant-dernière affichait un
+  // sous-total "Sous-total HT (XPF) 638 450" alors que la page suivante ne
+  // contenait AUCUNE ligne d'article (juste le bloc final totals/notes/bank/signatures).
+  // → ce sous-total était redondant et trompeur car égal au Total HT final.
+  //
+  // Règle 1 : si la dernière page n'a aucune ligne d'article (= aucun r non-isSec),
+  //           tenter de la fusionner avec la précédente. Si impossible faute de place,
+  //           on garde 2 pages mais on marque la précédente _skipSubtotal=true.
+  //
+  // Règle 2 : pour chaque page intermédiaire, si toutes les pages suivantes n'ont
+  //           AUCUNE ligne d'article (= dernière page "vide" non fusionnable),
+  //           le sous-total devient égal au Total HT final → on le supprime aussi.
+  function pageHasArticleLines(p){
+    for(var k=0;k<p.length;k++){if(!p[k].isSec)return true;}
+    return false;
+  }
+  if(pages.length>=2){
+    var lp=pages[pages.length-1];
+    if(!pageHasArticleLines(lp)){
+      // La dernière page ne contient aucune ligne d'article — essayer la fusion
+      var prevPage=pages[pages.length-2];
+      var combinedH=prevPage.reduce(function(s,r){return s+r.height;},0)+lp.reduce(function(s,r){return s+r.height;},0);
+      var prevBudget=(pages.length===2)?PAGE1_BUDGET:PAGE_N_BUDGET;
+      if(combinedH+LAST_EXTRA<=prevBudget){
+        // La fusion tient → fusionner
+        pages[pages.length-2]=prevPage.concat(lp);
+        pages.pop();
+      } else {
+        // Pas de place pour fusionner → marquer l'avant-dernière pour ne pas afficher le sous-total
+        prevPage._skipSubtotal=true;
+      }
+    }
+  }
+  // Règle 2 (généralisée) : marquer toute page dont les pages suivantes ne contiennent
+  // aucune ligne d'article (cas rare mais possible avec sections de queue)
+  for(var pgi=0;pgi<pages.length-1;pgi++){
+    var hasArticlesAfter=false;
+    for(var pgj=pgi+1;pgj<pages.length;pgj++){
+      if(pageHasArticleLines(pages[pgj])){hasArticlesAfter=true;break;}
+    }
+    if(!hasArticlesAfter)pages[pgi]._skipSubtotal=true;
   }
 
   var isMultiPage=pages.length>1;
@@ -37747,7 +37812,8 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   var mention=getMention(isExo?f.tgcM:'tgc');
 
   // === Mesure des hauteurs via DOM hors-écran (identique au devis) ===
-  var PAGE1_BUDGET=700, PAGE_N_BUDGET=900, LAST_EXTRA=600, FOOTER_H=45;
+  // [20/05/2026] Aligné sur DEVIS — cf historique dans buildPaginatedDV.
+  var PAGE1_BUDGET=760, PAGE_N_BUDGET=900, LAST_EXTRA=360, FOOTER_H=45;
   var measureDiv=document.createElement('div');
   measureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:14px;visibility:hidden';
   document.body.appendChild(measureDiv);
@@ -37876,6 +37942,15 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
     }
   }
   pages=pages.filter(function(p){return p.length>0;});
+
+  // GARDE ABSOLUE 1-PAGE (20/05/2026) — cf historique dans buildPaginatedDV
+  if(pages.length>1){
+    var totalRowsH=rowItems.reduce(function(s,r){return s+r.height;},0);
+    if(totalRowsH+LAST_EXTRA<=PAGE1_BUDGET){
+      pages=[rowItems.slice()];
+    }
+  }
+
   // Réserver LAST_EXTRA pour la dernière page (totals+notes+bank+signatures)
   if(pages.length>=1){
     var lastPage=pages[pages.length-1];
