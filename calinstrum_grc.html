@@ -12968,6 +12968,37 @@ function _normalizeFactureStatus(f){
 // =============================================================================
 function _renderFactureCell(d){
   if(!d) return '';
+
+  // [21/05/2026] Lien facture INDISPONIBLE pour les devis qui ne doivent pas porter
+  // de facturation : remplacé par une révision, Obsolète, ou Refusé.
+  // La facturation se fait sur la révision active (pour un parent révisé) ou pas du tout.
+  // On affiche une pill grisée NON cliquable avec un libellé adapté à la raison.
+  // NB : on ne bloque QUE si aucune facture n'est déjà liée — si une facture existe
+  // historiquement sur ce devis, on continue de l'afficher (cas 2/3 plus bas).
+  var _hasRev=Array.isArray(DB.devis) && DB.devis.some(function(x){return x && x._parentDevisId===d.id;});
+  var _lockReason=null;
+  if(_hasRev) _lockReason='révisé';
+  else if(d.status==='Obsolète') _lockReason='obsolète';
+  else if(d.status==='Refusé') _lockReason='refusé';
+  if(_lockReason){
+    var _lk=_findLinkedFactures(d);
+    if(!_lk.hasMatch){
+      var _lbl={'révisé':'Indisponible (révisé)','obsolète':'Indisponible (obsolète)','refusé':'Indisponible (refusé)'}[_lockReason];
+      var _tip={
+        'révisé':'Devis remplacé par une révision — la facturation se fait sur la révision active.',
+        'obsolète':'Devis obsolète — pas de facturation possible.',
+        'refusé':'Devis refusé — pas de facturation possible.'
+      }[_lockReason];
+      return '<span '+
+        'title="'+esc(_tip)+'" '+
+        'style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:6px;cursor:not-allowed;'+
+        'background:rgba(255,255,255,0.02);border:0.5px dashed rgba(120,120,120,0.25);'+
+        'font-size:10px;line-height:1.3;color:rgba(150,150,150,0.55);font-family:JetBrains Mono,monospace;white-space:nowrap">'+
+        '<i class="ti ti-link-off" style="font-size:11px"></i>'+
+        '<span>'+esc(_lbl)+'</span></span>';
+    }
+  }
+
   var linked=_findLinkedFactures(d);
   // Cas 1 : aucune facture liée
   if(!linked.hasMatch){
