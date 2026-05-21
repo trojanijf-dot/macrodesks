@@ -1853,6 +1853,11 @@ body.has-dashboard-bg #page-dashboard .metric{
       </div>
     </div>
     <div class="tab-pane" id="dvt-lignes">
+      <!-- Barre globale Copier/Coller (agit sur TOUTES les lignes du devis, presse-papier partagé avec les factures) -->
+      <div style="display:flex;gap:7px;margin:0 0 10px;flex-wrap:wrap;align-items:center;padding-bottom:8px;border-bottom:0.5px solid var(--border)">
+        <button class="btn btn-ghost btn-sm" onclick="copyLinesToClipboard('dv')" title="Copier toutes les lignes de ce devis (réutilisable dans un autre devis/facture)" style="border-color:rgba(45,212,191,.45);color:#5dcaa5;font-weight:500">📋 Copier les lignes</button>
+        <button class="btn btn-ghost btn-sm" id="dv-paste-btn" onclick="pasteLinesIntoDV()" title="Coller les lignes précédemment copiées (ajout à la fin)" style="border-color:rgba(167,139,250,.45);color:#a5b4fc;font-weight:500;display:none">📥 Coller les lignes <span id="dv-paste-count" style="background:rgba(167,139,250,.2);color:#c4b5fd;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:2px"></span></button>
+      </div>
       <!-- Boutons par section : ligne simple, sous-titre ITEMS, KIT (1 prix global).
            Les sous-titres et KITs s'ajoutent à la fin de la section ; tu peux les déplacer avec ▲▼ ensuite. -->
       <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 4px;flex-wrap:wrap;gap:6px">
@@ -2075,12 +2080,15 @@ body.has-dashboard-bg #page-dashboard .metric{
            Utilise le même parser que la page Devis (legacyImportDevisFromPDF) avec un flag
            _importTargetIsFacture qui déclenche la création auto de la facture liée. -->
       <input type="file" id="fa-import-pdf-file" accept="application/pdf" style="display:none" onchange="legacyImportDevisFromPDFForFacture(this.files[0])">
-      <div style="display:flex;gap:7px;margin-bottom:9px">
+      <div style="display:flex;gap:7px;margin-bottom:9px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-ghost btn-sm" onclick="addFAL('prod')">+ Produit</button>
         <button class="btn btn-ghost btn-sm" onclick="addFAL('svc')">+ Prestation</button>
         <button class="btn btn-ghost btn-sm" onclick="addFAL('lot')">+ Lot forfait</button>
         <button class="btn btn-ghost btn-sm" onclick="addFASection()" style="border-color:rgba(244,63,94,.4);color:#f43f5e">+ Section</button>
         <button class="btn btn-ghost btn-sm" onclick="addFAKitSection()" style="border-color:rgba(59,130,246,.4);color:#3b82f6">+ KIT (1 prix global)</button>
+        <span style="width:1px;height:22px;background:var(--border);margin:0 2px"></span>
+        <button class="btn btn-ghost btn-sm" onclick="copyLinesToClipboard('fa')" title="Copier toutes les lignes de cette facture (réutilisable dans un autre devis/facture)" style="border-color:rgba(45,212,191,.45);color:#5dcaa5;font-weight:500">📋 Copier les lignes</button>
+        <button class="btn btn-ghost btn-sm" id="fa-paste-btn" onclick="pasteLinesIntoFA()" title="Coller les lignes précédemment copiées (ajout à la fin)" style="border-color:rgba(167,139,250,.45);color:#a5b4fc;font-weight:500;display:none">📥 Coller les lignes <span id="fa-paste-count" style="background:rgba(167,139,250,.2);color:#c4b5fd;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:2px"></span></button>
       </div>
       <table class="items-tbl"><thead><tr><th style="width:32px;text-align:center">#</th><th style="width:110px">Réf.</th><th style="min-width:170px">Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th>PU(XPF)</th><th>Total HT</th><th></th></tr></thead>
       <tbody id="faLN"></tbody></table>
@@ -18399,6 +18407,7 @@ function _updateDVLineTotal(tb, sec, idx, subIdx){
 }
 
 function rDVlines(){
+  if(typeof _refreshPasteButtons==='function') _refreshPasteButtons();
   var sections=[['fourniture','dvFR'],['service','dvSV'],['fret','dvFT']];
   sections.forEach(function(pair){
     var sec=pair[0],tbId=pair[1];
@@ -25686,6 +25695,36 @@ function _populateFADvlieDatalist(){
     }
     return true;
   });
+
+  // [21/05/2026] GESTION DES RÉVISIONS :
+  // Quand un devis a des révisions (REV1, REV2...), on ne propose QUE la dernière
+  // révision active de chaque famille — pas le parent remplacé. Cela évite de lier
+  // une facture à un devis obsolète. La famille est identifiée par _parentDevisId
+  // (les révisions pointent vers leur racine).
+  // 1) indexer les révisions par parent
+  var revsByParent={};
+  dvAll.forEach(function(d){
+    if(d._parentDevisId){
+      (revsByParent[d._parentDevisId]=revsByParent[d._parentDevisId]||[]).push(d);
+    }
+  });
+  Object.keys(revsByParent).forEach(function(pid){
+    revsByParent[pid].sort(function(a,b){return (a._revisionNumber||0)-(b._revisionNumber||0);});
+  });
+  // 2) filtrer : retirer les parents qui ont une révision (remplacés) ET retirer les
+  //    révisions qui ne sont pas la dernière de leur famille.
+  candidates=candidates.filter(function(d){
+    // Parent ayant des révisions → exclure (c'est la dernière REV qui doit apparaître)
+    if(revsByParent[d.id] && revsByParent[d.id].length>0) return false;
+    // Révision : ne garder que la dernière de la famille
+    if(d._parentDevisId){
+      var fam=revsByParent[d._parentDevisId]||[];
+      var last=fam[fam.length-1];
+      if(last && last.id!==d.id) return false;
+    }
+    return true;
+  });
+
   // Tri : Cadre en premier, puis par date décroissante (récents d'abord)
   candidates.sort(function(a,b){
     var aCadre=a.status==='Cadre' || (a.num||'').toUpperCase().indexOf('CADRE')>=0;
@@ -25701,6 +25740,9 @@ function _populateFADvlieDatalist(){
     var isCadre=d.status==='Cadre' || (d.num||'').toUpperCase().indexOf('CADRE')>=0;
     var labelParts=[];
     if(isCadre) labelParts.push('CADRE');
+    // [21/05/2026] Afficher le n° de révision (REV1, REV2...) pour distinguer
+    // visuellement la dernière révision proposée du devis de base.
+    if(d.rev) labelParts.push(String(d.rev).toUpperCase());
     if(d.objet) labelParts.push(String(d.objet).substring(0,50));
     if(d.date) labelParts.push(d.date);
     if(d.status && !isCadre) labelParts.push(d.status);
@@ -26057,6 +26099,131 @@ function addFAL(t){
   var d={prod:{designation:'',tgc:0,unite:'U',qte:1,pu:0},svc:{designation:'',tgc:0,unite:'H sup',qte:1,pu:0},lot:{designation:'',tgc:0,unite:'Lot',qte:1,pu:0}};
   faL.push(Object.assign({},d[t]||d.prod));rFAlines();
 }
+
+// =============================================================================
+// PRESSE-PAPIER DE LIGNES — copier/coller entre devis et factures [21/05/2026]
+// =============================================================================
+// Format universel : tableau plat de lignes, chacune taguée avec _sec
+// ('fourniture' | 'service' | 'fret'). On copie/colle TOUTE la structure :
+// sections (header items), KIT (header kit + ligne porteuse + subLines), TASK,
+// produits/prestations. Le presse-papier est en mémoire (window._lineClipboard),
+// partagé entre devis et factures, persistant tant que la page n'est pas rechargée.
+window._lineClipboard = window._lineClipboard || null;
+
+// --- Sérialise les lignes du DEVIS courant (dvL = {fourniture,service,fret}) ---
+function _serializeDvLines(){
+  var out=[];
+  ['fourniture','service','fret'].forEach(function(sec){
+    var arr=(dvL&&dvL[sec])||[];
+    arr.forEach(function(l){
+      if(!l)return;
+      var cloned=JSON.parse(JSON.stringify(l));
+      cloned._sec=sec;
+      out.push(cloned);
+    });
+  });
+  return out;
+}
+
+// --- Sérialise les lignes de la FACTURE courante (faL = tableau plat) ---
+function _serializeFaLines(){
+  var out=[];
+  var curSec='fourniture';
+  var SEC_FROM_LABEL={'FOURNITURE':'fourniture',"MAIN D'OEUVRE":'service','FRET / FRAIS DIVERS':'fret'};
+  (faL||[]).forEach(function(l){
+    if(!l)return;
+    // Les bandeaux section_banner indiquent un changement de section mais ne sont pas
+    // des lignes à coller telles quelles → on s'en sert juste pour suivre curSec.
+    if(l.type==='section_banner'){
+      curSec=SEC_FROM_LABEL[(l.desc||'').toUpperCase()]||l._sec||curSec;
+      return;
+    }
+    if(l._sec) curSec=l._sec;
+    var cloned=JSON.parse(JSON.stringify(l));
+    delete cloned._sec; // on re-tague proprement
+    cloned._sec=curSec;
+    out.push(cloned);
+  });
+  return out;
+}
+
+// --- COPIER (appelé depuis devis ou facture) ---
+function copyLinesToClipboard(srcType){
+  var lines = (srcType==='dv') ? _serializeDvLines() : _serializeFaLines();
+  // Compter les lignes "réelles" (hors headers) pour le message
+  var realCount=lines.filter(function(l){return l.type!=='header';}).length;
+  if(!lines.length){
+    if(typeof showBCSaveToast==='function') showBCSaveToast('⚠ Aucune ligne à copier');
+    else alert('Aucune ligne à copier.');
+    return;
+  }
+  var srcNum = (srcType==='dv')
+    ? (gvg('dv-num')||(DB.devis.find(function(x){return x.id===eDVid;})||{}).num||'devis')
+    : (gvg('fa-num')||(DB.factures.find(function(x){return x.id===eFAid;})||{}).num||'facture');
+  window._lineClipboard = { lines:lines, srcNum:srcNum, srcType:srcType, count:realCount, ts:Date.now() };
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ '+lines.length+' ligne(s) copiée(s) depuis '+srcNum);
+  // Rafraîchir pour mettre à jour le badge "Coller"
+  if(srcType==='dv'){ if(typeof rDVlines==='function') rDVlines(); }
+  else { if(typeof rFAlines==='function') rFAlines(); }
+}
+
+// --- COLLER dans le DEVIS courant ---
+function pasteLinesIntoDV(){
+  var cb=window._lineClipboard;
+  if(!cb||!cb.lines||!cb.lines.length){ alert('Presse-papier vide.'); return; }
+  if(!confirm('Coller '+cb.lines.length+' ligne(s) copiée(s) depuis '+cb.srcNum+' ?\n\nElles seront ajoutées à la suite des lignes actuelles.')) return;
+  if(!dvL) dvL={fourniture:[],service:[],fret:[]};
+  cb.lines.forEach(function(l){
+    var sec=l._sec||'fourniture';
+    if(!dvL[sec]) dvL[sec]=[];
+    var cloned=JSON.parse(JSON.stringify(l));
+    delete cloned._sec;
+    dvL[sec].push(cloned);
+  });
+  if(typeof rDVlines==='function') rDVlines();
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ '+cb.lines.length+' ligne(s) collée(s)');
+}
+
+// --- COLLER dans la FACTURE courante ---
+function pasteLinesIntoFA(){
+  var cb=window._lineClipboard;
+  if(!cb||!cb.lines||!cb.lines.length){ alert('Presse-papier vide.'); return; }
+  if(!confirm('Coller '+cb.lines.length+' ligne(s) copiée(s) depuis '+cb.srcNum+' ?\n\nElles seront ajoutées à la suite des lignes actuelles.')) return;
+  if(!Array.isArray(faL)) faL=[];
+  var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
+  var lastSec=null;
+  // Détecter la dernière section déjà présente dans faL pour éviter un banner redondant
+  cb.lines.forEach(function(l){
+    var sec=l._sec||'fourniture';
+    var cloned=JSON.parse(JSON.stringify(l));
+    delete cloned._sec;
+    // Insérer un bandeau de section quand on change de section
+    if(sec!==lastSec){
+      faL.push({type:'section_banner',desc:SEC_LABELS[sec]||sec.toUpperCase(),_sec:sec});
+      lastSec=sec;
+    }
+    cloned._sec=sec;
+    faL.push(cloned);
+  });
+  if(typeof rFAlines==='function') rFAlines();
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ '+cb.lines.length+' ligne(s) collée(s)');
+}
+
+// --- Compteur pour le badge du bouton Coller (0 = pas de presse-papier) ---
+function _clipboardCount(){
+  return (window._lineClipboard && window._lineClipboard.lines) ? window._lineClipboard.lines.length : 0;
+}
+
+// --- Affiche/masque les boutons "Coller" + met à jour leur badge (appelé par rDVlines/rFAlines) ---
+function _refreshPasteButtons(){
+  var n=_clipboardCount();
+  [['dv-paste-btn','dv-paste-count'],['fa-paste-btn','fa-paste-count']].forEach(function(pair){
+    var btn=document.getElementById(pair[0]);
+    var cnt=document.getElementById(pair[1]);
+    if(btn){ btn.style.display = n>0 ? '' : 'none'; }
+    if(cnt){ cnt.textContent = n>0 ? String(n) : ''; }
+  });
+}
 function addFASection(){
   // Ajoute un bandeau de section (titre regroupant les lignes suivantes, comme dans le devis)
   var title=prompt('Titre de la section :','NOUVELLE SECTION');
@@ -26145,6 +26312,7 @@ function _updateFALineTotal(tb, idx, subIdx){
 }
 
 function rFAlines(){
+  if(typeof _refreshPasteButtons==='function') _refreshPasteButtons();
   var tb=document.getElementById('faLN');if(!tb)return;
   // Compteur d'items pour la colonne # (s'incrémente UNIQUEMENT pour les lignes mères, pas pour les headers/sub-lignes)
   var _itemNo=0;
@@ -37022,7 +37190,10 @@ function bFA(f){
     '<div class="doc-info-bar">'+
       '<div><span class="dlbl">Facture N°</span><strong>'+esc(f.num||'')+'</strong></div>'+
       '<div><span class="dlbl">Type</span>'+esc(f.type||'')+'</div>'+
-      '<div><span class="dlbl">BC Client</span>'+esc(f.bcClientSLN||'—')+'</div>'+
+      // [21/05/2026] BC Client : fallback sur _importPONum (= N° PO Client éditable) puis po.
+      //   Le BC était saisi dans le champ "N° PO Client" (stocké _importPONum) mais le PDF
+      //   ne lisait que bcClientSLN → case vide à l'impression. On lit les deux.
+      '<div><span class="dlbl">BC Client</span>'+esc(f.bcClientSLN||f._importPONum||f.po||'—')+'</div>'+
       '<div><span class="dlbl">Devis N°</span>'+esc(devisNumLink||'—')+'</div>'+
     '</div>'+
     '<div class="doc-parties">'+
@@ -38205,7 +38376,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Facture N\u00b0</span><strong>'+esc(f.num||'')+'</strong></div>'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Type</span>'+esc(f.type||'')+'</div>'+
-        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">BC Client</span>'+esc(f.bcClientSLN||'\u2014')+'</div>'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">BC Client</span>'+esc(f.bcClientSLN||f._importPONum||f.po||'\u2014')+'</div>'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Devis N\u00b0</span>'+esc(devisNumLink||'\u2014')+'</div>'+
       '</div>'+
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px">'+
