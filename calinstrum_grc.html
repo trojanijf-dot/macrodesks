@@ -1145,6 +1145,12 @@ body.has-dashboard-bg #page-dashboard .metric{
       <option value="num-asc">🔢 N° Devis ↑</option>
       <option value="ttc-desc">💰 Montant ↓</option>
       <option value="ttc-asc">💰 Montant ↑</option>
+      <option value="type-asc">🏷️ Type A→Z</option>
+      <option value="type-desc">🏷️ Type Z→A</option>
+      <option value="status-asc">🚦 Statut A→Z</option>
+      <option value="status-desc">🚦 Statut Z→A</option>
+      <option value="facture-asc">🧾 Facture ↑</option>
+      <option value="facture-desc">🧾 Facture ↓</option>
     </select>
     <button class="btn btn-ghost btn-sm" onclick="openExternalRefSearch()" title="Rechercher une cotation par sa référence Emerson, ACT ou PO Calinstrum" style="font-size:11px;padding:5px 10px;border-color:rgba(124,58,237,0.4);color:#c4b5fd;white-space:nowrap">
       🔍 Réf. externe
@@ -14756,6 +14762,26 @@ function preserveFocus(renderFn){
   }
 }
 
+// [21/05/2026] Tri par clic sur en-tête de colonne (page Devis pro).
+// Bascule asc/desc si on reclique la même colonne, sinon applique le tri par défaut
+// de la colonne. Écrit dans #fDVsort (select caché lu par renderDVPro), ce qui
+// SYNCHRONISE automatiquement le menu de tri de la barre (fDVsort2 se reconstruit
+// au prochain rendu avec la bonne valeur sélectionnée).
+// Colonnes triables : 'date' (N°/Date), 'type', 'ttc', 'status', 'facture'.
+function _dvSortBy(col){
+  var sortEl=document.getElementById('fDVsort');
+  var cur=sortEl?(sortEl.value||'date-desc'):'date-desc';
+  // Sens par défaut au premier clic sur une colonne (le plus utile en premier)
+  var defaults={date:'date-desc',type:'type-asc',ttc:'ttc-desc',status:'status-asc',facture:'facture-asc'};
+  var asc=col+'-asc', desc=col+'-desc';
+  var next;
+  if(cur===desc) next=asc;          // déjà desc → passe en asc
+  else if(cur===asc) next=desc;     // déjà asc → passe en desc
+  else next=defaults[col]||desc;    // autre colonne → sens par défaut
+  if(sortEl){ sortEl.value=next; }
+  if(typeof renderDV==='function') renderDV();
+}
+
 // Page Devis pro
 function renderDVPro(){
   var page=document.getElementById('page-devis');
@@ -15066,7 +15092,7 @@ function renderDVPro(){
   html+='</select>';
   // Tri
   html+='<select id="fDVsort2" title="Tri" onchange="document.getElementById(\'fDVsort\').value=this.value;renderDV()" style="'+selStyle+'">';
-  [['date-desc','Date ↓'],['date-asc','Date ↑'],['num-desc','N° ↓'],['num-asc','N° ↑'],['ttc-desc','Montant ↓'],['ttc-asc','Montant ↑']].forEach(function(opt){
+  [['date-desc','Date ↓'],['date-asc','Date ↑'],['num-desc','N° ↓'],['num-asc','N° ↑'],['ttc-desc','Montant ↓'],['ttc-asc','Montant ↑'],['type-asc','Type A→Z'],['type-desc','Type Z→A'],['status-asc','Statut A→Z'],['status-desc','Statut Z→A'],['facture-asc','Facture ↑'],['facture-desc','Facture ↓']].forEach(function(opt){
     html+='<option value="'+opt[0]+'"'+(sortKey===opt[0]?' selected':'')+'>'+opt[1]+'</option>';
   });
   html+='</select>';
@@ -15144,6 +15170,22 @@ function renderDVPro(){
       return 0;
     }
 
+    // [21/05/2026] Helper : 1er numéro de facture liée à un devis (pour tri colonne Facture)
+    function _dvFactureNumForSort(x){
+      try{
+        if(typeof _findLinkedFactures==='function'){
+          var lk=_findLinkedFactures(x);
+          var all=[].concat(lk.factures||[],lk.invoices||[]);
+          if(all.length){
+            // Plus petit numéro (ordre alpha-numérique stable)
+            var nums=all.map(function(f){return String(f.num||'');}).filter(Boolean).sort();
+            return nums[0]||'';
+          }
+        }
+      }catch(e){}
+      return ''; // pas de facture → chaîne vide (triée en fin via le fallback ci-dessous)
+    }
+
     sorted.sort(function(a,b){
       switch(sortKey){
         case 'date-asc': return (a.date||'').localeCompare(b.date||'');
@@ -15152,19 +15194,58 @@ function renderDVPro(){
         case 'num-desc': return _cmpDevisNum(b.num, a.num);
         case 'ttc-asc': return getDvTTC(a)-getDvTTC(b);
         case 'ttc-desc': return getDvTTC(b)-getDvTTC(a);
+        case 'type-asc': return String(a.type||'').localeCompare(String(b.type||''))||(b.date||'').localeCompare(a.date||'');
+        case 'type-desc': return String(b.type||'').localeCompare(String(a.type||''))||(b.date||'').localeCompare(a.date||'');
+        case 'status-asc': return String(a.status||'').localeCompare(String(b.status||''))||(b.date||'').localeCompare(a.date||'');
+        case 'status-desc': return String(b.status||'').localeCompare(String(a.status||''))||(b.date||'').localeCompare(a.date||'');
+        case 'facture-asc': {
+          // Croissant : devis SANS facture en fin
+          var fa=_dvFactureNumForSort(a), fb=_dvFactureNumForSort(b);
+          if(!fa && fb) return 1; if(fa && !fb) return -1; if(!fa && !fb) return (b.date||'').localeCompare(a.date||'');
+          return fa.localeCompare(fb);
+        }
+        case 'facture-desc': {
+          // Décroissant : devis SANS facture en fin
+          var fa2=_dvFactureNumForSort(a), fb2=_dvFactureNumForSort(b);
+          if(!fa2 && fb2) return 1; if(fa2 && !fb2) return -1; if(!fa2 && !fb2) return (b.date||'').localeCompare(a.date||'');
+          return fb2.localeCompare(fa2);
+        }
         default: return (b.date||'').localeCompare(a.date||'');
       }
     });
 
+    // [21/05/2026] En-têtes cliquables pour tri par colonne.
+    // Flèche pleine + teinte violette sur la colonne active ; flèche grise discrète sinon.
+    function _thSort(label, col, align){
+      var asc=col+'-asc', desc=col+'-desc';
+      var active=(sortKey===asc||sortKey===desc);
+      var arrow;
+      if(sortKey===asc) arrow='<i class="ti ti-arrow-up" style="font-size:11px;vertical-align:-1px"></i>';
+      else if(sortKey===desc) arrow='<i class="ti ti-arrow-down" style="font-size:11px;vertical-align:-1px"></i>';
+      else arrow='<i class="ti ti-arrows-sort" style="font-size:11px;vertical-align:-1px;opacity:0.4"></i>';
+      var col_=active?'#a78bfa':'var(--muted-soft)';
+      var bg=active?'background:rgba(167,139,250,0.08);':'';
+      var ta=align==='right'?'right':'left';
+      var arrowLeft=(align==='right'); // pour les colonnes à droite, flèche avant le label
+      return '<th onclick="_dvSortBy(\''+col+'\')" '+
+        'style="text-align:'+ta+';padding:10px 14px;font-size:10px;color:'+col_+';letter-spacing:0.08em;text-transform:uppercase;font-weight:500;cursor:pointer;user-select:none;'+bg+'" '+
+        'title="Trier par '+esc(label)+'">'+
+        (arrowLeft?(arrow+' '+esc(label)):(esc(label)+' '+arrow))+'</th>';
+    }
+    function _thPlain(label, align){
+      var ta=align==='right'?'right':'left';
+      return '<th style="text-align:'+ta+';padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">'+esc(label)+'</th>';
+    }
+
     html+='<table class="dvpro-table" style="width:100%;border-collapse:collapse">';
     html+='<thead><tr style="background:rgba(255,255,250,0.02);border-bottom:0.5px solid var(--border)">'+
-      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">N° / Date</th>'+
-      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Client / Objet</th>'+
-      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Type</th>'+
-      '<th style="text-align:right;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">TTC</th>'+
-      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Statut</th>'+
-      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Traçabilité</th>'+
-      '<th style="text-align:left;padding:10px 14px;font-size:10px;color:var(--muted-soft);letter-spacing:0.08em;text-transform:uppercase;font-weight:500">Facture</th>'+
+      _thSort('N° / Date','date')+
+      _thPlain('Client / Objet')+
+      _thSort('Type','type')+
+      _thSort('TTC','ttc','right')+
+      _thSort('Statut','status')+
+      _thPlain('Traçabilité')+
+      _thSort('Facture','facture')+
       '<th style="width:70px;padding:10px 14px"></th>'+
       '</tr></thead><tbody>';
 
