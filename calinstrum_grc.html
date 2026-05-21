@@ -11734,8 +11734,14 @@ function _dvlieWithRev(dvlieStr){
   var dvAll=Array.isArray(DB.devis)?DB.devis:[];
 
   // Numéro de base = on retire un éventuel suffixe " REVn" déjà présent dans la saisie.
+  // [21/05/2026] IMPORTANT : on normalise aussi les espaces internes/finaux car des
+  // devis importés ont un num avec espace parasite (ex: "SLN-DV126 " ≠ "SLN-DV126").
+  function normNum(s){
+    return String(s||'').replace(/\s*REV\s*\d+\s*$/i,'').replace(/\s+/g,'').trim().toUpperCase();
+  }
   function baseNum(s){
-    return String(s||'').replace(/\s*REV\s*\d+\s*$/i,'').trim();
+    // version affichée (sans REV, sans espaces parasites de bord)
+    return String(s||'').replace(/\s*REV\s*\d+\s*$/i,'').trim().replace(/\s+$/,'').replace(/^\s+/,'');
   }
   function revRank(d){
     if(d._revisionNumber!=null) return Number(d._revisionNumber)||0;
@@ -11747,23 +11753,30 @@ function _dvlieWithRev(dvlieStr){
     var raw=part.trim();
     if(!raw) return '';
     var num=baseNum(raw);
-    var numUp=num.toUpperCase();
+    var key=normNum(raw); // clé de comparaison normalisée (sans espaces, sans REV)
 
-    // 1) Tous les devis qui portent ce numéro de base
-    var fam=dvAll.filter(function(d){return String(d.num||'').toUpperCase()===numUp;});
+    // 1) Tous les devis dont le numéro normalisé correspond (gère "SLN-DV126 " avec espace)
+    var fam=dvAll.filter(function(d){return normNum(d.num)===key;});
 
-    // 2) Élargir à la famille via _parentDevisId : si l'un des devis trouvés a un
-    //    parent (ou est parent), on récupère toute la fratrie (parent + révisions).
+    // 2) Élargir à la famille via _parentDevisId UNIQUEMENT pour les devis qui ont
+    //    de vrais identifiants (id défini). On ne groupe JAMAIS sur un id/parent
+    //    undefined, sinon tous les devis sans id seraient fusionnés dans une même
+    //    "famille" (bug : un devis sans rev hériterait du REV d'un autre).
     if(fam.length){
       var rootIds={};
-      fam.forEach(function(d){ rootIds[d._parentDevisId||d.id]=1; });
-      dvAll.forEach(function(d){
-        var rid=d._parentDevisId||d.id;
-        if(rootIds[rid] && fam.indexOf(d)<0) fam.push(d);
+      fam.forEach(function(d){
+        var rid=d._parentDevisId!=null?d._parentDevisId:d.id;
+        if(rid!=null) rootIds[rid]=1;
       });
+      if(Object.keys(rootIds).length){
+        dvAll.forEach(function(d){
+          var rid=d._parentDevisId!=null?d._parentDevisId:d.id;
+          if(rid!=null && rootIds[rid] && fam.indexOf(d)<0) fam.push(d);
+        });
+      }
     }
 
-    if(!fam.length) return raw; // numéro inconnu → on garde la saisie telle quelle
+    if(!fam.length) return num; // numéro inconnu → on garde la saisie (nettoyée) telle quelle
 
     // 3) Révision la plus élevée de la famille
     var best=null, bestRank=-1;
