@@ -25623,9 +25623,13 @@ function _faDvlieRenderChips(){
   arr.forEach(function(dvNum){
     var chip=document.createElement('span');
     chip.className='fa-dvlie-chip';
-    chip.dataset.dvnum=dvNum;
+    chip.dataset.dvnum=dvNum; // valeur BRUTE conservée (matching _findLinkedFactures + suppression)
     chip.style.cssText='display:inline-flex;align-items:center;gap:4px;padding:2px 4px 2px 8px;background:rgba(93,202,165,.12);border:0.5px solid rgba(93,202,165,.3);border-radius:10px;font-size:11px;color:#5dcaa5;font-family:var(--mono);font-weight:600;line-height:1.6';
-    chip.innerHTML=esc(dvNum)+'<button type="button" tabindex="-1" title="Retirer ce devis" style="border:none;background:transparent;color:#5dcaa5;cursor:pointer;padding:0 3px;font-size:14px;line-height:1;opacity:0.6" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.6">×</button>';
+    // [21/05/2026] AFFICHAGE enrichi avec la dernière REV (ex: "SLN-DV126 REV3").
+    // La valeur stockée (dataset.dvnum + f.dvlie) reste brute "SLN-DV126" pour ne pas
+    // casser le matching qui compare avec d.num.
+    var displayNum=(typeof _dvlieWithRev==='function')?_dvlieWithRev(dvNum):dvNum;
+    chip.innerHTML=esc(displayNum)+'<button type="button" tabindex="-1" title="Retirer ce devis" style="border:none;background:transparent;color:#5dcaa5;cursor:pointer;padding:0 3px;font-size:14px;line-height:1;opacity:0.6" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.6">×</button>';
     chip.querySelector('button').addEventListener('click',function(e){
       e.stopPropagation();
       _faDvlieRemove(dvNum);
