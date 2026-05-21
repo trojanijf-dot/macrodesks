@@ -11718,27 +11718,61 @@ function _togglePhaseHistory(event,devisId){
 // =============================================================================
 // _dvlieWithRev(dvlieStr) — enrichit une liste de N° devis avec leur dernière REV
 // =============================================================================
-// [21/05/2026] f.dvlie stocke un texte brut ("SLN-DV126" ou "SLN-DV126, SLN-DV128").
-// À l'impression, on veut afficher la révision active : "SLN-DV126 REV3".
-// Pour chaque numéro, on cherche dans DB.devis la dernière révision (plus grand
-// _revisionNumber) portant ce num, et on accole son .rev s'il existe.
-// Si le devis n'a pas de révision, on garde le numéro tel quel.
+// [21/05/2026 — v2 robuste] f.dvlie stocke un texte ("SLN-DV126" ou CSV
+// "SLN-DV126, SLN-DV128"). Pour l'impression CLIENT, on affiche la révision
+// active : "SLN-DV126 REV3".
+//
+// Robustesse :
+//  - La valeur d'entrée peut DÉJÀ contenir un REV ("SLN-DV128 REV2") → on isole
+//    le numéro de base avant de chercher, puis on réécrit avec la dernière REV.
+//  - On identifie la "famille" d'un devis par son numéro de base (num sans le REV),
+//    en cherchant aussi via _parentDevisId pour couvrir les bases mal normalisées.
+//  - On prend la révision au plus grand _revisionNumber (ou au plus grand suffixe
+//    numérique de .rev), même si les num diffèrent légèrement.
 function _dvlieWithRev(dvlieStr){
   if(!dvlieStr) return '';
   var dvAll=Array.isArray(DB.devis)?DB.devis:[];
+
+  // Numéro de base = on retire un éventuel suffixe " REVn" déjà présent dans la saisie.
+  function baseNum(s){
+    return String(s||'').replace(/\s*REV\s*\d+\s*$/i,'').trim();
+  }
+  function revRank(d){
+    if(d._revisionNumber!=null) return Number(d._revisionNumber)||0;
+    if(d.rev){ var n=parseInt(String(d.rev).replace(/\D/g,''),10); return isNaN(n)?0:n; }
+    return 0;
+  }
+
   return String(dvlieStr).split(',').map(function(part){
-    var num=part.trim();
-    if(!num) return '';
+    var raw=part.trim();
+    if(!raw) return '';
+    var num=baseNum(raw);
     var numUp=num.toUpperCase();
-    // Tous les devis portant ce numéro (parent + révisions)
+
+    // 1) Tous les devis qui portent ce numéro de base
     var fam=dvAll.filter(function(d){return String(d.num||'').toUpperCase()===numUp;});
-    if(!fam.length) return num;
-    // Choisir la révision la plus élevée si elle existe
-    var best=null, bestRev=-1;
+
+    // 2) Élargir à la famille via _parentDevisId : si l'un des devis trouvés a un
+    //    parent (ou est parent), on récupère toute la fratrie (parent + révisions).
+    if(fam.length){
+      var rootIds={};
+      fam.forEach(function(d){ rootIds[d._parentDevisId||d.id]=1; });
+      dvAll.forEach(function(d){
+        var rid=d._parentDevisId||d.id;
+        if(rootIds[rid] && fam.indexOf(d)<0) fam.push(d);
+      });
+    }
+
+    if(!fam.length) return raw; // numéro inconnu → on garde la saisie telle quelle
+
+    // 3) Révision la plus élevée de la famille
+    var best=null, bestRank=-1;
     fam.forEach(function(d){
-      var rn=(d._revisionNumber!=null)?Number(d._revisionNumber):(d.rev?parseInt(String(d.rev).replace(/\D/g,''),10)||0:0);
-      if(rn>bestRev){ bestRev=rn; best=d; }
+      var r=revRank(d);
+      if(r>bestRank){ bestRank=r; best=d; }
     });
+
+    // 4) Réécriture : "numéro de base + REV de la dernière révision" (ou base seule)
     if(best && best.rev) return num+' '+String(best.rev).toUpperCase();
     return num;
   }).filter(Boolean).join(', ');
