@@ -11917,6 +11917,24 @@ function _findLinkedFactures(d){
     return !grcNums[String(i.num||'').toUpperCase()];
   });
 
+  // === EXCLUSIONS (factures déliées manuellement par l'utilisateur) ===
+  // [21/05/2026] d.excludedFactureLinks = liste d'IDs de factures que l'utilisateur
+  // a explicitement DÉLIÉES de ce devis via le bouton "Délier" du popover Traçabilité.
+  // Sert à neutraliser les matchs AUTOMATIQUES (par n° / objet / référence) qui
+  // sinon re-lieraient la facture au prochain rendu.
+  // Priorité : un lien MANUEL explicite (manualFactureLinks) l'emporte sur une
+  // exclusion (cas où l'utilisateur délie puis re-lie volontairement).
+  if(Array.isArray(d.excludedFactureLinks) && d.excludedFactureLinks.length>0){
+    var manualSet={};
+    if(Array.isArray(d.manualFactureLinks)){
+      d.manualFactureLinks.forEach(function(id){manualSet[id]=1;});
+    }
+    var excl={};
+    d.excludedFactureLinks.forEach(function(id){ if(!manualSet[id]) excl[id]=1; });
+    foundF=foundF.filter(function(f){return !excl[f.id];});
+    foundI=foundI.filter(function(i){return !excl[i.id];});
+  }
+
   return {
     factures: foundF,
     invoices: foundI,
@@ -13125,13 +13143,21 @@ function _toggleFacturePopover(event,devisId){
       '<div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">'+
         // Montant TTC
         '<div style="font-family:JetBrains Mono,monospace;font-size:12px;color:#fff;font-weight:600">'+esc(ttcDisp)+' <span style="font-size:9px;color:rgba(255,255,255,0.4)">XPF</span></div>'+
-        // Bouton ouvrir
-        (it.type==='F'?
-          '<button onclick="event.stopPropagation();(function(){var p=document.getElementById(\'facture-popover\');if(p)p.remove();var b=document.getElementById(\'facture-popover-backdrop\');if(b)b.remove();})();openFA('+it.obj.id+')" '+
-          'style="font-size:9px;padding:2px 8px;background:rgba(124,58,237,0.15);color:#c4b5fd;border:0.5px solid rgba(124,58,237,0.35);border-radius:3px;cursor:pointer;font-weight:500">Ouvrir →</button>'
-          :
-          '<span style="font-size:9px;color:rgba(255,255,255,0.4);font-style:italic">Voir Suivi</span>'
-        )+
+        // Boutons : Délier + Ouvrir
+        '<div style="display:flex;gap:5px;align-items:center">'+
+          // Bouton Délier (toujours présent, gère AUTO et MANUEL via _unlinkFactureFromDevis)
+          '<button onclick="event.stopPropagation();_unlinkFactureFromDevis('+devisId+','+it.obj.id+')" '+
+            'style="font-size:9px;padding:2px 8px;background:rgba(239,68,68,0.12);color:#fca5a5;border:0.5px solid rgba(239,68,68,0.4);border-radius:3px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:3px" '+
+            'title="Délier cette facture du devis (la facture n\'est pas supprimée)">'+
+            '<i class="ti ti-unlink" style="font-size:10px"></i>Délier</button>'+
+          // Bouton ouvrir (selon type)
+          (it.type==='F'?
+            '<button onclick="event.stopPropagation();(function(){var p=document.getElementById(\'facture-popover\');if(p)p.remove();var b=document.getElementById(\'facture-popover-backdrop\');if(b)b.remove();})();openFA('+it.obj.id+')" '+
+            'style="font-size:9px;padding:2px 8px;background:rgba(124,58,237,0.15);color:#c4b5fd;border:0.5px solid rgba(124,58,237,0.35);border-radius:3px;cursor:pointer;font-weight:500">Ouvrir →</button>'
+            :
+            '<span style="font-size:9px;color:rgba(255,255,255,0.4);font-style:italic">Voir Suivi</span>'
+          )+
+        '</div>'+
       '</div>'+
     '</div>';
   });
@@ -13648,6 +13674,70 @@ function _removeManualFactureLink(devisId, factureId){
   if(typeof save==='function') save();
   if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Lien manuel retiré');
   _openManualFactureLinker(devisId);
+  if(typeof renderDV==='function') renderDV();
+}
+
+// =============================================================================
+// _unlinkFactureFromDevis(devisId, factureId) — DÉLIER une facture d'un devis
+// =============================================================================
+// [21/05/2026] Appelé par le bouton "Délier" de chaque ligne du popover Traçabilité.
+// Gère les DEUX types de liaison :
+//   - Lien MANUEL  (id dans d.manualFactureLinks)  → on retire l'id de la liste.
+//   - Lien AUTO    (match par n°/objet/réf, ou d.linkFactureId) → on ajoute l'id
+//     à d.excludedFactureLinks pour neutraliser le re-matching automatique, ET on
+//     efface d.linkFactureId s'il pointait sur cette facture.
+// Demande TOUJOURS confirmation. Action annulable (pushUndo).
+// La facture elle-même n'est jamais supprimée — seul le lien avec ce devis est retiré.
+function _unlinkFactureFromDevis(devisId, factureId){
+  var d=(DB.devis||[]).find(function(x){return x.id===devisId;});
+  if(!d || !factureId) return;
+
+  // Retrouver le numéro de la facture (GRC ou Suivi) pour le message de confirmation
+  var f=(DB.factures||[]).find(function(x){return x.id===factureId;})
+      ||(DB.invoices||[]).find(function(x){return x.id===factureId;});
+  var numFac=f?(f.num||'cette facture'):'cette facture';
+
+  if(!confirm('Délier '+numFac+' du devis '+(d.num||'')+' ?\n\nLe lien sera retiré (la facture n\'est pas supprimée). Vous pourrez le rétablir via le bouton Annuler ou "Lier autre".')){
+    return;
+  }
+
+  // Sauvegarder l'état AVANT pour pushUndo
+  var prevManual=Array.isArray(d.manualFactureLinks)?d.manualFactureLinks.slice():null;
+  var prevExcluded=Array.isArray(d.excludedFactureLinks)?d.excludedFactureLinks.slice():null;
+  var prevLinkId=d.linkFactureId;
+
+  // 1) Retirer d'un éventuel lien manuel
+  if(Array.isArray(d.manualFactureLinks)){
+    var mi=d.manualFactureLinks.indexOf(factureId);
+    if(mi>=0) d.manualFactureLinks.splice(mi,1);
+  }
+  // 2) Effacer linkFactureId s'il pointait sur cette facture
+  if(d.linkFactureId===factureId){
+    d.linkFactureId=null;
+  }
+  // 3) Ajouter à la liste d'exclusion (neutralise le matching auto)
+  if(!Array.isArray(d.excludedFactureLinks)) d.excludedFactureLinks=[];
+  if(d.excludedFactureLinks.indexOf(factureId)<0){
+    d.excludedFactureLinks.push(factureId);
+  }
+
+  if(typeof pushUndo==='function'){
+    pushUndo('Facture déliée du devis', function(){
+      d.manualFactureLinks=prevManual;
+      d.excludedFactureLinks=prevExcluded;
+      d.linkFactureId=prevLinkId;
+      if(typeof save==='function') save();
+      if(typeof renderDV==='function') renderDV();
+    });
+  }
+
+  if(typeof save==='function') save();
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ '+numFac+' déliée du devis '+(d.num||''));
+
+  // Fermer le popover et rafraîchir
+  ['facture-popover','facture-popover-backdrop'].forEach(function(id){
+    var el=document.getElementById(id); if(el) el.remove();
+  });
   if(typeof renderDV==='function') renderDV();
 }
 
