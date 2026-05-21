@@ -11716,6 +11716,35 @@ function _togglePhaseHistory(event,devisId){
 // fiscal des factures pré-facturées). Ce sont deux choses différentes.
 // =============================================================================
 // =============================================================================
+// _dvlieWithRev(dvlieStr) — enrichit une liste de N° devis avec leur dernière REV
+// =============================================================================
+// [21/05/2026] f.dvlie stocke un texte brut ("SLN-DV126" ou "SLN-DV126, SLN-DV128").
+// À l'impression, on veut afficher la révision active : "SLN-DV126 REV3".
+// Pour chaque numéro, on cherche dans DB.devis la dernière révision (plus grand
+// _revisionNumber) portant ce num, et on accole son .rev s'il existe.
+// Si le devis n'a pas de révision, on garde le numéro tel quel.
+function _dvlieWithRev(dvlieStr){
+  if(!dvlieStr) return '';
+  var dvAll=Array.isArray(DB.devis)?DB.devis:[];
+  return String(dvlieStr).split(',').map(function(part){
+    var num=part.trim();
+    if(!num) return '';
+    var numUp=num.toUpperCase();
+    // Tous les devis portant ce numéro (parent + révisions)
+    var fam=dvAll.filter(function(d){return String(d.num||'').toUpperCase()===numUp;});
+    if(!fam.length) return num;
+    // Choisir la révision la plus élevée si elle existe
+    var best=null, bestRev=-1;
+    fam.forEach(function(d){
+      var rn=(d._revisionNumber!=null)?Number(d._revisionNumber):(d.rev?parseInt(String(d.rev).replace(/\D/g,''),10)||0:0);
+      if(rn>bestRev){ bestRev=rn; best=d; }
+    });
+    if(best && best.rev) return num+' '+String(best.rev).toUpperCase();
+    return num;
+  }).filter(Boolean).join(', ');
+}
+
+// =============================================================================
 // _findLinkedFactures(d) — Retrouve toutes les factures (GRC + Suivi) liées au devis
 // =============================================================================
 // Multi-passes en cascade pour maximiser les matches malgré les linkFactureId obsolètes :
@@ -37176,10 +37205,11 @@ function bFA(f){
   // Ligne 3 : Tél
   // Ligne 4 : Email
   // Récupérer le N° de devis lié (priorité : dvlie, sinon trouver via devisLieId)
-  var devisNumLink=f.dvlie||'';
+  // [21/05/2026] enrichi avec la dernière REV (ex: "SLN-DV126 REV3").
+  var devisNumLink=(typeof _dvlieWithRev==='function')?_dvlieWithRev(f.dvlie||''):(f.dvlie||'');
   if(!devisNumLink && f.devisLieId){
     var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
-    if(_dvObj) devisNumLink=_dvObj.num||'';
+    if(_dvObj) devisNumLink=(_dvObj.num||'')+(_dvObj.rev?' '+String(_dvObj.rev).toUpperCase():'');
   }
   return'<div class="doc">'+
     '<div class="doc-head">'+
@@ -38087,10 +38117,11 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   var isExo=isClientExo(f.client);
   var clientDetail=getClientDetail(f.client);
   // === Récup Devis lié pour info-bar ===
-  var devisNumLink=f.dvlie||'';
+  // [21/05/2026] On enrichit avec la dernière REV (ex: "SLN-DV126 REV3") pour l'impression.
+  var devisNumLink=(typeof _dvlieWithRev==='function')?_dvlieWithRev(f.dvlie||''):(f.dvlie||'');
   if(!devisNumLink && f.devisLieId){
     var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
-    if(_dvObj) devisNumLink=_dvObj.num||'';
+    if(_dvObj) devisNumLink=(_dvObj.num||'')+(_dvObj.rev?' '+String(_dvObj.rev).toUpperCase():'');
   }
   // === Préparation allL : array plat avec {sec} sur chaque ligne ===
   // f.lines peut contenir des type='section_banner' explicites. On les utilise pour tracker
