@@ -35745,8 +35745,8 @@ function renderART(){
         '<td>'+esc(x.nom||'')+'</td>'+
         '<td><span style="font-size:9.5px;padding:1px 7px;border-radius:10px;background:'+(x.type==='Produit'?'rgba(56,189,248,.15);color:var(--blue)':'rgba(16,185,129,.15);color:var(--green)')+'">'+esc(x.type||'')+'</span></td>'+
         '<td>'+esc(x.unite||'')+'</td>'+
-        '<td style="font-weight:700;color:var(--teal);text-align:right;font-family:var(--mono)">'+(pxXPF?fN(pxXPF)+' <span style="font-size:9px;color:var(--muted);font-weight:400">XPF</span>':'<span style="color:var(--muted)">—</span>')+'</td>'+
-        '<td style="font-weight:700;color:#a5b4fc;text-align:right;font-family:var(--mono)">'+(pxAUD?fN(pxAUD)+' <span style="font-size:9px;color:var(--muted);font-weight:400">AUD</span>':'<span style="color:var(--muted)">—</span>')+'</td>'+
+        '<td style="font-weight:700;color:var(--teal);text-align:right;font-family:var(--mono)">'+(pxXPF?'<span data-money>'+fN(pxXPF)+'</span> <span style="font-size:9px;color:var(--muted);font-weight:400">XPF</span>':'<span style="color:var(--muted)">—</span>')+'</td>'+
+        '<td style="font-weight:700;color:#a5b4fc;text-align:right;font-family:var(--mono)">'+(pxAUD?'<span data-money>'+fN(pxAUD)+'</span> <span style="font-size:9px;color:var(--muted);font-weight:400">AUD</span>':'<span style="color:var(--muted)">—</span>')+'</td>'+
         '<td>'+x.tgc+'%</td>'+
         '<td class="no-print">'+
           '<button class="btn btn-ghost btn-sm" onclick="openART('+x.id+')">✏️</button> '+
@@ -35825,9 +35825,17 @@ function pickArt(id){
     bcL[idx].ref=a.ref||'';
     bcL[idx].desc=a.nom||'';
     bcL[idx].codeSLN=a.codeSLN||'';
-    // Report du prix Emerson (AUD) — uniquement si le PU actuel est vide ou 0
-    if(a.prix&&(!bcL[idx].pu||bcL[idx].pu===0)){
-      bcL[idx].pu=Number(a.prix);
+    // [21/05/2026] Report du prix dans un BC = TOUJOURS le prix d'achat AUD (prixAchatAUD).
+    // Raison métier : la grille tarifaire ne contient que des articles Emerson validés
+    // avec le client. Un BC Calinstrum commande ces articles AUPRÈS d'Emerson, donc en AUD.
+    // (Avant : on reportait a.prix = prix de vente XPF → bug, prix XPF dans un doc AUD.)
+    // Fallback : si prixAchatAUD absent (vieil article non migré), on tente prix s'il est < 1000
+    // (donc déjà en AUD), sinon 0 pour forcer une saisie manuelle plutôt qu'un faux prix XPF.
+    var prixAUD = (a.prixAchatAUD!=null && a.prixAchatAUD>0)
+      ? Number(a.prixAchatAUD)
+      : ((Number(a.prix)>0 && Number(a.prix)<1000) ? Number(a.prix) : 0);
+    if(prixAUD>0 && (!bcL[idx].pu || bcL[idx].pu===0)){
+      bcL[idx].pu=prixAUD;
     }
     rBClines();
   }
