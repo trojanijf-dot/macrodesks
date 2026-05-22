@@ -14496,6 +14496,45 @@ function _toggleDVTypeFilter(typeName){
   if(typeof renderDV==='function') renderDV();
 }
 
+// [22/05/2026] Détecte si un devis est "révisé" (a une révision ou EST une révision).
+// Deux modèles : (a) _parentDevisId (révision avec parent), (b) champ rev rempli.
+function _dvIsRevised(d){
+  if(!d) return false;
+  if(d._parentDevisId) return true;                       // c'est une révision
+  if(d.rev && /^rev/i.test(String(d.rev).trim())) return true; // a un REV
+  // c'est un parent qui possède au moins une révision enfant
+  return (DB.devis||[]).some(function(x){return x && x._parentDevisId===d.id;});
+}
+
+// [22/05/2026] Toggle du filtre "devis révisés" (clic sur le badge révisions de
+// la carte Montant moyen). Persisté sur window._dvProFilters.revised (bool).
+function _toggleDVRevisedFilter(){
+  if(!window._dvProFilters) window._dvProFilters={type:'',prefix:'',contact:'',revised:false};
+  window._dvProFilters.revised=!window._dvProFilters.revised;
+  if(typeof showBCSaveToast==='function'){
+    showBCSaveToast(window._dvProFilters.revised?'🔍 Filtre : devis révisés uniquement':'✓ Filtre révisés retiré');
+  }
+  if(typeof renderDV==='function') renderDV();
+}
+
+// [22/05/2026] Toggle du filtre "devis gagnés" (clic sur le badge Taux acceptation).
+// Affiche Accepté + Facturé (= les 26 gagnés), cohérent avec le % affiché.
+// Persisté sur window._dvProFilters.won (bool). Mutuellement exclusif avec le
+// select statut classique (fDVst) : on vide fDVst quand on active "won".
+function _toggleDVWonFilter(){
+  if(!window._dvProFilters) window._dvProFilters={type:'',prefix:'',contact:'',revised:false,won:false};
+  window._dvProFilters.won=!window._dvProFilters.won;
+  // Si on active "gagnés", on retire un éventuel filtre statut simple pour éviter le conflit
+  if(window._dvProFilters.won){
+    var sel=document.getElementById('fDVst'); if(sel) sel.value='';
+    var sel2=document.getElementById('fDVst2'); if(sel2) sel2.value='';
+  }
+  if(typeof showBCSaveToast==='function'){
+    showBCSaveToast(window._dvProFilters.won?'🔍 Filtre : devis gagnés (Accepté + Facturé)':'✓ Filtre gagnés retiré');
+  }
+  if(typeof renderDV==='function') renderDV();
+}
+
 // =============================================================================
 // Mount des clics sur les KPI cards (page Devis)
 // =============================================================================
@@ -14507,7 +14546,7 @@ function _toggleDVTypeFilter(typeName){
 // métier à filtrer dessus — c'est déjà la vue globale).
 function _mountDVKpiClick(root){
   if(!root) root=document;
-  // 1. Card Taux acceptation → filtre 'Accepté'
+  // 1. Card Taux acceptation → filtre 'gagnés' (Accepté + Facturé), cohérent avec le %
   var acceptCard=root.querySelector('[data-dv-kpi-click="accept"]');
   if(acceptCard && acceptCard.dataset.dvKpiBound!=='1'){
     acceptCard.dataset.dvKpiBound='1';
@@ -14516,7 +14555,7 @@ function _mountDVKpiClick(root){
       // Skip si le clic est sur la zone sparkline (crosshair interactif)
       var tgt=e.target;
       if(tgt && tgt.closest && tgt.closest('.kpi-spark')) return;
-      _toggleDVStatusFilter('Accepté');
+      _toggleDVWonFilter();
     });
   }
   // 2. Mini-donut "Répartition par type" — segments SVG
@@ -14927,6 +14966,8 @@ function renderDVPro(){
   var fType=window._dvProFilters.type||'';
   var fPrefix=window._dvProFilters.prefix||'';
   var fContact=window._dvProFilters.contact||'';
+  var fRevised=!!window._dvProFilters.revised; // [22/05/2026] filtre devis révisés
+  var fWon=!!window._dvProFilters.won;         // [22/05/2026] filtre devis gagnés (Accepté+Facturé)
 
   var dvAll=DB.devis||[];
 
@@ -14992,6 +15033,8 @@ function renderDVPro(){
     if(fType&&normType(x.type)!==fType) return false;
     if(fPrefix&&extractPrefix(x)!==fPrefix) return false;
     if(fContact&&extractContact(x)!==fContact) return false;
+    if(fRevised&&!_dvIsRevised(x)) return false; // [22/05/2026] filtre devis révisés
+    if(fWon&&!(x.status==='Accepté'||x.status==='Facturé')) return false; // [22/05/2026] filtre gagnés
     // Filtre invisible : mois d'émission
     if(fDVMonth){
       var dDate=x.date||'';
@@ -15014,6 +15057,8 @@ function renderDVPro(){
       if(fType&&normType(x.type)!==fType) return false;
       if(fPrefix&&extractPrefix(x)!==fPrefix) return false;
       if(fContact&&extractContact(x)!==fContact) return false;
+      if(fRevised&&!_dvIsRevised(x)) return false; // [22/05/2026] filtre devis révisés
+      if(fWon&&!(x.status==='Accepté'||x.status==='Facturé')) return false; // [22/05/2026] filtre gagnés
       return true;
     });
     dataForDVDonut=(typeof filterByActiveClient==='function')?filterByActiveClient(dataForDVDonutPre,'dv'):dataForDVDonutPre;
@@ -15082,21 +15127,21 @@ function renderDVPro(){
     },
     'kpi_accept'
   );
-  // Card cliquable : toggle filtre Accepté. Indicateur visuel quand filtre actif.
-  var acceptFilterActive=(gvg('fDVst')==='Accepté');
+  // Card cliquable : toggle filtre "gagnés" (Accepté+Facturé). Indicateur visuel actif.
+  var acceptFilterActive=!!(window._dvProFilters && window._dvProFilters.won);
   var acceptCardExtra=acceptFilterActive
     ? 'box-shadow:inset 0 0 0 1px '+tauxColor+',0 0 0 1px '+tauxColor+'40;background:linear-gradient(180deg,rgba(93,202,165,0.06),transparent 60%);'
     : '';
-  var acceptCardTitle=acceptFilterActive?'Cliquer pour retirer le filtre Accepté':'Cliquer pour filtrer sur les devis acceptés';
+  var acceptCardTitle=acceptFilterActive?'Cliquer pour retirer le filtre · affiche les devis gagnés (Accepté + Facturé)':'Cliquer pour afficher les devis gagnés (Accepté + Facturé)';
   html+='<div class="kpi-pro" data-dv-kpi-click="accept" title="'+acceptCardTitle+'" style="border-top:2px solid '+tauxColor+';'+acceptCardExtra+'transition:box-shadow .15s,background .15s">'+
     '<div class="kpi-label" style="display:flex;align-items:center;gap:6px"><i class="ti ti-target-arrow"></i>Taux acceptation'+
       (acceptFilterActive?'<span style="margin-left:auto;font-size:9.5px;color:'+tauxColor+';font-weight:500;letter-spacing:0.05em">FILTRE ACTIF</span>':'')+
     '</div>'+
     '<div class="kpi-value" data-money style="color:'+tauxColor+'">'+kpi.tauxAccept.toFixed(0)+'%</div>'+
     // [22/05/2026] Sous-titre : taux sur devis TRANCHÉS uniquement.
-    //   "X gagnés · Y refusés" = la base réelle du taux ; les "en attente" sont
+    //   "X acceptés · Y refusés" = la base réelle du taux ; les "en attente" sont
     //   affichés à part (exclus du calcul) pour lever toute ambiguïté.
-    '<div class="kpi-sub">'+kpi.tauxGagnes+' gagnés · '+kpi.statusCount['Refusé']+' refusés'+
+    '<div class="kpi-sub">'+kpi.tauxGagnes+' acceptés · '+kpi.statusCount['Refusé']+' refusés'+
       (kpi.tauxEnAttente>0?' <span style="opacity:0.6">· '+kpi.tauxEnAttente+' en attente</span>':'')+'</div>'+
     sparkAccept+
     '</div>';
@@ -15127,10 +15172,18 @@ function renderDVPro(){
         '<div class="kpi-value" data-money style="font-size:22px;line-height:1">'+fNloc(kpi.moyen)+'</div>'+
         '<div class="kpi-sub" style="margin-top:2px">XPF par devis</div>'+
       '</div>'+
-      '<div style="text-align:right;border-left:0.5px solid rgba(255,255,250,0.10);padding-left:10px;margin-left:6px">'+
-        '<div data-money style="font-size:16px;line-height:1;color:'+revColor+';font-family:JetBrains Mono,monospace;font-weight:500">'+kpi.tauxRev.toFixed(0)+'%</div>'+
-        '<div class="kpi-sub" style="margin-top:2px;font-size:9.5px">'+kpi.rootsRevised+' rév. · '+kpi.revisionsCount+' tot.</div>'+
-      '</div>'+
+      // [22/05/2026] Badge révisions CLIQUABLE → filtre les devis révisés.
+      (function(){
+        var revFilterActive=!!(window._dvProFilters && window._dvProFilters.revised);
+        var revExtra=revFilterActive?'background:rgba(167,139,250,0.10);box-shadow:inset 0 0 0 1px '+revColor+'80;':'';
+        return '<div onclick="event.stopPropagation();_toggleDVRevisedFilter()" '+
+          'title="'+(revFilterActive?'Cliquer pour retirer le filtre · ':'Cliquer pour afficher uniquement les devis révisés · ')+kpi.rootsRevised+' devis révisés sur '+kpi.rootsTotal+'" '+
+          'style="text-align:right;border-left:0.5px solid rgba(255,255,250,0.10);padding:3px 6px 3px 10px;margin-left:6px;cursor:pointer;border-radius:5px;transition:background .15s;'+revExtra+'">'+
+          '<div data-money style="font-size:16px;line-height:1;color:'+revColor+';font-family:JetBrains Mono,monospace;font-weight:500">'+kpi.tauxRev.toFixed(0)+'%'+
+            (revFilterActive?' <i class="ti ti-filter-filled" style="font-size:10px;vertical-align:0"></i>':'')+'</div>'+
+          '<div class="kpi-sub" style="margin-top:2px;font-size:9.5px">'+kpi.rootsRevised+' rév. · '+kpi.revisionsCount+' tot.</div>'+
+        '</div>';
+      })()+
     '</div>'+
     sparkMoyen+
     '</div>';
