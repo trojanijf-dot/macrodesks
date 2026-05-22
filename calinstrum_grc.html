@@ -10610,7 +10610,7 @@ function rDashPro(){
     bucket.montant+=devisTtc(d);
     var st=d.status||'';
     if(st==='Accepté'||st==='Facturé'){bucket.accepted++;bucket.pertinents++;}
-    else if(st==='Envoyé'||st==='Refusé'){bucket.pertinents++;}
+    else if(st==='Refusé'){bucket.pertinents++;} // [22/05/2026] Envoyé exclu (non tranché) — cohérent avec _calcKpiDV
   });
   var totalByType=byType.Fourniture.montant+byType.Prestation.montant+byType.Mixte.montant;
   function pctType(v){return totalByType>0?(v/totalByType*100):0;}
@@ -13932,10 +13932,16 @@ function _calcKpiDV(devis){
       statusMontant[st]+=ttc(d);
     }
   });
-  // Taux acceptation : (Accepté + Facturé) / (Envoyé + Accepté + Refusé + Facturé)
-  // (Brouillons et Cadres exclus du calcul car non-pertinents)
-  var pertinents=statusCount['Envoyé']+statusCount['Accepté']+statusCount['Refusé']+statusCount['Facturé'];
-  var tauxAccept=pertinents>0?((statusCount['Accepté']+statusCount['Facturé'])/pertinents*100):0;
+  // [22/05/2026] Taux acceptation = TAUX DE TRANSFORMATION sur devis TRANCHÉS.
+  // Formule : (Accepté + Facturé) / (Accepté + Facturé + Refusé).
+  // Les devis "Envoyé / En attente client" sont EXCLUS : tant que le client n'a pas
+  // tranché, ils ne doivent ni gonfler ni pénaliser le taux. (Avant : ils étaient au
+  // dénominateur → taux < 100% même avec 0 refusé, ce qui prêtait à confusion.)
+  // Brouillons et Cadres restent exclus.
+  var gagnes=statusCount['Accepté']+statusCount['Facturé'];
+  var pertinents=gagnes+statusCount['Refusé']; // = devis tranchés (réponse reçue)
+  var tauxAccept=pertinents>0?(gagnes/pertinents*100):0;
+  var enAttente=statusCount['Envoyé']; // informatif (affichage)
   // Montant moyen
   var moyen=dvFy.length>0?total/dvFy.length:0;
   // === Répartition par TYPE (pour le donut interactif + stats détaillées) ===
@@ -13943,9 +13949,9 @@ function _calcKpiDV(devis){
   //   - count    : nombre total de devis
   //   - montant  : somme TTC des devis
   //   - accepted : nb devis Accepté ou Facturé (= "vendus")
-  //   - pertinents : nb devis avec un statut tranché (Envoyé/Accepté/Refusé/Facturé)
-  //                  → permet de calculer le taux d'acceptation par type, sans
-  //                    polluer avec les Brouillons et Cadres.
+  //   - pertinents : nb devis TRANCHÉS (Accepté/Facturé/Refusé) — base du taux de
+  //                  transformation par type. Les "Envoyé/En attente" sont EXCLUS
+  //                  (cohérent avec le KPI global, cf. _calcKpiDV ci-dessus, 22/05/2026).
   var byType={
     Fourniture:{count:0,montant:0,color:'#88aae0',accepted:0,pertinents:0},
     Prestation:{count:0,montant:0,color:'#5dcaa5',accepted:0,pertinents:0},
@@ -13961,7 +13967,7 @@ function _calcKpiDV(devis){
     bucket.montant+=ttc(d);
     var st=d.status||'';
     if(st==='Accepté'||st==='Facturé'){bucket.accepted++;bucket.pertinents++;}
-    else if(st==='Envoyé'||st==='Refusé'){bucket.pertinents++;}
+    else if(st==='Refusé'){bucket.pertinents++;} // Envoyé exclu (non tranché)
   });
   // === Taux de devis RÉVISÉS ===
   // Deux modèles cohabitent dans la base :
@@ -14005,6 +14011,9 @@ function _calcKpiDV(devis){
     total:total,
     count:dvFy.length,
     tauxAccept:tauxAccept,
+    tauxGagnes:gagnes,        // [22/05/2026] nb devis gagnés (Accepté+Facturé)
+    tauxTranches:pertinents,  // nb devis tranchés (gagnés+refusés) = base du taux
+    tauxEnAttente:enAttente,  // nb devis en attente (exclus du calcul, informatif)
     moyen:moyen,
     statusCount:statusCount,
     statusMontant:statusMontant,
@@ -15084,7 +15093,11 @@ function renderDVPro(){
       (acceptFilterActive?'<span style="margin-left:auto;font-size:9.5px;color:'+tauxColor+';font-weight:500;letter-spacing:0.05em">FILTRE ACTIF</span>':'')+
     '</div>'+
     '<div class="kpi-value" data-money style="color:'+tauxColor+'">'+kpi.tauxAccept.toFixed(0)+'%</div>'+
-    '<div class="kpi-sub">'+(kpi.statusCount['Accepté']+kpi.statusCount['Facturé'])+' acceptés · '+kpi.statusCount['Refusé']+' refusés</div>'+
+    // [22/05/2026] Sous-titre : taux sur devis TRANCHÉS uniquement.
+    //   "X gagnés · Y refusés" = la base réelle du taux ; les "en attente" sont
+    //   affichés à part (exclus du calcul) pour lever toute ambiguïté.
+    '<div class="kpi-sub">'+kpi.tauxGagnes+' gagnés · '+kpi.statusCount['Refusé']+' refusés'+
+      (kpi.tauxEnAttente>0?' <span style="opacity:0.6">· '+kpi.tauxEnAttente+' en attente</span>':'')+'</div>'+
     sparkAccept+
     '</div>';
 
