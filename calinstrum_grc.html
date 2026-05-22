@@ -1041,6 +1041,9 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="exportJSON()"><span class="ico"><span class="ico-classic">💾</span><i class="ti ti-download ico-pro"></i></span>Exporter JSON</button>
   <button class="sb-item" onclick="document.getElementById('impFile').click()"><span class="ico"><span class="ico-classic">📁</span><i class="ti ti-upload ico-pro"></i></span>Importer JSON</button>
   <input type="file" id="impFile" accept=".json" style="display:none" onchange="importJSON(this)">
+  <button class="sb-item" onclick="exportFullBackup()" title="Sauvegarde COMPLÈTE en UN seul fichier .grcbak : toutes les données (devis, factures, clients, BC) + TOUS les PDFs joints (Emerson, ACT, PO Cali, BC Client, Quote, Grille). Idéal pour migrer vers un nouveau PC ou sauvegarder sur clé USB. ~35 Mo."><span class="ico"><span class="ico-classic">📦</span><i class="ti ti-archive ico-pro"></i></span>Sauvegarde complète</button>
+  <button class="sb-item" onclick="document.getElementById('impFullBackup').click()" title="Restaure une sauvegarde complète .grcbak (données + PDFs joints) sur ce GRC. ⚠️ Remplace tout le contenu actuel."><span class="ico"><span class="ico-classic">📂</span><i class="ti ti-archive-off ico-pro"></i></span>Restaurer sauvegarde complète</button>
+  <input type="file" id="impFullBackup" accept=".grcbak,.json" style="display:none" onchange="importFullBackup(this)">
   <button class="sb-item" onclick="exportAllDevisPdfs()" title="Télécharge sur ton disque TOUS les PDFs (Emerson, ACT, PO Cali, BC Client, Quote) stockés dans IndexedDB pour TOUS les devis. Backup de sécurité — les PDFs originaux restent dans le GRC. Téléchargement séquentiel, chaque PDF arrive dans ton dossier Downloads."><span class="ico"><span class="ico-classic">🗃</span><i class="ti ti-files ico-pro"></i></span>Backup PDFs joints</button>
   <button class="sb-item" onclick="openDvlieRepairTool()" title="Détecte les factures sans dvlie ou avec dvlie cassé, propose des matchs par montant + objet + PO, et applique les réparations validées. Cohérence Dashboard ↔ Section Factures."><span class="ico"><span class="ico-classic">🔧</span><i class="ti ti-link ico-pro"></i></span>Réparer liens DV/FA</button>
   <button class="sb-item" onclick="loadDossierPRNC()" title="Crée le BC Emerson 12112025/063-001 (114 998 AUD, taux 74.5) et le lie automatiquement aux factures PRNC-F037, F040, F041"><span class="ico"><span class="ico-classic">⚡</span><i class="ti ti-bolt ico-pro"></i></span>Charger dossier PRNC</button>
@@ -36812,6 +36815,169 @@ function importJSON(inp){
     catch(ex){alert('Fichier invalide');}
   };
   r.readAsText(f);inp.value='';
+}
+
+// =============================================================================
+// SAUVEGARDE COMPLÈTE TOUT-EN-UN (données + PDFs IndexedDB) [22/05/2026]
+// =============================================================================
+// Problème résolu : exportJSON() ne sauvegarde QUE l'objet DB (devis/factures/
+// clients...). Les PDFs joints (PO Emerson, ACT, BC client, Quote, Grille) vivent
+// dans IndexedDB (3 stores : bc_pdfs, devis_pdfs, catalogue_pdfs) et étaient PERDUS
+// lors d'une migration vers un nouveau PC.
+// Ces 2 fonctions produisent/relisent UN SEUL fichier .grcbak (JSON) contenant :
+//   { _fullBackup:true, version:1, savedAt, DB:{...}, pdfs:{ store: [records base64] } }
+// Les blobs/bytes sont encodés base64. Les IDs des records sont PRÉSERVÉS (DB.devis
+// référence les PDFs par devisId/kind, donc l'intégrité dépend de la conservation
+// des clés). Poids constaté : ~35 Mo pour 56 PDFs (base64 = +33%).
+// =============================================================================
+var _FULL_BACKUP_STORES=['bc_pdfs','devis_pdfs','catalogue_pdfs'];
+
+// ArrayBuffer/Blob -> base64 (par chunks pour éviter le dépassement de pile sur gros volumes)
+function _abToBase64(buf){
+  var bytes=new Uint8Array(buf), CHUNK=0x8000, bin='';
+  for(var i=0;i<bytes.length;i+=CHUNK){
+    bin+=String.fromCharCode.apply(null, bytes.subarray(i, i+CHUNK));
+  }
+  return btoa(bin);
+}
+function _base64ToBlob(b64, type){
+  var bin=atob(b64), len=bin.length, bytes=new Uint8Array(len);
+  for(var i=0;i<len;i++) bytes[i]=bin.charCodeAt(i);
+  return new Blob([bytes], {type:type||'application/pdf'});
+}
+function _blobToBase64(blob){
+  return blob.arrayBuffer().then(_abToBase64);
+}
+
+// Lit tous les records d'un store IndexedDB
+function _readAllFromStore(db, storeName){
+  return new Promise(function(resolve){
+    if(!db.objectStoreNames.contains(storeName)){ resolve([]); return; }
+    var tx=db.transaction(storeName,'readonly');
+    var req=tx.objectStore(storeName).getAll();
+    req.onsuccess=function(e){ resolve(e.target.result||[]); };
+    req.onerror=function(){ resolve([]); };
+  });
+}
+
+// === EXPORT : génère et télécharge le fichier .grcbak tout-en-un ===
+function exportFullBackup(){
+  if(!confirm('💾 Sauvegarde COMPLÈTE (données + PDFs joints)\n\nGénère UN fichier contenant tous tes devis/factures/clients ET tous les PDFs attachés.\nÀ restaurer sur un nouveau PC via "Restaurer sauvegarde complète".\n\nLe fichier peut faire quelques dizaines de Mo. Continuer ?')) return;
+  if(typeof showBCSaveToast==='function') showBCSaveToast('⏳ Préparation de la sauvegarde…');
+
+  openAttachDB().then(function(db){
+    var stores=_FULL_BACKUP_STORES.filter(function(s){return db.objectStoreNames.contains(s);});
+    return Promise.all(stores.map(function(s){ return _readAllFromStore(db,s).then(function(recs){return {store:s, recs:recs};}); }));
+  }).then(function(storeData){
+    // Encoder chaque record : blob -> _blobB64, bytes -> _bytesB64
+    var pdfs={};
+    var jobs=[];
+    storeData.forEach(function(sd){
+      pdfs[sd.store]=[];
+      sd.recs.forEach(function(rec){
+        var out={};
+        // Copier tous les champs sauf blob/bytes (sérialisés à part)
+        Object.keys(rec).forEach(function(k){
+          if(k!=='blob' && k!=='bytes') out[k]=rec[k];
+        });
+        var job=Promise.resolve();
+        if(rec.blob instanceof Blob){
+          job=_blobToBase64(rec.blob).then(function(b64){ out._blobB64=b64; out._blobType=rec.blob.type||'application/pdf'; });
+        } else if(rec.bytes){
+          var buf=(rec.bytes.buffer)?rec.bytes.buffer:rec.bytes;
+          out._bytesB64=_abToBase64(buf);
+        }
+        job=job.then(function(){ pdfs[sd.store].push(out); });
+        jobs.push(job);
+      });
+    });
+    return Promise.all(jobs).then(function(){ return pdfs; });
+  }).then(function(pdfs){
+    var backup={
+      _fullBackup:true,
+      version:1,
+      savedAt:new Date().toISOString(),
+      DB:DB,
+      pdfs:pdfs
+    };
+    var json=JSON.stringify(backup);
+    var sizeMo=(json.length/1048576).toFixed(1);
+    var blob=new Blob([json],{type:'application/json'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='calinstrum_grc_FULL_'+td()+'.grcbak';
+    a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href);},2000);
+    var nbPdfs=Object.keys(pdfs).reduce(function(n,k){return n+pdfs[k].length;},0);
+    if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Sauvegarde complète : '+nbPdfs+' PDFs · '+sizeMo+' Mo');
+    else alert('Sauvegarde complète générée ('+nbPdfs+' PDFs, '+sizeMo+' Mo).');
+  }).catch(function(err){
+    console.error('[exportFullBackup]',err);
+    alert('Erreur lors de la sauvegarde complète : '+(err&&err.message||err));
+  });
+}
+
+// === IMPORT : restaure données + PDFs depuis un fichier .grcbak ===
+function importFullBackup(inp){
+  var f=inp.files[0]; if(!f){ return; }
+  if(!confirm('📂 Restaurer la sauvegarde complète ?\n\n⚠️ Cela REMPLACE toutes les données ET tous les PDFs actuels de ce GRC par le contenu du fichier.\n\nFais d\'abord une sauvegarde de sécurité si tu as un doute. Continuer ?')){ inp.value=''; return; }
+  var r=new FileReader();
+  r.onload=function(e){
+    var backup;
+    try{ backup=JSON.parse(e.target.result); }
+    catch(ex){ alert('Fichier invalide (JSON illisible).'); inp.value=''; return; }
+    if(!backup || !backup._fullBackup || !backup.DB){
+      alert('Ce fichier n\'est pas une sauvegarde complète .grcbak.\n\nPour un simple JSON de données, utilise "Importer JSON".');
+      inp.value=''; return;
+    }
+    if(typeof showBCSaveToast==='function') showBCSaveToast('⏳ Restauration en cours…');
+
+    // 1) Restaurer les données DB
+    DB=backup.DB;
+    invoices=DB.invoices||[];
+    saveDB();
+
+    // 2) Restaurer les PDFs en IndexedDB
+    var pdfs=backup.pdfs||{};
+    openAttachDB().then(function(db){
+      var stores=_FULL_BACKUP_STORES.filter(function(s){return db.objectStoreNames.contains(s);});
+      return Promise.all(stores.map(function(storeName){
+        var recs=pdfs[storeName]||[];
+        return new Promise(function(resolve){
+          var tx=db.transaction(storeName,'readwrite');
+          var store=tx.objectStore(storeName);
+          // Vider le store avant de réinjecter (remplacement complet)
+          store.clear().onsuccess=function(){
+            recs.forEach(function(rec){
+              var clean={};
+              Object.keys(rec).forEach(function(k){
+                if(k!=='_blobB64' && k!=='_blobType' && k!=='_bytesB64') clean[k]=rec[k];
+              });
+              if(rec._blobB64) clean.blob=_base64ToBlob(rec._blobB64, rec._blobType);
+              if(rec._bytesB64){
+                var bin=atob(rec._bytesB64), len=bin.length, u8=new Uint8Array(len);
+                for(var i=0;i<len;i++) u8[i]=bin.charCodeAt(i);
+                clean.bytes=u8;
+              }
+              try{ store.put(clean); }catch(e2){ console.warn('put record fail',e2); }
+            });
+          };
+          tx.oncomplete=function(){ resolve(true); };
+          tx.onerror=function(){ resolve(false); };
+        });
+      }));
+    }).then(function(){
+      var nbPdfs=Object.keys(pdfs).reduce(function(n,k){return n+(pdfs[k]?pdfs[k].length:0);},0);
+      if(typeof rDash==='function') rDash();
+      if(typeof renderDV==='function') renderDV();
+      alert('✅ Sauvegarde complète restaurée !\n\n• Données : devis, factures, clients, BC\n• '+nbPdfs+' PDFs joints réattachés\n\nLe GRC est à jour.');
+    }).catch(function(err){
+      console.error('[importFullBackup]',err);
+      alert('Données restaurées, mais erreur sur les PDFs : '+(err&&err.message||err));
+    });
+    inp.value='';
+  };
+  r.readAsText(f);
 }
 
 // ===== toLtr =====
