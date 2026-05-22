@@ -15450,6 +15450,19 @@ function renderDVPro(){
     // Sources finales = racines seulement (les révisions sont injectées sous leur parent)
     var rootsOnly=sorted.filter(function(d){return !d._parentDevisId;});
 
+    // [22/05/2026] FIX révisions ORPHELINES :
+    // Une révision est normalement affichée SOUS son parent (via revisionsByParent).
+    // Mais si le parent est exclu par le filtre courant (ex: filtre "Envoyé" alors que
+    // le parent est "Obsolète/Remplacé"), la révision — bien que présente dans `data`
+    // et comptée par le pipeline — n'avait aucun parent dans rootsOnly où s'accrocher,
+    // donc elle DISPARAISSAIT (bug : 6 comptés / 5 affichés).
+    // Solution : toute révision dont le parent n'est pas présent est promue racine.
+    var rootIdsPresent={};
+    rootsOnly.forEach(function(d){ rootIdsPresent[d.id]=true; });
+    var orphanRevisions=sorted.filter(function(d){
+      return d._parentDevisId && !rootIdsPresent[d._parentDevisId];
+    });
+
     // Helper local : rend une ligne (racine OU révision) avec contexte
     function _renderDVProRow(d, isRev){
       var meta=DV_STATUS_META[d.status]||DV_STATUS_META['Brouillon'];
@@ -15602,6 +15615,12 @@ function renderDVPro(){
           });
         }
       }
+    });
+    // [22/05/2026] Rendre les révisions orphelines (parent filtré/absent) au niveau racine.
+    // On les rend avec le badge REV (isRev=true pour conserver l'indicateur visuel), mais
+    // comme leur parent n'apparaît pas, elles s'affichent comme des lignes autonomes.
+    orphanRevisions.forEach(function(r){
+      html+=_renderDVProRow(r, true);
     });
     html+='</tbody></table>';
   }
