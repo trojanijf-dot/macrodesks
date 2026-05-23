@@ -2200,6 +2200,22 @@ body.has-dashboard-bg #page-dashboard .metric{
     <div id="acompteInfo" style="padding:10px;background:rgba(59,130,246,.08);border-radius:6px;font-size:11.5px;color:#cbd5e1;margin-bottom:12px">
       <!-- Rempli dynamiquement -->
     </div>
+
+    <!-- [22/05/2026] Sélecteur de MÉTHODE de facturation partielle -->
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;display:block;margin-bottom:6px">Méthode de facturation</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div id="ac-method-pct" onclick="setAcompteMethod('pct')" style="border:2px solid #3b82f6;background:rgba(59,130,246,.08);border-radius:7px;padding:9px 11px;cursor:pointer;transition:all .15s">
+          <div style="font-size:12.5px;font-weight:600;color:#3b82f6">＄ Pourcentage global</div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:2px">Chaque ligne facturée au même %</div>
+        </div>
+        <div id="ac-method-lines" onclick="setAcompteMethod('lines')" style="border:0.5px solid var(--border);border-radius:7px;padding:9px 11px;cursor:pointer;transition:all .15s">
+          <div style="font-size:12.5px;font-weight:600">☑ Lignes précises</div>
+          <div style="font-size:10.5px;color:var(--muted);margin-top:2px">Choisir les lignes réalisées</div>
+        </div>
+      </div>
+    </div>
+
     <div class="form-row">
       <div class="form-group">
         <label>N° Facture d'acompte</label>
@@ -2211,7 +2227,9 @@ body.has-dashboard-bg #page-dashboard .metric{
         <input type="date" class="form-input" id="ac-date">
       </div>
     </div>
-    <div class="form-row">
+
+    <!-- Bloc POURCENTAGE (mode pct) -->
+    <div id="ac-block-pct" class="form-row">
       <div class="form-group">
         <label>Pourcentage d'acompte</label>
         <div style="display:flex;gap:6px;align-items:center">
@@ -2231,6 +2249,26 @@ body.has-dashboard-bg #page-dashboard .metric{
         <small style="display:block;font-size:10px;color:var(--muted);margin-top:3px">Le "Solde" calcule automatiquement le reste</small>
       </div>
     </div>
+
+    <!-- Bloc LIGNES PRÉCISES (mode lines) -->
+    <div id="ac-block-lines" style="display:none">
+      <div class="form-group" style="margin-bottom:8px">
+        <label>Type de facture</label>
+        <select class="form-select" id="ac-type-lines" style="max-width:220px">
+          <option value="acompte">Acompte (Ax)</option>
+          <option value="solde">Solde (SO)</option>
+        </select>
+      </div>
+      <div style="border:0.5px solid var(--border);border-radius:7px;padding:11px;background:rgba(255,255,255,0.02);max-height:280px;overflow-y:auto">
+        <div style="font-size:10.5px;color:var(--muted);margin-bottom:8px">☑ Cocher les lignes réellement réalisées · ajuster la quantité si partiel. Les lignes déjà facturées sur un acompte précédent sont grisées.</div>
+        <div id="ac-lines-list"><!-- rempli dynamiquement par renderAcompteLinesList() --></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:10px;border-top:0.5px solid var(--border)">
+          <span id="ac-lines-summary" style="font-size:11.5px;color:var(--muted)">0 ligne sélectionnée</span>
+          <span id="ac-lines-total" style="font-size:14px;font-weight:700;color:#3b82f6">0 XPF</span>
+        </div>
+      </div>
+    </div>
+
     <div class="form-group">
       <label>Libellé apparaissant sur les lignes</label>
       <input class="form-input" id="ac-libelle" placeholder="Acompte 50%">
@@ -2240,7 +2278,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   </div>
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mAcompte')">Annuler</button>
-    <button class="btn btn-teal" onclick="generateAcompteInvoice()">✓ Générer la facture d'acompte</button>
+    <button class="btn btn-teal" onclick="generateAcompteInvoice()">✓ Générer la facture partielle</button>
   </div>
 </div></div>
 
@@ -27263,6 +27301,9 @@ function openAcompteModal(){
   gv('ac-type','acompte');
   gv('ac-libelle','Acompte '+Math.min(50,pctRestant)+'%');
   onAcomptePctChange();
+  // [22/05/2026] Réinitialiser sur le mode pourcentage par défaut à chaque ouverture
+  if(typeof setAcompteMethod==='function') setAcompteMethod('pct');
+  var typeLinesSel=document.getElementById('ac-type-lines'); if(typeLinesSel) typeLinesSel.value='acompte';
   om('mAcompte');
 }
 
@@ -27309,43 +27350,167 @@ document.addEventListener('change',function(e){
   if(e.target&&e.target.id==='ac-type'){onAcomptePctChange();}
 });
 
+// =============================================================================
+// MODE "LIGNES PRÉCISES" pour facture partielle [22/05/2026]
+// =============================================================================
+// En plus du mode pourcentage (chaque ligne × pct), on permet de cocher les lignes
+// réellement réalisées et d'ajuster leur quantité. Le solde "se souvient" des lignes
+// déjà facturées sur les acomptes précédents (via leur métadonnée _srcLineKey) et les
+// grise. window._acompteMethod = 'pct' | 'lines'.
+window._acompteMethod='pct';
+
+function setAcompteMethod(method){
+  window._acompteMethod=method;
+  var blkPct=document.getElementById('ac-block-pct');
+  var blkLines=document.getElementById('ac-block-lines');
+  var cardPct=document.getElementById('ac-method-pct');
+  var cardLines=document.getElementById('ac-method-lines');
+  var isLines=(method==='lines');
+  if(blkPct) blkPct.style.display=isLines?'none':'';
+  if(blkLines) blkLines.style.display=isLines?'':'none';
+  // Style des cartes (sélection visuelle)
+  if(cardPct){ cardPct.style.border=isLines?'0.5px solid var(--border)':'2px solid #3b82f6'; cardPct.style.background=isLines?'':'rgba(59,130,246,.08)'; }
+  if(cardLines){ cardLines.style.border=isLines?'2px solid #3b82f6':'0.5px solid var(--border)'; cardLines.style.background=isLines?'rgba(59,130,246,.08)':''; }
+  if(isLines) renderAcompteLinesList();
+}
+
+// Clé d'identification d'une ligne (pour suivre ce qui a déjà été facturé)
+function _acompteLineKey(l, idx){
+  return (l.ref||'')+'|'+(l.designation||'').replace(/\s*\((?:Acompte|Solde)[^)]*\)\s*$/,'')+'|'+idx;
+}
+
+// Récupère les clés de lignes déjà facturées sur les acomptes précédents de la mère
+function _alreadyBilledLineKeys(parentId){
+  var keys={};
+  (DB.factures||[]).forEach(function(f){
+    if(f.parentId===parentId && Array.isArray(f.lines)){
+      f.lines.forEach(function(l){
+        if(l._srcLineKey) keys[l._srcLineKey]=true;
+      });
+    }
+  });
+  return keys;
+}
+
+// Affiche la liste cochable des lignes de la facture mère
+function renderAcompteLinesList(){
+  var listEl=document.getElementById('ac-lines-list');
+  if(!listEl||!eFAid) return;
+  var parent=DB.factures.find(function(x){return x.id===eFAid;});
+  if(!parent){ listEl.innerHTML='<div style="color:var(--muted)">Facture mère introuvable</div>'; return; }
+  var billed=_alreadyBilledLineKeys(parent.id);
+  var rows=(parent.lines||[]).map(function(l,idx){
+    // Sauter les bandeaux de section / headers (pas des lignes facturables)
+    if(l.type==='header'||l.type==='section_banner') return '';
+    var key=_acompteLineKey(l,idx);
+    var isBilled=!!billed[key];
+    var ht=(l.qte||0)*(l.pu||0);
+    var checked=isBilled?'':'checked'; // par défaut on coche les non encore facturées
+    var dis=isBilled?'disabled':'';
+    var opacity=isBilled?'opacity:0.5;':'';
+    var strike=isBilled?'text-decoration:line-through;':'';
+    var billedNote=isBilled?'<span style="color:#10b981;font-size:10px"><i class="ti ti-check"></i> déjà facturé</span>':('Qté '+(l.qte||0)+' · PU '+fN(l.pu||0)+' · '+fN(ht)+' XPF');
+    return '<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:0.5px solid var(--border);'+opacity+'">'+
+      '<input type="checkbox" class="ac-line-cb" data-idx="'+idx+'" data-key="'+esc(key)+'" '+checked+' '+dis+' onchange="_recalcAcompteLines()" style="width:16px;height:16px">'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:12px;font-weight:500;'+strike+'">'+esc(l.designation||'(sans désignation)')+'</div>'+
+        '<div style="font-size:10.5px;color:var(--muted)">'+billedNote+'</div>'+
+      '</div>'+
+      '<input type="number" class="ac-line-qte" data-idx="'+idx+'" value="'+(l.qte||0)+'" min="0" '+dis+' onchange="_recalcAcompteLines()" oninput="_recalcAcompteLines()" style="width:60px;height:30px;text-align:right;font-size:12px" title="Quantité à facturer">'+
+    '</div>';
+  }).join('');
+  listEl.innerHTML=rows||'<div style="color:var(--muted);font-style:italic">Aucune ligne facturable</div>';
+  _recalcAcompteLines();
+}
+
+// Recalcule le total et le % équivalent des lignes cochées
+function _recalcAcompteLines(){
+  if(!eFAid) return;
+  var parent=DB.factures.find(function(x){return x.id===eFAid;});
+  if(!parent) return;
+  var cbs=document.querySelectorAll('#ac-lines-list .ac-line-cb');
+  var ht=0, tgcSum=0, nbSel=0;
+  cbs.forEach(function(cb){
+    if(!cb.checked) return;
+    var idx=parseInt(cb.dataset.idx,10);
+    var l=parent.lines[idx]; if(!l) return;
+    var qInput=document.querySelector('#ac-lines-list .ac-line-qte[data-idx="'+idx+'"]');
+    var qte=qInput?(parseFloat(qInput.value)||0):(l.qte||0);
+    var h=qte*(l.pu||0);
+    ht+=h; tgcSum+=h*(Number(l.tgc)||0)/100; nbSel++;
+  });
+  var ttc=Math.round(ht+tgcSum);
+  var parentTtc=parent.ttc||0;
+  var pctEq=parentTtc>0?Math.round(ttc/parentTtc*100):0;
+  var sumEl=document.getElementById('ac-lines-summary');
+  var totEl=document.getElementById('ac-lines-total');
+  if(sumEl) sumEl.textContent=nbSel+' ligne'+(nbSel>1?'s':'')+' sélectionnée'+(nbSel>1?'s':'')+' · '+pctEq+'% du devis';
+  if(totEl) totEl.textContent=fN(ttc)+' XPF';
+}
+
 // Génère la facture d'acompte à partir des champs de la modal
 function generateAcompteInvoice(){
   if(!eFAid){alert('Pas de facture mère sélectionnée');return;}
   var parent=DB.factures.find(function(x){return x.id===eFAid;});
   if(!parent){alert('Facture mère introuvable');return;}
+  var method=window._acompteMethod||'pct';
   var num=gvg('ac-num');
   var date=gvg('ac-date');
-  var pct=parseFloat(gvg('ac-pct'))||0;
-  var type=gvg('ac-type');
-  var libelle=gvg('ac-libelle')||('Acompte '+pct+'%');
   if(!num){alert('Le numéro est requis');return;}
-  if(pct<=0||pct>100){alert('Le pourcentage doit être entre 1 et 100');return;}
   // Check doublon numéro
   if(DB.factures.some(function(x){return x.num===num;})){
     alert('Le numéro '+num+' est déjà utilisé. Choisis un autre numéro.');
     return;
   }
-  // Check dépassement 100%
-  var pctEmis=getAcomptesCumulePct(parent.id);
-  if(pctEmis+pct>100.01){
-    if(!confirm('Attention : ce acompte + les précédents font '+(pctEmis+pct)+'% du total. Continuer quand même ?')) return;
-  }
-  // Construire les lignes : copie des lignes mère avec PU × pct/100 + suffixe libellé
-  var factor=pct/100;
-  var acompteLines=(parent.lines||[]).map(function(l){
-    return Object.assign({},l,{
-      pu:Math.round((l.pu||0)*factor),
-      designation:(l.designation||'')+' ('+libelle+')'
+
+  var type, pct, libelle, acompteLines, ht=0, tgcSum=0;
+
+  if(method==='lines'){
+    // === MODE LIGNES PRÉCISES ===
+    type=gvg('ac-type-lines')||'acompte';
+    libelle=gvg('ac-libelle')||'';
+    var cbs=document.querySelectorAll('#ac-lines-list .ac-line-cb');
+    acompteLines=[];
+    cbs.forEach(function(cb){
+      if(!cb.checked||cb.disabled) return;
+      var idx=parseInt(cb.dataset.idx,10);
+      var src=parent.lines[idx]; if(!src) return;
+      var qInput=document.querySelector('#ac-lines-list .ac-line-qte[data-idx="'+idx+'"]');
+      var qte=qInput?(parseFloat(qInput.value)||0):(src.qte||0);
+      if(qte<=0) return;
+      var newLine=Object.assign({},src,{
+        qte:qte,
+        designation:(src.designation||'')+(libelle?' ('+libelle+')':''),
+        _srcLineKey:cb.dataset.key // trace pour le solde futur
+      });
+      acompteLines.push(newLine);
     });
-  });
-  // Recalculer HT / TGC / TTC
-  var ht=0,tgcSum=0;
-  acompteLines.forEach(function(l){
-    var h=(l.qte||0)*(l.pu||0);
-    ht+=h;
-    tgcSum+=h*(Number(l.tgc)||0)/100;
-  });
+    if(!acompteLines.length){ alert('Sélectionne au moins une ligne (cochée, quantité > 0).'); return; }
+    acompteLines.forEach(function(l){ var h=(l.qte||0)*(l.pu||0); ht+=h; tgcSum+=h*(Number(l.tgc)||0)/100; });
+    // % équivalent (informatif, stocké dans acomptePct)
+    var ttcTmp=Math.round(ht+tgcSum);
+    pct=(parent.ttc||0)>0?Math.round(ttcTmp/(parent.ttc)*100):0;
+    if(!libelle) libelle=(type==='solde'?'Solde':'Acompte')+' '+pct+'%';
+  } else {
+    // === MODE POURCENTAGE (existant) ===
+    type=gvg('ac-type');
+    pct=parseFloat(gvg('ac-pct'))||0;
+    libelle=gvg('ac-libelle')||('Acompte '+pct+'%');
+    if(pct<=0||pct>100){alert('Le pourcentage doit être entre 1 et 100');return;}
+    // Check dépassement 100%
+    var pctEmis0=getAcomptesCumulePct(parent.id);
+    if(pctEmis0+pct>100.01){
+      if(!confirm('Attention : ce acompte + les précédents font '+(pctEmis0+pct)+'% du total. Continuer quand même ?')) return;
+    }
+    var factor=pct/100;
+    acompteLines=(parent.lines||[]).map(function(l){
+      return Object.assign({},l,{
+        pu:Math.round((l.pu||0)*factor),
+        designation:(l.designation||'')+' ('+libelle+')'
+      });
+    });
+    acompteLines.forEach(function(l){ var h=(l.qte||0)*(l.pu||0); ht+=h; tgcSum+=h*(Number(l.tgc)||0)/100; });
+  }
   var ttc=Math.round(ht+tgcSum);
   // Construire la nouvelle facture
   var newFA={
@@ -27374,7 +27539,8 @@ function generateAcompteInvoice(){
     parentNum: parent.num,
     acompteType: type,   // 'acompte' ou 'solde'
     acomptePct: pct,
-    acompteLibelle: libelle
+    acompteLibelle: libelle,
+    acompteMethod: method // [22/05/2026] 'pct' ou 'lines'
   };
   DB.factures.push(newFA);
   syncFactureToSuivi(newFA);
@@ -38425,9 +38591,39 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
     var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
     if(_dvObj) devisNumLink=(_dvObj.num||'')+(_dvObj.rev?' '+String(_dvObj.rev).toUpperCase():'');
   }
+  // [22/05/2026] Bandeau + récap facture PARTIELLE (Variante A — transparent).
+  // Construit si f.acompteType est défini ('acompte' ou 'solde').
+  var _acBanner='', _acRecap='';
+  if(f.acompteType && f.parentId){
+    var _pf=(DB.factures||[]).find(function(x){return x.id===f.parentId;});
+    var _parentTtc=_pf?(_pf.ttc||0):0;
+    var _pct=f.acomptePct||0;
+    var _isSolde=(f.acompteType==='solde');
+    // Rang de l'acompte (1, 2...) parmi les acomptes de la mère
+    var _rang=1;
+    if(!_isSolde && _pf){
+      var _ac=(DB.factures||[]).filter(function(x){return x.parentId===f.parentId && x.acompteType==='acompte';})
+        .sort(function(a,b){return (a.id||0)-(b.id||0);});
+      var _i=_ac.findIndex(function(x){return x.id===f.id;});
+      _rang=_i>=0?_i+1:_ac.length;
+    }
+    var _titreBandeau=_isSolde?'Facture de solde':('Facture partielle — Acompte '+_rang);
+    _acBanner='<div style="background:#eaf3fb;border:0.5px solid #b5d4f4;border-radius:4px;padding:8px 11px;margin-bottom:10px;font-size:12px;color:#0c447c;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+      '<strong>'+_titreBandeau+'</strong> · Avancement facturé : '+_pct+'% du devis '+esc(devisNumLink||(f.dvlie||''))+'<br>'+
+      '<span style="color:#185fa5">'+(_isSolde?'Solde des travaux — clôture de la facturation de ce devis':'Travaux réalisés à date · le solde fera l\'objet d\'une facturation ultérieure')+'</span>'+
+    '</div>';
+    // Récap : cumul déjà facturé sur la mère
+    if(_parentTtc>0){
+      var _cumulTtc=(DB.factures||[]).filter(function(x){return x.parentId===f.parentId;})
+        .reduce(function(s,x){return s+(x.ttc||0);},0);
+      var _reste=Math.max(0,_parentTtc-_cumulTtc);
+      var _restePct=Math.round(_reste/_parentTtc*100);
+      _acRecap='<div style="background:#f8fafc;border-radius:4px;padding:7px 10px;margin-top:8px;font-size:11px;color:#475569;line-height:1.5;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+        '<strong>Récapitulatif facturation :</strong> Devis total '+fN(_parentTtc)+' XPF · Cette facture ('+(_isSolde?'Solde':'Acompte '+_rang)+') : '+fN(f.ttc||0)+' XPF ('+_pct+'%) · Reste à facturer : '+fN(_reste)+' XPF ('+_restePct+'%)'+
+      '</div>';
+    }
+  }
   // === Préparation allL : array plat avec {sec} sur chaque ligne ===
-  // f.lines peut contenir des type='section_banner' explicites. On les utilise pour tracker
-  // la section courante. Fallback : si pas de section_banner mais des _sec, on traduit.
   var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
   var allL=[];
   var currentSecLabel='';
@@ -38712,6 +38908,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">BC Client</span>'+esc(f.bcClientSLN||f._importPONum||f.po||'\u2014')+'</div>'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Devis N\u00b0</span>'+esc(devisNumLink||'\u2014')+'</div>'+
       '</div>'+
+      _acBanner+
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px">'+
         '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CALINSTRUM SARL</h4><p style="font-size:13px;line-height:1.6;color:#333;margin:0">RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+'<br>'+CI.email+'</p></div>'+
         '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CLIENT</h4>'+
@@ -38720,7 +38917,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
             cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+
           '</p></div>'+
       '</div>'+
-      '<p style="font-size:13px;margin-bottom:8px;margin-top:0"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>';
+      '<p style="font-size:13px;margin-bottom:8px;margin-top:0"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+_acRecap;
   }
   var pagesHTML='',cumulSub=0;
   pages.forEach(function(pageRows,pi){
