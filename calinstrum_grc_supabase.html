@@ -31090,6 +31090,12 @@ function openAttachDB(){
 // Sauvegarde / remplacement atomique d'un PDF lié à un devis pour un kind donné.
 // Si un PDF existe déjà pour (devisId, kind), il est supprimé et remplacé.
 // att = {devisId, kind:'emerson'|'act', filename, refValue, refDate, bytes}
+//
+// ÉTAPE D : après écriture IndexedDB OK, lance EN PARALLÈLE un upload cloud
+// vers Supabase Storage (uploadDevisPdfToCloud, fire-and-forget). L'app rend
+// la main immédiatement après le succès IndexedDB ; le résultat cloud est
+// signalé par un toast (succès silencieux / échec visible). Le filet local
+// IndexedDB reste l'autorité pour l'UX immédiate.
 function storeDevisPdf(att){
   if(!att||!att.devisId||!att.kind||!att.bytes)
     return Promise.reject(new Error('storeDevisPdf: paramètres incomplets'));
@@ -31121,14 +31127,42 @@ function storeDevisPdf(att){
           blob:blob,
           savedAt:new Date().toISOString()
         };
+        // ÉTAPE D : helper local pour lancer l'upload cloud après succès IndexedDB
+        // sans bloquer la résolution de la Promise principale (fire-and-forget).
+        function _fireCloudUpload(){
+          try {
+            if (typeof window.uploadDevisPdfToCloud !== 'function') return;
+            window.uploadDevisPdfToCloud(att.devisId, att.kind, blob, record.filename)
+              .then(function(dest){
+                console.log('[étape D] PDF uploadé cloud :', dest);
+                // Re-render la liste Devis si visible (pastille 👁 doit refléter cloud).
+                try {
+                  if (typeof renderDV === 'function' && document.getElementById('page-devis')) renderDV();
+                } catch(e){}
+              })
+              .catch(function(err){
+                console.warn('[étape D] Upload cloud échoué :', err);
+                var msg = '⚠ PDF sauvegardé en local mais l\'envoi cloud a échoué : '
+                        + (err && err.message ? err.message : err)
+                        + '\n\nLe PDF est utilisable depuis ce navigateur mais ne sera pas visible '
+                        + 'sur tes autres appareils tant qu\'il n\'est pas re-poussé. '
+                        + 'Tu peux réessayer en rejoignant le PDF.';
+                if (typeof showBCSaveToast === 'function') {
+                  try { showBCSaveToast(msg); } catch(e){ setTimeout(function(){ alert(msg); }, 100); }
+                } else {
+                  setTimeout(function(){ alert(msg); }, 100);
+                }
+              });
+          } catch(e){ console.warn('[étape D] Cannot schedule cloud upload :', e); }
+        }
         if(existing && existing.id){
           record.id=existing.id;
           var putReq=store.put(record);
-          putReq.onsuccess=function(){resolve({id:existing.id,replaced:true});};
+          putReq.onsuccess=function(){ _fireCloudUpload(); resolve({id:existing.id,replaced:true}); };
           putReq.onerror=function(ev){reject(ev.target.error);};
         } else {
           var addReq=store.add(record);
-          addReq.onsuccess=function(){resolve({id:addReq.result,replaced:false});};
+          addReq.onsuccess=function(){ _fireCloudUpload(); resolve({id:addReq.result,replaced:false}); };
           addReq.onerror=function(ev){reject(ev.target.error);};
         }
       };
@@ -32482,6 +32516,20 @@ var STORAGE_KIND_MAP = {
 // Dossier(s) Storage mixtes contenant la cotation Emerson parmi d'autres PDFs.
 var EMERSON_MIXED_FOLDERS = ['devis_calinstrum'];
 
+// ÉTAPE D — mapping kind app → dossier Storage de DESTINATION pour les uploads
+// faits depuis l'app (storeDevisPdf + uploadDevisPdfToCloud). Validé utilisateur
+// 2026-05-26 : le kind 'emerson' atterrit dans quote_emerson/ comme 'quote_emerson'
+// (cohérent avec la pratique récente où toutes les Quotes sont là). Les deux kinds
+// pointeront sur le même dossier — c'est OK car logiquement identiques côté business.
+// Côté LECTURE (étape C), Pass 1.5 fait déjà la promotion quote_emerson/ → emerson.
+var APP_KIND_TO_STORAGE_FOLDER = {
+  emerson:       'quote_emerson',
+  act:           'act',
+  po_cali:       'po_cali',
+  bc_client:     'bc_client',
+  quote_emerson: 'quote_emerson'
+};
+
 // Détecte si un NOM DE FICHIER est une cotation/proposal Emerson.
 // Signatures observées : "EMR_...", "EMERSON_Quote_...", "...Proposal...",
 // + un numéro de proposal Emerson à 6-9 chiffres (cf _shortEmerson dans l'app).
@@ -32533,6 +32581,35 @@ function _normNum(s){
   return String(s||'').trim().toUpperCase().replace(/[\s\-_.]/g,'');
 }
 
+// Reproduction JS de la fonction safe_seg() de upload_pdfs.py — utilisée pour
+// générer un segment de chemin Storage sûr (Supabase refuse les non-ASCII).
+// IMPORTANT : doit produire EXACTEMENT le même résultat que la version Python,
+// sinon les uploads depuis l'app créeraient des doublons de chemins par rapport
+// aux 246 PDFs déjà uploadés. Test de cohérence : safe_seg("Signé") == "Signe".
+function _safeSeg(s){
+  s = String(s || '');
+  // 1) Tirets typographiques en-dash (U+2013) / em-dash (U+2014) -> tiret ASCII
+  s = s.replace(/–/g, '-').replace(/—/g, '-');
+  // 2) Décomposition Unicode + suppression des marques combinantes (é -> e + U+0301 -> e)
+  s = s.normalize('NFKD').replace(/[̀-ͯ]/g, '');
+  // 3) Garde ASCII alphanumérique + ' .-_' ; tout autre caractère devient '_'
+  var out = '';
+  for (var i = 0; i < s.length; i++){
+    var c = s.charCodeAt(i);
+    if (c > 127) { out += '_'; continue; }
+    var ch = s.charAt(i);
+    if ((c >= 48 && c <= 57)        // 0-9
+     || (c >= 65 && c <= 90)        // A-Z
+     || (c >= 97 && c <= 122)       // a-z
+     || ch === ' ' || ch === '.' || ch === '-' || ch === '_') {
+      out += ch;
+    } else {
+      out += '_';
+    }
+  }
+  return out.replace(/^\s+|\s+$/g, ''); // trim final
+}
+
 // Construit l'index num→id interne à partir de DB.devis.
 // Retourne { exact:{numTrim:id}, norm:{numNorm:id} }.
 function _buildDevisNumIndex(){
@@ -32554,6 +32631,23 @@ function _resolveFolderToDevisId(folderName, numIndex){
   if (numIndex.exact[t] !== undefined) return numIndex.exact[t];   // match exact (après trim)
   var n = _normNum(folderName);
   if (numIndex.norm[n] !== undefined) return numIndex.norm[n];     // repli normalisé
+  return null;
+}
+
+// Symétrique de _resolveFolderToDevisId : convertit un id interne (d.id, timestamp)
+// vers le numéro de devis (d.num, ex "SLN-DV163"), via lookup direct dans DB.devis.
+// Utilisé par l'étape D (écriture cloud) pour construire le chemin Storage
+// qui range par NUMÉRO et non par id. Retourne null si introuvable.
+function _resolveDevisIdToNum(devisId){
+  if (devisId == null) return null;
+  var list = (typeof DB==='object' && DB && Array.isArray(DB.devis)) ? DB.devis : [];
+  var key = String(devisId);
+  for (var i = 0; i < list.length; i++){
+    var d = list[i];
+    if (d && d.id != null && String(d.id) === key && d.num) {
+      return String(d.num).trim();
+    }
+  }
   return null;
 }
 
@@ -32682,6 +32776,106 @@ function getDevisPdfCloudUrl(devisId, kind){
   if (typeof window._supaSignedUrl !== 'function') return Promise.resolve(null);
   return window._supaSignedUrl(entry[kind], 3600);
 }
+
+// =============================================================================
+// ÉTAPE D — ÉCRITURE : upload d'un PDF joint vers Supabase Storage
+// =============================================================================
+// Symétrique de getDevisPdfCloudUrl (lecture). Utilisé en fire-and-forget par
+// storeDevisPdf après l'écriture IndexedDB, pour que les PDFs joints depuis
+// l'app soient ÉGALEMENT envoyés dans le cloud (sinon les collègues ne les
+// voient pas et ils disparaissent si le cache local est vidé).
+//
+// Sécurité : utilise window._supaClient (session authenticated de l'utilisateur
+// connecté) — JAMAIS la clé service_role. Les RLS policies insert/update du
+// bucket pdfs sont déjà ouvertes au rôle `authenticated`.
+//
+// Chemin Storage : `<num_devis>/<dossier_kind>/<filename>` — chaque segment
+// translittéré via _safeSeg() (cohérent avec les 246 uploads existants).
+//
+// Comportement upsert:true → écrase silencieusement si un PDF existait déjà
+// pour ce (devis, kind) — cohérent avec la sémantique IndexedDB locale.
+//
+// En cas de succès : met aussi à jour devisPdfCloudIndex + le Set de pastille
+// correspondant pour que la pastille 👁 reflète immédiatement l'état cloud.
+//
+// Retourne le chemin Storage en cas de succès, ou rejette avec une Error claire.
+// =============================================================================
+function uploadDevisPdfToCloud(devisId, kind, blob, filename){
+  return new Promise(function(resolve, reject){
+    if (!window._supaClient) {
+      reject(new Error('Pas connecté au cloud (Supabase client absent — session expirée ?)'));
+      return;
+    }
+    if (!blob || typeof blob.arrayBuffer !== 'function') {
+      reject(new Error('Blob PDF invalide'));
+      return;
+    }
+    var num = _resolveDevisIdToNum(devisId);
+    if (!num) {
+      reject(new Error('Devis introuvable en base (id=' + devisId + ') — num non résolu'));
+      return;
+    }
+    var folder = APP_KIND_TO_STORAGE_FOLDER[kind];
+    if (!folder) {
+      reject(new Error('Kind sans mapping cloud : ' + kind));
+      return;
+    }
+    var fname = (filename && String(filename).trim()) || (kind + '.pdf');
+    var dest = _safeSeg(num) + '/' + _safeSeg(folder) + '/' + _safeSeg(fname);
+    // Upload via le client authenticated. upsert:true pour écraser l'existant
+    // si même chemin (cohérent avec sémantique IndexedDB qui remplace par défaut).
+    var p = window._supaClient.storage.from('pdfs').upload(dest, blob, {
+      contentType: 'application/pdf',
+      upsert: true
+    });
+    if (p && typeof p.then === 'function') {
+      p.then(function(res){
+        if (res && res.error) {
+          reject(new Error('Upload Storage échoué : ' + (res.error.message || res.error)));
+          return;
+        }
+        // Succès : on met à jour le cache cloud + le Set de pastille en mémoire
+        // pour que l'UI reflète immédiatement l'état (pas besoin de F5).
+        if (!window.devisPdfCloudIndex) window.devisPdfCloudIndex = {};
+        var idStr = String(devisId);
+        if (!window.devisPdfCloudIndex[idStr]) window.devisPdfCloudIndex[idStr] = {};
+        window.devisPdfCloudIndex[idStr][kind] = dest;
+        // Ajoute aussi dans le Set du kind correspondant (pastille 👁).
+        // Pour 'emerson' uploadé dans quote_emerson/ : on alimente AUSSI le Set
+        // quote_emerson — cohérent avec Pass 1.5 du refresh cloud côté lecture.
+        var setMap = {
+          emerson:       window.devisIdsWithEmersonPdf,
+          act:           window.devisIdsWithACTPdf,
+          po_cali:       window.devisIdsWithPoCaliPdf,
+          bc_client:     window.devisIdsWithBCClientPdf,
+          quote_emerson: window.devisIdsWithQuoteEmersonPdf
+        };
+        if (setMap[kind] && typeof setMap[kind].add === 'function') {
+          setMap[kind].add(idStr);
+        }
+        // Si kind == 'emerson', on remplit aussi le miroir quote_emerson
+        // (puisque le fichier est physiquement dans quote_emerson/) et l'inverse.
+        if (kind === 'emerson') {
+          window.devisPdfCloudIndex[idStr].quote_emerson = window.devisPdfCloudIndex[idStr].quote_emerson || dest;
+          if (setMap.quote_emerson && typeof setMap.quote_emerson.add === 'function') {
+            setMap.quote_emerson.add(idStr);
+          }
+        } else if (kind === 'quote_emerson') {
+          window.devisPdfCloudIndex[idStr].emerson = window.devisPdfCloudIndex[idStr].emerson || dest;
+          if (setMap.emerson && typeof setMap.emerson.add === 'function') {
+            setMap.emerson.add(idStr);
+          }
+        }
+        resolve(dest);
+      }).catch(function(err){
+        reject(new Error('Upload Storage exception : ' + (err && err.message || err)));
+      });
+    } else {
+      reject(new Error('storage.upload() n\'a pas retourné de Promise'));
+    }
+  });
+}
+window.uploadDevisPdfToCloud = uploadDevisPdfToCloud;
 
 // =============================================================================
 // HELPER : buildDevisPdfBadges(devisId, opts)
