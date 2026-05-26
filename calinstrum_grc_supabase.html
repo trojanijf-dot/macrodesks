@@ -33423,17 +33423,19 @@ function downloadDevisPdf(devisId,kind){
 }
 
 // Supprime le PDF stocké (avec confirmation)
-// ÉTAPE D-QUATER — delete robuste + transparence totale :
+// ÉTAPE D-QUINQUIES — delete robuste + transparence totale + cohérence pastille :
 //
-// Source de vérité = LISTING Supabase en live (pas le cache mémoire qui peut
-// être stale). La confirm dialog affiche EXPLICITEMENT le(s) fichier(s) qui
-// vont disparaitre, AVANT le clic final. Plus de surprise sur quel fichier
-// est supprimé (cf incident où le user a perdu un EMR Calinstrum en cliquant
-// trash sur l'EMERSON alors qu'il voulait supprimer l'ACT).
-//
-// Aussi : les champs texte référence + date sont LAISSÉS INTACTS. Ils sont
-// indépendants du PDF (juste des annotations). L'utilisateur les efface
-// manuellement s'il le souhaite. (Comportement initial pré-D-ter.)
+// 1. Source de vérité = LISTING Supabase en live (pas le cache mémoire stale).
+// 2. La confirm dialog affiche EXPLICITEMENT le(s) fichier(s) qui vont
+//    disparaitre, AVANT le clic final. Plus de surprise sur quel fichier est
+//    supprimé (cf incident où le user a perdu un EMR Calinstrum en cliquant
+//    trash sur l'EMERSON alors qu'il voulait supprimer l'ACT).
+// 3. Les champs texte référence + date sont AUSSI effacés (DOM + DB.devis +
+//    saveDB) → la pastille du tableau (qui lit DB.devis) disparait aussi,
+//    plus d'incohérence visuelle "pastille présente mais pas de PDF derrière".
+//    Annoncé clairement dans la confirm dialog ; l'utilisateur peut annuler
+//    la modale juste après s'il regrette (la valeur d'origine est sauvegardée
+//    avant le clear pour permettre un éventuel revert manuel).
 async function confirmDeleteDevisPdf(devisId, kind){
   var labels = {emerson:'Emerson', act:'ACT', po_cali:'PO Calinstrum', bc_client:'BC Client', quote_emerson:'Quote Emerson'};
   var label = labels[kind] || kind;
@@ -33491,7 +33493,8 @@ async function confirmDeleteDevisPdf(devisId, kind){
     lines.push('  Si elles pointent sur le même fichier, les DEUX disparaitront.');
     lines.push('');
   }
-  lines.push('Les champs texte (référence, date) ne sont PAS touchés.');
+  lines.push('Les champs texte (référence + date) seront AUSSI effacés et sauvegardés');
+  lines.push('immédiatement → la pastille du tableau disparait elle aussi.');
   lines.push('Le PDF source sur ton disque n\'est pas affecté.');
   if (!confirm(lines.join('\n'))) return;
 
@@ -33543,12 +33546,45 @@ async function confirmDeleteDevisPdf(devisId, kind){
   };
   if (setMap[kind] && typeof setMap[kind].delete === 'function') setMap[kind].delete(idStr);
 
-  // ===== 6) Refresh des caches + UI (les champs texte/date sont laissés intacts) =====
+  // ===== 6) Clear des champs texte référence + date — DOM + DB.devis + saveDB =====
+  // Coherence visuelle : delete PDF = section entièrement nettoyée. La pastille
+  // du tableau lit DB.devis (pas le DOM) donc il faut persister le clear pour
+  // qu'elle disparaisse. saveDB() pousse aussi vers Supabase via _supaSyncSchedule.
+  var formFieldMap = {
+    emerson:       {ref:'dv-ref-emerson',       date:'dv-ref-emerson-date'},
+    act:           {ref:'dv-ref-act',           date:'dv-ref-act-date'},
+    po_cali:       {ref:'dv-po-calinstrum',     date:'dv-po-calinstrum-date'},
+    bc_client:     {ref:'dv-bc-client-ref',     date:'dv-bc-client-date'},
+    quote_emerson: {ref:'dv-quote-emerson-ref', date:'dv-quote-emerson-date'}
+  };
+  var dbFieldMap = {
+    emerson:       {ref:'refEmerson',       date:'refEmersonDate'},
+    act:           {ref:'refACT',           date:'refACTDate'},
+    po_cali:       {ref:'poCalinstrum',     date:'poCalinstrumDate'},
+    bc_client:     {ref:'bcClientRef',      date:'bcClientDate'},
+    quote_emerson: {ref:'quoteEmersonRef',  date:'quoteEmersonDate'}
+  };
+  var fmF = formFieldMap[kind];
+  if (fmF) {
+    var refEl  = document.getElementById(fmF.ref);  if (refEl)  refEl.value  = '';
+    var dateEl = document.getElementById(fmF.date); if (dateEl) dateEl.value = '';
+  }
+  var fmDB = dbFieldMap[kind];
+  if (fmDB && typeof DB === 'object' && DB && Array.isArray(DB.devis)) {
+    var d = DB.devis.find(function(x){ return x && (x.id === devisId || String(x.id) === idStr); });
+    if (d) {
+      d[fmDB.ref]  = '';
+      d[fmDB.date] = '';
+      try { if (typeof saveDB === 'function') saveDB(); } catch(e){ console.warn('[D-quinquies] saveDB failed:', e); }
+    }
+  }
+
+  // ===== 7) Refresh des caches + UI =====
   try { if (typeof refreshDevisPdfCache === 'function') await refreshDevisPdfCache(); } catch(e){}
   try { renderDevisPdfCard(devisId, kind); } catch(e){}
   try { if (typeof renderDV === 'function') renderDV(); } catch(e){}
 
-  // ===== 7) Toast récap =====
+  // ===== 8) Toast récap =====
   var msg;
   if (cloudErr) {
     msg = '⚠ PDF '+label+' : local '+(locDel?'supprimé':'rien')+', cloud ÉCHEC ('+cloudErr+').';
