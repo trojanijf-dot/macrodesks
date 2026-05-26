@@ -32410,6 +32410,22 @@ function refreshDevisPdfCache(){
       else if(m.kind==='bc_client') setBC.add(m.devisId);
       else if(m.kind==='quote_emerson') setQE.add(m.devisId);
     }
+    // ÉTAPE C — FUSION CLOUD : on merge les ids déjà retrouvés côté Storage
+    // (cf refreshDevisPdfCacheCloud), sinon cette réassignation des Sets écrase
+    // toute entry cloud `.add()`ée juste avant — régression visible : pastilles
+    // 👁 cloud disparaissent (1) au F5 si IndexedDB finit après le cloud, et
+    // (2) après tout add/remove PDF local qui rappelle ce refresh.
+    // Le cache cloud (window.devisPdfCloudIndex) est source of truth, on le
+    // restamp à chaque rebuild des Sets pour rester cohérent.
+    var cIdx = window.devisPdfCloudIndex || {};
+    Object.keys(cIdx).forEach(function(idStr){
+      var kinds = cIdx[idStr] || {};
+      if (kinds.emerson)       setE.add(idStr);
+      if (kinds.act)           setA.add(idStr);
+      if (kinds.po_cali)       setP.add(idStr);
+      if (kinds.bc_client)     setBC.add(idStr);
+      if (kinds.quote_emerson) setQE.add(idStr);
+    });
     window.devisIdsWithEmersonPdf=setE;
     window.devisIdsWithACTPdf=setA;
     window.devisIdsWithPoCaliPdf=setP;
@@ -32420,6 +32436,251 @@ function refreshDevisPdfCache(){
     console.warn('refreshDevisPdfCache failed:',err);
     return {emerson:0,act:0,po_cali:0,bc_client:0,quote_emerson:0};
   });
+}
+
+// =============================================================================
+// ÉTAPE C — COUCHE STORAGE CLOUD (lecture des 246 PDFs depuis Supabase Storage)
+// =============================================================================
+// Arborescence RÉELLE du bucket (confirmée capture 26/05) :
+//     pdfs/<NUMÉRO devis>/<kindStorage>/<fichier>.pdf
+// ⚠️ Le 1er niveau = le NUMÉRO du devis (d.num : "SLN-DV163", "PRNC-DV022",
+//    "SLN-DV-BCGMAO-00729523"…) — PAS l'id interne (d.id = timestamp).
+//    Or les Sets window.devisIdsWith*Pdf et openDevisPdf travaillent sur l'ID
+//    INTERNE. Il faut donc RÉSOUDRE num → id via DB.devis avant de remplir.
+//
+// On LISTE le bucket au login (via window._supaListRecursive), on résout chaque
+// dossier-num vers son id interne, et on remplit les Sets — exactement comme
+// refreshDevisPdfCache() le fait depuis IndexedDB, mais sur la source cloud.
+//
+// LECTURE SEULE : on NE touche PAS IndexedDB (pas de bump de version). Les PDFs
+// déjà en local continuent de marcher via leur blob ; le cloud vient en plus et
+// PRIORITAIRE quand un PDF cloud existe.
+//
+// ⚠️ TABLE DE MAPPING ÉDITABLE — kind app (Sets/IndexedDB) → dossier(s) Storage.
+//   Confirmé capture : devis_calinstrum, bc_client, po_cali, quote_emerson,
+//   act, emerson_ack, emerson_invoice, facture.
+//   'emerson' (app) ↔ 'devis_calinstrum' (Storage).
+//   Kinds Storage pas encore affichés par l'UI (facture, bl, emerson_ack,
+//   emerson_invoice, logistique, technique) → étape D (décommenter alors).
+// ⚠️ Le dossier 'devis_calinstrum' est MIXTE : il contient à la fois le devis
+// Calinstrum (XPF, ton document) ET la cotation source Emerson (AUD). On ne peut
+// donc PAS se fier au nom du dossier seul → on classe par le NOM DE FICHIER.
+//
+// Mapping dossier Storage → kind app, pour les dossiers NON ambigus.
+// (devis_calinstrum est traité à part par _classifyStoragePdf.)
+var STORAGE_KIND_MAP = {
+  act:           ['act'],
+  po_cali:       ['po_cali'],
+  bc_client:     ['bc_client'],
+  quote_emerson: ['quote_emerson']
+  // ,facture:        ['facture']          // étape D
+  // ,bl:             ['bl']               // étape D
+  // ,emerson_ack:    ['emerson_ack']      // étape D
+  // ,emerson_invoice:['emerson_invoice']  // étape D
+};
+
+// Dossier(s) Storage mixtes contenant la cotation Emerson parmi d'autres PDFs.
+var EMERSON_MIXED_FOLDERS = ['devis_calinstrum'];
+
+// Détecte si un NOM DE FICHIER est une cotation/proposal Emerson.
+// Signatures observées : "EMR_...", "EMERSON_Quote_...", "...Proposal...",
+// + un numéro de proposal Emerson à 6-9 chiffres (cf _shortEmerson dans l'app).
+function _isEmersonFilename(fname){
+  var n = String(fname||'');
+  // REJET PRIORITAIRE : les fichiers nommés "DEVIS CALINSTRUM..." sont par
+  // convention les devis Calinstrum (XPF), même quand leur description contient
+  // le mot "Emerson" (cas fréquent : devis qui vendent du matériel Emerson).
+  // Sans ce filet, la regex /emerson/i ci-dessous classe faussement le devis
+  // Calinstrum en cotation Emerson → la pastille 💼 ouvre le devis Calinstrum
+  // au lieu de la vraie cotation source. Cas réels : SLN-DV128 / PRNC-DV022 /
+  // SLN-DV126 dont les fichiers s'appellent "DEVIS CALINSTRUM ... Emerson ...".
+  if (/^\s*DEVIS[\s_\-]*CALINSTRUM\b/i.test(n)) return false;
+  if (/emerson/i.test(n)) return true;
+  if (/\bEMR[_\- ]/i.test(n)) return true; // accepte aussi "EMR " (espace) ex: "EMR Calinstrum AUNZ..."
+  if (/proposal/i.test(n)) return true;
+  if (/\bquote\b/i.test(n)) return true;
+  if (/\d{6,9}/.test(n) && /ver|v\d|_\d{6,9}_/i.test(n)) return true; // ex: 29463159_Ver_2
+  return false;
+}
+
+// Classe un PDF (dossier + nom de fichier) vers un kind app, ou null si à ignorer.
+// - Dossiers non ambigus : via STORAGE_KIND_MAP.
+// - Dossier mixte devis_calinstrum : nom Emerson → 'emerson' ; sinon → null
+//   (c'est le devis Calinstrum lui-même, qui n'a pas de pastille dédiée en liste).
+function _classifyStoragePdf(folder, fname){
+  for (var appKind in STORAGE_KIND_MAP){
+    if (!STORAGE_KIND_MAP.hasOwnProperty(appKind)) continue;
+    var folders = STORAGE_KIND_MAP[appKind];
+    for (var i=0;i<folders.length;i++){
+      if (folders[i] === folder) return appKind;
+    }
+  }
+  if (EMERSON_MIXED_FOLDERS.indexOf(folder) !== -1){
+    return _isEmersonFilename(fname) ? 'emerson' : null;
+  }
+  return null; // dossier non mappé (emerson_ack, facture, logistique, technique…)
+}
+
+// Index cloud rempli au login : { idInterne(str) : { kindApp : "chemin/complet.pdf" } }
+// Permet à openDevisPdf de retrouver le chemin Storage sans re-lister le bucket.
+window.devisPdfCloudIndex = {};
+
+// Normalisation tolérante d'un numéro de devis pour matcher dossier Storage ↔ DB.num.
+// Les num sont saisis de façon irrégulière ("SLN-DV163" vs "SLN-DV-146" vs
+// "SLN-DV126 " avec espace). On compare en majuscules, sans espaces ni tirets.
+// ⚠️ On ne se sert de cette forme QUE comme repli après échec du match exact (trim).
+function _normNum(s){
+  return String(s||'').trim().toUpperCase().replace(/[\s\-_.]/g,'');
+}
+
+// Construit l'index num→id interne à partir de DB.devis.
+// Retourne { exact:{numTrim:id}, norm:{numNorm:id} }.
+function _buildDevisNumIndex(){
+  var exact = {}, norm = {};
+  var list = (typeof DB==='object' && DB && Array.isArray(DB.devis)) ? DB.devis : [];
+  list.forEach(function(d){
+    if (!d || d.id==null || !d.num) return;
+    var t = String(d.num).trim();
+    if (t && exact[t]===undefined) exact[t] = d.id;     // 1er gagnant (doublons num rares)
+    var n = _normNum(d.num);
+    if (n && norm[n]===undefined) norm[n] = d.id;
+  });
+  return { exact:exact, norm:norm };
+}
+
+// Résout un nom de dossier Storage (= num devis) vers l'id interne, ou null.
+function _resolveFolderToDevisId(folderName, numIndex){
+  var t = String(folderName||'').trim();
+  if (numIndex.exact[t] !== undefined) return numIndex.exact[t];   // match exact (après trim)
+  var n = _normNum(folderName);
+  if (numIndex.norm[n] !== undefined) return numIndex.norm[n];     // repli normalisé
+  return null;
+}
+
+// Reconstruit le cache cloud + les Sets 👁 à partir du listing du bucket.
+// FUSIONNE avec ce que IndexedDB a déjà mis (un devis peut avoir un PDF local
+// ET cloud ; les deux doivent allumer la pastille).
+function refreshDevisPdfCacheCloud(){
+  if (typeof window._supaListRecursive !== 'function' || !window._supaClient){
+    return Promise.resolve({error:'storage indisponible'});
+  }
+  return window._supaListRecursive('').then(function(paths){
+    var numIndex = _buildDevisNumIndex();
+    var cloudIndex = {};
+    var counts = {emerson:0,act:0,po_cali:0,bc_client:0,quote_emerson:0,
+                  _ignoredKind:0,_unresolvedNum:0,_total:paths.length};
+    var unresolvedFolders = {}; // pour diagnostic (dossiers num non retrouvés en base)
+    paths.forEach(function(p){
+      // Attendu : "<numDevis>/<kindStorage>/<fichier>.pdf"
+      var parts = p.split('/');
+      if (parts.length < 3) { counts._ignoredKind++; return; } // racine, _orphelins/…, etc.
+      var folderNum = parts[0];
+      var folderKind = parts[1];
+      var fileName = parts[parts.length - 1];
+      // Classification par (dossier, nom de fichier) — gère le dossier mixte
+      // devis_calinstrum (Emerson vs Calinstrum discriminés par le nom).
+      var appKind = _classifyStoragePdf(folderKind, fileName);
+      if (!appKind) { counts._ignoredKind++; return; }
+      var devId = _resolveFolderToDevisId(folderNum, numIndex);
+      if (devId == null) {
+        counts._unresolvedNum++;
+        unresolvedFolders[folderNum] = (unresolvedFolders[folderNum]||0) + 1;
+        return;
+      }
+      var idStr = String(devId);
+      if (!cloudIndex[idStr]) cloudIndex[idStr] = {};
+      // 1er chemin trouvé pour (devis, kind) gagne (multi-PDF → étape D).
+      if (!cloudIndex[idStr][appKind]) {
+        cloudIndex[idStr][appKind] = p;
+        if (counts[appKind] != null) counts[appKind]++;
+      }
+    });
+    // ===== PROMOTION quote_emerson -> emerson (Pass 1.5, spec utilisateur) =====
+    // La pastille 💼 (kind 'emerson') doit afficher la cotation Emerson en PRIORITÉ
+    // sur le fallback Acknowledgement. Or la classification de Pass 1 ne remplit
+    // cloudIndex[id].emerson QUE depuis les fichiers du dossier mixte
+    // devis_calinstrum/ (via _isEmersonFilename) — elle ignore le dossier dédié
+    // quote_emerson/ qui contient pourtant aussi de vraies cotations Emerson.
+    // Sans cette passe intermédiaire, les devis dont la Quote est uniquement dans
+    // quote_emerson/ tomberaient sur le fallback Ack à tort (cas PRNC-DV022,
+    // PRNC-DV023, SLN-DV126 entre autres). Conséquence visuelle : pastilles 💼
+    // et 🌐 pointent sur le même PDF — c'est voulu et accepté par l'utilisateur
+    // (option a confirmée) pour rester sans risque sur le code de rendu.
+    var promoCountQE = 0;
+    Object.keys(cloudIndex).forEach(function(idStr){
+      var entry = cloudIndex[idStr];
+      if (!entry.emerson && entry.quote_emerson) {
+        entry.emerson = entry.quote_emerson;
+        counts.emerson++;
+        promoCountQE++;
+      }
+    });
+    if (promoCountQE > 0) {
+      counts._emersonFromQuoteEmerson = promoCountQE; // visibilité diagnostic
+    }
+    // ===== FALLBACK Emerson Acknowledgement (Pass 2, spec utilisateur) =====
+    // Pour les devis qui N'ONT TOUJOURS PAS de cotation Emerson (ni dans
+    // devis_calinstrum/ ni dans quote_emerson/), on prend en DERNIER REPLI le PDF
+    // Emerson Acknowledgement (confirmation de prise en compte de la commande
+    // par Emerson) du dossier emerson_ack/. Citation utilisateur :
+    //   « si tu ne trouves pas de devis "QUOTE" prend l'acknowledgement »
+    // Cela fait apparaître la pastille 💼 sur les devis qui ont une commande
+    // confirmée même si la Quote source n'a pas (encore) été uploadée.
+    var ackCountAdded = 0;
+    paths.forEach(function(p){
+      var parts = p.split('/');
+      if (parts.length < 3) return;
+      if (parts[1] !== 'emerson_ack') return;
+      var folderNum = parts[0];
+      var devId = _resolveFolderToDevisId(folderNum, numIndex);
+      if (devId == null) return;
+      var idStr = String(devId);
+      if (!cloudIndex[idStr]) cloudIndex[idStr] = {};
+      // Ne remplit QUE si pas déjà de cotation Emerson "vraie" (Quote/EMR_/...).
+      if (!cloudIndex[idStr].emerson) {
+        cloudIndex[idStr].emerson = p;
+        counts.emerson++;
+        ackCountAdded++;
+      }
+    });
+    if (ackCountAdded > 0) {
+      counts._emersonFromAck = ackCountAdded; // visibilité diagnostic
+    }
+    window.devisPdfCloudIndex = cloudIndex;
+    // FUSION dans les Sets existants (remplis par refreshDevisPdfCache/IndexedDB).
+    var setMap = {
+      emerson:       window.devisIdsWithEmersonPdf,
+      act:           window.devisIdsWithACTPdf,
+      po_cali:       window.devisIdsWithPoCaliPdf,
+      bc_client:     window.devisIdsWithBCClientPdf,
+      quote_emerson: window.devisIdsWithQuoteEmersonPdf
+    };
+    Object.keys(cloudIndex).forEach(function(idStr){
+      var kinds = cloudIndex[idStr];
+      Object.keys(kinds).forEach(function(appKind){
+        var s = setMap[appKind];
+        if (s && typeof s.add === 'function') s.add(idStr);
+      });
+    });
+    var uf = Object.keys(unresolvedFolders);
+    if (uf.length) {
+      console.warn('[étape C] '+uf.length+' dossier(s) num non résolu(s) en base (PDFs cloud non rattachés) :', uf);
+    }
+    return counts;
+  }).catch(function(err){
+    console.warn('refreshDevisPdfCacheCloud failed:', err);
+    return {error:String(err && err.message || err)};
+  });
+}
+window.refreshDevisPdfCacheCloud = refreshDevisPdfCacheCloud;
+
+// Renvoie une URL signée cloud pour (idInterne, kind), ou null si pas de PDF cloud.
+function getDevisPdfCloudUrl(devisId, kind){
+  var idx = window.devisPdfCloudIndex || {};
+  var entry = idx[String(devisId)];
+  if (!entry || !entry[kind]) return Promise.resolve(null);
+  if (typeof window._supaSignedUrl !== 'function') return Promise.resolve(null);
+  return window._supaSignedUrl(entry[kind], 3600);
 }
 
 // =============================================================================
@@ -32876,30 +33137,59 @@ function renderDevisPdfCard(devisId,kind){
   });
 }
 
-// Ouvre le PDF dans un nouvel onglet (object URL)
+// Ouvre le PDF dans un nouvel onglet.
+// ÉTAPE C : on tente D'ABORD le cloud (URL signée Storage). Si pas de PDF cloud
+// pour ce (devis, kind), on retombe sur le blob IndexedDB local (filet). Ainsi
+// rien ne casse pour les PDFs déjà en local, et les 246 du cloud deviennent
+// visibles dès qu'ils existent.
 function openDevisPdf(devisId,kind){
-  getDevisPdf(devisId,kind).then(function(rec){
-    if(!rec){alert('PDF introuvable.');return;}
-    var url=URL.createObjectURL(rec.blob);
-    var w=window.open(url,'_blank');
-    // Révoque l'URL après un délai (le nouvel onglet a eu le temps de charger)
-    setTimeout(function(){URL.revokeObjectURL(url);},60000);
-    if(!w){
-      alert('⚠️ Pop-up bloqué. Autorise les pop-ups pour ce site, ou utilise le bouton ⬇ Télécharger.');
+  // window.open doit être appelé dans le même tick que le clic pour éviter le
+  // blocage pop-up. On ouvre donc l'onglet TOUT DE SUITE, puis on y pousse l'URL.
+  var w=window.open('','_blank');
+  getDevisPdfCloudUrl(devisId,kind).then(function(cloudUrl){
+    if(cloudUrl){
+      if(w){ w.location.href=cloudUrl; } else { window.open(cloudUrl,'_blank'); }
+      return;
     }
+    // Fallback local
+    return getDevisPdf(devisId,kind).then(function(rec){
+      if(!rec || !rec.blob){
+        if(w) try{w.close();}catch(e){}
+        alert('PDF introuvable (ni cloud ni local).');return;
+      }
+      var url=URL.createObjectURL(rec.blob);
+      if(w){ w.location.href=url; } else { window.open(url,'_blank'); }
+      setTimeout(function(){URL.revokeObjectURL(url);},60000);
+    });
   }).catch(function(err){
+    if(w) try{w.close();}catch(e){}
     alert('❌ Échec : '+(err.message||err));
   });
+  if(!w){
+    alert('⚠️ Pop-up bloqué. Autorise les pop-ups pour ce site, ou utilise le bouton ⬇ Télécharger.');
+  }
 }
 
-// Télécharge le PDF stocké
+// Télécharge le PDF stocké. ÉTAPE C : cloud-first (URL signée) puis fallback local.
 function downloadDevisPdf(devisId,kind){
-  getDevisPdf(devisId,kind).then(function(rec){
-    if(!rec){alert('PDF introuvable.');return;}
-    var url=URL.createObjectURL(rec.blob);
-    var a=document.createElement('a');a.href=url;a.download=rec.filename||(kind+'.pdf');
-    document.body.appendChild(a);a.click();
-    setTimeout(function(){URL.revokeObjectURL(url);a.remove();},500);
+  getDevisPdfCloudUrl(devisId,kind).then(function(cloudUrl){
+    if(cloudUrl){
+      var a=document.createElement('a');a.href=cloudUrl;a.download=(kind+'.pdf');
+      a.target='_blank'; // certains navigateurs téléchargent mieux les cross-origin via onglet
+      document.body.appendChild(a);a.click();
+      setTimeout(function(){a.remove();},500);
+      return;
+    }
+    // Fallback local
+    return getDevisPdf(devisId,kind).then(function(rec){
+      if(!rec || !rec.blob){alert('PDF introuvable (ni cloud ni local).');return;}
+      var url=URL.createObjectURL(rec.blob);
+      var a=document.createElement('a');a.href=url;a.download=rec.filename||(kind+'.pdf');
+      document.body.appendChild(a);a.click();
+      setTimeout(function(){URL.revokeObjectURL(url);a.remove();},500);
+    });
+  }).catch(function(err){
+    alert('❌ Échec téléchargement : '+(err.message||err));
   });
 }
 
@@ -40746,8 +41036,9 @@ document.addEventListener('DOMContentLoaded',function(){
   if(typeof refreshDevisPdfCache==='function'){
     refreshDevisPdfCache().then(function(stats){
       console.log('PDFs devis en cache:',stats);
-      // Re-render la liste si elle est visible (les pills 👁 vont apparaître)
-      if(typeof renderDV==='function' && document.getElementById('view-devis')){
+      // Re-render la liste si elle est visible (les pills 👁 vont apparaître).
+      // Fix : l'id réel est 'page-devis' (cf ligne ~1121), pas 'view-devis'.
+      if(typeof renderDV==='function' && document.getElementById('page-devis')){
         try{renderDV();}catch(e){}
       }
     });
@@ -41954,8 +42245,74 @@ function critProceed(){
     sbClient = supabase.createClient(SUPA_URL, SUPA_KEY, {
       auth: { persistSession: true, autoRefreshToken: true, storageKey: 'ci_grc3_supa_auth' }
     });
+    // ===== ÉTAPE C : pont Storage =====
+    // Le code PDF (≈ lignes 31000-32900) tourne dans le scope global du script
+    // principal et ne voit PAS sbClient (encapsulé dans cette IIFE). On expose
+    // donc le client + 2 helpers minimalistes, SANS toucher à la logique métier.
+    window._supaClient = sbClient;
     return sbClient;
   }
+
+  // Bucket PDFs (privé). Lecture via URLs signées uniquement.
+  var PDF_BUCKET = 'pdfs';
+
+  // Génère une URL signée (lien temporaire) pour un chemin Storage.
+  // Retourne la string URL, ou null si échec / non connecté.
+  // expiresSec : durée de validité (défaut 1h, comme prévu côté upload).
+  window._supaSignedUrl = async function(path, expiresSec){
+    if (!sbClient || !path) return null;
+    try {
+      var res = await sbClient.storage.from(PDF_BUCKET)
+        .createSignedUrl(path, expiresSec || 3600);
+      if (res.error) { console.warn('[supa signedUrl]', path, res.error.message); return null; }
+      return (res.data && res.data.signedUrl) || null;
+    } catch(e) {
+      console.warn('[supa signedUrl] exception', path, e);
+      return null;
+    }
+  };
+
+  // Liste RÉCURSIVE d'un préfixe dans le bucket PDFs.
+  // L'API list() ne renvoie qu'UN niveau : les "dossiers" reviennent avec
+  // metadata:null, les vrais fichiers avec un objet metadata. On descend donc
+  // à la main. Pagine par lots de 100. Retourne un tableau de chemins complets
+  // (string) relatifs au bucket, ex: "12/act/cotation-act.pdf".
+  // Garde-fou : profondeur max pour éviter toute boucle pathologique.
+  window._supaListRecursive = async function(prefix, _depth){
+    if (!sbClient) return [];
+    prefix = prefix || '';
+    _depth = _depth || 0;
+    if (_depth > 6) { console.warn('[supa list] profondeur max atteinte sur', prefix); return []; }
+    var out = [];
+    var offset = 0;
+    var PAGE = 100;
+    try {
+      while (true) {
+        var res = await sbClient.storage.from(PDF_BUCKET).list(prefix, {
+          limit: PAGE, offset: offset, sortBy: { column:'name', order:'asc' }
+        });
+        if (res.error) { console.warn('[supa list]', prefix, res.error.message); break; }
+        var items = res.data || [];
+        for (var i=0; i<items.length; i++) {
+          var it = items[i];
+          if (!it || !it.name) continue;
+          var full = prefix ? (prefix.replace(/\/+$/,'') + '/' + it.name) : it.name;
+          // Un "dossier" a metadata == null → on descend dedans.
+          if (it.metadata == null) {
+            var sub = await window._supaListRecursive(full, _depth + 1);
+            out = out.concat(sub);
+          } else {
+            out.push(full);
+          }
+        }
+        if (items.length < PAGE) break; // dernière page
+        offset += PAGE;
+      }
+    } catch(e) {
+      console.warn('[supa list] exception', prefix, e);
+    }
+    return out;
+  };
 
   // ===== Mapping colonnes miroir =====
   // (Conforme au schéma confirmé : id + champs miroir + data jsonb. Les colonnes
@@ -42191,6 +42548,20 @@ function critProceed(){
     if (lbtn) lbtn.style.display = '';
     if (offlineMode) {
       _toast('Mode hors-ligne actif. La sync cloud est désactivée jusqu\'à reconnexion.', 'err');
+    }
+    // ÉTAPE C : reconstruire le cache des PDFs depuis Storage (online seulement).
+    // Le client est connecté → on peut lister le bucket et remplir les Sets 👁.
+    // Fire-and-forget : un échec ne doit jamais bloquer le boot de l'app.
+    if (!offlineMode && typeof window.refreshDevisPdfCacheCloud === 'function') {
+      window.refreshDevisPdfCacheCloud().then(function(stats){
+        console.log('[étape C] PDFs Storage en cache:', stats);
+        // Re-render la liste Devis si elle est actuellement visible (les
+        // pastilles 👁 vont apparaître). NB : l'id du conteneur est 'page-devis'
+        // (cf ligne ~1121), PAS 'view-devis' (typo récurrente).
+        try {
+          if (typeof renderDV === 'function' && document.getElementById('page-devis')) renderDV();
+        } catch(e){}
+      }).catch(function(e){ console.warn('refreshDevisPdfCacheCloud failed:', e); });
     }
     // Re-render via nav() pour refléter les vraies données fraîchement chargées.
     try { if (typeof nav === 'function') nav('dashboard'); } catch(e) { console.warn('nav failed:', e); }
