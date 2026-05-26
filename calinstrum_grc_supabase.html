@@ -33289,6 +33289,9 @@ function _isoFromEmersonDate(s){
 // Rend la carte fichier sous le champ Réf Emerson ou Réf ACT
 // Si pas de PDF stocké : masque la carte. Sinon : affiche filename, taille,
 // 3 boutons (👁 Voir, ⬇ Télécharger, 🗑 Supprimer).
+// ÉTAPE D-BIS : si pas de record IndexedDB mais entrée présente dans le cache
+// cloud (devisPdfCloudIndex), on affiche QUAND MÊME une carte (sinon UX dead-end :
+// pastille allumée mais aucun moyen de gérer le PDF depuis la modale).
 function renderDevisPdfCard(devisId,kind){
   var cardMap={
     'emerson':{cardId:'dv-emerson-pdf-card',color:'#22d3ee',icon:'circuit-bulb',label:'Emerson'},
@@ -33302,29 +33305,61 @@ function renderDevisPdfCard(devisId,kind){
   var card=document.getElementById(meta.cardId);
   if(!card) return;
   if(!devisId){card.style.display='none';card.innerHTML='';return;}
-  getDevisPdf(devisId,kind).then(function(rec){
-    if(!rec){card.style.display='none';card.innerHTML='';return;}
-    var color=meta.color;
-    var labelKind=meta.label;
-    card.style.display='block';
-    card.innerHTML=
-      '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;'+
+  // Helper interne : construit le HTML de la carte. Variant cloud-only n'a ni
+  // fileSize ni savedAt précis → on affiche un label clair "cloud uniquement".
+  function _buildCardHtml(opts){
+    var color = meta.color;
+    var labelKind = meta.label;
+    var sub = opts.cloudOnly
+      ? ('PDF '+labelKind+' · ☁ cloud uniquement (pas de copie locale)')
+      : ('PDF '+labelKind+' · '+esc(_fmtFileSize(opts.fileSize))+' · ajouté le '+esc(_fmtSavedAt(opts.savedAt)));
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;'+
       'background:'+color+'12;border:1px solid '+color+'40;font-size:11px">'+
         '<i class="ti ti-file-type-pdf" style="font-size:18px;color:'+color+'"></i>'+
         '<div style="flex:1;min-width:0">'+
-          '<div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(rec.filename)+'">'+
-            esc(rec.filename)+
+          '<div style="font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(opts.filename)+'">'+
+            esc(opts.filename)+
           '</div>'+
-          '<div style="color:var(--muted);font-size:10px;margin-top:1px">'+
-            'PDF '+labelKind+' · '+esc(_fmtFileSize(rec.fileSize))+' · ajouté le '+esc(_fmtSavedAt(rec.savedAt))+
-          '</div>'+
+          '<div style="color:var(--muted);font-size:10px;margin-top:1px">'+sub+'</div>'+
         '</div>'+
         '<div style="display:flex;gap:4px;flex-shrink:0">'+
           '<button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px" onclick="openDevisPdf(\''+esc(devisId)+'\',\''+kind+'\')" title="Ouvrir le PDF dans un nouvel onglet">👁 Voir</button>'+
           '<button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px" onclick="downloadDevisPdf(\''+esc(devisId)+'\',\''+kind+'\')" title="Télécharger le PDF">⬇</button>'+
-          '<button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px;color:#ef4444" onclick="confirmDeleteDevisPdf(\''+esc(devisId)+'\',\''+kind+'\')" title="Supprimer le PDF stocké">🗑</button>'+
+          '<button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:3px 8px;color:#ef4444" onclick="confirmDeleteDevisPdf(\''+esc(devisId)+'\',\''+kind+'\')" title="Supprimer le PDF stocké (local + cloud)">🗑</button>'+
         '</div>'+
       '</div>';
+  }
+  getDevisPdf(devisId,kind).then(function(rec){
+    if(rec){
+      // Cas standard : record IndexedDB présent → affiche avec métadonnées locales
+      card.style.display='block';
+      card.innerHTML = _buildCardHtml({
+        filename: rec.filename,
+        fileSize: rec.fileSize,
+        savedAt:  rec.savedAt,
+        cloudOnly: false
+      });
+      return;
+    }
+    // ÉTAPE D-BIS : fallback cloud-only. Si l'index cloud a une entrée pour
+    // (devisId, kind), on affiche une carte minimaliste avec le filename extrait
+    // du chemin Storage. Les actions ouvrent / téléchargent / suppriment la
+    // version cloud (cloud-first dans openDevisPdf/downloadDevisPdf, et la
+    // suppression patchée ci-dessus prend bien le chemin cloud).
+    var cIdx = window.devisPdfCloudIndex || {};
+    var entry = cIdx[String(devisId)];
+    var cloudPath = entry && entry[kind];
+    if (cloudPath) {
+      var cloudFilename = String(cloudPath).split('/').pop();
+      card.style.display='block';
+      card.innerHTML = _buildCardHtml({
+        filename: cloudFilename,
+        cloudOnly: true
+      });
+      return;
+    }
+    // Ni local, ni cloud : carte masquée (état initial)
+    card.style.display='none';card.innerHTML='';
   }).catch(function(err){
     console.warn('renderDevisPdfCard failed:',err);
     card.style.display='none';card.innerHTML='';
@@ -33389,21 +33424,78 @@ function downloadDevisPdf(devisId,kind){
 
 // Supprime le PDF stocké (avec confirmation)
 function confirmDeleteDevisPdf(devisId,kind){
-  var labels={emerson:'Emerson',act:'ACT',po_cali:'PO Calinstrum'};
+  var labels={emerson:'Emerson',act:'ACT',po_cali:'PO Calinstrum',bc_client:'BC Client',quote_emerson:'Quote Emerson'};
   var label=labels[kind]||kind;
-  if(!confirm('Supprimer le PDF '+label+' stocké pour ce devis ?\n\n(Le PDF source sur ton disque n\'est pas affecté.)')) return;
-  deleteDevisPdf(devisId,kind).then(function(deleted){
-    if(deleted){
-      refreshDevisPdfCache().then(function(){
-        renderDevisPdfCard(devisId,kind);
-        if(typeof renderDV==='function'){try{renderDV();}catch(e){}}
-        if(typeof showBCSaveToast==='function'){
-          showBCSaveToast('✓ PDF '+label+' supprimé');
-        }
-      });
+  if(!confirm('Supprimer le PDF '+label+' stocké pour ce devis ?\n\n(Local IndexedDB + cloud Supabase Storage. Le PDF source sur ton disque n\'est pas affecté.)')) return;
+
+  // ÉTAPE D-BIS : symétrie avec l'écriture (uploadDevisPdfToCloud).
+  // Avant : la suppression ne touchait QUE IndexedDB → fichiers orphelins dans le cloud.
+  // Après : on supprime local + cloud, on met à jour cloudIndex + les Sets en mémoire.
+  var idStr = String(devisId);
+  var cIdx = window.devisPdfCloudIndex || {};
+  var entry = cIdx[idStr] || {};
+  var cloudPath = entry[kind] || null;
+
+  // Lance la suppression locale et la suppression cloud en parallèle.
+  var localPromise = deleteDevisPdf(devisId, kind);
+  var cloudPromise;
+  if (cloudPath && window._supaClient) {
+    cloudPromise = window._supaClient.storage.from('pdfs').remove([cloudPath]);
+  } else {
+    cloudPromise = Promise.resolve(null);
+  }
+
+  Promise.all([localPromise, cloudPromise]).then(function(results){
+    var locDel = results[0];
+    var cldRes = results[1];
+    var cloudOk = (!cldRes) || (cldRes && !cldRes.error);
+
+    // Mise à jour cloudIndex + Sets (uniquement si la suppression cloud a réussi).
+    if (cloudPath && cloudOk) {
+      // Retire l'entrée pour le kind supprimé
+      if (entry[kind]) delete entry[kind];
+      // Cas miroir emerson <-> quote_emerson (cf Pass 1.5 / Pass 2 du refresh cloud) :
+      // si l'autre kind pointait sur le MÊME fichier physique, on le nettoie aussi
+      // sinon la pastille resterait allumée alors que le fichier est parti.
+      if (kind === 'emerson' && entry.quote_emerson === cloudPath) {
+        delete entry.quote_emerson;
+        if (window.devisIdsWithQuoteEmersonPdf) window.devisIdsWithQuoteEmersonPdf.delete(idStr);
+      }
+      if (kind === 'quote_emerson' && entry.emerson === cloudPath) {
+        delete entry.emerson;
+        if (window.devisIdsWithEmersonPdf) window.devisIdsWithEmersonPdf.delete(idStr);
+      }
+      // Retire l'id du Set du kind directement supprimé
+      var setMap = {
+        emerson:       window.devisIdsWithEmersonPdf,
+        act:           window.devisIdsWithACTPdf,
+        po_cali:       window.devisIdsWithPoCaliPdf,
+        bc_client:     window.devisIdsWithBCClientPdf,
+        quote_emerson: window.devisIdsWithQuoteEmersonPdf
+      };
+      if (setMap[kind] && typeof setMap[kind].delete === 'function') setMap[kind].delete(idStr);
     }
+
+    // refreshDevisPdfCache rebuilds les Sets depuis IndexedDB + merge cloud (cf
+    // Patch 1 de l'étape C). Ça remettra en cohérence si IndexedDB avait encore
+    // l'entry pour ce kind (impossible après deleteDevisPdf, mais filet de sécurité).
+    return refreshDevisPdfCache().then(function(){
+      renderDevisPdfCard(devisId, kind);
+      if (typeof renderDV === 'function') { try { renderDV(); } catch(e){} }
+
+      var msg;
+      if (locDel && cloudOk && cloudPath)            msg = '✓ PDF '+label+' supprimé (local + cloud)';
+      else if (locDel && cloudOk && !cloudPath)      msg = '✓ PDF '+label+' supprimé (local uniquement — rien en cloud)';
+      else if (!locDel && cloudOk && cloudPath)      msg = '✓ PDF '+label+' supprimé du cloud (rien en local)';
+      else if (locDel && !cloudOk)                   msg = '⚠ PDF '+label+' supprimé en local, mais échec cloud : '+((cldRes && cldRes.error && cldRes.error.message) || 'erreur réseau');
+      else if (!locDel && !cloudPath)                msg = 'ℹ️ Aucun PDF '+label+' à supprimer.';
+      else                                           msg = '⚠ Suppression partielle (voir console)';
+
+      if (typeof showBCSaveToast === 'function') { try { showBCSaveToast(msg); } catch(e){ alert(msg); } }
+      else alert(msg);
+    });
   }).catch(function(err){
-    alert('❌ Échec de la suppression : '+(err.message||err));
+    alert('❌ Échec de la suppression : '+(err && err.message || err));
   });
 }
 
