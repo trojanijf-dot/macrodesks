@@ -33423,80 +33423,131 @@ function downloadDevisPdf(devisId,kind){
 }
 
 // Supprime le PDF stocké (avec confirmation)
-function confirmDeleteDevisPdf(devisId,kind){
-  var labels={emerson:'Emerson',act:'ACT',po_cali:'PO Calinstrum',bc_client:'BC Client',quote_emerson:'Quote Emerson'};
-  var label=labels[kind]||kind;
-  if(!confirm('Supprimer le PDF '+label+' stocké pour ce devis ?\n\n(Local IndexedDB + cloud Supabase Storage. Le PDF source sur ton disque n\'est pas affecté.)')) return;
+// ÉTAPE D-TER (refonte par rapport à D-bis) — delete robuste :
+// 1. Source de vérité = LISTING Supabase en live (pas le cache cloudIndex qui
+//    peut être stale ou pas encore peuplé → bug observé où le delete cloud
+//    était silencieusement skip parce que cloudIndex[id][kind] était vide).
+// 2. Suppression LOCAL (IndexedDB) + CLOUD (tous les fichiers du dossier).
+// 3. Clear des champs texte référence + date du formulaire (cohérence visuelle :
+//    delete = section entièrement nettoyée). Non persisté tant que l'utilisateur
+//    ne clique pas "Enregistrer" — il peut annuler via le bouton Annuler.
+// 4. Hard cleanup en mémoire de cloudIndex et des Sets (pastille disparait pour de bon).
+async function confirmDeleteDevisPdf(devisId, kind){
+  var labels = {emerson:'Emerson', act:'ACT', po_cali:'PO Calinstrum', bc_client:'BC Client', quote_emerson:'Quote Emerson'};
+  var label = labels[kind] || kind;
+  if (!confirm(
+    'Supprimer le PDF '+label+' stocké pour ce devis ?\n\n'+
+    '• Local IndexedDB\n'+
+    '• Cloud Supabase Storage (tous les fichiers du dossier)\n'+
+    '• Champs texte référence + date (effacés du formulaire, persistés au "Enregistrer")\n\n'+
+    'Le PDF source sur ton disque n\'est pas affecté.'
+  )) return;
 
-  // ÉTAPE D-BIS : symétrie avec l'écriture (uploadDevisPdfToCloud).
-  // Avant : la suppression ne touchait QUE IndexedDB → fichiers orphelins dans le cloud.
-  // Après : on supprime local + cloud, on met à jour cloudIndex + les Sets en mémoire.
   var idStr = String(devisId);
-  var cIdx = window.devisPdfCloudIndex || {};
-  var entry = cIdx[idStr] || {};
-  var cloudPath = entry[kind] || null;
 
-  // Lance la suppression locale et la suppression cloud en parallèle.
-  var localPromise = deleteDevisPdf(devisId, kind);
-  var cloudPromise;
-  if (cloudPath && window._supaClient) {
-    cloudPromise = window._supaClient.storage.from('pdfs').remove([cloudPath]);
-  } else {
-    cloudPromise = Promise.resolve(null);
+  // ===== 1) Suppression LOCAL IndexedDB =====
+  var locDel = false;
+  try { locDel = await deleteDevisPdf(devisId, kind); }
+  catch(e) { console.warn('[D-ter] Local delete failed:', e); }
+
+  // ===== 2) Suppression CLOUD via LISTING live (source de vérité Supabase) =====
+  var cloudRemoved = 0;
+  var cloudErr = null;
+  if (window._supaClient) {
+    try {
+      var num = (typeof _resolveDevisIdToNum === 'function') ? _resolveDevisIdToNum(devisId) : null;
+      var folder = (typeof APP_KIND_TO_STORAGE_FOLDER === 'object') ? APP_KIND_TO_STORAGE_FOLDER[kind] : null;
+      if (!num) {
+        console.warn('[D-ter] Pas de num résolu pour devisId='+devisId+' → skip cloud delete');
+      } else if (!folder) {
+        console.warn('[D-ter] Pas de mapping cloud pour kind='+kind+' → skip cloud delete');
+      } else {
+        var prefix = _safeSeg(num) + '/' + _safeSeg(folder);
+        var listRes = await window._supaClient.storage.from('pdfs').list(prefix, { limit: 100 });
+        if (listRes.error) {
+          cloudErr = listRes.error.message || String(listRes.error);
+        } else {
+          // Filtre les fichiers (metadata != null) ; ignore les sous-dossiers (metadata == null)
+          var files = (listRes.data || []).filter(function(f){ return f && f.name && f.metadata != null; });
+          if (files.length > 0) {
+            var paths = files.map(function(f){ return prefix + '/' + f.name; });
+            console.log('[D-ter] Suppression cloud de', paths.length, 'fichier(s) :', paths);
+            var rmRes = await window._supaClient.storage.from('pdfs').remove(paths);
+            if (rmRes.error) {
+              cloudErr = rmRes.error.message || String(rmRes.error);
+            } else {
+              cloudRemoved = (rmRes.data && rmRes.data.length) || files.length;
+            }
+          }
+        }
+      }
+    } catch(e) {
+      cloudErr = (e && e.message) || String(e);
+      console.warn('[D-ter] Cloud delete exception:', e);
+    }
   }
 
-  Promise.all([localPromise, cloudPromise]).then(function(results){
-    var locDel = results[0];
-    var cldRes = results[1];
-    var cloudOk = (!cldRes) || (cldRes && !cldRes.error);
-
-    // Mise à jour cloudIndex + Sets (uniquement si la suppression cloud a réussi).
-    if (cloudPath && cloudOk) {
-      // Retire l'entrée pour le kind supprimé
-      if (entry[kind]) delete entry[kind];
-      // Cas miroir emerson <-> quote_emerson (cf Pass 1.5 / Pass 2 du refresh cloud) :
-      // si l'autre kind pointait sur le MÊME fichier physique, on le nettoie aussi
-      // sinon la pastille resterait allumée alors que le fichier est parti.
-      if (kind === 'emerson' && entry.quote_emerson === cloudPath) {
-        delete entry.quote_emerson;
-        if (window.devisIdsWithQuoteEmersonPdf) window.devisIdsWithQuoteEmersonPdf.delete(idStr);
-      }
-      if (kind === 'quote_emerson' && entry.emerson === cloudPath) {
-        delete entry.emerson;
-        if (window.devisIdsWithEmersonPdf) window.devisIdsWithEmersonPdf.delete(idStr);
-      }
-      // Retire l'id du Set du kind directement supprimé
-      var setMap = {
-        emerson:       window.devisIdsWithEmersonPdf,
-        act:           window.devisIdsWithACTPdf,
-        po_cali:       window.devisIdsWithPoCaliPdf,
-        bc_client:     window.devisIdsWithBCClientPdf,
-        quote_emerson: window.devisIdsWithQuoteEmersonPdf
-      };
-      if (setMap[kind] && typeof setMap[kind].delete === 'function') setMap[kind].delete(idStr);
+  // ===== 3) Hard cleanup cloudIndex + Sets en mémoire =====
+  // Permet à la pastille de disparaitre immédiatement, sans attendre un refresh complet.
+  if (window.devisPdfCloudIndex && window.devisPdfCloudIndex[idStr]) {
+    var entry = window.devisPdfCloudIndex[idStr];
+    var oldPath = entry[kind];
+    if (entry[kind]) delete entry[kind];
+    // Miroir emerson <-> quote_emerson (Pass 1.5 / Pass 2 étape C) :
+    // si l'autre kind pointait sur le MÊME fichier physique, nettoyer aussi.
+    if (kind === 'emerson' && entry.quote_emerson === oldPath) {
+      delete entry.quote_emerson;
+      if (window.devisIdsWithQuoteEmersonPdf) window.devisIdsWithQuoteEmersonPdf.delete(idStr);
     }
+    if (kind === 'quote_emerson' && entry.emerson === oldPath) {
+      delete entry.emerson;
+      if (window.devisIdsWithEmersonPdf) window.devisIdsWithEmersonPdf.delete(idStr);
+    }
+  }
+  var setMap = {
+    emerson:       window.devisIdsWithEmersonPdf,
+    act:           window.devisIdsWithACTPdf,
+    po_cali:       window.devisIdsWithPoCaliPdf,
+    bc_client:     window.devisIdsWithBCClientPdf,
+    quote_emerson: window.devisIdsWithQuoteEmersonPdf
+  };
+  if (setMap[kind] && typeof setMap[kind].delete === 'function') setMap[kind].delete(idStr);
 
-    // refreshDevisPdfCache rebuilds les Sets depuis IndexedDB + merge cloud (cf
-    // Patch 1 de l'étape C). Ça remettra en cohérence si IndexedDB avait encore
-    // l'entry pour ce kind (impossible après deleteDevisPdf, mais filet de sécurité).
-    return refreshDevisPdfCache().then(function(){
-      renderDevisPdfCard(devisId, kind);
-      if (typeof renderDV === 'function') { try { renderDV(); } catch(e){} }
+  // ===== 4) Clear des champs texte référence + date dans le formulaire =====
+  var fieldMap = {
+    emerson:       {ref:'dv-ref-emerson',       date:'dv-ref-emerson-date'},
+    act:           {ref:'dv-ref-act',           date:'dv-ref-act-date'},
+    po_cali:       {ref:'dv-po-calinstrum',     date:'dv-po-calinstrum-date'},
+    bc_client:     {ref:'dv-bc-client-ref',     date:'dv-bc-client-date'},
+    quote_emerson: {ref:'dv-quote-emerson-ref', date:'dv-quote-emerson-date'}
+  };
+  var fm = fieldMap[kind];
+  if (fm) {
+    var refEl  = document.getElementById(fm.ref);  if (refEl)  refEl.value  = '';
+    var dateEl = document.getElementById(fm.date); if (dateEl) dateEl.value = '';
+  }
 
-      var msg;
-      if (locDel && cloudOk && cloudPath)            msg = '✓ PDF '+label+' supprimé (local + cloud)';
-      else if (locDel && cloudOk && !cloudPath)      msg = '✓ PDF '+label+' supprimé (local uniquement — rien en cloud)';
-      else if (!locDel && cloudOk && cloudPath)      msg = '✓ PDF '+label+' supprimé du cloud (rien en local)';
-      else if (locDel && !cloudOk)                   msg = '⚠ PDF '+label+' supprimé en local, mais échec cloud : '+((cldRes && cldRes.error && cldRes.error.message) || 'erreur réseau');
-      else if (!locDel && !cloudPath)                msg = 'ℹ️ Aucun PDF '+label+' à supprimer.';
-      else                                           msg = '⚠ Suppression partielle (voir console)';
+  // ===== 5) Refresh des caches + UI =====
+  try { if (typeof refreshDevisPdfCache === 'function') await refreshDevisPdfCache(); } catch(e){}
+  try { renderDevisPdfCard(devisId, kind); } catch(e){}
+  try { if (typeof renderDV === 'function') renderDV(); } catch(e){}
 
-      if (typeof showBCSaveToast === 'function') { try { showBCSaveToast(msg); } catch(e){ alert(msg); } }
-      else alert(msg);
-    });
-  }).catch(function(err){
-    alert('❌ Échec de la suppression : '+(err && err.message || err));
-  });
+  // ===== 6) Toast récap =====
+  var msg;
+  if (cloudErr) {
+    msg = '⚠ PDF '+label+' : local '+(locDel?'supprimé':'rien à supprimer')+
+          ', cloud ÉCHEC ('+cloudErr+'). Réessaie ou contacte le support.';
+  } else if (locDel && cloudRemoved > 0) {
+    msg = '✓ PDF '+label+' supprimé (local + '+cloudRemoved+' fichier'+(cloudRemoved>1?'s':'')+' cloud)';
+  } else if (locDel && cloudRemoved === 0) {
+    msg = '✓ PDF '+label+' supprimé (local uniquement — rien en cloud)';
+  } else if (!locDel && cloudRemoved > 0) {
+    msg = '✓ PDF '+label+' supprimé du cloud ('+cloudRemoved+' fichier'+(cloudRemoved>1?'s':'')+', rien en local)';
+  } else {
+    msg = 'ℹ️ Aucun PDF '+label+' à supprimer.';
+  }
+  if (typeof showBCSaveToast === 'function') { try { showBCSaveToast(msg); } catch(e){ alert(msg); } }
+  else alert(msg);
 }
 
 // =============================================================================
