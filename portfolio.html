@@ -120,9 +120,11 @@ tr:last-child td{border-bottom:none}
 <div class="tabs">
   <button class="tab active" onclick="sw('regime',this)">📊 Macro Regime</button>
   <button class="tab" onclick="sw('confluence',this)">🔬 Confluences</button>
+  <button class="tab" onclick="sw('setup',this)">🎯 Setup Builder</button>
   <button class="tab" onclick="sw('portfolio',this)">💼 Portfolio</button>
   <button class="tab" onclick="sw('process',this)">📋 Process</button>
   <button class="tab" onclick="sw('decision',this)">⚡ Decision</button>
+  <a href="https://trojanijf-dot.github.io/macrodesks/index.html" class="tab" style="margin-left:auto;text-decoration:none;color:var(--teal);display:flex;align-items:center" title="Ouvrir le dashboard MacroDesk">↗ MacroDesk</a>
 </div>
 
 <!-- ═══════════════════════════════════════ -->
@@ -201,7 +203,131 @@ tr:last-child td{border-bottom:none}
 </div>
 
 <!-- ═══════════════════════════════════════ -->
-<!-- TAB 3 — PORTFOLIO -->
+<!-- TAB 3 — SETUP BUILDER (invalidation-first) -->
+<!-- ═══════════════════════════════════════ -->
+<div id="p-setup" class="panel">
+
+  <!-- SÉLECTION INSTRUMENT + DIRECTION -->
+  <div class="card" style="margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+      <div class="ctitle" style="color:var(--teal);margin-bottom:0">🎯 Setup Builder — Règle de Survie #2 : on part de l'invalidation</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span id="setup-macro-status" class="pill pill-amber" style="font-size:9px"><div class="dot"></div>MacroDesk —</span>
+        <button class="refresh-btn" onclick="runSetupAnalysis()">↻ Analyser</button>
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-group"><label>Instrument</label>
+        <select id="su-inst" onchange="runSetupAnalysis()">
+          <option>NZD/JPY</option><option>AUD/JPY</option><option>AUD/USD</option>
+          <option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option>
+          <option>Gold XAU</option><option>WTI Crude</option><option>BTC/USD</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Direction proposée</label>
+        <select id="su-dir" onchange="recomputeSetup()">
+          <option value="SHORT">SHORT / SELL</option><option value="LONG">LONG / BUY</option>
+        </select>
+      </div>
+    </div>
+    <div id="su-price-live" style="font-size:10px;color:var(--muted)">Prix live : <span id="su-price" style="color:var(--teal);font-weight:700">—</span></div>
+  </div>
+
+  <!-- CONFLUENCE MULTI-TIMEFRAME -->
+  <div class="sec">Confluence multi-timeframe — alignement 1D / 4H / 1H</div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
+    <div class="card" id="su-tf-1d" style="margin-bottom:0;text-align:center">
+      <div class="ctitle">1D · structurel</div>
+      <div class="mval" id="su-1d-score" style="font-size:20px">—</div>
+      <div class="msub" id="su-1d-detail" style="color:var(--muted)">—</div>
+    </div>
+    <div class="card" id="su-tf-4h" style="margin-bottom:0;text-align:center">
+      <div class="ctitle">4H · intermédiaire</div>
+      <div class="mval" id="su-4h-score" style="font-size:20px">—</div>
+      <div class="msub" id="su-4h-detail" style="color:var(--muted)">—</div>
+    </div>
+    <div class="card" id="su-tf-1h" style="margin-bottom:0;text-align:center">
+      <div class="ctitle">1H · timing</div>
+      <div class="mval" id="su-1h-score" style="font-size:20px">—</div>
+      <div class="msub" id="su-1h-detail" style="color:var(--muted)">—</div>
+    </div>
+    <div class="card" id="su-tf-align" style="margin-bottom:0;text-align:center;border-color:rgba(45,212,191,.3)">
+      <div class="ctitle" style="color:var(--teal)">Alignement MTF</div>
+      <div class="mval teal" id="su-align" style="font-size:20px">—</div>
+      <div class="msub" id="su-align-detail" style="color:var(--muted)">—</div>
+    </div>
+  </div>
+
+  <!-- DÉTAIL INDICATEURS PAR TF -->
+  <div class="card" style="margin-bottom:10px">
+    <div class="ctitle">Indicateurs techniques calculés (live)</div>
+    <table id="su-indicators">
+      <tr><th>TF</th><th>EMA 50</th><th>EMA 200</th><th>RSI 14</th><th>Fib 0.618</th><th>Fib 0.705</th><th>Signal</th></tr>
+      <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:16px">Clique « Analyser » pour calculer EMA / RSI / Fibonacci sur données live</td></tr>
+    </table>
+    <div style="font-size:9px;color:var(--muted);margin-top:6px;line-height:1.5">
+      <span class="teal">●</span> EMA & RSI = calcul réel · <span class="amber">●</span> Fib = pivots auto (override possible) · trendline/pattern = saisie manuelle ci-dessous
+    </div>
+  </div>
+
+  <!-- CONFLUENCES MANUELLES (trendline / pattern) -->
+  <div class="card" style="margin-bottom:10px">
+    <div class="ctitle">Confluences manuelles — ce que l'algo ne détecte pas de façon fiable</div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px">
+      <div class="chk" onclick="toggleSetupCk(this)"><div class="cb"></div><div class="clbl">Trendline majeure cassée / respectée</div></div>
+      <div class="chk" onclick="toggleSetupCk(this)"><div class="cb"></div><div class="clbl">Counter-trendline confirmée</div></div>
+      <div class="chk" onclick="toggleSetupCk(this)"><div class="cb"></div><div class="clbl">Pattern (double top/bottom, H&S, drapeau)</div></div>
+      <div class="chk" onclick="toggleSetupCk(this)"><div class="cb"></div><div class="clbl">Niveau S/R horizontal majeur testé</div></div>
+    </div>
+  </div>
+
+  <!-- LE CŒUR : INVALIDATION → ENTRÉE → TP → TAILLE -->
+  <div class="g2">
+    <!-- COLONNE GAUCHE : NIVEAUX -->
+    <div class="card" style="border-left:3px solid var(--red)">
+      <div class="ctitle" style="color:var(--red)">① Niveau d'invalidation = Stop Loss</div>
+      <div style="font-size:9px;color:#94a3b8;line-height:1.6;margin-bottom:8px">Le prix qui tue l'idée. Structurel (swing, Fib, EMA), jamais un % arbitraire. La taille s'ajuste après.</div>
+      <div id="su-inval-suggestions" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"></div>
+      <div class="form-grid">
+        <div class="form-group"><label>Invalidation (SL)</label><input type="number" id="su-sl" step="0.0001" oninput="recomputeSetup()" placeholder="auto"></div>
+        <div class="form-group"><label>Prix d'entrée</label><input type="number" id="su-entry" step="0.0001" oninput="recomputeSetup()" placeholder="auto"></div>
+      </div>
+      <div style="margin-top:6px;padding-top:8px;border-top:1px solid var(--border)">
+        <div class="ctitle" style="color:var(--green)">② Take Profit — expansion Fibonacci</div>
+        <div class="form-grid">
+          <div class="form-group"><label>TP1 (0.618 ext)</label><input type="number" id="su-tp1" step="0.0001" oninput="recomputeSetup()" placeholder="auto"></div>
+          <div class="form-group"><label>TP2 (1.0 ext)</label><input type="number" id="su-tp2" step="0.0001" oninput="recomputeSetup()" placeholder="auto"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- COLONNE DROITE : POSITION CALCULÉE -->
+    <div class="card" style="border-left:3px solid var(--teal)">
+      <div class="ctitle" style="color:var(--teal)">③ Position — calculée depuis le SL</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;padding:4px 0;border-bottom:1px solid var(--border)"><span>Distance entrée → SL</span><span id="su-dist" class="red" style="font-weight:700">—</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;padding:4px 0;border-bottom:1px solid var(--border)"><span>Risk (<span id="su-risk-pct">0.5</span>% du capital)</span><span id="su-risk-amt" style="font-weight:700">—</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;padding:4px 0;border-bottom:1px solid var(--border)"><span>Taille de position</span><span id="su-size" class="teal" style="font-weight:700">—</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;padding:4px 0"><span>R/R réel (TP1)</span><span id="su-rr" class="green" style="font-weight:700">—</span></div>
+      </div>
+      <div class="slrow" style="margin-top:8px"><label>Risk/trade (%)</label><input type="range" min="0.1" max="2" step="0.1" value="0.5" id="su-risk-slider" oninput="recomputeSetup()"><span id="su-risk-slider-v">0.5%</span></div>
+      <div id="su-verdict" class="verdict" style="margin-top:4px">Renseigne instrument + invalidation pour obtenir le verdict.</div>
+      <button class="btn btn-teal" onclick="sendSetupToPortfolio()" style="width:100%;margin-top:8px">→ Envoyer vers Portfolio (pré-remplir)</button>
+    </div>
+  </div>
+
+  <!-- AFFINAGE 15MIN -->
+  <div class="sec">Affinage de l'entrée — timing 15min</div>
+  <div class="card">
+    <div style="font-size:10px;color:#94a3b8;line-height:1.7;margin-bottom:8px">
+      Direction validée sur les grands TF → on attend le <strong style="color:var(--teal)">pullback</strong> vers la zone d'entrée (retracement Fib interne au 15min) plutôt que d'entrer au marché. On chasse un meilleur prix <strong>sans déplacer l'invalidation</strong>.
+    </div>
+    <div id="su-15min-chart" style="background:var(--bg3);border-radius:8px;padding:10px"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- TAB 4 — PORTFOLIO -->
 <!-- ═══════════════════════════════════════ -->
 <div id="p-portfolio" class="panel">
 
@@ -1171,6 +1297,469 @@ function updateDec(){
   else{box.className='dec dec-no';icon.style.color='var(--red)';icon.textContent='PASSER';text.textContent='Setup invalide — confluence '+conf+' (min 65), R/R '+rr.toFixed(1)+' (min 2), '+crit+'/6 critères.';}
 }
 updateDec();
+
+// ════════════════════════════════════════
+// SETUP BUILDER — moteur technique réel
+// (EMA/RSI/Fibonacci live multi-TF + invalidation-first)
+// ════════════════════════════════════════
+
+// Mapping instrument → ticker Yahoo (réutilise la convention du dashboard)
+const SU_TICKERS = {
+  'NZD/JPY':'NZDJPY=X','AUD/JPY':'AUDJPY=X','AUD/USD':'AUDUSD=X',
+  'EUR/USD':'EURUSD=X','GBP/USD':'GBPUSD=X','USD/JPY':'USDJPY=X',
+  'Gold XAU':'GC=F','WTI Crude':'CL=F','BTC/USD':'BTC-USD',
+};
+
+// Cache bougies par TF pour éviter de re-fetch en boucle
+let suCandles = {};        // { '1D':[...], '4H':[...], '1H':[...], '15m':[...] }
+let suFib = {};            // niveaux Fibonacci par TF
+let suMacro = null;        // données lues depuis macrodata.json
+let suState = {};          // résultat agrégé de l'analyse
+
+// ---- Fetch bougies Yahoo (via le même proxy que le dashboard) ----
+async function suFetchCandles(ticker, interval, range){
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=${interval}&range=${range}`;
+    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    const r = await fetch(proxy,{signal:AbortSignal.timeout(9000)});
+    const j = await r.json();
+    const data = JSON.parse(j.contents);
+    const res = data?.chart?.result?.[0];
+    if(!res?.indicators?.quote?.[0]?.close) return null;
+    const closes = res.indicators.quote[0].close;
+    const highs  = res.indicators.quote[0].high;
+    const lows   = res.indicators.quote[0].low;
+    // Nettoyer les nulls (Yahoo en renvoie sur les sessions vides)
+    const candles = [];
+    for(let i=0;i<closes.length;i++){
+      if(closes[i]!=null && highs[i]!=null && lows[i]!=null){
+        candles.push({c:closes[i], h:highs[i], l:lows[i]});
+      }
+    }
+    return candles.length ? candles : null;
+  } catch(e){ return null; }
+}
+
+// ---- EMA (calcul réel) ----
+function suEMA(values, period){
+  if(!values || values.length < period) return null;
+  const k = 2/(period+1);
+  let ema = values.slice(0,period).reduce((a,b)=>a+b,0)/period; // SMA initiale
+  for(let i=period;i<values.length;i++){ ema = values[i]*k + ema*(1-k); }
+  return ema;
+}
+
+// ---- RSI Wilder (calcul réel) ----
+function suRSI(values, period=14){
+  if(!values || values.length < period+1) return null;
+  let gains=0, losses=0;
+  for(let i=1;i<=period;i++){
+    const d = values[i]-values[i-1];
+    if(d>=0) gains+=d; else losses-=d;
+  }
+  let avgG=gains/period, avgL=losses/period;
+  for(let i=period+1;i<values.length;i++){
+    const d = values[i]-values[i-1];
+    avgG = (avgG*(period-1) + (d>0?d:0))/period;
+    avgL = (avgL*(period-1) + (d<0?-d:0))/period;
+  }
+  if(avgL===0) return 100;
+  const rs = avgG/avgL;
+  return 100 - (100/(1+rs));
+}
+
+// ---- Détection du dernier swing (pivot high/low) pour Fibonacci ----
+function suLastSwing(candles, lookback=5){
+  if(!candles || candles.length < lookback*2+1) return null;
+  let lastHigh=null, lastLow=null, hiIdx=-1, loIdx=-1;
+  for(let i=candles.length-lookback-1; i>=lookback; i--){
+    const isHigh = candles.slice(i-lookback,i).every(x=>x.h<=candles[i].h) &&
+                   candles.slice(i+1,i+lookback+1).every(x=>x.h<=candles[i].h);
+    const isLow  = candles.slice(i-lookback,i).every(x=>x.l>=candles[i].l) &&
+                   candles.slice(i+1,i+lookback+1).every(x=>x.l>=candles[i].l);
+    if(isHigh && hiIdx<0){ lastHigh=candles[i].h; hiIdx=i; }
+    if(isLow  && loIdx<0){ lastLow =candles[i].l; loIdx=i; }
+    if(hiIdx>=0 && loIdx>=0) break;
+  }
+  if(lastHigh==null||lastLow==null) return null;
+  return {high:lastHigh, low:lastLow, hiIdx, loIdx, upMove: loIdx>hiIdx};
+}
+
+// ---- Niveaux Fibonacci retracement + expansion ----
+function suFibLevels(swing, dir){
+  if(!swing) return null;
+  const {high, low} = swing;
+  const range = high - low;
+  // Retracements (depuis le mouvement) — utiles pour zone d'entrée
+  const ret = {
+    '0.382': high - range*0.382,
+    '0.5':   high - range*0.5,
+    '0.618': high - range*0.618,
+    '0.705': high - range*0.705,
+  };
+  // Expansions (projection au-delà) — utiles pour TP
+  // SHORT : on projette sous le low. LONG : au-dessus du high.
+  const ext = dir==='SHORT'
+    ? { '0.618': low - range*0.618, '1.0': low - range*1.0, '1.618': low - range*1.618 }
+    : { '0.618': high + range*0.618, '1.0': high + range*1.0, '1.618': high + range*1.618 };
+  return {high, low, range, ret, ext};
+}
+
+// ---- Score de confluence par TF (combine EMA, RSI, position Fib) ----
+function suScoreTF(candles, dir){
+  if(!candles || candles.length<50) return {score:0, detail:'data insuffisante', ema50:null, ema200:null, rsi:null};
+  const closes = candles.map(x=>x.c);
+  const price  = closes[closes.length-1];
+  const ema50  = suEMA(closes,50);
+  const ema200 = candles.length>=200 ? suEMA(closes,200) : suEMA(closes, Math.min(100,candles.length-1));
+  const rsi    = suRSI(closes,14);
+  let score=50, bits=[];
+  // Tendance EMA
+  if(ema50 && ema200){
+    if(dir==='SHORT' && ema50<ema200){ score+=18; bits.push('EMA50<200'); }
+    else if(dir==='LONG' && ema50>ema200){ score+=18; bits.push('EMA50>200'); }
+    else { score-=12; bits.push('EMA contraire'); }
+  }
+  // Prix vs EMA50
+  if(ema50){
+    if(dir==='SHORT' && price<ema50){ score+=8; }
+    else if(dir==='LONG' && price>ema50){ score+=8; }
+  }
+  // RSI
+  if(rsi!=null){
+    if(dir==='SHORT'){
+      if(rsi>65){ score+=14; bits.push('RSI surachat '+rsi.toFixed(0)); }
+      else if(rsi<35){ score-=10; bits.push('RSI survente '+rsi.toFixed(0)); }
+      else bits.push('RSI '+rsi.toFixed(0));
+    } else {
+      if(rsi<35){ score+=14; bits.push('RSI survente '+rsi.toFixed(0)); }
+      else if(rsi>65){ score-=10; bits.push('RSI surachat '+rsi.toFixed(0)); }
+      else bits.push('RSI '+rsi.toFixed(0));
+    }
+  }
+  score = Math.max(0,Math.min(95,Math.round(score)));
+  return {score, detail:bits.slice(0,2).join(' · ')||'neutre', ema50, ema200, rsi, price};
+}
+
+// ---- Lecture macrodata.json (branchement MacroDesk, même origine en prod) ----
+async function suFetchMacro(){
+  const candidates = ['./macrodata.json','macrodata.json','https://trojanijf-dot.github.io/macrodesks/macrodata.json'];
+  for(const u of candidates){
+    try {
+      const r = await fetch(u,{signal:AbortSignal.timeout(6000)});
+      if(r.ok){ suMacro = await r.json(); return suMacro; }
+    } catch(e){}
+  }
+  suMacro = null; return null;
+}
+
+function suMacroBias(){
+  // Lecture défensive : structure macrodata.json inconnue → on tente plusieurs clés
+  if(!suMacro) return {label:'non connecté', score:null};
+  const m = suMacro;
+  const liq = m?.liquidity?.score ?? m?.liquidityPulse?.score ?? m?.A1?.score;
+  const mac = m?.macro?.score ?? m?.macroPulse?.score ?? m?.A2?.score;
+  const cry = m?.crypto?.score ?? m?.cryptoPulse?.score ?? m?.A3?.score;
+  const parts = [liq,mac,cry].filter(x=>typeof x==='number');
+  if(!parts.length) return {label:'connecté (clés à mapper)', score:null};
+  const avg = parts.reduce((a,b)=>a+b,0)/parts.length;
+  return {label: avg>0.5?'RISK-ON':avg<-0.5?'RISK-OFF':'NEUTRE', score:avg};
+}
+
+// ---- Confluences manuelles ----
+function suManualCount(){
+  return document.querySelectorAll('#p-setup .chk .cb.on').length;
+}
+function toggleSetupCk(el){
+  el.querySelector('.cb').classList.toggle('on');
+  el.querySelector('.clbl').classList.toggle('done');
+  recomputeSetup();
+}
+
+// ---- Analyse complète (fetch + calcul) ----
+async function runSetupAnalysis(){
+  const inst = document.getElementById('su-inst').value;
+  const dir  = document.getElementById('su-dir').value;
+  const ticker = SU_TICKERS[inst];
+  if(!ticker){ return; }
+
+  // statut macro
+  const ms = document.getElementById('setup-macro-status');
+  ms.innerHTML = '<div class="dot"></div>MacroDesk…';
+  await suFetchMacro();
+  const mb = suMacroBias();
+  ms.className = 'pill ' + (mb.label==='RISK-ON'?'pill-green':mb.label==='RISK-OFF'?'pill-red':'pill-amber');
+  ms.innerHTML = '<div class="dot"></div>MacroDesk '+mb.label;
+
+  // Indicateur de chargement
+  ['su-1d-score','su-4h-score','su-1h-score','su-align'].forEach(id=>document.getElementById(id).textContent='…');
+
+  // Fetch bougies multi-TF (Yahoo : pas de 4H natif → 1H range étendu, on agrège)
+  const [d1, h1, h1_15] = await Promise.all([
+    suFetchCandles(ticker,'1d','6mo'),
+    suFetchCandles(ticker,'1h','1mo'),
+    suFetchCandles(ticker,'15m','5d'),
+  ]);
+  // 4H synthétique par agrégation de 4 bougies 1H
+  const h4 = h1 ? suAggregate(h1,4) : null;
+  suCandles = {'1D':d1,'4H':h4,'1H':h1,'15m':h1_15};
+
+  // Scores par TF
+  const s1d = suScoreTF(d1, dir);
+  const s4h = suScoreTF(h4, dir);
+  const s1h = suScoreTF(h1, dir);
+
+  // Fibonacci sur 4H (TF de référence pour les niveaux)
+  const swing4h = suLastSwing(h4||h1||[]);
+  suFib = { ref: suFibLevels(swing4h, dir) };
+
+  suState = {inst, dir, ticker, s1d, s4h, s1h, mb, price:s1h.price||s1d.price};
+
+  suRenderTF(s1d,s4h,s1h);
+  suRenderIndicators(s1d,s4h,s1h);
+  suSuggestInvalidation();
+  recomputeSetup();
+  suRender15min();
+
+  const pe = document.getElementById('su-price');
+  if(suState.price) pe.textContent = fmtSU(inst, suState.price);
+}
+
+// Agrège N bougies en une (pour 4H depuis 1H)
+function suAggregate(candles, n){
+  const out=[];
+  for(let i=0;i<candles.length;i+=n){
+    const grp=candles.slice(i,i+n);
+    if(!grp.length) continue;
+    out.push({c:grp[grp.length-1].c, h:Math.max(...grp.map(x=>x.h)), l:Math.min(...grp.map(x=>x.l))});
+  }
+  return out;
+}
+
+function fmtSU(inst, p){
+  if(inst.includes('JPY')) return parseFloat(p).toFixed(3);
+  if(inst==='BTC/USD'||inst==='Gold XAU'||inst==='WTI Crude') return parseFloat(p).toFixed(2);
+  return parseFloat(p).toFixed(5);
+}
+
+function suRenderTF(s1d,s4h,s1h){
+  const set=(id,detId,s)=>{
+    const el=document.getElementById(id), de=document.getElementById(detId);
+    const col = s.score>=65?'var(--green)':s.score>=50?'var(--amber)':'var(--red)';
+    const arrow = suState.dir==='SHORT'?'▼':'▲';
+    el.textContent = (s.score>=50?arrow+' ':'')+s.score;
+    el.style.color = col;
+    de.textContent = s.detail;
+  };
+  set('su-1d-score','su-1d-detail',s1d);
+  set('su-4h-score','su-4h-detail',s4h);
+  set('su-1h-score','su-1h-detail',s1h);
+  // Alignement : combien de TF ≥ 60 dans le bon sens
+  const aligned = [s1d,s4h,s1h].filter(s=>s.score>=60).length;
+  const ae=document.getElementById('su-align'), ad=document.getElementById('su-align-detail');
+  const arrow = suState.dir==='SHORT'?'▼':'▲';
+  ae.textContent = aligned+'/3 '+arrow;
+  ae.style.color = aligned===3?'var(--green)':aligned===2?'var(--amber)':'var(--red)';
+  ad.textContent = aligned>=2 ? suState.dir+' confirmé' : 'pas d\'alignement';
+  document.getElementById('su-tf-align').style.borderColor = aligned===3?'rgba(16,185,129,.4)':'rgba(45,212,191,.3)';
+}
+
+function suRenderIndicators(s1d,s4h,s1h){
+  const fib = suFib.ref;
+  const fib618 = fib?fmtSU(suState.inst,fib.ret['0.618']):'—';
+  const fib705 = fib?fmtSU(suState.inst,fib.ret['0.705']):'—';
+  const row=(tf,s)=>{
+    const sig = s.score>=65?'<span class="badge badge-green">TRADE</span>':s.score>=50?'<span class="badge badge-amber">PARTIEL</span>':'<span class="badge badge-red">WAIT</span>';
+    return `<tr><td style="font-weight:700">${tf}</td>
+      <td>${s.ema50?fmtSU(suState.inst,s.ema50):'—'}</td>
+      <td>${s.ema200?fmtSU(suState.inst,s.ema200):'—'}</td>
+      <td class="${s.rsi>65?'red':s.rsi<35?'green':''}">${s.rsi!=null?s.rsi.toFixed(0):'—'}</td>
+      <td class="amber">${fib618}</td>
+      <td class="amber">${fib705}</td>
+      <td>${sig}</td></tr>`;
+  };
+  document.getElementById('su-indicators').innerHTML =
+    '<tr><th>TF</th><th>EMA 50</th><th>EMA 200</th><th>RSI 14</th><th>Fib 0.618</th><th>Fib 0.705</th><th>Signal</th></tr>'+
+    row('1D',s1d)+row('4H',s4h)+row('1H',s1h);
+}
+
+// ---- Suggestions d'invalidation (la Règle #2) ----
+function suSuggestInvalidation(){
+  const box=document.getElementById('su-inval-suggestions');
+  const fib=suFib.ref;
+  const dir=suState.dir;
+  const sugg=[];
+  if(fib){
+    // SHORT : invalidation au-dessus (swing high, Fib 0.705 haut). LONG : en-dessous.
+    if(dir==='SHORT'){
+      sugg.push({lbl:'swing high 4H', val:fib.high});
+      sugg.push({lbl:'Fib 0.705', val:fib.ret['0.705']});
+    } else {
+      sugg.push({lbl:'swing low 4H', val:fib.low});
+      sugg.push({lbl:'Fib 0.705', val:fib.ret['0.705']});
+    }
+  }
+  const s1h=suState.s1h;
+  if(s1h?.ema200) sugg.push({lbl:'EMA200 1H', val:s1h.ema200});
+  box.innerHTML = sugg.map((x,i)=>
+    `<span onclick="suApplyInval(${x.val})" style="cursor:pointer;font-size:8px;padding:3px 8px;border-radius:5px;background:${i===0?'rgba(45,212,191,.12)':'rgba(255,255,255,.04)'};border:1px solid ${i===0?'rgba(45,212,191,.4)':'rgba(255,255,255,.1)'};color:${i===0?'var(--teal)':'var(--muted)'}">${x.lbl}: ${fmtSU(suState.inst,x.val)}</span>`
+  ).join('');
+  // Pré-remplir : SL = 1ère suggestion, entrée = prix actuel, TP = expansion Fib
+  if(sugg.length && !document.getElementById('su-sl').value){
+    document.getElementById('su-sl').value = fmtSU(suState.inst,sugg[0].val);
+  }
+  if(suState.price && !document.getElementById('su-entry').value){
+    document.getElementById('su-entry').value = fmtSU(suState.inst,suState.price);
+  }
+  if(fib && !document.getElementById('su-tp1').value){
+    document.getElementById('su-tp1').value = fmtSU(suState.inst,fib.ext['0.618']);
+    document.getElementById('su-tp2').value = fmtSU(suState.inst,fib.ext['1.0']);
+  }
+}
+function suApplyInval(v){
+  document.getElementById('su-sl').value = fmtSU(suState.inst||'',v);
+  recomputeSetup();
+}
+
+// ---- Recalcul position (invalidation-first) ----
+function recomputeSetup(){
+  const inst  = document.getElementById('su-inst').value;
+  const dir   = document.getElementById('su-dir').value;
+  if(suState) suState.dir = dir;
+  const entry = parseFloat(document.getElementById('su-entry').value);
+  const sl    = parseFloat(document.getElementById('su-sl').value);
+  const tp1   = parseFloat(document.getElementById('su-tp1').value);
+  const riskPct = parseFloat(document.getElementById('su-risk-slider').value);
+  document.getElementById('su-risk-slider-v').textContent = riskPct.toFixed(1)+'%';
+  document.getElementById('su-risk-pct').textContent = riskPct.toFixed(1);
+
+  const isJpy = inst.includes('JPY');
+  const cap = parseFloat(document.getElementById('cap-current')?.value || document.getElementById('cap-initial')?.value || 0);
+  const cur = document.getElementById('cap-currency')?.value || 'USD';
+  const sym = currencySymbol(cur);
+
+  const dEl=document.getElementById('su-dist'), rEl=document.getElementById('su-risk-amt'),
+        szEl=document.getElementById('su-size'), rrEl=document.getElementById('su-rr'),
+        v=document.getElementById('su-verdict');
+
+  if(!entry||!sl){ dEl.textContent=rEl.textContent=szEl.textContent=rrEl.textContent='—'; 
+    v.className='verdict'; v.textContent='Renseigne entrée + invalidation pour le verdict.'; return; }
+
+  // Cohérence directionnelle de l'invalidation (la Règle #2)
+  const slValid = dir==='SHORT' ? sl>entry : sl<entry;
+  const dist = Math.abs(entry-sl);
+  const pips = Math.round(dist*(isJpy?100:inst==='BTC/USD'||inst==='Gold XAU'||inst==='WTI Crude'?10:10000));
+  dEl.textContent = pips+' pips';
+
+  const riskAmt = cap*riskPct/100;
+  rEl.textContent = cap? sym+Math.round(riskAmt).toLocaleString() : 'capital ?';
+
+  // Taille : risk / (distance × valeur du pip). Approximation cohérente avec getPnL existant.
+  const pipVal = isJpy?1000:100000;
+  const sizeRaw = cap ? riskAmt / (dist*pipVal/(isJpy?1:Math.max(entry,0.0001))) : 0;
+  const size = cap ? Math.max(0.01, sizeRaw) : 0;
+  szEl.textContent = cap? size.toFixed(2)+' lot' : '—';
+
+  let rr='—';
+  if(tp1){
+    const reward=Math.abs(tp1-entry);
+    rr=(reward/dist).toFixed(1);
+    rrEl.textContent='1 : '+rr;
+    rrEl.className='mval '+(parseFloat(rr)>=2?'green':parseFloat(rr)>=1.5?'amber':'red');
+  } else rrEl.textContent='—';
+
+  // Verdict invalidation-first
+  const aligned = suState?.s1d ? [suState.s1d,suState.s4h,suState.s1h].filter(s=>s.score>=60).length : 0;
+  const manual = suManualCount();
+  if(!slValid){
+    v.className='verdict bear';
+    v.innerHTML='⚠ Invalidation incohérente : pour un '+dir+', le SL doit être '+(dir==='SHORT'?'<strong>au-dessus</strong>':'<strong>en-dessous</strong>')+' de l\'entrée. L\'idée n\'a pas de niveau de mort valide.';
+  } else if(parseFloat(rr)>=2 && aligned>=2){
+    v.className='verdict bull';
+    v.innerHTML='✓ ENTRER · R/R 1:'+rr+' · '+aligned+'/3 TF alignés · '+manual+' confluences manuelles. Poser le SL à '+fmtSU(inst,sl)+' immédiatement. Si franchi → couper, pas de débat.';
+  } else if(parseFloat(rr)>=1.5 && aligned>=2){
+    v.className='verdict warn';
+    v.innerHTML='TAILLE RÉDUITE · R/R 1:'+rr+' (vise ≥2) · '+aligned+'/3 TF. Entrer 50% ou attendre meilleur prix sur pullback 15min.';
+  } else {
+    v.className='verdict bear';
+    v.innerHTML='PASSER · '+(parseFloat(rr)<1.5?'R/R 1:'+rr+' insuffisant (min 1:2)':'')+' '+(aligned<2?'· seulement '+aligned+'/3 TF alignés':'')+'. Le marché récompense la patience.';
+  }
+}
+
+// ---- Affinage 15min (SVG, géométrie correcte selon direction) ----
+function suRender15min(){
+  const dir=suState.dir, inst=suState.inst;
+  const entry=parseFloat(document.getElementById('su-entry').value);
+  const sl=parseFloat(document.getElementById('su-sl').value);
+  const tp1=parseFloat(document.getElementById('su-tp1').value);
+  const wrap=document.getElementById('su-15min-chart');
+  if(!entry||!sl||!tp1){ wrap.innerHTML='<div style="font-size:10px;color:var(--muted);text-align:center;padding:12px">Renseigne entrée / SL / TP pour visualiser l\'affinage.</div>'; return; }
+
+  // Échelle verticale : SHORT → SL en haut, TP en bas. LONG → inverse.
+  const vals=[sl,entry,tp1];
+  const max=Math.max(...vals), min=Math.min(...vals), span=max-min||1;
+  const Y=v=>10+((max-v)/span)*100; // px : max en haut
+
+  const ySL=Y(sl), yE=Y(entry), yTP=Y(tp1);
+  // Pullback vers l'entrée, puis mouvement vers le TP
+  const path = dir==='SHORT'
+    ? `0,${(yE+yTP)/2} 80,${(yE+yTP)/2-6} 160,${yE+12} 240,${yE+4} 310,${yE}`   // remonte vers entrée
+    : `0,${(yE+yTP)/2} 80,${(yE+yTP)/2+6} 160,${yE-12} 240,${yE-4} 310,${yE}`;  // redescend vers entrée
+  const path2 = dir==='SHORT'
+    ? `310,${yE} 360,${yE+8} 420,${yE+20} 500,${yTP-14} 580,${yTP-4} 640,${yTP}` // redescend vers TP
+    : `310,${yE} 360,${yE-8} 420,${yE-20} 500,${yTP+14} 580,${yTP+4} 640,${yTP}`; // remonte vers TP
+
+  wrap.innerHTML = `<svg viewBox="0 0 640 130" style="width:100%;height:auto">
+    <line x1="0" y1="${ySL}" x2="640" y2="${ySL}" stroke="#f43f5e" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="6" y="${ySL-3}" font-size="8" fill="#f43f5e" font-family="monospace">SL / invalidation ${fmtSU(inst,sl)} ${dir==='SHORT'?'▲':'▼'}</text>
+    <line x1="0" y1="${yE}" x2="640" y2="${yE}" stroke="#2dd4bf" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="6" y="${yE-3}" font-size="8" fill="#2dd4bf" font-family="monospace">entrée ${fmtSU(inst,entry)} (zone pullback 15min)</text>
+    <line x1="0" y1="${yTP}" x2="640" y2="${yTP}" stroke="#10b981" stroke-width="1" stroke-dasharray="3,3"/>
+    <text x="6" y="${yTP-3}" font-size="8" fill="#10b981" font-family="monospace">TP1 ${fmtSU(inst,tp1)} ${dir==='SHORT'?'▼':'▲'}</text>
+    <polyline points="${path}" fill="none" stroke="#64748b" stroke-width="1.2"/>
+    <polyline points="${path2}" fill="none" stroke="#94a3b8" stroke-width="1.4"/>
+    <circle cx="310" cy="${yE}" r="4" fill="#2dd4bf"/>
+    <text x="318" y="${yE+(dir==='SHORT'?-8:14)}" font-size="8" fill="#2dd4bf" font-family="monospace">entrée sur rejet du pullback</text>
+  </svg>`;
+}
+
+// ---- Pont vers le Portfolio : pré-remplir addTrade ----
+function sendSetupToPortfolio(){
+  const inst=document.getElementById('su-inst').value;
+  const dir=document.getElementById('su-dir').value;
+  const entry=document.getElementById('su-entry').value;
+  const sl=document.getElementById('su-sl').value;
+  const tp1=document.getElementById('su-tp1').value;
+  const tp2=document.getElementById('su-tp2').value;
+  const sizeTxt=document.getElementById('su-size').textContent;
+  const size=parseFloat(sizeTxt)||'';
+  const rr=document.getElementById('su-rr').textContent;
+  // Score = score 4H (TF de référence)
+  const score=suState?.s4h?.score||'';
+
+  // Mapper l'instrument vers les options du select portfolio (sinon "Autre")
+  const trInst=document.getElementById('tr-inst');
+  let matched=false;
+  for(const o of trInst.options){ if(o.value===inst){ trInst.value=inst; matched=true; break; } }
+  if(!matched) trInst.value='Autre';
+
+  document.getElementById('tr-dir').value=dir;
+  document.getElementById('tr-entry').value=entry;
+  document.getElementById('tr-size').value=size;
+  document.getElementById('tr-sl').value=sl;
+  document.getElementById('tr-tp1').value=tp1;
+  document.getElementById('tr-tp2').value=tp2;
+  document.getElementById('tr-score').value=score;
+  document.getElementById('tr-notes').value=`${inst} ${dir} · R/R ${rr} · ${suState?.mb?.label||''} · setup invalidation-first (SL structurel ${sl})`;
+
+  // Basculer sur l'onglet Portfolio
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('p-portfolio').classList.add('active');
+  const pfTab=document.querySelector('.tab[onclick*="portfolio"]');
+  if(pfTab) pfTab.classList.add('active');
+  document.getElementById('tr-entry').scrollIntoView({behavior:'smooth',block:'center'});
+}
 
 // ════════════════════════════════════════
 // TAB SWITCH
