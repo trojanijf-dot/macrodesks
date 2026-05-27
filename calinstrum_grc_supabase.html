@@ -42711,9 +42711,16 @@ function critProceed(){
              status:d.status||null, ht:Number(d.ht)||0, ttc:Number(d.ttc)||0, data:d };
   }
   function _mirrorFacture(f){
+    // ATTENTION : f.paye est un MONTANT EN XPF dans l'app (cf usages dans le
+    // code métier : fa.paye=ttc ; if(typeof f.paye==='number' && f.paye>0) ;
+    // somme des versements ; etc.). La colonne Supabase factures.paye est
+    // typée `numeric`. Avant : `paye:!!f.paye` envoyait un booléen → 400
+    // PostgREST "invalid input syntax for type numeric: true" → toute la
+    // sync des factures bloquée + boucle d'erreurs en console à chaque
+    // autosave 30s. Fix : Number(f.paye)||0 (cohérent avec le reste du code).
     return { id:f.id, num:f.num||null, date:f.date||null, client:f.client||null,
              status:f.status||null, ht:Number(f.ht)||0, ttc:Number(f.ttc)||0,
-             paye:!!f.paye, dvlie:(f.dvlie!=null?f.dvlie:null), data:f };
+             paye:Number(f.paye)||0, dvlie:(f.dvlie!=null?f.dvlie:null), data:f };
   }
   function _mirrorBC(b){
     return { id:b.id, num:b.num||null, date:b.date||null, status:b.status||null,
