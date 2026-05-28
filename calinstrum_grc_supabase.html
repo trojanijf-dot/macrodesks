@@ -1221,6 +1221,23 @@ body.has-dashboard-bg #page-dashboard .metric{
   <!-- ===== BANDEAU KPIs (réactif aux filtres actifs) ===== -->
   <div class="g4 no-print" id="fa-kpis" style="margin-bottom:12px"></div>
 
+  <!-- ===== POTENTIEL CA ANNUEL (Fourniture / Prestation) =====
+       Carte cliquable au-dessus du pipeline. Agrège les factures dont la date
+       d'émission OU d'encaissement tombe dans l'année du filtre fFAyear.
+       Type strict : Fourniture pour l'onglet 1, Prestation de service pour l'onglet 2.
+       Les mixtes ("Fourniture + Prestation") sont EXCLUS des deux (validé 2026-05-28,
+       les mixtes ne concernent généralement pas la fourniture Emerson).
+       Cachée quand fFAyear="" (Toutes années). Logique JS : _renderFAAnnualCA. -->
+  <div class="card no-print" id="fa-ca-annual-card" style="margin-bottom:12px;padding:14px 16px;display:none">
+    <div class="card-pro-title" style="display:flex;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">
+      <i class="ti ti-coin"></i>
+      <span>Potentiel CA annuel</span>
+      <span id="fa-ca-annual-year" style="color:var(--muted-soft);font-weight:400;font-size:11px;letter-spacing:0"></span>
+      <span style="margin-left:auto;font-size:10.5px;color:var(--muted-soft);font-weight:400;letter-spacing:0;text-transform:none">émis OU encaissé dans l'année · clic pour filtrer le tableau</span>
+    </div>
+    <div id="fa-ca-annual" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>
+  </div>
+
   <!-- ===== PIPELINE ENCAISSEMENT (barre empilée par statut) ===== -->
   <!-- Affiche d'un coup d'œil le ratio Payées / En attente / En retard / Pré-facturées.
        Réactif aux filtres actifs. -->
@@ -27948,6 +27965,15 @@ function renderFA(){
   // Cf. _drillDownToMonth() qui set ce filtre + affiche le chip.
   var fEncMonth=(typeof window._faFilterByEncMonth==='string')?window._faFilterByEncMonth:'';
 
+  // ===== Filtre CA potentiel (mode "année élargie : émise OU encaissée") =====
+  // Activé via clic sur les onglets de la carte #fa-ca-annual-card. Quand actif :
+  //  - Type STRICT ('Fourniture' ou 'Prestation de service'), exclut les mixtes
+  //  - Critère année élargi (via _faIsInCAYear) au lieu du filtre standard
+  //  - Le filtre type dropdown (fFAtype) et le filtre année standard sont
+  //    court-circuités. Le filtre statut reste applicable mais est reset à
+  //    vide au moment du clic (cf _toggleFACAFilter) pour montrer tous statuts.
+  var fCAFilter = (typeof window._faCAFilter === 'string') ? window._faCAFilter : '';
+
   // ===== Filtres combinés (ET logique) =====
   var data=sourceWithClient.filter(function(i){
     // Recherche texte (sur le JSON complet)
@@ -27962,20 +27988,30 @@ function renderFA(){
         if(st!==fStatut) return false;
       }
     }
-    // Type
-    if(fType){
-      var t=i.type||'Fourniture';
-      if(t!==fType) return false;
-    }
-    // Année (sur dateEnvoi ou dateReceptionBC pour les pré-facturées)
-    // EXCEPTION : si le filtre invisible par mois d'encaissement est actif,
-    // on ignore le filtre année. Car une facture peut être encaissée en
-    // février 2026 mais émise en décembre 2025 — on veut quand même la voir.
-    if(fYear && !fEncMonth){
-      // Date comptable (_dateCreation) prime sur dateReceptionBC pour cohérence dashboard.
-      var dateForYear=i.dateEnvoi||i._dateCreation||i.dateReceptionBC||'';
-      var m=String(dateForYear).match(/^(\d{4})/);
-      if(!m || m[1]!==fYear) return false;
+    if(fCAFilter){
+      // Mode CA potentiel : type strict + année élargie (émission OU encaissement).
+      // Court-circuite les filtres type et année standards ci-dessous.
+      var caType = (fCAFilter==='fourniture') ? 'Fourniture' : 'Prestation de service';
+      var tCA = i.type || 'Fourniture';
+      if(tCA !== caType) return false;
+      if(fYear && !_faIsInCAYear(i, fYear)) return false;
+    } else {
+      // Mode standard (existant) : filtres type + année dropdowns
+      // Type
+      if(fType){
+        var t=i.type||'Fourniture';
+        if(t!==fType) return false;
+      }
+      // Année (sur dateEnvoi ou dateReceptionBC pour les pré-facturées)
+      // EXCEPTION : si le filtre invisible par mois d'encaissement est actif,
+      // on ignore le filtre année. Car une facture peut être encaissée en
+      // février 2026 mais émise en décembre 2025 — on veut quand même la voir.
+      if(fYear && !fEncMonth){
+        // Date comptable (_dateCreation) prime sur dateReceptionBC pour cohérence dashboard.
+        var dateForYear=i.dateEnvoi||i._dateCreation||i.dateReceptionBC||'';
+        var m=String(dateForYear).match(/^(\d{4})/);
+        if(!m || m[1]!==fYear) return false;
+      }
     }
     // Filtre invisible : mois d'encaissement (drill-down depuis donut)
     if(fEncMonth){
@@ -28046,6 +28082,10 @@ function renderFA(){
   }
 
   // ===== Mise à jour du compteur de résultats + KPIs + pipeline + donut + chip =====
+  // Carte CA annuel : on passe la source COMPLÈTE (sourceWithClient) pour que les
+  // chiffres restent stables indépendamment des autres filtres actifs (statut,
+  // recherche, onglet client). Cf. _renderFAAnnualCA pour la logique métier.
+  _renderFAAnnualCA(sourceWithClient);
   _renderFAKpis(data);
   _renderFAPipeline(data);
   _renderFADonut(dataForDonut);
@@ -28369,6 +28409,149 @@ function _renderFAKpis(data){
   if(typeof _mountInteractiveSparklines==='function') _mountInteractiveSparklines(el);
   // Mount des clics KPI cards (toggle filtre statut Factures)
   if(typeof _mountFAKpiClick==='function') _mountFAKpiClick(el);
+}
+
+// =============================================================================
+// CA annuel par type — Fourniture / Prestation (onglets cliquables)
+// =============================================================================
+// Affiche 2 cartes cliquables au-dessus du pipeline, agrégeant le CA potentiel
+// annuel par type (Fourniture vs Prestation de service). Logique métier validée
+// avec l'utilisateur le 2026-05-28 :
+//   - Une facture COMPTE dans l'année N si dateEnvoi, dateReceptionBC,
+//     _dateCreation OU dateEncaissement tombe dans N. Cela permet aux factures
+//     émises N-1 et payées N d'être visibles dans le total N.
+//   - Type STRICT (pas de mixtes) : "Fourniture" pour l'onglet 1, "Prestation
+//     de service" pour l'onglet 2. Les "Fourniture + Prestation" sont exclus des
+//     deux (généralement non concernés par la fourniture Emerson).
+//   - Tous statuts confondus : payées + partiel + en attente + en retard +
+//     pré-facturées. Chaque facture comptée 1 fois par son montant TTC.
+// Clic sur un onglet active window._faCAFilter et appelle renderFA() qui
+// applique la même logique au tableau du bas (cf branche `if(fCAFilter)` dans
+// renderFA, ainsi que resetFAFilters qui efface aussi ce flag).
+
+// True si la facture tombe dans l'année N (émission OU encaissement OU réception BC).
+function _faIsInCAYear(inv, year){
+  if(!inv || !year) return false;
+  var yStr = String(year);
+  var dEnv = String(inv.dateEnvoi || '').substring(0,4);
+  var dRec = String(inv.dateReceptionBC || '').substring(0,4);
+  var dCre = String(inv._dateCreation || '').substring(0,4);
+  var dEnc = '';
+  try {
+    var dEncStr = (typeof _faGetEncaissement === 'function') ? _faGetEncaissement(inv) : (inv.dateEncaissement||'');
+    dEnc = String(dEncStr || '').substring(0,4);
+  } catch(e) {}
+  return dEnv===yStr || dRec===yStr || dCre===yStr || dEnc===yStr;
+}
+
+// Agrège le CA par statut pour un type donné et une année donnée.
+// Retourne { total, paid, prebilled, pending, late, count }
+function _computeCAByType(allInvoices, year, type){
+  var out = { total:0, paid:0, prebilled:0, pending:0, late:0, count:0 };
+  if(!Array.isArray(allInvoices)) return out;
+  allInvoices.forEach(function(i){
+    var t = i.type || 'Fourniture';
+    if(t !== type) return;
+    if(!_faIsInCAYear(i, year)) return;
+    var m = Number(i.montant || i.ttc || 0) || 0;
+    out.total += m;
+    out.count++;
+    if(typeof isPrebilled === 'function' && isPrebilled(i)){
+      out.prebilled += m;
+      return;
+    }
+    var st = (typeof getStatus === 'function') ? getStatus(i) : 'pending';
+    if(st === 'paid') out.paid += m;
+    else if(st === 'late') out.late += m;
+    else out.pending += m;
+  });
+  return out;
+}
+
+// Helper utilitaire : '#RRGGBB' → 'r,g,b' (pour rgba dynamique sur fond actif).
+function _hex2rgb(hex){
+  hex = String(hex||'').replace('#','');
+  if(hex.length===3) hex = hex.split('').map(function(c){return c+c;}).join('');
+  var n = parseInt(hex, 16);
+  return ((n>>16)&255)+','+((n>>8)&255)+','+(n&255);
+}
+
+// Rend la carte CA annuel. `source` = liste complète AVANT autres filtres :
+// l'utilisateur veut voir le chiffre global annuel même s'il filtre par
+// recherche/statut/onglet client (pour repère stable). À changer si besoin.
+function _renderFAAnnualCA(source){
+  var card = document.getElementById('fa-ca-annual-card');
+  if(!card) return;
+  var fy = gvg('fFAyear') || '';
+  if(!fy){
+    // Pas d'année sélectionnée : on cache la carte (logique annuelle inapplicable)
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  var yearLbl = document.getElementById('fa-ca-annual-year');
+  if(yearLbl) yearLbl.textContent = String(fy);
+
+  var fournStats = _computeCAByType(source, fy, 'Fourniture');
+  var prestStats = _computeCAByType(source, fy, 'Prestation de service');
+
+  function fNlocCA(n){ return (Math.round(n)||0).toLocaleString('fr-FR').replace(/ | /g,' '); }
+  var active = (typeof window._faCAFilter === 'string') ? window._faCAFilter : '';
+
+  function renderCell(key, label, icon, accentColor, stats){
+    var isActive = (active === key);
+    var border = isActive ? ('1.5px solid '+accentColor) : '0.5px solid rgba(255,255,255,0.08)';
+    var bg = isActive ? ('rgba('+_hex2rgb(accentColor)+',0.06)') : 'rgba(255,255,255,0.015)';
+    var hoverHint = isActive ? 'Cliquer pour retirer le filtre' : 'Cliquer pour filtrer le tableau ci-dessous';
+    return '<div data-fa-ca-toggle="'+key+'" title="'+esc(hoverHint)+'" '+
+      'style="border:'+border+';border-radius:10px;padding:14px 16px;background:'+bg+';cursor:pointer;transition:all .15s">'+
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'+
+          '<span style="font-size:16px">'+icon+'</span>'+
+          '<span style="font-size:12px;font-weight:600;letter-spacing:0.04em;color:'+accentColor+';text-transform:uppercase">'+label+' '+fy+'</span>'+
+          (isActive?'<span style="margin-left:auto;font-size:10px;color:'+accentColor+';font-weight:700;letter-spacing:0.06em">● ACTIF</span>':'')+
+        '</div>'+
+        '<div class="num" data-money style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:10px;letter-spacing:-0.01em">'+fNlocCA(stats.total)+' <span style="font-size:13px;color:var(--muted-soft);font-weight:500">XPF</span></div>'+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:11px;line-height:1.6">'+
+          '<div><span style="color:#5dcaa5">✓</span> <span style="color:var(--muted)">Encaissé</span> <span class="num" data-money style="color:var(--text);float:right">'+fNlocCA(stats.paid)+'</span></div>'+
+          '<div><span style="color:#a78bfa">📦</span> <span style="color:var(--muted)">Pré-facturé</span> <span class="num" data-money style="color:var(--text);float:right">'+fNlocCA(stats.prebilled)+'</span></div>'+
+          '<div><span style="color:#fbbf24">⏳</span> <span style="color:var(--muted)">En attente</span> <span class="num" data-money style="color:var(--text);float:right">'+fNlocCA(stats.pending)+'</span></div>'+
+          '<div><span style="color:#f09595">⚠</span> <span style="color:var(--muted)">En retard</span> <span class="num" data-money style="color:var(--text);float:right">'+fNlocCA(stats.late)+'</span></div>'+
+        '</div>'+
+        '<div style="margin-top:8px;font-size:10px;color:var(--muted-soft);letter-spacing:0.02em">'+stats.count+' facture'+(stats.count>1?'s':'')+'</div>'+
+      '</div>';
+  }
+
+  var html = '';
+  html += renderCell('fourniture', 'Fourniture', '🔧', '#5dcaa5', fournStats);
+  html += renderCell('prestation', 'Prestation', '🛠', '#fb923c', prestStats);
+
+  var box = document.getElementById('fa-ca-annual');
+  if(!box) return;
+  box.innerHTML = html;
+
+  box.querySelectorAll('[data-fa-ca-toggle]').forEach(function(node){
+    node.addEventListener('click', function(){
+      _toggleFACAFilter(node.dataset.faCaToggle);
+    });
+  });
+}
+
+// Toggle filtre CA. Reset le filtre statut au passage pour montrer TOUS les
+// statuts (cohérent avec "potentiel CA = tous statuts confondus").
+function _toggleFACAFilter(key){
+  if(!key) return;
+  var cur = (typeof window._faCAFilter === 'string') ? window._faCAFilter : '';
+  if(cur === key){
+    window._faCAFilter = '';
+    if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Filtre CA potentiel retiré');
+  } else {
+    window._faCAFilter = key;
+    var fSt = document.getElementById('fFAst');
+    if(fSt) fSt.value = '';
+    var lbl = (key==='fourniture') ? 'Fourniture' : 'Prestation';
+    if(typeof showBCSaveToast==='function') showBCSaveToast('💰 Filtre CA potentiel : '+lbl);
+  }
+  if(typeof renderFA==='function') renderFA();
 }
 
 // =============================================================================
@@ -29078,6 +29261,8 @@ function resetFAFilters(){
   if(sort) sort.value='date_desc';
   // Effacer aussi le filtre invisible par mois d'encaissement (drill-down donut)
   window._faFilterByEncMonth='';
+  // Effacer aussi le filtre CA potentiel (onglets Fourniture/Prestation, cf carte #fa-ca-annual-card)
+  window._faCAFilter='';
   if(typeof renderFA==='function') renderFA();
 }
 
