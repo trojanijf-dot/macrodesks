@@ -2839,6 +2839,36 @@ body.has-dashboard-bg #page-dashboard .metric{
   </div>
 </div></div>
 
+<!-- ============================================================================
+     PHASE 2 (chantier Realtime/Attribution 2026-05-28) — Modale conflit
+     Affichée par window._supaCheckAndPromptConflict quand l'updated_at côté
+     Supabase a changé depuis qu'on a ouvert la modale d'édition. 3 choix :
+       - Annuler : on retourne à la modale d'édition sans rien faire
+       - Recharger leur version : on remplace DB[table][id] par la version cloud
+       - Écraser quand même : on continue le save avec notre version
+     Le contenu (message + diff) est injecté dynamiquement par _showConflictModal.
+============================================================================ -->
+<div class="modal-overlay" id="mConflict">
+<div class="modal" style="max-width:760px">
+  <div class="modal-header" style="background:rgba(244,63,94,0.06);border-bottom-color:rgba(244,63,94,0.2)">
+    <h3 style="color:#f43f5e;font-weight:700"><i class="ti ti-alert-triangle" style="vertical-align:-2px;margin-right:4px"></i> Conflit de modification</h3>
+    <button class="modal-close" onclick="cm('mConflict');if(typeof window._supaConflictResolve==='function')window._supaConflictResolve({action:'cancel'});">✕</button>
+  </div>
+  <div class="modal-body">
+    <div id="mConflict-message" style="margin-bottom:14px;color:var(--muted);font-size:12px;line-height:1.5"></div>
+    <div id="mConflict-diff" style="display:flex;flex-direction:column;max-height:50vh;overflow-y:auto;border:0.5px solid rgba(255,255,255,0.06);border-radius:8px;background:rgba(0,0,0,0.15)"></div>
+    <div style="margin-top:12px;font-size:10.5px;color:var(--muted-soft);font-style:italic;letter-spacing:0.02em">
+      <i class="ti ti-info-circle" style="font-size:11px;vertical-align:-1px"></i>
+      Si vous écrasez, leur version sera perdue. Si vous rechargez, vos modifications locales seront perdues.
+    </div>
+  </div>
+  <div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px">
+    <button class="btn btn-ghost" data-conflict-action="cancel">Annuler (continuer à éditer)</button>
+    <button class="btn btn-ghost" data-conflict-action="reload" style="border-color:rgba(251,191,36,.5);color:#fbbf24">⟳ Recharger leur version</button>
+    <button class="btn btn-teal" data-conflict-action="overwrite" style="background:linear-gradient(180deg,#f43f5e 0%,#be1d3a 100%);color:#fff">⚠ Écraser quand même</button>
+  </div>
+</div></div>
+
 <!-- SÉLECTEUR CATALOGUE (popup réutilisable pour BC) -->
 <div class="modal-overlay" id="mARTPICK">
 <div class="modal modal-lg" style="max-width:850px">
@@ -19763,7 +19793,14 @@ function flashSaveBtn(modalId){
   });
 }
 
-function saveDV(){
+async function saveDV(){
+  // PHASE 2 (warning conflit) : avant tout, vérifier si quelqu'un a modifié
+  // ce devis côté Supabase pendant qu'on l'éditait. Si oui, mConflict s'affiche
+  // et l'utilisateur choisit (annuler/recharger/écraser). Cf _supaCheckAndPromptConflict.
+  if(eDVid!=null && typeof window._supaCheckAndPromptConflict==='function'){
+    var __caok=await window._supaCheckAndPromptConflict('devis',eDVid);
+    if(!__caok) return; // annulé ou rechargé → on n'écrase pas
+  }
   var d=getDV();
   if(!d.num||!d.client){alert('Champs obligatoires: N° Devis et Client');return;}
   if(eDVid){var i=DB.devis.findIndex(function(x){return x.id===eDVid;});if(i>=0)DB.devis[i]=d;else DB.devis.push(d);}
@@ -27726,7 +27763,12 @@ function _refreshFAObjet(){
   if(typeof showToast==='function') showToast('Objet régénéré','info');
 }
 
-function saveFA(){
+async function saveFA(){
+  // PHASE 2 (warning conflit) : check Supabase avant écrasement. Cf _supaCheckAndPromptConflict.
+  if(eFAid!=null && typeof window._supaCheckAndPromptConflict==='function'){
+    var __caok=await window._supaCheckAndPromptConflict('factures',eFAid);
+    if(!__caok) return;
+  }
   var f=getFA();
   // === Génération auto de l'objet pour les factures Fourniture ============
   // Format : "Fourniture Matériel BC <bcClient> / PO <poCalinstrum> / REF DEVIS <dvNum>"
@@ -34246,7 +34288,12 @@ function buildPropSelectOptions(selectedId){
   return opts;
 }
 
-function saveBC(){
+async function saveBC(){
+  // PHASE 2 (warning conflit) : check Supabase avant écrasement. Cf _supaCheckAndPromptConflict.
+  if(eBCid!=null && typeof window._supaCheckAndPromptConflict==='function'){
+    var __caok=await window._supaCheckAndPromptConflict('bcs',eBCid);
+    if(!__caok) return;
+  }
   var b=getBC();if(!b.num){alert('N° PO manquant');return;}
   var wasNew=!eBCid;
   // Détecter le précédent statut (pour savoir si on vient de passer en Confirmé)
@@ -37018,7 +37065,12 @@ function getBL(){
     total: tot
   };
 }
-function saveBL(){
+async function saveBL(){
+  // PHASE 2 (warning conflit) : check Supabase avant écrasement. Cf _supaCheckAndPromptConflict.
+  if(eBLid!=null && typeof window._supaCheckAndPromptConflict==='function'){
+    var __caok=await window._supaCheckAndPromptConflict('bls',eBLid);
+    if(!__caok) return;
+  }
   var b=getBL();if(!b.num||!b.client){alert('N° BL et Client obligatoires');return;}
   var wasNew=!eBLid;
   if(eBLid){var i=DB.bls.findIndex(function(x){return x.id===eBLid;});if(i>=0)DB.bls[i]=b;else DB.bls.push(b);}
@@ -37111,7 +37163,12 @@ function openCL(id){
   }
   om('mCL');
 }
-function saveCL(){
+async function saveCL(){
+  // PHASE 2 (warning conflit) : check Supabase avant écrasement. Cf _supaCheckAndPromptConflict.
+  if(eCLid!=null && typeof window._supaCheckAndPromptConflict==='function'){
+    var __caok=await window._supaCheckAndPromptConflict('clients',eCLid);
+    if(!__caok) return;
+  }
   var priorityChk=document.getElementById('cl-priority').checked;
   var c={id:eCLid||Date.now(),nom:gvg('cl-nom'),contact:gvg('cl-contact'),email:gvg('cl-email'),
     tel:gvg('cl-tel'),tel2:'',exo:gvg('cl-exo'),adresse:gvg('cl-addr'),notes:gvg('cl-notes'),
@@ -37219,7 +37276,12 @@ function openART(id){
   }
   om('mART');
 }
-function saveART(){
+async function saveART(){
+  // PHASE 2 (warning conflit) : check Supabase avant écrasement. Cf _supaCheckAndPromptConflict.
+  if(eARTid!=null && typeof window._supaCheckAndPromptConflict==='function'){
+    var __caok=await window._supaCheckAndPromptConflict('articles',eARTid);
+    if(!__caok) return;
+  }
   // Lecture des 2 prix séparés. Le champ legacy `prix` est synchronisé avec prixVenteXPF
   // pour ne pas casser le code existant qui lit a.prix (ex: pickArt() ligne 32628).
   var prixVenteXPF=+gvg('art-prixVenteXPF')||0;
@@ -42796,6 +42858,16 @@ function critProceed(){
   var _aliases = {};
   var _currentUserId = null;
 
+  // ===== Phase 2 : Warning de conflit avant écrasement =====
+  // Snapshot pris à l'OUVERTURE de chaque modale d'édition (cf _supaShowAttributionFooter
+  // qui fait un re-fetch frais et capture updated_at au passage).
+  // Format : { 'devis:1779...': 'iso_string', 'factures:42:': 'iso_string', ... }
+  // À la sauvegarde, _supaCheckAndPromptConflict refetch la version actuelle ;
+  // si l'updated_at a changé ET updated_by != _currentUserId → conflit, on affiche
+  // mConflict avec le diff champ par champ + 3 boutons (annuler / recharger / écraser).
+  // Si updated_by === _currentUserId (multi-tab du même user), pas de warning.
+  var _openedSnapshots = {};
+
   // ===== Helpers UI =====
   function $$(id){ return document.getElementById(id); }
   function _msg(html, isErr){
@@ -43030,6 +43102,10 @@ function critProceed(){
       // Mettre à jour le cache _meta au passage
       if (!_meta[table]) _meta[table] = {};
       _meta[table][String(id)] = m;
+      // PHASE 2 : capture du snapshot pour détection de conflit à la sauvegarde.
+      // Le snapshot = updated_at au moment de l'ouverture (= maintenant, après refetch
+      // frais). Sera comparé à l'updated_at re-fetché au moment du saveXX.
+      _openedSnapshots[table+':'+String(id)] = m.updated_at || null;
       var parts = [];
       // Bloc "Modifié par X · il y a 3h"
       if (m.updated_at) {
@@ -43057,6 +43133,204 @@ function critProceed(){
     } catch(e) {
       console.warn('[supa attribution] exception', e);
       footer.innerHTML = '<span style="opacity:0.5">⚠ Attribution indisponible (réseau)</span>';
+    }
+  };
+
+  // =============================================================================
+  // PHASE 2 : Warning de conflit — check + modale de résolution
+  // =============================================================================
+  // Comportement utilisateur : à l'enregistrement d'une entité (saveDV, saveFA…),
+  // on refetch updated_at côté Supabase ; si > snapshot capturé à l'ouverture ET
+  // updated_by != _currentUserId, on affiche mConflict avec le diff champ par
+  // champ. L'utilisateur choisit :
+  //   - "Annuler"          : on retourne false, saveXX retourne sans rien faire
+  //   - "Recharger leur"   : on remplace DB[table][id] par la version cloud,
+  //                          on ré-ouvre la modale d'édition (donc save abandonné)
+  //   - "Écraser quand même" : on retourne true, saveXX continue normalement
+  //
+  // SAFETY : si pas de snapshot (modale jamais ouverte / id null), si erreur
+  // réseau, ou si la table n'a pas updated_at lisible → on retourne true par
+  // défaut pour ne pas bloquer l'utilisateur (mode dégradé silencieux).
+
+  // Diff lisible entre 2 objets d'entité (top-level keys uniquement, suffisant
+  // pour la majorité des cas — les nested arrays/objects sont signalés "modifié"
+  // sans détail récursif pour ne pas surcharger la modale).
+  function _diffEntities(mine, theirs){
+    if (!mine || !theirs) return [];
+    var out = [];
+    var keys = {};
+    Object.keys(mine).forEach(function(k){ keys[k]=1; });
+    Object.keys(theirs).forEach(function(k){ keys[k]=1; });
+    // Champs internes à ignorer (techniques, non métier)
+    var skip = { _factureId:1, _isVirtual:1, _fromGRC:1, _dateCreation:1 };
+    Object.keys(keys).sort().forEach(function(k){
+      if (skip[k]) return;
+      var a = mine[k], b = theirs[k];
+      var sa = JSON.stringify(a), sb = JSON.stringify(b);
+      if (sa === sb) return;
+      var label = k;
+      var display;
+      // Cas scalaires (string / number / boolean / null)
+      if ((a==null || typeof a !== 'object') && (b==null || typeof b !== 'object')) {
+        display = { mine: a==null?'(vide)':String(a), theirs: b==null?'(vide)':String(b), kind:'scalar' };
+      } else if (Array.isArray(a) || Array.isArray(b)) {
+        var la = Array.isArray(a) ? a.length : 0;
+        var lb = Array.isArray(b) ? b.length : 0;
+        display = { mine: la + ' élément' + (la>1?'s':''), theirs: lb + ' élément' + (lb>1?'s':''), kind:'array' };
+      } else {
+        display = { mine: '(objet modifié)', theirs: '(objet modifié)', kind:'object' };
+      }
+      out.push({ field: label, display: display });
+    });
+    return out;
+  }
+
+  // Affiche mConflict et attend le choix de l'utilisateur.
+  // Retourne une Promise<{ action: 'overwrite' | 'reload' | 'cancel' }>
+  function _showConflictModal(table, id, mine, theirs){
+    return new Promise(function(resolve){
+      var modal = document.getElementById('mConflict');
+      if (!modal) {
+        console.warn('[supa conflict] mConflict modale absente du DOM. Skip warning.');
+        resolve({ action:'overwrite' }); return;
+      }
+      // Header message
+      var msg = document.getElementById('mConflict-message');
+      if (msg) {
+        var theirUpdBy = theirs.updated_by ? window._supaGetAlias(theirs.updated_by) : null;
+        var theirWhen = theirs.updated_at ? _relativeDate(theirs.updated_at) : 'récemment';
+        var whoLabel = theirUpdBy ? ('<strong style="color:'+theirUpdBy.color+';font-weight:600">'+theirUpdBy.alias+'</strong>') : 'Quelqu\'un';
+        msg.innerHTML = '⚠ ' + whoLabel + ' a modifié cette entrée <strong>' + theirWhen + '</strong>' +
+          ', pendant que vous l\'éditiez. Voici les différences détectées :';
+      }
+      // Diff body
+      var diffBox = document.getElementById('mConflict-diff');
+      if (diffBox) {
+        var theirData = theirs.data || {};
+        var diffs = _diffEntities(mine || {}, theirData);
+        if (!diffs.length) {
+          diffBox.innerHTML = '<div style="padding:14px;color:var(--muted);font-style:italic;text-align:center">' +
+            'Aucune différence détectable au niveau des champs principaux ' +
+            '(modification peut-être dans un sous-objet ou statut sync uniquement).</div>';
+        } else {
+          var rows = diffs.map(function(d){
+            var safeMine = String(d.display.mine);
+            var safeTheirs = String(d.display.theirs);
+            if (safeMine.length > 80) safeMine = safeMine.substring(0,80) + '…';
+            if (safeTheirs.length > 80) safeTheirs = safeTheirs.substring(0,80) + '…';
+            return '<div style="display:grid;grid-template-columns:140px 1fr 20px 1fr;gap:10px;padding:8px 10px;border-bottom:0.5px solid rgba(255,255,255,0.05);align-items:center">'+
+              '<div style="font-size:11px;color:var(--muted);font-weight:600">'+_escConflict(d.field)+'</div>'+
+              '<div style="font-size:11px;color:#5dcaa5;background:rgba(93,202,165,0.08);padding:4px 8px;border-radius:4px;font-family:monospace;word-break:break-all">'+_escConflict(safeMine)+'</div>'+
+              '<div style="text-align:center;color:var(--muted-soft);font-size:14px">→</div>'+
+              '<div style="font-size:11px;color:#fbbf24;background:rgba(251,191,36,0.08);padding:4px 8px;border-radius:4px;font-family:monospace;word-break:break-all">'+_escConflict(safeTheirs)+'</div>'+
+              '</div>';
+          }).join('');
+          diffBox.innerHTML =
+            '<div style="display:grid;grid-template-columns:140px 1fr 20px 1fr;gap:10px;padding:6px 10px;font-size:10px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;border-bottom:1px solid rgba(255,255,255,0.08);margin-bottom:4px">'+
+              '<div>Champ</div><div style="color:#5dcaa5">Votre version</div><div></div><div style="color:#fbbf24">Leur version</div>'+
+            '</div>' + rows;
+        }
+      }
+      // Bind buttons (override à chaque ouverture pour éviter accumulation)
+      modal.querySelectorAll('[data-conflict-action]').forEach(function(btn){
+        btn.onclick = function(){
+          var act = btn.dataset.conflictAction;
+          modal.classList.remove('open');
+          resolve({ action: act });
+        };
+      });
+      modal.classList.add('open');
+    });
+  }
+
+  // Mini-escape local (esc() est défini globalement plus haut mais accessible
+  // depuis l'IIFE — on fait un alias safe par défensivité).
+  function _escConflict(s){
+    return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // Helper exposé : check de conflit + affichage modale + traitement de la
+  // réponse. Retourne Promise<boolean> :
+  //   - true  → saveXX peut continuer normalement
+  //   - false → saveXX doit retourner sans rien faire (utilisateur a annulé ou
+  //     rechargé la version cloud, dans les 2 cas on n'écrase pas)
+  window._supaCheckAndPromptConflict = async function(table, id){
+    if (!sbClient || id == null) return true;
+    var snapKey = table + ':' + String(id);
+    var snapshot = _openedSnapshots[snapKey];
+    // Pas de snapshot capturé (modale jamais ouverte via _onModalOpen, ou
+    // entité créée à la volée sans passer par une modale) → on assume OK.
+    if (!snapshot) return true;
+    try {
+      var res = await sbClient.from(table)
+        .select('updated_at, updated_by, data')
+        .eq('id', id)
+        .maybeSingle();
+      if (res.error) {
+        console.warn('[supa conflict] refetch failed pour ' + table + '/' + id + ' :', res.error.message);
+        return true;
+      }
+      if (!res.data) return true; // entité absente du cloud (= sera créée par push)
+      var current = res.data;
+      // Pas de updated_at côté Supabase (peu probable) ou identique au snapshot
+      // → pas de conflit. On rafraîchit le snapshot pour le prochain check.
+      if (!current.updated_at || current.updated_at === snapshot) {
+        _openedSnapshots[snapKey] = current.updated_at || snapshot;
+        return true;
+      }
+      // Updated_at différent : changement détecté.
+      // Si c'est le même user que nous (multi-tab du même login), pas d'alerte.
+      if (current.updated_by && _currentUserId && current.updated_by === _currentUserId) {
+        _openedSnapshots[snapKey] = current.updated_at;
+        return true;
+      }
+      // VRAI conflit : on affiche la modale avec le diff
+      var localData = null;
+      try {
+        var arr = (typeof DB === 'object' && DB && Array.isArray(DB[table])) ? DB[table] : [];
+        localData = arr.find(function(x){ return x && String(x.id) === String(id); });
+      } catch(e){}
+      var choice = await _showConflictModal(table, id, localData, current);
+      if (choice.action === 'overwrite') {
+        // L'utilisateur accepte d'écraser. On rafraîchit le snapshot pour ne
+        // pas re-warn au prochain save si rien d'autre ne change.
+        _openedSnapshots[snapKey] = current.updated_at;
+        return true;
+      }
+      if (choice.action === 'reload') {
+        // Remplacer la version locale par la version cloud, sans push.
+        // L'utilisateur perd ses modifs en cours — on l'a prévenu via le bouton.
+        try {
+          if (Array.isArray(DB[table]) && current.data) {
+            var ix = DB[table].findIndex(function(x){ return x && String(x.id) === String(id); });
+            if (ix >= 0) DB[table][ix] = current.data;
+          }
+          if (!_meta[table]) _meta[table] = {};
+          _meta[table][String(id)] = { updated_at: current.updated_at, updated_by: current.updated_by };
+          _openedSnapshots[snapKey] = current.updated_at;
+          // Re-render générique : on re-ouvre la modale d'édition pour montrer la
+          // version fraîche. Le mapping modale → openFn est dans _MODAL_EDIT_MAP.
+          var modalIdByTable = { devis:'mDV', factures:'mFA', bcs:'mBC', bls:'mBL', clients:'mCL', articles:'mART' };
+          var modalId = modalIdByTable[table];
+          if (modalId && typeof _MODAL_EDIT_MAP !== 'undefined') {
+            var mapEntry = _MODAL_EDIT_MAP[modalId];
+            if (mapEntry && typeof window[mapEntry.openFn] === 'function') {
+              // Fermer d'abord l'éventuelle modale ouverte (la propre, celle d'édition)
+              if (typeof cm === 'function') try { cm(modalId); } catch(e){}
+              setTimeout(function(){ try { window[mapEntry.openFn](id); } catch(e){} }, 50);
+            }
+          }
+          if (typeof _toast === 'function') _toast('Version cloud rechargée. Vos modifications locales ont été abandonnées.', 'ok');
+        } catch(e) {
+          console.warn('[supa conflict] reload failed', e);
+        }
+        return false;
+      }
+      // cancel ou autre : on ne save pas, on laisse l'utilisateur dans sa modale d'édition
+      return false;
+    } catch(e) {
+      console.warn('[supa conflict] exception', e);
+      return true; // fail-open : pas bloquer l'utilisateur en cas de bug
     }
   };
 
