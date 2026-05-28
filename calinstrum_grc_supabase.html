@@ -3171,6 +3171,9 @@ function dedupeDB(db){
   }
   db.factures=dedupeArr(db.factures,['dateEncaissement','versements','suiviId','paye','dvlie','notes'],'factures');
   db.invoices=dedupeArr(db.invoices,['dateEncaissement','po','comment','phase','grcFactureId','_factureId'],'invoices');
+  // Extension dédup aux DEVIS : observé in-the-wild des duplicates (même num,
+  // ids différents). Garde la copie la plus riche (lignes/références/statut).
+  db.devis=dedupeArr(db.devis,['fourniture','service','fret','client','objet','status','refEmerson','refACT','poCalinstrum','dvlie','notes'],'devis');
 }
 function defDB(){
   return{devis:[],factures:[],bcs:[],bls:[],
@@ -42578,6 +42581,13 @@ function critProceed(){
   var _syncInFlight = false;
   var _syncPending = false;
   var _lastSyncedHash = {};
+  // FIX SYNC DELETE PROPAGATION : tracking des ids présents dans Supabase à la
+  // fin du dernier sync réussi. Permet de détecter les suppressions locales
+  // (id était dans Supabase, n'est plus dans DB.<table>) et de les propager.
+  // SAFETY : rempli UNIQUEMENT par _loadFromSupabase succès. Tant qu'on n'a pas
+  // fait au moins un fetch réussi, ces sets sont vides → aucun delete déclenché.
+  var _lastSyncedIds = {};   // { tableName: Set<id_string> } pour devis/factures/bcs/bls/clients/articles/invoices
+  var _lastSyncedParamsKeys = null;  // Set<string> pour la table params (null = pas encore initialisé)
 
   // ===== Helpers UI =====
   function $$(id){ return document.getElementById(id); }
@@ -42792,12 +42802,33 @@ function critProceed(){
     } else {
       window.DB = newDB;
     }
-    // Garde-fous existants
+    // FIX SYNC DELETE PROPAGATION : capture l'ÉTAT SUPABASE (ids présents dans
+    // le bucket à l'instant du fetch) AVANT que dedupeDB ne modifie DB. Sinon
+    // les duplicates supprimés localement par dedup ne seraient pas tracés comme
+    // "existants dans le cloud" → leurs lignes Supabase ne seraient JAMAIS
+    // supprimées (= les duplicates reviennent au F5 suivant via le re-fetch).
+    // Idem pour _lastSyncedHash : on hash l'état SUPABASE pour que le prochain
+    // sync détecte l'écart (dedup local → besoin de propager le delete cloud).
+    TABLES.forEach(function(t){
+      _lastSyncedHash[t.name] = _hashArr(DB[t.arr]);
+      _lastSyncedIds[t.name] = new Set(
+        (DB[t.arr] || []).filter(function(r){ return r && r.id != null; })
+                         .map(function(r){ return String(r.id); })
+      );
+    });
+    _lastSyncedHash._params = _hashParamsBucket();
+    _lastSyncedParamsKeys = new Set(
+      Object.keys(DB).filter(function(k){
+        if (_isTableKey(k)) return false;
+        var v = DB[k];
+        return !(v === undefined || typeof v === 'function');
+      })
+    );
+    // Garde-fous existants — MAINTENANT seulement, après le snapshot ci-dessus.
+    // dedupeDB peut maintenant retirer des duplicates de DB sans casser le
+    // tracking des ids Supabase à supprimer.
     try { if (typeof dedupeDB === 'function') dedupeDB(DB); } catch(e) {}
     try { if (typeof ensureFactureBillingEmails === 'function') ensureFactureBillingEmails(DB); } catch(e) {}
-    // Initialise les empreintes de sync → évite de re-pousser ce qu'on vient de charger.
-    TABLES.forEach(function(t){ _lastSyncedHash[t.name] = _hashArr(DB[t.arr]); });
-    _lastSyncedHash._params = _hashParamsBucket();
     // Met le filet local à jour (cohérence cache hors-ligne)
     try {
       var json = JSON.stringify(DB);
@@ -42836,34 +42867,103 @@ function critProceed(){
         return;
       }
       var errors = [];
+
+      // ===== Sync par TABLE : delete (si suppressions locales détectées) PUIS upsert =====
+      // FIX SYNC DELETE PROPAGATION : avant l'upsert, on compare les ids actuels
+      // au snapshot _lastSyncedIds[tableName] (= ids connus dans Supabase au
+      // dernier sync réussi). Les ids présents dans _lastSyncedIds mais absents
+      // de DB.<table> = suppressions locales à propager au cloud via .delete().in().
+      // SAFETY : si _lastSyncedIds[tableName] n'a JAMAIS été initialisé (= pas
+      // de fetch initial réussi), on saute la phase delete pour ce table → aucun
+      // delete accidentel sur des données dont on ignore la présence cloud.
       var pushes = changed.map(function(c){
         var rows = (DB[c.t.arr] || []).map(c.t.mirror).filter(function(r){ return r.id != null; });
-        if (rows.length === 0) {
-          // Table vide → on actualise quand même le hash pour ne pas retenter en boucle.
-          _lastSyncedHash[c.t.name] = c.h;
-          return Promise.resolve();
+        var currentIds = new Set(rows.map(function(r){ return String(r.id); }));
+        var lastSynced = _lastSyncedIds[c.t.name];
+        var idsToDelete = [];
+        if (lastSynced && lastSynced.size > 0) {
+          lastSynced.forEach(function(id){
+            if (!currentIds.has(id)) idsToDelete.push(id);
+          });
         }
-        return sbClient.from(c.t.name).upsert(rows, { onConflict:'id' }).then(function(res){
-          if (res.error) errors.push(c.t.name + ' : ' + res.error.message);
-          else _lastSyncedHash[c.t.name] = c.h;
+        var chain = Promise.resolve();
+        if (idsToDelete.length > 0) {
+          console.log('[supa sync] DELETE', c.t.name, idsToDelete.length, 'id(s) :', idsToDelete);
+          chain = chain.then(function(){
+            return sbClient.from(c.t.name).delete().in('id', idsToDelete).then(function(res){
+              if (res.error) {
+                errors.push(c.t.name + ' delete : ' + res.error.message);
+                throw new Error('delete-failed');  // abort la chaîne : pas d'upsert si on n'a pas pu propager le delete
+              }
+            });
+          });
+        }
+        if (rows.length > 0) {
+          chain = chain.then(function(){
+            return sbClient.from(c.t.name).upsert(rows, { onConflict:'id' }).then(function(res){
+              if (res.error) {
+                errors.push(c.t.name + ' upsert : ' + res.error.message);
+                throw new Error('upsert-failed');
+              }
+            });
+          });
+        }
+        // Succès complet (delete + upsert) → on met à jour le snapshot
+        return chain.then(function(){
+          _lastSyncedIds[c.t.name] = currentIds;
+          _lastSyncedHash[c.t.name] = c.h;
+        }).catch(function(){
+          // Erreur déjà loggée dans errors → on n'updateNOT _lastSynced{Ids,Hash}
+          // pour que le prochain tick retente la sync de ce table.
         });
       });
+
+      // ===== Sync de la table params (key/value) =====
       if (paramsChanged) {
-        // Push de TOUTES les clés non-tableaux de DB → params/nid/iid/flags/etc.
         var paramRows = [];
+        var currentParamKeys = new Set();
         Object.keys(DB).forEach(function(k){
           if (_isTableKey(k)) return;
           var v = DB[k];
           if (v === undefined || typeof v === 'function') return;
           paramRows.push({ key:k, value:v });
+          currentParamKeys.add(k);
         });
-        if (paramRows.length > 0) {
-          pushes.push(sbClient.from('params').upsert(paramRows, { onConflict:'key' }).then(function(res){
-            if (res.error) errors.push('params : ' + res.error.message);
-            else _lastSyncedHash._params = pH;
-          }));
+        var paramsKeysToDelete = [];
+        if (_lastSyncedParamsKeys && _lastSyncedParamsKeys.size > 0) {
+          _lastSyncedParamsKeys.forEach(function(k){
+            if (!currentParamKeys.has(k)) paramsKeysToDelete.push(k);
+          });
         }
+        var paramsChain = Promise.resolve();
+        if (paramsKeysToDelete.length > 0) {
+          console.log('[supa sync] DELETE params key(s) :', paramsKeysToDelete);
+          paramsChain = paramsChain.then(function(){
+            return sbClient.from('params').delete().in('key', paramsKeysToDelete).then(function(res){
+              if (res.error) {
+                errors.push('params delete : ' + res.error.message);
+                throw new Error('params-delete-failed');
+              }
+            });
+          });
+        }
+        if (paramRows.length > 0) {
+          paramsChain = paramsChain.then(function(){
+            return sbClient.from('params').upsert(paramRows, { onConflict:'key' }).then(function(res){
+              if (res.error) {
+                errors.push('params upsert : ' + res.error.message);
+                throw new Error('params-upsert-failed');
+              }
+            });
+          });
+        }
+        paramsChain = paramsChain.then(function(){
+          _lastSyncedParamsKeys = currentParamKeys;
+          _lastSyncedHash._params = pH;
+        }).catch(function(){});
+        pushes.push(paramsChain);
       }
+
       await Promise.all(pushes);
       if (errors.length > 0) {
         console.warn('[supa sync] erreurs :', errors);
