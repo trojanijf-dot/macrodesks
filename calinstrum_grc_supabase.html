@@ -42868,6 +42868,21 @@ function critProceed(){
   // Si updated_by === _currentUserId (multi-tab du même user), pas de warning.
   var _openedSnapshots = {};
 
+  // ===== Phase 3 : Realtime push via Supabase Realtime =====
+  // Mutex anti-rebond CRITIQUE : empêche les remote events (qui mutent DB)
+  // de déclencher un re-push via _supaSyncSchedule. Sans ce flag : remote
+  // UPDATE → DB change → hash change → push → remote UPDATE again → boucle.
+  var _applyingRemoteChange = false;
+  // Handle de subscription Supabase Realtime (pour cleanup au logout).
+  var _remoteChannel = null;
+  // Debounce de re-render groupé (500ms validé). _remoteRenderQueue accumule
+  // les tables touchées pendant la fenêtre de debounce, _remoteRenderTimer est
+  // le handle du setTimeout.
+  var _remoteRenderTimer = null;
+  var _remoteRenderQueue = new Set();
+  // Boot guard : éviter de s'abonner 2 fois (ex: si _bootApp est appelé 2x).
+  var _remoteSubscribed = false;
+
   // ===== Helpers UI =====
   function $$(id){ return document.getElementById(id); }
   function _msg(html, isErr){
@@ -43334,6 +43349,236 @@ function critProceed(){
     }
   };
 
+  // =============================================================================
+  // PHASE 3 : Realtime push via Supabase Realtime
+  // =============================================================================
+  // Architecture :
+  //   1. _subscribeRealtime() crée 1 channel Supabase qui écoute INSERT/UPDATE/
+  //      DELETE sur les 7 tables (devis/factures/bcs/bls/clients/articles/invoices).
+  //   2. Chaque event → _onRemoteChange(table, payload) :
+  //        - Set mutex _applyingRemoteChange=true (empêche re-push circulaire)
+  //        - Mute DB[table] in-place (push/replace/splice selon eventType)
+  //        - Update _meta[table][id] avec fresh updated_at/by
+  //        - Refresh _lastSyncedHash[table] + _lastSyncedIds[table] pour que
+  //          le prochain push de l'utilisateur ne croie pas qu'il y a un diff
+  //        - Si modale d'édition ouverte sur cette entité ET ce n'est pas nous
+  //          → toast persistant avec bouton "Recharger" (cf _maybeShowReloadToast)
+  //        - Queue la table dans _remoteRenderQueue + kick debounce 500ms
+  //        - Reset _applyingRemoteChange=false (en finally)
+  //   3. _processRemoteRenderQueue() : 500ms après le dernier event, re-render
+  //      les pages affectées (renderDV/renderFA/renderBC/renderBL/rClients/
+  //      renderART/renderSuivi). Aussi : rDash + renderHist.
+  //
+  // Guards critiques :
+  //   - _supaSyncSchedule + _supaSyncFlush : skip si _applyingRemoteChange===true.
+  //   - Si event UPDATE provient de NOUS (updated_by === _currentUserId), pas de
+  //     toast (silent, juste sync). Sinon → toast informatif si modale ouverte.
+
+  // Liste des tables écoutées (= 7 tables de TABLES).
+  var REALTIME_TABLES = ['devis','factures','bcs','bls','clients','articles','invoices'];
+
+  // Mapping table → { idVar, modalId, openFn, renderFn } pour toast et re-render
+  var REALTIME_TABLE_MAP = {
+    devis:    { idVar:'eDVid',  modalId:'mDV',  openFn:'openDV',  renderFn:'renderDV' },
+    factures: { idVar:'eFAid',  modalId:'mFA',  openFn:'openFA',  renderFn:'renderFA' },
+    bcs:      { idVar:'eBCid',  modalId:'mBC',  openFn:'openBC',  renderFn:'renderBC' },
+    bls:      { idVar:'eBLid',  modalId:'mBL',  openFn:'openBL',  renderFn:'renderBL' },
+    clients:  { idVar:'eCLid',  modalId:'mCL',  openFn:'openCL',  renderFn:'rClients' },
+    articles: { idVar:'eARTid', modalId:'mART', openFn:'openART', renderFn:'renderART' },
+    invoices: { idVar:null,     modalId:null,   openFn:null,      renderFn:'renderSuivi' }
+  };
+
+  // Crée le channel Supabase Realtime et abonne les 7 listeners.
+  // Idempotent grâce à _remoteSubscribed.
+  function _subscribeRealtime(){
+    if (!sbClient || _remoteSubscribed) return;
+    var channelName = 'grc-realtime-' + Date.now();
+    var ch = sbClient.channel(channelName);
+    REALTIME_TABLES.forEach(function(table){
+      ch = ch.on('postgres_changes', { event:'*', schema:'public', table: table }, function(payload){
+        _onRemoteChange(table, payload);
+      });
+    });
+    ch.subscribe(function(status){
+      console.log('[supa realtime] channel "' + channelName + '" status:', status);
+      if (status === 'SUBSCRIBED') {
+        _remoteSubscribed = true;
+        _toast('🟢 Sync temps réel activée', 'ok');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        _remoteSubscribed = false;
+        if (status !== 'CLOSED') {
+          console.warn('[supa realtime] subscribe issue:', status);
+          _toast('⚠ Sync temps réel indisponible (' + status + ')', 'err');
+        }
+      }
+    });
+    _remoteChannel = ch;
+  }
+
+  // Handler principal d'un event Realtime. Applique le changement à DB en
+  // bloquant temporairement la sync push via _applyingRemoteChange.
+  function _onRemoteChange(table, payload){
+    if (!table || !payload) return;
+    var eventType = payload.eventType || payload.event;
+    var newRow = payload.new || null;
+    var oldRow = payload.old || null;
+    var rowId = (newRow && newRow.id != null) ? newRow.id : (oldRow && oldRow.id);
+    if (rowId == null) return;
+    var idStr = String(rowId);
+
+    // Si c'est nous-mêmes qui avons fait le change (notre push retourne via
+    // l'event Realtime), on applique silencieusement sans toast.
+    var isFromUs = !!(newRow && newRow.updated_by && _currentUserId && newRow.updated_by === _currentUserId);
+
+    _applyingRemoteChange = true;
+    try {
+      if (!Array.isArray(DB[table])) DB[table] = [];
+      if (eventType === 'INSERT' || eventType === 'UPDATE') {
+        var data = newRow && newRow.data;
+        if (!data) return; // payload incomplet (rare)
+        var idx = DB[table].findIndex(function(r){ return r && String(r.id) === idStr; });
+        if (idx >= 0) DB[table][idx] = data;
+        else DB[table].push(data);
+        // Update _meta
+        if (!_meta[table]) _meta[table] = {};
+        _meta[table][idStr] = {
+          created_at: newRow.created_at, created_by: newRow.created_by,
+          updated_at: newRow.updated_at, updated_by: newRow.updated_by
+        };
+        // Update tracking sync (sinon prochain push utilisateur croit qu'il y a un diff)
+        if (_lastSyncedIds[table]) _lastSyncedIds[table].add(idStr);
+        _lastSyncedHash[table] = _hashArr(DB[table]);
+      } else if (eventType === 'DELETE') {
+        var idx2 = DB[table].findIndex(function(r){ return r && String(r.id) === idStr; });
+        if (idx2 >= 0) DB[table].splice(idx2, 1);
+        if (_meta[table]) delete _meta[table][idStr];
+        if (_lastSyncedIds[table]) _lastSyncedIds[table].delete(idStr);
+        _lastSyncedHash[table] = _hashArr(DB[table]);
+      } else {
+        // event inconnu (ne devrait pas arriver avec event:'*')
+        return;
+      }
+
+      // Update localStorage cache (cohérence offline)
+      try {
+        var json = JSON.stringify(DB);
+        var nowIso = new Date().toISOString();
+        localStorage.setItem('ci_grc3', json);
+        localStorage.setItem('ci_grc3_lastSave', nowIso);
+      } catch(e){}
+
+      // Toast si modale ouverte sur cette entité ET ce n'est pas nous
+      if (!isFromUs && (eventType === 'INSERT' || eventType === 'UPDATE')) {
+        _maybeShowReloadToast(table, idStr, newRow);
+      } else if (!isFromUs && eventType === 'DELETE') {
+        // Cas particulier : l'entité que je suis en train d'éditer a été supprimée
+        _maybeShowDeletedToast(table, idStr);
+      }
+
+      // Queue le re-render debounced
+      _remoteRenderQueue.add(table);
+      if (_remoteRenderTimer) clearTimeout(_remoteRenderTimer);
+      _remoteRenderTimer = setTimeout(_processRemoteRenderQueue, 500);
+    } catch(e) {
+      console.warn('[supa realtime] erreur handler ' + table + ' :', e);
+    } finally {
+      // CRUCIAL : reset du flag pour permettre les push utilisateur ultérieurs
+      _applyingRemoteChange = false;
+    }
+  }
+
+  // Re-render groupé après debounce. Appelle les renderers globaux pour les
+  // tables qui ont été touchées dans la fenêtre des 500ms.
+  function _processRemoteRenderQueue(){
+    var tables = Array.from(_remoteRenderQueue);
+    _remoteRenderQueue.clear();
+    _remoteRenderTimer = null;
+    tables.forEach(function(table){
+      var entry = REALTIME_TABLE_MAP[table];
+      if (entry && entry.renderFn && typeof window[entry.renderFn] === 'function') {
+        try { window[entry.renderFn](); } catch(e){ console.warn('[supa realtime] re-render '+table+' failed:', e); }
+      }
+    });
+    // Aussi : dashboard + historique (souvent affectés par les changements)
+    try { if (typeof rDash === 'function') rDash(); } catch(e){}
+    try { if (typeof renderHist === 'function') renderHist(); } catch(e){}
+  }
+
+  // Toast persistant "X vient de modifier ce devis. [Recharger]". Affiché
+  // UNIQUEMENT si la modale d'édition correspondante est ouverte sur cette entité.
+  function _maybeShowReloadToast(table, idStr, newRow){
+    var m = REALTIME_TABLE_MAP[table];
+    if (!m || !m.modalId) return;
+    var modal = document.getElementById(m.modalId);
+    if (!modal || !modal.classList.contains('open')) return;
+    var openId = null;
+    try { openId = window[m.idVar]; } catch(e){}
+    if (openId == null || String(openId) !== idStr) return; // autre entité ouverte
+    var who = newRow && newRow.updated_by ? window._supaGetAlias(newRow.updated_by) : null;
+    var whoLabel = who ? who.alias : 'Un autre utilisateur';
+    var whoColor = who ? who.color : '#fbbf24';
+    _showPersistentReloadToast(table, idStr, m, whoLabel, whoColor);
+  }
+
+  // Variante DELETE : l'entité que j'édite vient d'être SUPPRIMÉE à distance.
+  // Cas rare mais critique — on prévient sans bouton recharger (rien à recharger).
+  function _maybeShowDeletedToast(table, idStr){
+    var m = REALTIME_TABLE_MAP[table];
+    if (!m || !m.modalId) return;
+    var modal = document.getElementById(m.modalId);
+    if (!modal || !modal.classList.contains('open')) return;
+    var openId = null;
+    try { openId = window[m.idVar]; } catch(e){}
+    if (openId == null || String(openId) !== idStr) return;
+    var t = _ensureReloadToastEl();
+    t.style.background = 'rgba(244,63,94,0.95)';
+    t.innerHTML = '<span style="color:#fff">⚠ <strong>Cette entrée a été supprimée à distance.</strong> Vos modifications locales ne pourront pas être sauvegardées (elle réapparaîtra comme nouvelle).</span>';
+    t.style.display = 'flex';
+    clearTimeout(t._h);
+    t._h = setTimeout(function(){ t.style.display='none'; }, 30000);
+  }
+
+  // Lazy-créé : élément #supaReloadToast (réutilisable pour reload et deleted).
+  function _ensureReloadToastEl(){
+    var t = document.getElementById('supaReloadToast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'supaReloadToast';
+      t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:999999;padding:14px 18px;border-radius:8px;max-width:380px;font-family:Inter,system-ui,sans-serif;font-size:12.5px;line-height:1.5;box-shadow:0 10px 30px rgba(0,0,0,0.4);display:none;align-items:center;gap:12px';
+      document.body.appendChild(t);
+    }
+    return t;
+  }
+
+  // Toast persistant pour le cas "modifié à distance" avec bouton [Recharger]
+  // qui re-ouvre la modale avec la version fraîche.
+  function _showPersistentReloadToast(table, idStr, mapEntry, whoLabel, whoColor){
+    var t = _ensureReloadToastEl();
+    t.style.background = 'rgba(251,191,36,0.96)';
+    t.innerHTML =
+      '<span style="color:#0a0a08">⚠ <strong style="color:'+whoColor+';background:rgba(0,0,0,0.15);padding:1px 6px;border-radius:4px">'+_escConflict(whoLabel)+'</strong> vient de modifier cette entrée. Vos modifs locales ne sont pas perdues, mais vous éditez une version dépassée.</span>' +
+      '<button id="supaReloadBtn" style="padding:6px 12px;background:rgba(0,0,0,0.18);border:1px solid rgba(0,0,0,0.35);border-radius:6px;cursor:pointer;font-weight:700;color:#0a0a08;font-family:inherit;font-size:12px;white-space:nowrap">⟳ Recharger</button>' +
+      '<button id="supaReloadDismiss" style="padding:4px 6px;background:transparent;border:0;cursor:pointer;color:rgba(0,0,0,0.5);font-size:18px;line-height:1;font-family:inherit">×</button>';
+    t.style.display = 'flex';
+    var btn = document.getElementById('supaReloadBtn');
+    if (btn) {
+      btn.onclick = function(){
+        // Pareil que "Recharger leur version" de Phase 2 : ferme + rouvre la modale
+        if (typeof cm === 'function') try { cm(mapEntry.modalId); } catch(e){}
+        setTimeout(function(){
+          if (typeof window[mapEntry.openFn] === 'function') {
+            try { window[mapEntry.openFn](Number(idStr) || idStr); } catch(e){}
+          }
+        }, 50);
+        t.style.display = 'none';
+      };
+    }
+    var dismiss = document.getElementById('supaReloadDismiss');
+    if (dismiss) dismiss.onclick = function(){ t.style.display='none'; };
+    clearTimeout(t._h);
+    t._h = setTimeout(function(){ t.style.display='none'; }, 30000);
+  }
+
   // ===== Mapping colonnes miroir =====
   // (Conforme au schéma confirmé : id + champs miroir + data jsonb. Les colonnes
   // created_at/updated_at/created_by/updated_by sont gérées par triggers → on
@@ -43505,12 +43750,19 @@ function critProceed(){
   // Exposé en global → appelé depuis saveDB() (cf rewrite ligne ~3192).
   window._supaSyncSchedule = function(){
     if (!sbClient || !_bootDone) return; // pas de push avant que le fetch initial ait réussi
+    // PHASE 3 : MUTEX CRITIQUE — si on est en train d'appliquer un remote event
+    // Realtime, NE PAS re-push. Sinon : remote UPDATE → DB mute → hash change
+    // → push → serveur trigger → remote UPDATE again → boucle infinie.
+    if (_applyingRemoteChange) return;
     if (_syncTimer) clearTimeout(_syncTimer);
     _syncTimer = setTimeout(_supaSyncFlush, 1000);
   };
 
   async function _supaSyncFlush(){
     if (!sbClient) return;
+    // PHASE 3 : double guard mutex. _supaSyncSchedule devrait déjà bloquer mais
+    // au cas où ce serait appelé directement (ex: depuis le retry après échec).
+    if (_applyingRemoteChange) return;
     if (_syncInFlight) { _syncPending = true; return; }
     _syncInFlight = true;
     try {
@@ -43668,6 +43920,15 @@ function critProceed(){
   // Exposé en global → appelé par le bouton "Se déconnecter" de la sidebar.
   window._supaLogout = async function(){
     if (!confirm('Se déconnecter du compte cloud ?\n\n(La copie locale reste en cache. L\'app rechargera.)')) return;
+    // PHASE 3 : unsubscribe Realtime AVANT signOut, sinon le serveur garde une
+    // connexion fantôme et envoie des events sur un client en train de se fermer.
+    try {
+      if (_remoteChannel) {
+        await _remoteChannel.unsubscribe();
+        _remoteChannel = null;
+        _remoteSubscribed = false;
+      }
+    } catch(e){ console.warn('[supa realtime] unsubscribe on logout:', e); }
     try { if (sbClient) await sbClient.auth.signOut(); } catch(e) { console.warn(e); }
     location.reload();
   };
@@ -43720,6 +43981,12 @@ function critProceed(){
     }
     // Re-render via nav() pour refléter les vraies données fraîchement chargées.
     try { if (typeof nav === 'function') nav('dashboard'); } catch(e) { console.warn('nav failed:', e); }
+    // PHASE 3 : activer Supabase Realtime (online uniquement). Push remote events
+    // vers _onRemoteChange qui mute DB + update _meta + queue re-render debounced.
+    // Idempotent grâce à _remoteSubscribed (pas de double subscribe).
+    if (!offlineMode) {
+      try { _subscribeRealtime(); } catch(e){ console.warn('[supa realtime] subscribe failed:', e); }
+    }
   }
 
   async function _boot(){
