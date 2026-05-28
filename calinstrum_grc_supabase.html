@@ -4651,13 +4651,17 @@ function _flashModalLocked(overlay){
 // est ouverte.
 //
 // Mapping : modalId → { idVar:'eDVid', openFn:'openDV' }
+// Mapping modale → variables/fonctions du métier. Étendu avec supaTable (Phase 1
+// attribution) : nom de la table Supabase pour fetcher updated_by/updated_at et
+// afficher "Modifié par X · il y a 3h" en bas de la modale. Cf. _onModalOpen
+// qui hook window._supaShowAttributionFooter après l'ouverture.
 var _MODAL_EDIT_MAP = {
-  'mDV':  {idVar:'eDVid',  openFn:'openDV'},
-  'mFA':  {idVar:'eFAid',  openFn:'openFA'},
-  'mBC':  {idVar:'eBCid',  openFn:'openBC'},
-  'mBL':  {idVar:'eBLid',  openFn:'openBL'},
-  'mCL':  {idVar:'eCLid',  openFn:'openCL'},
-  'mART': {idVar:'eARTid', openFn:'openART'}
+  'mDV':  {idVar:'eDVid',  openFn:'openDV',  supaTable:'devis'},
+  'mFA':  {idVar:'eFAid',  openFn:'openFA',  supaTable:'factures'},
+  'mBC':  {idVar:'eBCid',  openFn:'openBC',  supaTable:'bcs'},
+  'mBL':  {idVar:'eBLid',  openFn:'openBL',  supaTable:'bls'},
+  'mCL':  {idVar:'eCLid',  openFn:'openCL',  supaTable:'clients'},
+  'mART': {idVar:'eARTid', openFn:'openART', supaTable:'articles'}
 };
 var _rowHighlightObserver = null;
 var _activeHighlight = null; // {modalId, openFn, id} pour ré-application post-render
@@ -4673,6 +4677,12 @@ function _onModalOpen(modalId){
     var id = null;
     try { id = window[map.idVar]; } catch(e){}
     if(id == null){ try { id = globalThis[map.idVar]; } catch(e){} }
+    // PHASE 1 (attribution) : footer "Modifié par X · il y a 3h" dans la modale.
+    // Appelé même si id null/undefined (la fonction gère le cas "création locale").
+    // Fire-and-forget : ne bloque pas la suite (surbrillance des lignes).
+    if(map.supaTable && typeof window._supaShowAttributionFooter === 'function'){
+      try { window._supaShowAttributionFooter('#'+modalId, map.supaTable, id); } catch(e){}
+    }
     if(id == null) return; // nouveau document (id null/undefined) : pas de surbrillance
     _activeHighlight = {modalId: modalId, openFn: map.openFn, id: id};
     _applyRowHighlight();
@@ -42774,6 +42784,18 @@ function critProceed(){
   var _lastSyncedIds = {};   // { tableName: Set<id_string> } pour devis/factures/bcs/bls/clients/articles/invoices
   var _lastSyncedParamsKeys = null;  // Set<string> pour la table params (null = pas encore initialisé)
 
+  // ===== Phase 1 : Attribution (updated_by/updated_at) =====
+  // Stockage HORS de DB pour éviter la pollution du système de sync (cf _hashParamsBucket).
+  // Ces caches sont re-fetchés au boot via _loadFromSupabase, et chaque ouverture
+  // de modale re-fetche la meta de l'entité concernée pour avoir l'info fraîche.
+  // _meta     : { tableName: { <id_string>: { created_at, created_by, updated_at, updated_by } } }
+  // _aliases  : { <uuid_string>: { alias, color } } — depuis la table public.users_alias
+  // _currentUserId : uuid de l'utilisateur loggué (set après _loadFromSupabase via auth.getUser).
+  //                  Utile pour Phase 2 (warning conflit : ne pas s'avertir soi-même).
+  var _meta = { devis:{}, factures:{}, bcs:{}, bls:{}, clients:{}, articles:{}, invoices:{} };
+  var _aliases = {};
+  var _currentUserId = null;
+
   // ===== Helpers UI =====
   function $$(id){ return document.getElementById(id); }
   function _msg(html, isErr){
@@ -42790,6 +42812,36 @@ function critProceed(){
     t.style.display = 'block';
     clearTimeout(t._h);
     t._h = setTimeout(function(){ t.style.display='none'; }, 7000);
+  }
+
+  // ===== Phase 1 : helpers de date (humain) =====
+  // Format relatif : "à l'instant", "il y a 3 min", "il y a 2 h", "il y a 4 j", etc.
+  function _relativeDate(iso){
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var diffMs = Date.now() - d.getTime();
+    var diffSec = Math.round(diffMs / 1000);
+    if (diffSec < 30)  return 'à l\'instant';
+    if (diffSec < 60)  return 'il y a ' + diffSec + ' s';
+    var diffMin = Math.round(diffSec / 60);
+    if (diffMin < 60)  return 'il y a ' + diffMin + ' min';
+    var diffH = Math.round(diffMin / 60);
+    if (diffH < 24)    return 'il y a ' + diffH + ' h';
+    var diffJ = Math.round(diffH / 24);
+    if (diffJ < 7)     return 'il y a ' + diffJ + ' j';
+    if (diffJ < 30)    return 'il y a ' + Math.round(diffJ/7) + ' sem';
+    if (diffJ < 365)   return 'il y a ' + Math.round(diffJ/30) + ' mois';
+    var diffA = Math.round(diffJ/365);
+    return 'il y a ' + diffA + ' an' + (diffA>1?'s':'');
+  }
+  // Format absolu (pour le tooltip au survol) : "28/05/2026 19:47"
+  function _absoluteDate(iso){
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var pad = function(n){ return String(n).padStart(2,'0'); };
+    return pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear()+' '+pad(d.getHours())+':'+pad(d.getMinutes());
   }
 
   // ===== Hash léger pour diff par table (djb2) =====
@@ -42897,6 +42949,117 @@ function critProceed(){
     return out;
   };
 
+  // =============================================================================
+  // PHASE 1 : Attribution — helpers exposés en global
+  // =============================================================================
+  // Résout un UUID en { alias, color } via le cache _aliases peuplé au boot
+  // depuis la table public.users_alias. Fallback : 6 premiers chars de l'UUID
+  // avec une couleur grise discrète.
+  window._supaGetAlias = function(uuid){
+    if (!uuid) return { alias: '—', color: '#888' };
+    var a = _aliases[uuid];
+    if (a) return a;
+    return { alias: String(uuid).substring(0,6) + '…', color: '#888' };
+  };
+
+  // Renvoie la meta cache pour une entité (ne fait pas de fetch réseau).
+  // Pour avoir l'info fraîche, utiliser _supaShowAttributionFooter (re-fetch).
+  window._supaGetMeta = function(table, id){
+    if (!table || id == null) return null;
+    var t = _meta[table];
+    if (!t) return null;
+    return t[String(id)] || null;
+  };
+
+  // Renvoie le map complet { uuid: {alias,color} } — utile pour afficher la liste
+  // des collègues, debug, futures fonctionnalités (avatar list, etc.).
+  window._supaGetAllAliases = function(){
+    var copy = {};
+    Object.keys(_aliases).forEach(function(k){ copy[k] = _aliases[k]; });
+    return copy;
+  };
+
+  // Injecte un footer "Modifié par X · il y a 3h" dans une modale ouverte.
+  //   - selector : sélecteur CSS de la modale (ex: '#mDV', '#mFA', '#mBC')
+  //   - table    : nom de la table Supabase (ex: 'devis', 'factures')
+  //   - id       : id de l'entité (number ou string)
+  // Re-fetche la meta côté Supabase à chaque appel pour avoir l'info à jour
+  // (le cache _meta peut dater de plusieurs minutes). Latence ~200ms, non bloquant.
+  // Cas particuliers gérés :
+  //   - id absent ou nouveau (entité en cours de création locale) → "Création locale"
+  //   - updated_by NULL (ligne créée avant le trigger, clients/articles legacy) → fallback
+  //     sans nom mais avec la date
+  //   - users_alias absente → fallback uuid raccourci
+  //   - erreur réseau → message discret "Attribution indisponible"
+  window._supaShowAttributionFooter = async function(selector, table, id){
+    if (!sbClient) return;
+    var modal = (typeof selector === 'string') ? document.querySelector(selector) : selector;
+    if (!modal) return;
+    // Cible : .modal-body si présent, sinon le modal lui-même
+    var body = modal.querySelector('.modal-body') || modal;
+    // Footer unique : un seul par modale, identifié par data-attr
+    var footer = modal.querySelector('[data-supa-attribution]');
+    if (!footer){
+      footer = document.createElement('div');
+      footer.setAttribute('data-supa-attribution','1');
+      footer.style.cssText = 'margin:10px 0 0;padding:8px 12px;border-top:0.5px solid rgba(255,255,255,0.08);font-size:10.5px;color:var(--muted-soft);letter-spacing:0.02em;display:flex;align-items:center;gap:12px;flex-wrap:wrap';
+      body.appendChild(footer);
+    }
+    // ID absent ou nouveau → entité pas encore sync
+    if (id == null || id === '' || id === 'new') {
+      footer.innerHTML = '<span style="opacity:0.6">📝 Création locale — sera attribuée à votre nom à la 1<sup>re</sup> sauvegarde</span>';
+      return;
+    }
+    footer.innerHTML = '<span style="opacity:0.5">⏳ Chargement attribution…</span>';
+    try {
+      var res = await sbClient.from(table)
+        .select('updated_by, updated_at, created_by, created_at')
+        .eq('id', id)
+        .maybeSingle();
+      if (res.error) {
+        console.warn('[supa attribution] ' + table + '/' + id + ' :', res.error.message);
+        footer.innerHTML = '<span style="opacity:0.5">⚠ Attribution indisponible</span>';
+        return;
+      }
+      if (!res.data) {
+        // Entité présente dans DB local mais pas dans Supabase → création non encore sync
+        footer.innerHTML = '<span style="opacity:0.6">📝 Pas encore synchronisée au cloud</span>';
+        return;
+      }
+      var m = res.data;
+      // Mettre à jour le cache _meta au passage
+      if (!_meta[table]) _meta[table] = {};
+      _meta[table][String(id)] = m;
+      var parts = [];
+      // Bloc "Modifié par X · il y a 3h"
+      if (m.updated_at) {
+        var upBy = m.updated_by ? window._supaGetAlias(m.updated_by) : null;
+        var upRel = _relativeDate(m.updated_at);
+        var upAbs = _absoluteDate(m.updated_at);
+        if (upBy) {
+          parts.push('<span title="'+upAbs+'">📝 Modifié par <strong style="color:'+upBy.color+';font-weight:600">'+upBy.alias+'</strong> · '+upRel+'</span>');
+        } else {
+          parts.push('<span style="opacity:0.7" title="'+upAbs+'">📝 Modifié '+upRel+' <span style="opacity:0.5">(auteur inconnu)</span></span>');
+        }
+      }
+      // Bloc "Créé par Y · il y a 2 mois" (seulement si différent de updated_at)
+      if (m.created_at && m.created_at !== m.updated_at) {
+        var crBy = m.created_by ? window._supaGetAlias(m.created_by) : null;
+        var crRel = _relativeDate(m.created_at);
+        var crAbs = _absoluteDate(m.created_at);
+        if (crBy) {
+          parts.push('<span title="'+crAbs+'">✨ Créé par <strong style="color:'+crBy.color+';font-weight:600">'+crBy.alias+'</strong> · '+crRel+'</span>');
+        } else {
+          parts.push('<span style="opacity:0.7" title="'+crAbs+'">✨ Créé '+crRel+'</span>');
+        }
+      }
+      footer.innerHTML = parts.length ? parts.join('<span style="opacity:0.4">·</span> ') : '<span style="opacity:0.5">— pas de métadonnées</span>';
+    } catch(e) {
+      console.warn('[supa attribution] exception', e);
+      footer.innerHTML = '<span style="opacity:0.5">⚠ Attribution indisponible (réseau)</span>';
+    }
+  };
+
   // ===== Mapping colonnes miroir =====
   // (Conforme au schéma confirmé : id + champs miroir + data jsonb. Les colonnes
   // created_at/updated_at/created_by/updated_by sont gérées par triggers → on
@@ -42953,10 +43116,25 @@ function critProceed(){
     if (!sbClient) return false;
     _msg('⏳ Chargement des données…', false);
     var newDB = {};
+    // PHASE 1 : reset des caches meta + aliases (repeuplés ci-dessous)
+    Object.keys(_meta).forEach(function(k){ _meta[k] = {}; });
+    _aliases = {};
     var fetchers = TABLES.map(function(t){
-      return sbClient.from(t.name).select('data').then(function(res){
+      // PHASE 1 : SELECT élargi pour récupérer aussi created_at/created_by/updated_at/updated_by
+      // → peuplement du cache _meta en parallèle du peuplement de DB.<table>.
+      return sbClient.from(t.name).select('id, data, created_at, created_by, updated_at, updated_by').then(function(res){
         if (res.error) throw new Error(t.name + ' : ' + res.error.message);
-        newDB[t.arr] = (res.data || []).map(function(r){ return r.data; }).filter(Boolean);
+        var rows = res.data || [];
+        newDB[t.arr] = rows.map(function(r){ return r.data; }).filter(Boolean);
+        // Peuplement du cache meta : indexé par String(id) pour cohérence avec _lastSyncedIds
+        rows.forEach(function(r){
+          if (r && r.id != null) {
+            _meta[t.name][String(r.id)] = {
+              created_at: r.created_at, created_by: r.created_by,
+              updated_at: r.updated_at, updated_by: r.updated_by
+            };
+          }
+        });
       });
     });
     fetchers.push(
@@ -42965,6 +43143,29 @@ function critProceed(){
         (res.data || []).forEach(function(row){ newDB[row.key] = row.value; });
       })
     );
+    // PHASE 1 : fetch users_alias (mapping uuid → alias affichable). Non bloquant :
+    // si la table n'existe pas ou si RLS refuse, on continue avec le fallback uuid raccourci.
+    fetchers.push(
+      sbClient.from('users_alias').select('id, alias, color').then(function(res){
+        if (res.error) {
+          console.warn('[supa users_alias] indisponible :', res.error.message);
+          return;
+        }
+        (res.data || []).forEach(function(row){
+          if (row && row.id) {
+            _aliases[row.id] = { alias: row.alias || String(row.id).substring(0,6), color: row.color || '#5dcaa5' };
+          }
+        });
+      })
+    );
+    // PHASE 1 : récupérer l'uuid du user loggué (utile pour Phase 2 conflit + Realtime).
+    // Fire-and-forget : ne bloque pas le chargement initial, mais sera dispo très vite.
+    sbClient.auth.getUser().then(function(res){
+      if (res && res.data && res.data.user) {
+        _currentUserId = res.data.user.id;
+        window._supaCurrentUserId = _currentUserId;
+      }
+    }).catch(function(){});
     try {
       await Promise.all(fetchers);
     } catch(e) {
