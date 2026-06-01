@@ -3194,11 +3194,16 @@ function dedupeDB(db){
     if(f.id)s+=1/(1+f.id/1e13);
     return s;
   }
-  function dedupeArr(arr,fields,label){
+  function dedupeArr(arr,fields,label,keyFn){
     if(!Array.isArray(arr)||arr.length<2)return arr||[];
+    // Clé de regroupement des doublons. Par défaut = num seul (factures/invoices,
+    // comportement historique INCHANGÉ). Pour les DEVIS on passe un keyFn = num+rev
+    // (cf. appel ci-dessous) car un devis et sa révision PARTAGENT le num
+    // (createDVRevision : newRev.num=root.num) et ne diffèrent que par rev.
+    function _key(f){ return keyFn ? keyFn(f) : (f.num||'').toLowerCase().trim(); }
     var groups={};
     arr.forEach(function(f){
-      var k=(f.num||'').toLowerCase().trim();
+      var k=_key(f);
       if(!k)return;
       (groups[k]=groups[k]||[]).push(f);
     });
@@ -3211,8 +3216,8 @@ function dedupeDB(db){
       removed+=copies.length-1;
       console.warn('[dedupe '+label+'] '+k+' : '+copies.length+' copies → 1 conservée (id='+copies[0].id+')');
     });
-    // garder aussi les entrées sans num (rares)
-    arr.forEach(function(f){if(!(f.num||'').toLowerCase().trim())kept.push(f);});
+    // garder aussi les entrées sans clé (rares)
+    arr.forEach(function(f){if(!_key(f))kept.push(f);});
     if(removed>0)console.warn('[dedupe '+label+'] '+removed+' doublon(s) supprimé(s)');
     return kept;
   }
@@ -3220,7 +3225,21 @@ function dedupeDB(db){
   db.invoices=dedupeArr(db.invoices,['dateEncaissement','po','comment','phase','grcFactureId','_factureId'],'invoices');
   // Extension dédup aux DEVIS : observé in-the-wild des duplicates (même num,
   // ids différents). Garde la copie la plus riche (lignes/références/statut).
-  db.devis=dedupeArr(db.devis,['fourniture','service','fret','client','objet','status','refEmerson','refACT','poCalinstrum','dvlie','notes'],'devis');
+  // ⚠ FIX 2026-06-01 (PERTE DE DONNÉES) : la clé de dédup des devis DOIT être
+  // num + rev, PAS num seul. Un devis et ses révisions partagent le même num
+  // (createDVRevision ligne ~25154 : newRev.num=root.num ; newRev.rev='REV1'…).
+  // Avec une clé sur num seul, dedupeArr groupait la base et sa révision comme
+  // des "doublons", gardait la plus riche et SUPPRIMAIT l'autre — puis la
+  // propagation DELETE (sync) effaçait la révision côté Supabase. C'est ce qui
+  // a effacé SLN-DV167 REV1. La clé num+rev sépare correctement chaque version
+  // tout en gardant la détection des VRAIS doublons (même num ET même rev).
+  db.devis=dedupeArr(db.devis,['fourniture','service','fret','client','objet','status','refEmerson','refACT','poCalinstrum','dvlie','notes'],'devis',
+    function(d){
+      var num=(d.num||'').toLowerCase().trim();
+      if(!num) return '';                       // pas de num → géré comme "sans clé"
+      var rev=(d.rev||'').toLowerCase().trim();  // '' pour la base, 'rev1'/'rev2'… pour les révisions
+      return num+'|'+rev;                   // séparateur   = jamais dans un num/rev réel
+    });
 }
 function defDB(){
   return{devis:[],factures:[],bcs:[],bls:[],
