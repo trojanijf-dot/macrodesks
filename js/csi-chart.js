@@ -17,17 +17,17 @@
   const CURRENCIES = ['AUD', 'NZD', 'JPY', 'USD', 'EUR', 'GBP', 'CHF', 'CAD'];
   
   const COLORS = {
-    AUD: '#f5a623', NZD: '#b968e8', JPY: '#a8b2c0', USD: '#ff4d6d',
-    EUR: '#4a9eff', GBP: '#1fd388', CHF: '#c89b3d', CAD: '#e85d9a'
+    AUD: '#5dcaa5', NZD: '#ef9f27', JPY: '#f09595', USD: '#88aae0',
+    EUR: '#a78bfa', GBP: '#c9a3e0', CHF: '#88c0c0', CAD: '#d6a06b'
   };
 
   const DIVERGENCE_META = {
-    'BEARISH_MOMENTUM_BREAK': { shortLabel: 'BMB', color: '#ff4d6d', priority: 3, badgeClass: 'csi-div-badge--p3' },
-    'BULLISH_MOMENTUM_BREAK': { shortLabel: 'BullMB', color: '#1fd388', priority: 3, badgeClass: 'csi-div-badge--bullp3' },
-    'BEARISH_SHORT_TERM': { shortLabel: 'BST', color: '#f5a623', priority: 2, badgeClass: 'csi-div-badge--p2' },
-    'BULLISH_SHORT_TERM': { shortLabel: 'BullST', color: '#4a9eff', priority: 2, badgeClass: 'csi-div-badge--p2bull' },
-    'SHORT_TERM_FADE': { shortLabel: 'Fade', color: '#ffd54f', priority: 1, badgeClass: 'csi-div-badge--p1' },
-    'SHORT_TERM_SURGE': { shortLabel: 'Surge', color: '#b968e8', priority: 1, badgeClass: 'csi-div-badge--p1surge' }
+    'BEARISH_MOMENTUM_BREAK': { shortLabel: 'BMB', color: '#f09595', priority: 3, badgeClass: 'csi-div-badge--p3' },
+    'BULLISH_MOMENTUM_BREAK': { shortLabel: 'BullMB', color: '#5dcaa5', priority: 3, badgeClass: 'csi-div-badge--bullp3' },
+    'BEARISH_SHORT_TERM': { shortLabel: 'BST', color: '#ef9f27', priority: 2, badgeClass: 'csi-div-badge--p2' },
+    'BULLISH_SHORT_TERM': { shortLabel: 'BullST', color: '#88aae0', priority: 2, badgeClass: 'csi-div-badge--p2bull' },
+    'SHORT_TERM_FADE': { shortLabel: 'Fade', color: '#ef9f27', priority: 1, badgeClass: 'csi-div-badge--p1' },
+    'SHORT_TERM_SURGE': { shortLabel: 'Surge', color: '#a78bfa', priority: 1, badgeClass: 'csi-div-badge--p1surge' }
   };
 
   class DualCSIChart {
