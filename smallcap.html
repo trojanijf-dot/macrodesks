@@ -256,9 +256,10 @@ let FILTER='all', CUR=null, TF='1Y', volHi=null;
 
 /* ---- TOP BAND ---- */
 function spark(id,data,color){var el=document.getElementById(id);if(el)el.innerHTML=svgArea(data,color,42);}
-function renderTop(){const topStocks=Object.keys(STOCKS).filter(k=>STOCKS[k].star).sort((a,b)=>STOCKS[b].score-STOCKS[a].score);
- document.getElementById('topband').innerHTML=topStocks.map(k=>{const s=STOCKS[k];return `<div class="topcard" onclick="openStock('${k}')"><div class="h"><span class="tk">${k}</span><span class="pot"><i class="ti ti-star-filled"></i>POTENTIEL ÉLEVÉ</span></div><div class="nm">${s.name}</div><div class="sp" id="sp-${k}"></div><div class="ft"><div class="sc">${s.score}</div><div class="pj">${s.proj[0][2]?'<b>'+s.proj[0][2]+'</b> '+s.proj[0][1].replace('Si ','si '):''}</div></div></div>`}).join('');
- topStocks.forEach(k=>spark('sp-'+k,STOCKS[k].series['1Y'],css('--green')));}
+function renderTop(){let topStocks=Object.keys(STOCKS).filter(k=>STOCKS[k].star).sort((a,b)=>STOCKS[b].score-STOCKS[a].score);
+ if(topStocks.length<3) topStocks=Object.keys(STOCKS).sort((a,b)=>STOCKS[b].score-STOCKS[a].score).slice(0,3);
+ document.getElementById('topband').innerHTML=topStocks.map(k=>{const s=STOCKS[k];const pill=s.star?'<i class="ti ti-star-filled"></i>POTENTIEL ÉLEVÉ':'<i class="ti ti-trophy"></i>TOP OPPORTUNITÉ';return `<div class="topcard" onclick="openStock('${k}')"><div class="h"><span class="tk">${k}</span><span class="pot">${pill}</span></div><div class="nm">${s.name}</div><div class="sp" id="sp-${k}"></div><div class="ft"><div class="sc">${s.score}</div><div class="pj">${s.proj[0][2]?'<b>'+s.proj[0][2]+'</b> '+s.proj[0][1].replace('Si ','si '):''}</div></div></div>`}).join('');
+ topStocks.forEach(k=>{if(STOCKS[k].series)spark('sp-'+k,STOCKS[k].series['1Y'],css('--green'));});}
 renderTop();
 
 /* ---- THEME DONUT ---- */
