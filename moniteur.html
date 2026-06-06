@@ -1,0 +1,78 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MacroDesk — Moniteur de position</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+:root{--bg:#0e0e0c;--bg1:#0a0a08;--bg2:#1a1a17;--bg3:#14140f;--bg4:#222220;--border:rgba(255,255,250,0.08);--border-2:rgba(255,255,250,0.13);--text:#f5f5f0;--muted:#a3a39a;--muted-soft:#6e6e66;--faint:#46463f;--red:#f09595;--green:#5dcaa5;--amber:#ef9f27;--blue:#88aae0;--purple:#a78bfa;--mono:'JetBrains Mono',monospace;--font:'Inter',system-ui,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:22px 24px 70px;max-width:1080px;margin:0 auto}
+.topnav{display:flex;gap:4px;margin-bottom:16px;border-bottom:.5px solid var(--border)}
+.topnav a{font-family:var(--mono);font-size:11px;color:var(--muted);text-decoration:none;padding:9px 15px;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px;transition:.12s;margin-bottom:-.5px}
+.topnav a:hover{color:var(--text)}.topnav a.active{color:var(--blue);border-bottom-color:var(--blue)}
+.head{display:flex;align-items:center;gap:11px;margin-bottom:3px}
+.head .logo{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--red),#8f3a3a);color:#210707;font-weight:800;font-size:17px}
+.head h1{font-size:19px;font-weight:800;color:#fff}
+.head .badge{margin-left:auto;font-family:var(--mono);font-size:9px;font-weight:700;color:var(--amber);background:rgba(239,159,39,.14);padding:3px 10px;border-radius:999px;text-transform:uppercase;letter-spacing:.08em}
+.sub{color:var(--muted);font-size:12px;margin-bottom:16px}
+.kpi{display:flex;background:var(--bg2);border:.5px solid var(--border);border-radius:11px;margin-bottom:14px;overflow:hidden}
+.kpi .c{flex:1;padding:10px 15px;border-right:.5px solid var(--border)}.kpi .c:last-child{border-right:none}
+.kpi .k{font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-soft);font-weight:600}
+.kpi .v{font-family:var(--mono);font-size:16px;font-weight:700;margin-top:2px}
+.up{color:var(--green)}.down{color:var(--red)}
+.feed{display:flex;flex-direction:column;gap:9px}
+.pos{background:var(--bg2);border:.5px solid var(--border);border-radius:12px;padding:13px 15px;display:grid;grid-template-columns:130px 150px 110px 1fr 160px;gap:14px;align-items:center}
+.pos.sortir{border-left:3px solid var(--red)}.pos.trim{border-left:3px solid var(--amber)}.pos.hold{border-left:3px solid var(--green)}
+.pos .tk{font-weight:800;font-size:16px;color:#fff}.pos .nm{font-size:10px;color:var(--muted-soft);margin-top:1px}
+.pos .px{font-family:var(--mono);font-size:11.5px;color:var(--muted)}.pos .px b{color:#fff}
+.pos .pl{font-family:var(--mono);text-align:right}.pos .pl .v{font-size:17px;font-weight:800}.pos .pl .r{font-size:10px;color:var(--muted-soft)}
+.sigs{display:flex;flex-wrap:wrap;gap:5px}
+.sig{font-family:var(--mono);font-size:9px;font-weight:600;padding:2px 7px;border-radius:5px;display:inline-flex;align-items:center;gap:4px}
+.s-red{background:rgba(240,149,149,.13);color:var(--red)}.s-amb{background:rgba(239,159,39,.12);color:var(--amber)}.s-ok{background:var(--bg4);color:var(--muted-soft)}
+.verdict{text-align:right}
+.vpill{font-family:var(--mono);font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;display:inline-block}
+.v-sortir{background:rgba(240,149,149,.15);color:var(--red)}.v-trim{background:rgba(239,159,39,.14);color:var(--amber)}.v-hold{background:rgba(93,202,165,.13);color:var(--green)}
+.verdict .why{font-size:9.5px;color:var(--muted-soft);margin-top:4px}
+.note{background:rgba(240,149,149,.06);border:.5px dashed rgba(240,149,149,.3);border-radius:11px;padding:12px 15px;margin-top:16px;font-size:11.5px;color:var(--muted);line-height:1.55}.note b{color:var(--text)}
+.foot{margin-top:14px;color:var(--faint);font-size:10px;font-family:var(--mono)}
+@media(max-width:860px){.pos{grid-template-columns:1fr 1fr;gap:8px}.verdict,.pl{text-align:left}}
+</style></head><body>
+<nav class="topnav"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html" class="active"><i class="ti ti-shield-half"></i>Moniteur</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
+<div class="head"><span class="logo">M</span><h1>Moniteur de position <span style="color:var(--muted-soft);font-weight:600;font-size:14px">— signaux de sortie</span></h1><span class="badge" id="badge"><i class="ti ti-flask" style="font-size:11px"></i>DEMO</span></div>
+<div class="sub">Le robot surveille tes positions : <b style="color:var(--text)">424B5 · Form 4 · lock-up · RVOL ↓ · stop/cible</b> → te dit <b style="color:var(--text)">quand sortir</b>. Savoir sortir = pérennité.</div>
+
+<div class="kpi" id="kpi"></div>
+<div class="feed" id="feed"></div>
+
+<div class="note"><b>D'où viennent les signaux :</b> 424B5 / Form 4 / 13F → <b>EDGAR</b>. RVOL & prix → <b>Yahoo</b>. Lock-up → <b>IPO + 180j</b>. Stop / Cible → tes niveaux. → calculés par le node <b>SmallCap Positions Monitor</b> → <code>data/positions.json</code>.</div>
+<div class="foot" id="foot">DEMO inline · positions & signaux simulés</div>
+
+<script>
+const VLABEL={sortir:['SORTIR','v-sortir'],trim:['ALLÉGER','v-trim'],hold:['CONSERVER','v-hold']};
+const DEMO={generatedAt:'2026-06-05',positions:[
+ {tk:'AVTX',nm:'Avalo · Biotech',entry:1.10,now:0.80,r:-1.0,sigs:[['s-red','ti-arrow-down','Stop -25% touché'],['s-red','ti-file-dollar','424B5 dilution']],verdict:'sortir',why:'Stop déclenché + dilution → coupe.'},
+ {tk:'OKLO',nm:'Oklo · AI-Power',entry:52.00,now:46.30,r:-0.5,sigs:[['s-red','ti-file-dollar','424B5 dilution'],['s-red','ti-user-x','Form 4 vente initiés']],verdict:'sortir',why:'Thèse cassée : dilution + initiés qui vendent.'},
+ {tk:'GENB',nm:'Generate Bio · Biotech',entry:13.00,now:18.40,r:2.1,sigs:[['s-amb','ti-lock-open','Lock-up J-12'],['s-amb','ti-trending-up','+42% atteint']],verdict:'trim',why:'Encaisse avant la pression vendeuse du lock-up.'},
+ {tk:'USAR',nm:'USA Rare Earth · Métaux',entry:9.20,now:14.10,r:2.7,sigs:[['s-amb','ti-activity','RVOL ↓ 0.9×'],['s-amb','ti-flame','Parabole']],verdict:'trim',why:'Le carburant (RVOL) retombe → prends une partie dans la force.'},
+ {tk:'RCAT',nm:'Red Cat · Défense',entry:7.80,now:9.05,r:0.8,sigs:[['s-ok','ti-check','Thèse intacte · RVOL ok']],verdict:'hold',why:'Aucun signal négatif, momentum sain → laisse courir (trailing stop).'},
+]};
+let DATA=DEMO;
+function pct(p){return ((p.now-p.entry)/p.entry*100);}
+function apply(){const P=DATA.positions||[];
+ document.getElementById('kpi').innerHTML=`
+  <div class="c"><div class="k">Positions</div><div class="v">${P.length}</div></div>
+  <div class="c"><div class="k">À sortir</div><div class="v down">${P.filter(p=>p.verdict==='sortir').length}</div></div>
+  <div class="c"><div class="k">À alléger</div><div class="v" style="color:var(--amber)">${P.filter(p=>p.verdict==='trim').length}</div></div>
+  <div class="c"><div class="k">À conserver</div><div class="v up">${P.filter(p=>p.verdict==='hold').length}</div></div>`;
+ document.getElementById('feed').innerHTML=P.map(p=>{const pc=pct(p),up=pc>=0,vl=VLABEL[p.verdict]||VLABEL.hold;
+  return `<div class="pos ${p.verdict}">
+   <div><div class="tk">${p.tk}</div><div class="nm">${p.nm||''}</div></div>
+   <div class="px">Entrée <b>$${(+p.entry).toFixed(2)}</b><br>Actuel <b>$${(+p.now).toFixed(2)}</b></div>
+   <div class="pl"><div class="v ${up?'up':'down'}">${up?'+':''}${pc.toFixed(1)}%</div><div class="r">${p.r>=0?'+':''}${p.r}R</div></div>
+   <div class="sigs">${(p.sigs||[]).map(s=>`<span class="sig ${s[0]}"><i class="ti ${s[1]}"></i>${s[2]}</span>`).join('')}</div>
+   <div class="verdict"><span class="vpill ${vl[1]}">${vl[0]}</span><div class="why">${p.why||''}</div></div>
+  </div>`;}).join('') || '<div class="nm" style="color:var(--muted-soft);padding:14px">Aucune position. Édite la liste dans le node SmallCap Positions Monitor.</div>';
+}
+apply();
+(async()=>{try{const r=await fetch('data/positions.json',{cache:'no-store'});if(!r.ok)throw 0;const j=await r.json();if(j&&j.positions){DATA=j;document.getElementById('badge').innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>LIVE JSON · '+String(j.generatedAt||'').slice(0,10);document.getElementById('foot').textContent='data/positions.json chargé · '+j.positions.length+' positions';apply();}}catch(e){console.warn('positions.json indisponible → DEMO (normal en file://)');}})();
+</script>
+</body></html>
