@@ -157,7 +157,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 
 <!-- OPPORTUNITY TABLE -->
 <div class="stitle"><i class="ti ti-target-arrow"></i>Opportunity Score <span class="s2" id="oppSub">— tous thèmes · trié par opportunité</span></div>
-<div class="card" style="padding:5px 6px"><div style="overflow-x:auto">
+<div class="card" style="padding:5px 6px"><div style="padding:6px 6px 10px"><input id="oppSearch" oninput="SEARCH=this.value.toUpperCase().trim();renderTable()" placeholder="🔍 Rechercher un ticker ou un nom…" style="width:100%;background:var(--bg3);border:.5px solid var(--border-2);border-radius:8px;padding:8px 12px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none"></div><div style="overflow-x:auto">
   <table class="tbl"><thead><tr><th>Ticker</th><th>Thème</th><th>Float</th><th>Cash runway</th><th>Catalyseur</th><th>Insiders/13F</th><th>Momentum</th><th>Valo</th><th>Opportunity</th><th>Projection</th><th>Statut</th></tr></thead>
     <tbody id="oppBody"></tbody>
   </table>
@@ -258,7 +258,7 @@ let STOCKS={
 };
 function vser(n,sd){var a=[];for(var i=0;i<n;i++)a.push(+(0.8+Math.abs(Math.sin(i*1.3+sd))*1.4+Math.abs(Math.sin(i*0.4))*0.8).toFixed(2));return a;}
 Object.keys(STOCKS).forEach(k=>{const s=STOCKS[k];s.series=tfSeries(s.base,s.bias);const sd=s.base*7+k.length;s.rvol={'1D':vser(26,sd),'1M':vser(30,sd+1),'1Y':vser(52,sd+2),'5Y':vser(60,sd+3),'All':vser(70,sd+4)};});
-let FILTER='all', CUR=null, TF='1Y', volHi=null;
+let FILTER='all', CUR=null, TF='1Y', volHi=null, SEARCH='';
 
 /* ---- TOP BAND ---- */
 function spark(id,data,color){var el=document.getElementById(id);if(el)el.innerHTML=svgArea(data,color,42);}
@@ -276,7 +276,7 @@ renderLegend();
 /* ---- TABLE + FILTER ---- */
 function rowHtml(k){const s=STOCKS[k];const col=s.score>=80?'var(--green)':s.score>=60?'var(--blue)':'var(--red)';const stcls=s.status==='ÉVITER'?'tag-neutral':s.score>=80?'tag-long':'tag-blue';
  return `<tr data-k="${k}" data-theme="${s.theme}" onclick="openStock('${k}')"><td style="font-weight:700">${k}${s.star?'<i class="ti ti-star-filled star"></i>':''}</td><td><span class="tag ${s.tag}">${s.theme}</span></td><td data-num>${s.float}</td><td data-num class="${s.runway.indexOf('3 mois')>=0?'down':'up'}">${s.runway}</td><td style="color:var(--muted)">${s.cat}</td><td><span class="mini ${s.ins>=3?'up':'down'}">${[0,1,2,3,4].map(i=>'<b class="'+(i<s.ins?'on':'')+'"></b>').join('')}</span></td><td data-num class="${s.mom.indexOf('−')>=0?'down':'up'}">${s.mom}</td><td class="${s.valo.indexOf('trap')>=0?'down':s.valo.indexOf('décote')>=0?'up':'flat'}">${s.valo}</td><td><span class="opp"><span class="bar"><i style="width:${s.score}%;background:${col}"></i></span><span class="v" style="color:${col}">${s.score}</span></span></td><td style="font-size:10px"><span class="${s.proj[0][0]}">${s.proj[0][2]||'—'}</span></td><td><span class="tag ${stcls}">${s.status}</span></td></tr>`;}
-function renderTable(){const ks=Object.keys(STOCKS).filter(k=>FILTER==='all'||STOCKS[k].theme===FILTER).sort((a,b)=>STOCKS[b].score-STOCKS[a].score);if(!ks.length){document.getElementById('oppBody').innerHTML='<tr class="empty"><td colspan="11" style="text-align:center;color:var(--muted-soft);padding:22px"><i class="ti ti-filter-off" style="font-size:14px;vertical-align:-2px"></i> Aucun titre dans ce thème — clique le centre du donut pour revenir à « Tous ».</td></tr>';return;}document.getElementById('oppBody').innerHTML=ks.map(rowHtml).join('');if(CUR){const tr=document.querySelector('#oppBody tr[data-k="'+CUR+'"]');if(tr)tr.classList.add('sel');}}
+function renderTable(){const ks=Object.keys(STOCKS).filter(k=>(FILTER==='all'||STOCKS[k].theme===FILTER)&&(!SEARCH||k.includes(SEARCH)||(STOCKS[k].name||'').toUpperCase().includes(SEARCH))).sort((a,b)=>STOCKS[b].score-STOCKS[a].score);if(!ks.length){document.getElementById('oppBody').innerHTML='<tr class="empty"><td colspan="11" style="text-align:center;color:var(--muted-soft);padding:22px"><i class="ti ti-filter-off" style="font-size:14px;vertical-align:-2px"></i> Aucun titre dans ce thème — clique le centre du donut pour revenir à « Tous ».</td></tr>';return;}document.getElementById('oppBody').innerHTML=ks.map(rowHtml).join('');if(CUR){const tr=document.querySelector('#oppBody tr[data-k="'+CUR+'"]');if(tr)tr.classList.add('sel');}}
 function setFilter(k){FILTER=k;const lbl=k==='all'?'Tous thèmes':THEMES.find(t=>t.key===k).label;
  document.getElementById('donutBig').textContent=k==='all'?'Tous':k;
  document.getElementById('kpiFilter').innerHTML='<i class="ti ti-filter" style="font-size:13px"></i>'+lbl;
