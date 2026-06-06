@@ -83,6 +83,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
   <span class="chip" data-f="424">424B5</span>
 </div>
 
+<div style="margin:10px 2px"><input id="dSearch" oninput="DSEARCH=this.value.toUpperCase().trim();render()" placeholder="🔍 Rechercher un ticker ou un nom…" style="width:100%;background:var(--bg2);border:.5px solid var(--border-2);border-radius:8px;padding:8px 12px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none"></div>
 <div class="stitle"><i class="ti ti-search"></i>Candidats EDGAR <span style="color:var(--muted-soft);font-weight:400;text-transform:none;letter-spacing:0" id="dcount"></span></div>
 <div class="feed" id="feed"></div>
 
@@ -121,7 +122,7 @@ const DEMO={generatedAt:'2026-06-05',window:{startdt:'2026-05-29',enddt:'2026-06
   {theme:'Défense',recipient:'QUANTUM-SYSTEMS INC',amountM:20,agency:'Department of State',date:'',kw:'drone'},
   {theme:'Défense',recipient:'SKYCOPE C-UAS TECHNOLOGIES INC',amountM:2,agency:'Department of Justice',date:'',kw:'drone'},
  ]};
-let DATA=DEMO, FILTER='all', LIST=[];
+let DATA=DEMO, FILTER='all', LIST=[], DSEARCH='';
 function renderKpi(){const bySig=s=>DATA.discoveries.filter(d=>d.sig===s).length;
  document.getElementById('kpi').innerHTML=`
   <div class="c"><div class="k">Fenêtre scannée</div><div class="v" style="font-size:12px">${DATA.window?DATA.window.startdt+' → '+DATA.window.enddt:'—'}</div></div>
@@ -130,7 +131,7 @@ function renderKpi(){const bySig=s=>DATA.discoveries.filter(d=>d.sig===s).length
   <div class="c"><div class="k">S-1 (IPO)</div><div class="v">${bySig('S1')}</div></div>
   <div class="c"><div class="k">Contrats gov</div><div class="v">${DATA.govCount||DATA.govAwards.length}</div></div>`;}
 function render(){
- LIST=DATA.discoveries.filter(c=>FILTER==='all'||c.sig===FILTER).sort((a,b)=>b.score-a.score);
+ LIST=DATA.discoveries.filter(c=>(FILTER==='all'||c.sig===FILTER)&&(!DSEARCH||(c.ticker||'').includes(DSEARCH)||(c.name||'').toUpperCase().includes(DSEARCH))).sort((a,b)=>b.score-a.score);
  document.getElementById('dcount').textContent='— '+LIST.length+' affichés · clique pour le détail';
  document.getElementById('feed').innerHTML=LIST.map((c,i)=>{const s=SIG[c.sig]||SIG['8K'],col=c.score>=85?'var(--green)':c.score>=70?'var(--amber)':'var(--blue)';
   return `<div class="cand" onclick="openDetail(${i})">
