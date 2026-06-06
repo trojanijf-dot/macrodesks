@@ -137,8 +137,8 @@ function render(){
  document.getElementById('gov').innerHTML=g.length?g.map(a=>`<div class="gov"><span class="tag ${TH[a.theme]||'t-grey'}">${a.theme}</span><b style="color:#fff">${a.recipient}</b><span style="color:var(--muted-soft);font-size:11px">${a.agency||''} · ${a.kw||''}</span><span class="amt">${a.amountM?'$'+a.amountM+'M':'—'}</span></div>`).join(''):'<div class="nm" style="color:var(--muted-soft);padding:6px">Aucun contrat.</div>';
 }
 function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'];
- const news=(c.news&&c.news.length)?`<div class="sec"><h3><i class="ti ti-news"></i>Actualité récente</h3><div class="mnews">${c.news.map(n=>`<a href="${n.url||'#'}" target="_blank"><span class="d">${(n.date||'').slice(5)}</span><span>${n.headline}</span></a>`).join('')}</div><div class="meta">source : Finnhub /company-news</div></div>`:'';
- const profile=c.profile?`<p>${c.profile}</p><div class="meta">source : FMP /stable/profile · Finnhub</div>`:`<p class="dim">Profil non chargé — relance le node Discovery (enrichi) puis Publish.</p>`;
+ const news=(c.news&&c.news.length)?`<div class="sec"><h3><i class="ti ti-news"></i>Actualité récente</h3><div class="mnews">${c.news.map(n=>`<a href="${n.url||'#'}" target="_blank"><span class="d">${(n.date||'').slice(5)}</span><span class="js-news">${n.headline}</span></a>`).join('')}</div><div class="meta">source : Finnhub /company-news · trad. auto FR</div></div>`:'';
+ const profile=c.profile?`<p class="js-prof">${c.profile}</p><div class="meta">source : FMP /stable/profile · trad. auto FR</div>`:`<p class="dim">Profil non chargé — relance le node Discovery (enrichi) puis Publish.</p>`;
  const thesis=c.thesis?`<div class="thesis"><p>${c.thesis}</p></div>`:`<p class="dim">Thèse non générée (enrichissement requis).</p>`;
  const filingBtn=c.filingUrl?`<a class="btn src" href="${c.filingUrl}" target="_blank"><i class="ti ti-building-bank"></i>Filing EDGAR (source)</a>`:'';
  document.getElementById('modal').innerHTML=`<button class="x" onclick="closeDetail()">&times;</button>
@@ -155,7 +155,11 @@ function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'
   ${news}
   <div class="btns" style="margin-top:16px"><a class="btn" href="#"><i class="ti ti-plus"></i>Ajouter à la watchlist</a><a class="btn src" href="smallcap.html"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</a></div>`;
  document.getElementById('overlay').classList.add('on');
+ translateModal();
 }
+const TC={};
+async function tr(t){ if(!t)return t; if(TC[t])return TC[t]; try{ const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(t.slice(0,480))}&langpair=en|fr`); const j=await r.json(); const o=(j&&j.responseData&&j.responseData.translatedText)||t; TC[t]=o; return o; }catch(e){ return t; } }
+async function translateModal(){ const m=document.getElementById('modal'); const p=m.querySelector('.js-prof'); if(p){ const fr=await tr(p.textContent); if(p.isConnected)p.textContent=fr; } const ns=m.querySelectorAll('.js-news'); for(const el of ns){ const fr=await tr(el.textContent); if(el.isConnected)el.textContent=fr; } }
 function closeDetail(){document.getElementById('overlay').classList.remove('on');}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail();});
 function apply(){renderKpi();render();}
