@@ -66,7 +66,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 @media(max-width:780px){.cand{grid-template-columns:1fr;gap:8px}.score,.act{text-align:left}.score .bar{margin:4px 0 0 0}}
 </style></head><body>
 <nav class="topnav"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html" class="active"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html"><i class="ti ti-shield-half"></i>Moniteur</a><a href="validateur.html"><i class="ti ti-checkup-list"></i>Validateur</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
-<div class="head"><span class="logo">M</span><h1>Découvertes <span style="color:var(--muted-soft);font-weight:600;font-size:14px">— sourcing automatique</span></h1><span class="badge" id="badge"><i class="ti ti-flask" style="font-size:11px"></i>DEMO</span></div>
+<div class="head"><span class="logo">M</span><h1>Découvertes <span style="color:var(--muted-soft);font-weight:600;font-size:14px">— sourcing automatique</span></h1><button onclick="openWh()" title="Config webhook Watchlist" style="background:none;border:.5px solid var(--border);color:var(--muted);border-radius:7px;padding:5px 9px;font-family:var(--mono);font-size:10px;cursor:pointer;margin-right:8px"><i class="ti ti-settings"></i> Webhook</button><span class="badge" id="badge"><i class="ti ti-flask" style="font-size:11px"></i>DEMO</span></div>
+<div id="wh-overlay" onclick="if(event.target===this)closeWh()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:60;align-items:center;justify-content:center;padding:20px"><div style="background:var(--bg2);border:.5px solid var(--border-2);border-radius:13px;padding:18px 20px;max-width:540px;width:100%">
+  <div style="display:flex;align-items:center;margin-bottom:11px"><b style="color:#fff">Webhook ➕ Watchlist</b><button onclick="closeWh()" style="margin-left:auto;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">&times;</button></div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Colle l'URL <b style="color:var(--text)">production</b> du webhook n8n (workflow <code style="background:var(--bg3);border:.5px solid var(--border);padding:1px 5px;border-radius:4px;font-size:10.5px;color:var(--blue)">SmallCap Watchlist Add</code>). Gardée <b style="color:var(--text)">dans ton navigateur</b> uniquement.</div>
+  <input id="wh-url" type="text" placeholder="https://....app.n8n.cloud/webhook/smallcap-watchlist" style="width:100%;background:var(--bg1);border:.5px solid var(--border-2);border-radius:7px;padding:8px 11px;color:var(--text);font-family:var(--mono);font-size:11px;outline:none">
+  <div style="display:flex;gap:8px;margin-top:11px;justify-content:flex-end"><button onclick="closeWh()" class="btn" style="color:var(--muted);background:var(--bg3);border:.5px solid var(--border)">Annuler</button><button onclick="saveWh()" class="btn">Enregistrer</button></div>
+</div></div>
 <div class="sub">Scan auto des filings publics (EDGAR + USASpending) → candidats <b style="color:var(--text)">avant le tweet</b>. <span style="color:var(--muted-soft)"><i class="ti ti-click"></i> clique un candidat pour la fiche détaillée (sourcée)</span></div>
 
 <div class="kpi" id="kpi"></div>
@@ -131,7 +137,7 @@ function render(){
    <div><div class="tk">${c.ticker}<span class="tag theme-tag ${TH[c.theme]||'t-grey'}">${c.theme}</span></div><div class="nm">${c.name||''}</div></div>
    <div><div class="sig"><span class="tag ${s[0]}"><i class="ti ${s[1]}"></i>${s[2]}</span> &nbsp;${c.reason}</div><div class="src"><span><i class="ti ti-link"></i>${c.src||'EDGAR'}</span><span><i class="ti ti-clock"></i>${c.date||''}</span>${c.profile?'<span style="color:var(--green)"><i class="ti ti-file-description"></i>fiche</span>':''}</div></div>
    <div class="score"><div class="v" style="color:${col}">${c.score}</div><div class="bar"><i style="width:${c.score}%;background:${col}"></i></div></div>
-   <div class="act"><button class="btn" onclick="event.stopPropagation();this.classList.add('added');this.innerHTML='<i class=\\'ti ti-check\\'></i> Ajouté'">➕ Watchlist</button></div>
+   <div class="act"><button class="btn" onclick="event.stopPropagation();addToWatchlist('${c.ticker}','${c.theme||''}',this)">➕ Watchlist</button></div>
   </div>`;}).join('') || '<div class="nm" style="color:var(--muted-soft);padding:14px">Aucun candidat pour ce filtre.</div>';
  const g=DATA.govAwards||[];
  document.getElementById('gov').innerHTML=g.length?g.map(a=>`<div class="gov"><span class="tag ${TH[a.theme]||'t-grey'}">${a.theme}</span><b style="color:#fff">${a.recipient}</b><span style="color:var(--muted-soft);font-size:11px">${a.agency||''} · ${a.kw||''}</span><span class="amt">${a.amountM?'$'+a.amountM+'M':'—'}</span></div>`).join(''):'<div class="nm" style="color:var(--muted-soft);padding:6px">Aucun contrat.</div>';
@@ -153,7 +159,7 @@ function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'
   <div class="sec"><h3><i class="ti ti-bolt"></i>Le catalyseur <span style="color:var(--green);text-transform:none;letter-spacing:0;font-weight:400">— vérifiable</span></h3><div class="cat"><p>${c.reason}</p><div class="btns">${filingBtn}</div></div></div>
   <div class="sec"><h3><i class="ti ti-target"></i>Pourquoi ça compte <span style="color:var(--muted-soft);text-transform:none;letter-spacing:0;font-weight:400">— la thèse</span></h3>${thesis}</div>
   ${news}
-  <div class="btns" style="margin-top:16px"><a class="btn" href="#"><i class="ti ti-plus"></i>Ajouter à la watchlist</a><a class="btn src" href="smallcap.html"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</a></div>`;
+  <div class="btns" style="margin-top:16px"><button class="btn" onclick="addToWatchlist('${c.ticker}','${c.theme||''}',this)"><i class="ti ti-plus"></i>Ajouter à la watchlist</button><a class="btn src" href="smallcap.html"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</a></div>`;
  document.getElementById('overlay').classList.add('on');
  translateModal();
 }
@@ -166,5 +172,27 @@ function apply(){renderKpi();render();}
 document.querySelectorAll('#filters .chip').forEach(ch=>ch.onclick=()=>{document.querySelectorAll('#filters .chip').forEach(x=>x.classList.remove('on'));ch.classList.add('on');FILTER=ch.dataset.f;render();});
 apply();
 (async()=>{try{const r=await fetch('data/discoveries.json',{cache:'no-store'});if(!r.ok)throw 0;const j=await r.json();if(j&&j.discoveries){DATA=j;document.getElementById('badge').innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>LIVE JSON · '+String(j.generatedAt||'').slice(0,10);document.getElementById('foot').textContent='data/discoveries.json chargé · '+(j.count||j.discoveries.length)+' candidats';apply();}}catch(e){console.warn('discoveries.json indisponible → DEMO (normal en file://)');}})();
+
+/* ---- Watchlist webhook ---- */
+function openWh(){document.getElementById('wh-url').value=localStorage.getItem('mk_webhook')||'';document.getElementById('wh-overlay').style.display='flex';}
+function closeWh(){document.getElementById('wh-overlay').style.display='none';}
+function saveWh(){const u=document.getElementById('wh-url').value.trim();if(u)localStorage.setItem('mk_webhook',u);else localStorage.removeItem('mk_webhook');closeWh();}
+function toast(msg,ok){const t=document.createElement('div');t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:'+(ok?'rgba(93,202,165,.15)':'rgba(240,149,149,.15)')+';color:'+(ok?'var(--green)':'var(--red)')+';border:.5px solid '+(ok?'rgba(93,202,165,.4)':'rgba(240,149,149,.4)')+';padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:12px;font-weight:600;z-index:80;box-shadow:0 6px 18px rgba(0,0,0,.5)';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3200);}
+async function addToWatchlist(tk,theme,btn){
+ const url=localStorage.getItem('mk_webhook')||'';
+ if(!url){ toast('Configure d\'abord l\'URL webhook (bouton ⚙ Webhook en haut)',false); openWh(); return; }
+ if(btn){btn.classList.add('loading');btn.innerHTML='<i class="ti ti-loader-2" style="animation:spin .8s linear infinite"></i> Envoi…';}
+ try{
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:tk,theme:theme||'?'})});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const j=await r.json().catch(()=>({}));
+  if(btn){btn.classList.remove('loading');btn.classList.add('added');btn.innerHTML='<i class="ti ti-check"></i> Ajouté';}
+  toast(tk+' ajouté à la watchlist'+(j.count?' ('+j.count+' tickers)':''), true);
+ }catch(e){
+  if(btn){btn.classList.remove('loading');btn.style.background='var(--red)';btn.style.color='#2a0d0d';btn.innerHTML='<i class="ti ti-x"></i> Erreur';setTimeout(()=>{btn.style.background='';btn.style.color='';btn.innerHTML='➕ Watchlist';},2500);}
+  toast('Erreur : '+e.message, false);
+ }
+}
+const _style=document.createElement('style');_style.textContent='@keyframes spin{to{transform:rotate(360deg)}}';document.head.appendChild(_style);
 </script>
 </body></html>
