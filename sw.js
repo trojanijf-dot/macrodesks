@@ -5,7 +5,7 @@
  *   - data/*.json -> network-first (données fraîches, fallback dernier cache)
  *   - icônes/CSS/fonts -> cache-first (rapide)
  */
-const VERSION = 'macrodesk-v2-2026-06-07';
+const VERSION = 'macrodesk-v3-2026-06-07';
 const SHELL = 'shell-' + VERSION;
 const RUNTIME = 'runtime-' + VERSION;
 
@@ -16,6 +16,7 @@ const SHELL_ASSETS = [
   'moniteur.html',
   'validateur.html',
   'smallcap_guide.html',
+  'split.html',
   'manifest.json',
   'icons/icon-192.png',
   'icons/icon-512.png',

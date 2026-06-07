@@ -140,4 +140,27 @@ preset('xmet');
 
 <!-- PWA service worker -->
 <script>if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(e){console.warn('SW register failed',e);});});}</script>
+
+<!-- macrodesk-tab-shortcuts : Ctrl+Tab/Ctrl+Shift+Tab + Ctrl+1..5 + bouton Double vue -->
+<script>
+(function(){
+  var PAGES=['smallcap.html','decouvertes.html','moniteur.html','validateur.html','smallcap_guide.html'];
+  function cur(){var p=(location.pathname.split('/').pop()||'smallcap.html');var i=PAGES.indexOf(p);return i<0?0:i;}
+  function go(i){location.href=PAGES[(i+PAGES.length)%PAGES.length];}
+  function openSplit(){location.href='split.html?left='+PAGES[cur()]+'&right=moniteur.html';}
+  document.addEventListener('keydown',function(e){
+    if(e.ctrlKey&&!e.altKey&&(e.key==='Tab'||e.code==='Tab')){e.preventDefault();go(cur()+(e.shiftKey?-1:1));}
+    else if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&e.key>='1'&&e.key<='5'){e.preventDefault();go(+e.key-1);}
+    else if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&e.code==='KeyB'){e.preventDefault();openSplit();}
+  });
+  var nav=document.querySelector('nav.topnav');
+  if(nav&&!nav.querySelector('.splitlink')){
+    var a=document.createElement('a');
+    a.className='splitlink';a.href='split.html?left='+PAGES[cur()]+'&right=moniteur.html';
+    a.style.marginLeft='auto';a.title='Deux onglets cote a cote (Ctrl + B)';
+    a.innerHTML='<i class="ti ti-layout-columns"></i>Double vue';
+    nav.appendChild(a);
+  }
+})();
+</script>
 </body></html>
