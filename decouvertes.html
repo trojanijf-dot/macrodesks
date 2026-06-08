@@ -201,7 +201,7 @@ function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'
   <div class="sec"><h3><i class="ti ti-bolt"></i>Le catalyseur <span style="color:var(--green);text-transform:none;letter-spacing:0;font-weight:400">— vérifiable</span></h3><div class="cat"><p>${c.reason}</p><div class="btns">${filingBtn}</div></div></div>
   ${accum}<div class="sec"><h3><i class="ti ti-target"></i>Pourquoi ça compte <span style="color:var(--muted-soft);text-transform:none;letter-spacing:0;font-weight:400">— la thèse</span></h3>${thesis}</div>
   ${news}
-  <div class="btns" style="margin-top:16px"><button class="btn" onclick="addToWatchlist('${c.ticker}','${c.theme||''}',this)"><i class="ti ti-plus"></i>Ajouter à la watchlist</button><a class="btn src" href="smallcap.html"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</a></div>`;
+  <div class="btns" style="margin-top:16px"><button class="btn" onclick="addToWatchlist('${c.ticker}','${c.theme||''}',this)"><i class="ti ti-plus"></i>Ajouter à la watchlist</button><button class="btn src" onclick="openInRadar('${c.ticker}')"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</button></div>`;
  document.getElementById('overlay').classList.add('on');
  translateModal();
 }
@@ -209,6 +209,14 @@ const TC={};
 async function tr(t){ if(!t)return t; if(TC[t])return TC[t]; try{ const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(t.slice(0,480))}&langpair=en|fr`); const j=await r.json(); const o=(j&&j.responseData&&j.responseData.translatedText)||t; TC[t]=o; return o; }catch(e){ return t; } }
 async function translateModal(){ const m=document.getElementById('modal'); const p=m.querySelector('.js-prof'); if(p){ const fr=await tr(p.textContent); if(p.isConnected)p.textContent=fr; } const ns=m.querySelectorAll('.js-news'); for(const el of ns){ const fr=await tr(el.textContent); if(el.isConnected)el.textContent=fr; } }
 function closeDetail(){document.getElementById('overlay').classList.remove('on');}
+function openInRadar(tk){
+  // En Double vue (dans une iframe) -> demander au parent d'ouvrir le Radar dans l'AUTRE volet
+  if(window.parent && window.parent!==window){
+    try{ window.parent.postMessage({type:'macrodesk-open',page:'smallcap.html',tk:tk,from:'decouvertes.html'},'*'); return; }catch(e){}
+  }
+  // Sinon navigation normale avec deep-link
+  location.href='smallcap.html?tk='+encodeURIComponent(tk);
+}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail();});
 function apply(){renderKpi();render();}
 document.querySelectorAll('#filters .chip').forEach(ch=>ch.onclick=()=>{document.querySelectorAll('#filters .chip').forEach(x=>x.classList.remove('on'));ch.classList.add('on');FILTER=ch.dataset.f;render();});
