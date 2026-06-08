@@ -68,6 +68,7 @@ hr{border:none;border-top:.5px solid var(--border);margin:18px 0}
 <a href="#ipo">6. Repérer les IPO & lock-up</a>
 <a href="#edgar">7. EDGAR : l'edge avant le tweet</a>
 <a href="#pipeline">8. Le pipeline data (n8n)</a>
+<a href="#fonctionnement">↳ Interactions, mise en route &amp; timings</a>
 <a href="#watchlist">9. Éditer ta watchlist</a>
 <a href="#sortie">10. Gestion de sortie</a>
 <a href="#glossaire">11. Glossaire</a>
@@ -176,6 +177,51 @@ Schedule (1×/jour)<br>
 &nbsp;&nbsp;smallcap.html (PROD) ←┘  LIVE
 </div>
 <p class="muted">100 % gratuit : FMP <code>/stable</code> · Finnhub · Yahoo · SEC EDGAR · GDELT. Aucune dépendance payante (pas de Finviz Elite).</p>
+
+<h2 id="fonctionnement"><i class="ti ti-clock-bolt"></i>Interactions, mise en route &amp; timings</h2>
+<p><b>Le principe en une phrase :</b> n8n calcule <b>1×/jour</b> → écrit des fichiers JSON → les pages <b>affichent</b> ces JSON. Tout ce que tu vois est une <b>photo du dernier run</b> (badge <code>generatedAt</code> « LIVE JSON · date » en haut de page). Les pages ne calculent rien : tout le cerveau est dans n8n.</p>
+
+<h3>Quel onglet lit quel fichier</h3>
+<div class="card"><table>
+<tr><th>Onglet</th><th>Source (node → JSON)</th><th>Rôle</th></tr>
+<tr><td><b>Radar</b></td><td class="mono">A→C→B→Compute → smallcap.json</td><td>Univers noté (Opportunity Score)</td></tr>
+<tr><td><b>Découvertes</b></td><td class="mono">Discovery → discoveries.json</td><td>Candidats sourcés EDGAR + fiches</td></tr>
+<tr><td><b>Moniteur</b></td><td class="mono">Positions Monitor → positions.json</td><td>Verdicts de sortie de tes positions</td></tr>
+<tr><td><b>➕ Watchlist</b></td><td class="mono">webhook → watchlist.json → node A</td><td>Seul flux qui va <b>vers</b> n8n</td></tr>
+<tr><td><b>Validateur</b></td><td class="mono">autonome (Finnhub à la demande)</td><td>Note fondamentale 5D, hors batch</td></tr>
+</table></div>
+
+<h3>Mise en route — la 1ère étape</h3>
+<div class="card">
+<div class="step"><div class="n">1</div><div>Workflow <code>MacroDesk_SmallCap</code> <b>ACTIVÉ</b>. <span class="muted">Sinon aucun JSON n'est régénéré → pages figées au dernier run.</span></div></div>
+<div class="step"><div class="n">2</div><div><b>Schedule</b> réglé (1×/jour). <span class="muted">Le battement de cœur. « Execute workflow » force un run immédiat.</span></div></div>
+<div class="step"><div class="n">3</div><div>Webhook <code>SmallCap Watchlist Add</code> <b>ACTIVE</b>. <span class="muted">Sinon le bouton ➕ ne fait rien.</span></div></div>
+<div class="step"><div class="n">4</div><div><b>Univers de départ</b> = la watchlist (30 tickers). <span class="muted">La 1ère étape « métier » : qui suivre ?</span></div></div>
+<div class="step"><div class="n">5</div><div><b>Tes positions</b> dans le node Positions Monitor. <span class="muted">Vide = aucune alerte (normal).</span></div></div>
+<div class="step"><div class="n">6</div><div><b>1er run</b> → les JSON se remplissent → <kbd>Ctrl+Shift+R</kbd> sur les pages.</div></div>
+</div>
+<div class="note good"><b>En une ligne :</b> activer le workflow + lancer un run. Le reste (watchlist, positions) ne fait qu'<b>alimenter</b> ce moteur déjà allumé.</div>
+
+<h3>Les timings — as-tu un retard de 24h / 48h ?</h3>
+<p>La chaîne complète, d'un <b>filing EDGAR</b> jusqu'à <b>ton écran</b> :</p>
+<div class="formula">
+1. Entreprise dépose à la SEC&nbsp;&nbsp;&nbsp;&nbsp;→ EDGAR&nbsp;&nbsp;<b>minutes</b><br>
+2. EDGAR full-text l'indexe&nbsp;&nbsp;&nbsp;&nbsp;→ <b>minutes → ~24h</b><br>
+3. <b>Le Schedule n8n se déclenche</b>&nbsp;→ <b>0 → 24h d'attente</b>&nbsp;&nbsp;◀ le maillon qui domine<br>
+4. Publish → GitHub Pages&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ <b>~1 min</b><br>
+5. Tu ouvres la page (Ctrl+Shift+R)&nbsp;→ <b>instant</b>
+</div>
+<div class="card"><table>
+<tr><th>Question</th><th>Réponse</th></tr>
+<tr><td>Délai typique (filing → écran)</td><td><b style="color:var(--green)">≤ 24h</b> — souvent le jour même ou le lendemain</td></tr>
+<tr><td>Pire cas réaliste</td><td><b style="color:var(--amber)">~24h</b> ; ~48h <b>seulement si</b> un run a échoué ou indexation EDGAR lente</td></tr>
+<tr><td>Risque de <b>rater</b> un filing</td><td><b style="color:var(--green)">Non</b> — Discovery scrute <b>7 jours glissants</b> : jamais perdu, juste vu plus tard</td></tr>
+<tr><td>Prix / RVOL affichés</td><td><b style="color:var(--amber)">Batch</b> — figés au dernier run (pas du live). Voir <code>generatedAt</code></td></tr>
+<tr><td>Bouton ➕ Watchlist</td><td><b style="color:var(--green)">Instant</b> sur watchlist.json, noté au Radar au <b>prochain run</b></td></tr>
+<tr><td>Besoin de « maintenant »</td><td><b style="color:var(--green)">Execute workflow</b> dans n8n → run immédiat</td></tr>
+</table></div>
+<div class="note warn"><b>Le retard ne casse PAS l'edge.</b> Même avec ~24h de batch, tu restes <b>des jours avant le tweet</b> (cas AMPG : ~13 j). Le tweet NoLimit/Assembly arrive APRÈS le filing public, pas avant.</div>
+<div class="note good"><b>Réduire le délai</b> (optionnel) : passer le Schedule à <b>2×/jour</b> (ex. 8h / 18h). Le Discovery est parallélisé (&lt; 60 s) → peu coûteux, en restant poli avec EDGAR (User-Agent + throttle) et dans les quotas gratuits. <b>2×/jour suffit largement.</b></div>
 
 <h2 id="watchlist"><i class="ti ti-edit"></i>9. Éditer ta watchlist</h2>
 <p>C'est <b>toi le radar</b>. Quand Finviz te sort un candidat, ajoute son ticker dans le node <b>SmallCap A</b>, const <code>WATCHLIST</code> :</p>
