@@ -66,6 +66,19 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .sec p{color:var(--text);line-height:1.6;font-size:12.5px}.sec .meta{font-size:10px;color:var(--muted-soft);font-family:var(--mono);margin-top:5px}
 .cat{background:rgba(136,170,224,.06);border:.5px solid rgba(136,170,224,.25);border-radius:10px;padding:12px 14px}
 .thesis{background:rgba(93,202,165,.06);border:.5px solid rgba(93,202,165,.25);border-radius:10px;padding:12px 14px}
+.idgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:6px}
+.idc{background:var(--bg3);border:.5px solid var(--border);border-radius:9px;padding:8px 10px}
+.idc .k{font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-weight:600}
+.idc .v{font-size:12px;font-weight:600;color:var(--text);margin-top:2px;font-family:var(--mono)}
+.accstack{display:flex;flex-direction:column;gap:6px}
+.accrow{display:flex;align-items:center;gap:10px;background:var(--bg3);border:.5px solid var(--border);border-radius:9px;padding:8px 11px;font-size:11.5px}
+.accrow i{font-size:15px;color:var(--green);width:18px;text-align:center;flex-shrink:0}
+.accrow .al{color:var(--muted)}
+.accrow .av{color:var(--text);font-weight:600;font-family:var(--mono);margin-left:auto;text-align:right}
+.convrow{display:flex;align-items:center;gap:13px;background:linear-gradient(120deg,rgba(93,202,165,.1),rgba(93,202,165,.02));border:.5px solid rgba(93,202,165,.28);border-radius:11px;padding:11px 14px;margin-bottom:9px}
+.convrow .cscore{font-family:var(--mono);font-size:26px;font-weight:800;color:var(--green);line-height:1}
+.convrow .ctx{font-size:10.5px;color:var(--muted)}.convrow .ctx b{color:#fff;font-size:12px}
+@media(max-width:600px){.idgrid{grid-template-columns:1fr 1fr}}
 .mnews{display:flex;flex-direction:column;gap:4px}
 .mnews a{display:flex;gap:9px;align-items:baseline;color:var(--text);text-decoration:none;font-size:12px;padding:5px 0;border-bottom:.5px solid var(--border)}.mnews a:hover{color:var(--blue)}.mnews a:last-child{border-bottom:none}
 .mnews .d{font-family:var(--mono);font-size:10px;color:var(--muted-soft);flex-shrink:0;width:54px}
@@ -156,6 +169,26 @@ function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'
  const profile=c.profile?`<p class="js-prof">${c.profile}</p><div class="meta">source : FMP /stable/profile · trad. auto FR</div>`:`<p class="dim">Profil non chargé — relance le node Discovery (enrichi) puis Publish.</p>`;
  const thesis=c.thesis?`<div class="thesis"><p>${c.thesis}</p></div>`:`<p class="dim">Thèse non générée (enrichissement requis).</p>`;
  const filingBtn=c.filingUrl?`<a class="btn src" href="${c.filingUrl}" target="_blank"><i class="ti ti-building-bank"></i>Filing EDGAR (source)</a>`:'';
+ // ---- v6 : carte d'identité (rendu seulement si données présentes) ----
+ const idf=[];
+ if(c.ipoDate) idf.push(['Fondée · IPO',c.ipoDate]);
+ if(c.marketCap) idf.push(['Market cap',fmtCap(c.marketCap)]);
+ if(c.price) idf.push(['Cours','$'+c.price]);
+ if(c.revenue!=null) idf.push(['CA '+(c.revenueYear||''),fmtCap(c.revenue)+(c.revGrowthYoY!=null?' · '+(c.revGrowthYoY>0?'+':'')+c.revGrowthYoY+'%':'')]);
+ if(c.revenueProj!=null) idf.push(['CA projeté (tend.)','≈ '+fmtCap(c.revenueProj)]);
+ if(c.employees) idf.push(['Effectif · Pays',c.employees+(c.country?' · '+c.country:'')]);
+ const idcard=idf.length?`<div class="sec"><h3><i class="ti ti-id-badge-2"></i>Carte d'identité</h3><div class="idgrid">${idf.map(f=>`<div class="idc"><div class="k">${f[0]}</div><div class="v">${f[1]}</div></div>`).join('')}</div>${c.ceo?`<div class="meta">Dirigeant : ${c.ceo}${c.industry?' · '+c.industry:''}${c.website?' · <a href="'+c.website+'" target="_blank">site</a>':''}</div>`:''}</div>`:'';
+ // ---- v6 : signaux d'accumulation ----
+ const ar=[];
+ if(c.belowHigh52!=null) ar.push(['ti-trending-down','Décote 52 sem',(c.belowHigh52>0?'+':'')+c.belowHigh52+'% vs haut'+(c.week52High?' ($'+c.week52High+')':'')]);
+ if(c.form4_180!=null) ar.push(['ti-user-check','Initiés (Form 4, 180j)',c.form4_180+' dépôt(s)']);
+ if(c.analysts!=null) ar.push(['ti-eye-off','Couverture analystes',c.analysts+(c.analysts<=3?' — sous le radar':'')]);
+ if(c.currentRatio!=null||c.debtEq!=null) ar.push(['ti-pig-money','Survie',[c.currentRatio!=null?'Current '+c.currentRatio:'',c.debtEq!=null?'D/E '+c.debtEq:''].filter(Boolean).join(' · ')]);
+ if(c.dilutionWatch) ar.push(['ti-file-shredder','⚠️ Dilution récente',c.dilutionWatch.form+' ('+c.dilutionWatch.date+')']); else if(c.convScore!=null) ar.push(['ti-shield-check','Dilution watch','Aucune récente']);
+ if(c.lockupInDays!=null) ar.push(['ti-lock','Lock-up','J'+(c.lockupInDays>=0?'-'+c.lockupInDays:'+'+(-c.lockupInDays))]);
+ const convHdr=c.convScore!=null?`<div class="convrow"><div class="cscore">${c.convScore}</div><div class="ctx"><b>Conviction « accumulation »</b><br>initiés · décote · croissance · survie − dilution</div></div>`:'';
+ const convTh=c.convThesis?`<div class="thesis" style="margin-top:9px"><p>${c.convThesis}</p></div>`:'';
+ const accum=(ar.length||c.convScore!=null)?`<div class="sec"><h3><i class="ti ti-stack-2"></i>Signaux d'accumulation</h3>${convHdr}<div class="accstack">${ar.map(r=>`<div class="accrow"><i class="ti ${r[0]}"></i><span class="al">${r[1]}</span><span class="av">${r[2]}</span></div>`).join('')}</div>${convTh}</div>`:'';
  document.getElementById('modal').innerHTML=`<button class="x" onclick="closeDetail()">&times;</button>
   <div class="mdh"><span class="tk">${c.ticker}</span><span class="tag ${TH[c.theme]||'t-grey'}">${c.theme}</span><span class="nm">${c.name||''}</span>${c.price?`<div class="px"><div class="v">$${c.price}</div></div>`:''}</div>
   <div class="flash">
@@ -164,9 +197,9 @@ function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'
    <span class="fkv">Détecté<b>${c.date||'—'}</b></span>
    ${c.marketCap?`<span class="fkv">Market cap<b>${fmtCap(c.marketCap)}</b></span>`:''}
   </div>
-  <div class="sec"><h3><i class="ti ti-building"></i>Profil</h3>${profile}</div>
+  ${idcard}<div class="sec"><h3><i class="ti ti-building"></i>Profil</h3>${profile}</div>
   <div class="sec"><h3><i class="ti ti-bolt"></i>Le catalyseur <span style="color:var(--green);text-transform:none;letter-spacing:0;font-weight:400">— vérifiable</span></h3><div class="cat"><p>${c.reason}</p><div class="btns">${filingBtn}</div></div></div>
-  <div class="sec"><h3><i class="ti ti-target"></i>Pourquoi ça compte <span style="color:var(--muted-soft);text-transform:none;letter-spacing:0;font-weight:400">— la thèse</span></h3>${thesis}</div>
+  ${accum}<div class="sec"><h3><i class="ti ti-target"></i>Pourquoi ça compte <span style="color:var(--muted-soft);text-transform:none;letter-spacing:0;font-weight:400">— la thèse</span></h3>${thesis}</div>
   ${news}
   <div class="btns" style="margin-top:16px"><button class="btn" onclick="addToWatchlist('${c.ticker}','${c.theme||''}',this)"><i class="ti ti-plus"></i>Ajouter à la watchlist</button><a class="btn src" href="smallcap.html"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</a></div>`;
  document.getElementById('overlay').classList.add('on');
