@@ -444,7 +444,19 @@ renderDonut();
 renderTable();
 openStock('OKLO');
 /* puis tentative de données réelles (PROD https / serveur local) */
-loadReal();
+function radarToast(msg){var id='radarToast',el=document.getElementById(id);
+  if(!msg){if(el)el.remove();return;}
+  if(!el){el=document.createElement('div');el.id=id;el.style.cssText='position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(239,159,39,.14);color:#ef9f27;border:.5px solid rgba(239,159,39,.4);border-radius:10px;padding:10px 16px;font-size:12px;max-width:540px;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.5);cursor:pointer';el.onclick=function(){el.remove();};document.body.appendChild(el);}
+  el.innerHTML=msg+' <span style="opacity:.6">(clic pour fermer)</span>';}
+function handleDeepLink(){try{
+  var tk=(new URLSearchParams(location.search).get('tk')||'').toUpperCase().trim();if(!tk)return;
+  var inp=document.getElementById('oppSearch');
+  if(STOCKS[tk]){SEARCH=tk;if(inp)inp.value=tk;renderTable();openStock(tk);
+    var dt=document.getElementById('dTk');if(dt&&dt.scrollIntoView)dt.scrollIntoView({behavior:'smooth',block:'center'});radarToast('');}
+  else{SEARCH=tk;if(inp)inp.value=tk;renderTable();
+    radarToast('⚠️ <b>'+tk+'</b> n\'est pas encore dans ton univers Radar. Ajoute-le à la watchlist (Découvertes ➕) — il sera scoré au prochain run.');}
+}catch(e){}}
+loadReal().then(handleDeepLink);
 </script>
 
 <!-- PWA service worker -->

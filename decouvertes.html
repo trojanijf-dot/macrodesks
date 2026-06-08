@@ -66,6 +66,33 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .sec p{color:var(--text);line-height:1.6;font-size:12.5px}.sec .meta{font-size:10px;color:var(--muted-soft);font-family:var(--mono);margin-top:5px}
 .cat{background:rgba(136,170,224,.06);border:.5px solid rgba(136,170,224,.25);border-radius:10px;padding:12px 14px}
 .thesis{background:rgba(93,202,165,.06);border:.5px solid rgba(93,202,165,.25);border-radius:10px;padding:12px 14px}
+.idgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:6px}
+.idc{background:var(--bg3);border:.5px solid var(--border);border-radius:9px;padding:8px 10px}
+.idc .k{font-size:8.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-weight:600}
+.idc .v{font-size:12px;font-weight:600;color:var(--text);margin-top:2px;font-family:var(--mono)}
+.accstack{display:flex;flex-direction:column;gap:6px}
+.accrow{display:flex;align-items:center;gap:10px;background:var(--bg3);border:.5px solid var(--border);border-radius:9px;padding:8px 11px;font-size:11.5px}
+.accrow i{font-size:15px;color:var(--green);width:18px;text-align:center;flex-shrink:0}
+.accrow .al{color:var(--muted)}
+.accrow .av{color:var(--text);font-weight:600;font-family:var(--mono);margin-left:auto;text-align:right}
+.convrow{display:flex;align-items:center;gap:13px;background:linear-gradient(120deg,rgba(93,202,165,.1),rgba(93,202,165,.02));border:.5px solid rgba(93,202,165,.28);border-radius:11px;padding:11px 14px;margin-bottom:9px}
+.convrow .cscore{font-family:var(--mono);font-size:26px;font-weight:800;color:var(--green);line-height:1}
+.convrow .ctx{font-size:10.5px;color:var(--muted)}.convrow .ctx b{color:#fff;font-size:12px}
+@media(max-width:600px){.idgrid{grid-template-columns:1fr 1fr}}
+.track{display:flex;align-items:center;gap:13px;flex-wrap:wrap;background:var(--bg2);border:.5px solid var(--border);border-radius:11px;padding:11px 14px;margin:10px 0}
+.track:empty{display:none}
+.track .seg{display:flex;flex-direction:column;gap:2px}
+.track .seg .k{font-size:8.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-soft);font-weight:600}
+.track .seg .v{font-size:12px;font-weight:700;color:var(--text);font-family:var(--mono)}
+.track .pill{font-family:var(--mono);font-size:10px;font-weight:700;padding:3px 9px;border-radius:9999px;display:inline-flex;align-items:center;gap:5px}
+.track .pill.ok{background:rgba(93,202,165,.14);color:var(--green)}
+.track .pill.warn{background:rgba(239,159,39,.14);color:var(--amber)}
+.track .pill.bad{background:rgba(240,149,149,.14);color:var(--red)}
+.track .news{display:flex;gap:5px;flex-wrap:wrap;margin-left:auto;align-items:center}
+.track .nchip{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--green);background:rgba(93,202,165,.1);border:.5px solid rgba(93,202,165,.3);border-radius:6px;padding:2px 7px}
+.track .note-inline{flex-basis:100%;font-size:10px;color:var(--muted-soft);line-height:1.5;border-top:.5px solid var(--border);padding-top:8px;margin-top:2px}
+.track .note-inline b{color:var(--muted)}
+.newbadge{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.05em;color:#07211b;background:var(--green);border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:1px}
 .mnews{display:flex;flex-direction:column;gap:4px}
 .mnews a{display:flex;gap:9px;align-items:baseline;color:var(--text);text-decoration:none;font-size:12px;padding:5px 0;border-bottom:.5px solid var(--border)}.mnews a:hover{color:var(--blue)}.mnews a:last-child{border-bottom:none}
 .mnews .d{font-family:var(--mono);font-size:10px;color:var(--muted-soft);flex-shrink:0;width:54px}
@@ -84,6 +111,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 <div class="sub">Scan auto des filings publics (EDGAR + USASpending) → candidats <b style="color:var(--text)">avant le tweet</b>. <span style="color:var(--muted-soft)"><i class="ti ti-click"></i> clique un candidat pour la fiche détaillée (sourcée)</span></div>
 
 <div class="kpi" id="kpi"></div>
+<div class="track" id="discoTracking"></div>
 <div class="filters" id="filters">
   <span class="chip on" data-f="all">Tous</span>
   <span class="chip" data-f="8K">8-K stratégique</span>
@@ -131,6 +159,34 @@ const DEMO={generatedAt:'2026-06-05',window:{startdt:'2026-05-29',enddt:'2026-06
   {theme:'Défense',recipient:'SKYCOPE C-UAS TECHNOLOGIES INC',amountM:2,agency:'Department of Justice',date:'',kw:'drone'},
  ]};
 let DATA=DEMO, FILTER='all', LIST=[], DSEARCH='';
+// ---- suivi des découvertes : mémoire firstSeen (serveur si présent, sinon localStorage) ----
+let LIVE=false;
+const SEEN_KEY='mc_disco_seen_v1';
+function loadSeen(){try{return JSON.parse(localStorage.getItem(SEEN_KEY)||'{}');}catch(e){return{};}}
+function saveSeen(m){try{localStorage.setItem(SEEN_KEY,JSON.stringify(m));}catch(e){}}
+function runDate(){return (String((DATA&&DATA.generatedAt)||'').slice(0,10))||new Date().toISOString().slice(0,10);}
+function trackDiscoveries(){const rd=runDate();
+ if(!LIVE){ (DATA.discoveries||[]).forEach(c=>{ if(!c.firstSeen)c.firstSeen=rd; }); return; } // DEMO : aucune persistance (évite de polluer le suivi réel)
+ const seen=loadSeen();
+ (DATA.discoveries||[]).forEach(c=>{
+   if(c.firstSeen){ if(!seen[c.ticker])seen[c.ticker]=c.firstSeen; }          // serveur (node v6) fait foi
+   else if(seen[c.ticker]){ c.firstSeen=seen[c.ticker]; }                      // déjà vu
+   else { c.firstSeen=rd; seen[c.ticker]=rd; }                                 // nouveau -> intégré au run courant
+ });
+ saveSeen(seen);}
+function renderTracking(){const el=document.getElementById('discoTracking');if(!el)return;
+ const rd=runDate(),gen=(DATA&&DATA.generatedAt)||'';
+ let fresh='—',cls='warn';
+ if(gen){const ageH=Math.max(0,Math.round((Date.now()-new Date(gen).getTime())/3600000));
+   fresh = ageH<48? 'il y a '+ageH+' h' : 'il y a '+Math.round(ageH/24)+' j';
+   cls = ageH<=14?'ok':ageH<=30?'warn':'bad';}
+ const news=(DATA.discoveries||[]).filter(c=>c.firstSeen===rd).map(c=>c.ticker);
+ el.innerHTML=`
+  <div class="seg"><span class="k">Dernier scan</span><span class="v">${gen?gen.slice(0,16).replace('T',' '):'—'}</span></div>
+  <span class="pill ${cls}"><i class="ti ti-${cls==='ok'?'circle-check':cls==='warn'?'clock':'alert-triangle'}"></i>${fresh}</span>
+  <div class="seg"><span class="k">Nouveaux ce run</span><span class="v" style="color:var(--green)">${news.length}</span></div>
+  ${news.length?`<div class="news">${news.slice(0,12).map(t=>`<span class="nchip">${t}</span>`).join('')}${news.length>12?`<span class="nchip">+${news.length-12}</span>`:''}</div>`:`<div class="news"><span style="font-size:11px;color:var(--muted-soft)">aucun nouveau ce run</span></div>`}
+  <div class="note-inline"><b>Fenêtre glissante 7 j</b> : la liste se régénère à chaque run — un titre <b>sort après ~7 j</b> sans nouveau filing. <b>≥1 nouveau/jour attendu</b> ; 0 pendant plusieurs jours ou badge <b>rouge</b> = vérifie que ton workflow tourne (2×/jour).</div>`;}
 function renderKpi(){const bySig=s=>DATA.discoveries.filter(d=>d.sig===s).length;
  document.getElementById('kpi').innerHTML=`
   <div class="c"><div class="k">Fenêtre scannée</div><div class="v" style="font-size:12px">${DATA.window?DATA.window.startdt+' → '+DATA.window.enddt:'—'}</div></div>
@@ -139,12 +195,13 @@ function renderKpi(){const bySig=s=>DATA.discoveries.filter(d=>d.sig===s).length
   <div class="c"><div class="k">S-1 (IPO)</div><div class="v">${bySig('S1')}</div></div>
   <div class="c"><div class="k">Contrats gov</div><div class="v">${DATA.govCount||DATA.govAwards.length}</div></div>`;}
 function render(){
- LIST=DATA.discoveries.filter(c=>(FILTER==='all'||c.sig===FILTER)&&(!DSEARCH||(c.ticker||'').includes(DSEARCH)||(c.name||'').toUpperCase().includes(DSEARCH))).sort((a,b)=>b.score-a.score);
+ const RD=runDate(); const isNew=c=>c.firstSeen===RD?1:0;
+ LIST=DATA.discoveries.filter(c=>(FILTER==='all'||c.sig===FILTER)&&(!DSEARCH||(c.ticker||'').includes(DSEARCH)||(c.name||'').toUpperCase().includes(DSEARCH))).sort((a,b)=>(isNew(b)-isNew(a))||(b.score-a.score));
  document.getElementById('dcount').textContent='— '+LIST.length+' affichés · clique pour le détail';
  document.getElementById('feed').innerHTML=LIST.map((c,i)=>{const s=SIG[c.sig]||SIG['8K'],col=c.score>=85?'var(--green)':c.score>=70?'var(--amber)':'var(--blue)';
   return `<div class="cand" onclick="openDetail(${i})">
-   <div><div class="tk">${c.ticker}<span class="tag theme-tag ${TH[c.theme]||'t-grey'}">${c.theme}</span></div><div class="nm">${c.name||''}</div></div>
-   <div><div class="sig"><span class="tag ${s[0]}"><i class="ti ${s[1]}"></i>${s[2]}</span> &nbsp;${c.reason}</div><div class="src"><span><i class="ti ti-link"></i>${c.src||'EDGAR'}</span><span><i class="ti ti-clock"></i>${c.date||''}</span>${c.profile?'<span style="color:var(--green)"><i class="ti ti-file-description"></i>fiche</span>':''}</div></div>
+   <div><div class="tk">${c.ticker}<span class="tag theme-tag ${TH[c.theme]||'t-grey'}">${c.theme}</span>${isNew(c)?'<span class="newbadge">NOUVEAU</span>':''}</div><div class="nm">${c.name||''}</div></div>
+   <div><div class="sig"><span class="tag ${s[0]}"><i class="ti ${s[1]}"></i>${s[2]}</span> &nbsp;${c.reason}</div><div class="src"><span><i class="ti ti-link"></i>${c.src||'EDGAR'}</span><span><i class="ti ti-clock"></i>filing ${c.date||''}</span><span style="color:var(--green)"><i class="ti ti-calendar-plus"></i>intégré ${c.firstSeen||'—'}</span>${c.profile?'<span style="color:var(--green)"><i class="ti ti-file-description"></i>fiche</span>':''}</div></div>
    <div class="score"><div class="v" style="color:${col}">${c.score}</div><div class="bar"><i style="width:${c.score}%;background:${col}"></i></div></div>
    <div class="act"><button class="btn" onclick="event.stopPropagation();addToWatchlist('${c.ticker}','${c.theme||''}',this)">➕ Watchlist</button></div>
   </div>`;}).join('') || '<div class="nm" style="color:var(--muted-soft);padding:14px">Aucun candidat pour ce filtre.</div>';
@@ -156,6 +213,26 @@ function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'
  const profile=c.profile?`<p class="js-prof">${c.profile}</p><div class="meta">source : FMP /stable/profile · trad. auto FR</div>`:`<p class="dim">Profil non chargé — relance le node Discovery (enrichi) puis Publish.</p>`;
  const thesis=c.thesis?`<div class="thesis"><p>${c.thesis}</p></div>`:`<p class="dim">Thèse non générée (enrichissement requis).</p>`;
  const filingBtn=c.filingUrl?`<a class="btn src" href="${c.filingUrl}" target="_blank"><i class="ti ti-building-bank"></i>Filing EDGAR (source)</a>`:'';
+ // ---- v6 : carte d'identité (rendu seulement si données présentes) ----
+ const idf=[];
+ if(c.ipoDate) idf.push(['Fondée · IPO',c.ipoDate]);
+ if(c.marketCap) idf.push(['Market cap',fmtCap(c.marketCap)]);
+ if(c.price) idf.push(['Cours','$'+c.price]);
+ if(c.revenue!=null) idf.push(['CA '+(c.revenueYear||''),fmtCap(c.revenue)+(c.revGrowthYoY!=null?' · '+(c.revGrowthYoY>0?'+':'')+c.revGrowthYoY+'%':'')]);
+ if(c.revenueProj!=null) idf.push(['CA projeté (tend.)','≈ '+fmtCap(c.revenueProj)]);
+ if(c.employees) idf.push(['Effectif · Pays',c.employees+(c.country?' · '+c.country:'')]);
+ const idcard=idf.length?`<div class="sec"><h3><i class="ti ti-id-badge-2"></i>Carte d'identité</h3><div class="idgrid">${idf.map(f=>`<div class="idc"><div class="k">${f[0]}</div><div class="v">${f[1]}</div></div>`).join('')}</div>${c.ceo?`<div class="meta">Dirigeant : ${c.ceo}${c.industry?' · '+c.industry:''}${c.website?' · <a href="'+c.website+'" target="_blank">site</a>':''}</div>`:''}</div>`:'';
+ // ---- v6 : signaux d'accumulation ----
+ const ar=[];
+ if(c.belowHigh52!=null) ar.push(['ti-trending-down','Décote 52 sem',(c.belowHigh52>0?'+':'')+c.belowHigh52+'% vs haut'+(c.week52High?' ($'+c.week52High+')':'')]);
+ if(c.form4_180!=null) ar.push(['ti-user-check','Initiés (Form 4, 180j)',c.form4_180+' dépôt(s)']);
+ if(c.analysts!=null) ar.push(['ti-eye-off','Couverture analystes',c.analysts+(c.analysts<=3?' — sous le radar':'')]);
+ if(c.currentRatio!=null||c.debtEq!=null) ar.push(['ti-pig-money','Survie',[c.currentRatio!=null?'Current '+c.currentRatio:'',c.debtEq!=null?'D/E '+c.debtEq:''].filter(Boolean).join(' · ')]);
+ if(c.dilutionWatch) ar.push(['ti-file-shredder','⚠️ Dilution récente',c.dilutionWatch.form+' ('+c.dilutionWatch.date+')']); else if(c.convScore!=null) ar.push(['ti-shield-check','Dilution watch','Aucune récente']);
+ if(c.lockupInDays!=null) ar.push(['ti-lock','Lock-up','J'+(c.lockupInDays>=0?'-'+c.lockupInDays:'+'+(-c.lockupInDays))]);
+ const convHdr=c.convScore!=null?`<div class="convrow"><div class="cscore">${c.convScore}</div><div class="ctx"><b>Conviction « accumulation »</b><br>initiés · décote · croissance · survie − dilution</div></div>`:'';
+ const convTh=c.convThesis?`<div class="thesis" style="margin-top:9px"><p>${c.convThesis}</p></div>`:'';
+ const accum=(ar.length||c.convScore!=null)?`<div class="sec"><h3><i class="ti ti-stack-2"></i>Signaux d'accumulation</h3>${convHdr}<div class="accstack">${ar.map(r=>`<div class="accrow"><i class="ti ${r[0]}"></i><span class="al">${r[1]}</span><span class="av">${r[2]}</span></div>`).join('')}</div>${convTh}</div>`:'';
  document.getElementById('modal').innerHTML=`<button class="x" onclick="closeDetail()">&times;</button>
   <div class="mdh"><span class="tk">${c.ticker}</span><span class="tag ${TH[c.theme]||'t-grey'}">${c.theme}</span><span class="nm">${c.name||''}</span>${c.price?`<div class="px"><div class="v">$${c.price}</div></div>`:''}</div>
   <div class="flash">
@@ -164,11 +241,11 @@ function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'
    <span class="fkv">Détecté<b>${c.date||'—'}</b></span>
    ${c.marketCap?`<span class="fkv">Market cap<b>${fmtCap(c.marketCap)}</b></span>`:''}
   </div>
-  <div class="sec"><h3><i class="ti ti-building"></i>Profil</h3>${profile}</div>
+  ${idcard}<div class="sec"><h3><i class="ti ti-building"></i>Profil</h3>${profile}</div>
   <div class="sec"><h3><i class="ti ti-bolt"></i>Le catalyseur <span style="color:var(--green);text-transform:none;letter-spacing:0;font-weight:400">— vérifiable</span></h3><div class="cat"><p>${c.reason}</p><div class="btns">${filingBtn}</div></div></div>
-  <div class="sec"><h3><i class="ti ti-target"></i>Pourquoi ça compte <span style="color:var(--muted-soft);text-transform:none;letter-spacing:0;font-weight:400">— la thèse</span></h3>${thesis}</div>
+  ${accum}<div class="sec"><h3><i class="ti ti-target"></i>Pourquoi ça compte <span style="color:var(--muted-soft);text-transform:none;letter-spacing:0;font-weight:400">— la thèse</span></h3>${thesis}</div>
   ${news}
-  <div class="btns" style="margin-top:16px"><button class="btn" onclick="addToWatchlist('${c.ticker}','${c.theme||''}',this)"><i class="ti ti-plus"></i>Ajouter à la watchlist</button><a class="btn src" href="smallcap.html"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</a></div>`;
+  <div class="btns" style="margin-top:16px"><button class="btn" onclick="addToWatchlist('${c.ticker}','${c.theme||''}',this)"><i class="ti ti-plus"></i>Ajouter à la watchlist</button><button class="btn src" onclick="openInRadar('${c.ticker}')"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</button></div>`;
  document.getElementById('overlay').classList.add('on');
  translateModal();
 }
@@ -176,11 +253,19 @@ const TC={};
 async function tr(t){ if(!t)return t; if(TC[t])return TC[t]; try{ const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(t.slice(0,480))}&langpair=en|fr`); const j=await r.json(); const o=(j&&j.responseData&&j.responseData.translatedText)||t; TC[t]=o; return o; }catch(e){ return t; } }
 async function translateModal(){ const m=document.getElementById('modal'); const p=m.querySelector('.js-prof'); if(p){ const fr=await tr(p.textContent); if(p.isConnected)p.textContent=fr; } const ns=m.querySelectorAll('.js-news'); for(const el of ns){ const fr=await tr(el.textContent); if(el.isConnected)el.textContent=fr; } }
 function closeDetail(){document.getElementById('overlay').classList.remove('on');}
+function openInRadar(tk){
+  // En Double vue (dans une iframe) -> demander au parent d'ouvrir le Radar dans l'AUTRE volet
+  if(window.parent && window.parent!==window){
+    try{ window.parent.postMessage({type:'macrodesk-open',page:'smallcap.html',tk:tk,from:'decouvertes.html'},'*'); return; }catch(e){}
+  }
+  // Sinon navigation normale avec deep-link
+  location.href='smallcap.html?tk='+encodeURIComponent(tk);
+}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail();});
-function apply(){renderKpi();render();}
+function apply(){trackDiscoveries();renderKpi();renderTracking();render();}
 document.querySelectorAll('#filters .chip').forEach(ch=>ch.onclick=()=>{document.querySelectorAll('#filters .chip').forEach(x=>x.classList.remove('on'));ch.classList.add('on');FILTER=ch.dataset.f;render();});
 apply();
-(async()=>{try{const r=await fetch('data/discoveries.json',{cache:'no-store'});if(!r.ok)throw 0;const j=await r.json();if(j&&j.discoveries){DATA=j;document.getElementById('badge').innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>LIVE JSON · '+String(j.generatedAt||'').slice(0,10);document.getElementById('foot').textContent='data/discoveries.json chargé · '+(j.count||j.discoveries.length)+' candidats';apply();}}catch(e){console.warn('discoveries.json indisponible → DEMO (normal en file://)');}})();
+(async()=>{try{const r=await fetch('data/discoveries.json',{cache:'no-store'});if(!r.ok)throw 0;const j=await r.json();if(j&&j.discoveries){DATA=j;LIVE=true;document.getElementById('badge').innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>LIVE JSON · '+String(j.generatedAt||'').slice(0,10);document.getElementById('foot').textContent='data/discoveries.json chargé · '+(j.count||j.discoveries.length)+' candidats';apply();}}catch(e){console.warn('discoveries.json indisponible → DEMO (normal en file://)');}})();
 
 /* ---- Watchlist webhook ---- */
 function openWh(){document.getElementById('wh-url').value=localStorage.getItem('mk_webhook')||'';document.getElementById('wh-overlay').style.display='flex';}

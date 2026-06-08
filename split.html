@@ -133,6 +133,22 @@ window.addEventListener('mousemove', e=>{
   paneR.style.flex = `1 1 ${(1-ratio)*100}%`;
 });
 
+// un volet (iframe) demande d'ouvrir une page dans l'AUTRE volet (ex: "Ouvrir dans le Radar")
+window.addEventListener('message', function(e){
+  var d = e.data || {};
+  if (!d || d.type !== 'macrodesk-open' || !d.page) return;
+  var base = valid(d.page);
+  var full = base + (d.tk ? ('?tk=' + encodeURIComponent(d.tk)) : '');
+  if (left === d.from) {            // émetteur à gauche -> ouvre à droite
+    right = base; selR.value = base; frR.src = full; frR.dataset.src = base;
+  } else if (right === d.from) {    // émetteur à droite -> ouvre à gauche
+    left = base; selL.value = base; frL.src = full; frL.dataset.src = base;
+  } else {                         // par défaut : volet droit
+    right = base; selR.value = base; frR.src = full; frR.dataset.src = base;
+  }
+  var u = new URL(location.href); u.searchParams.set('left',left); u.searchParams.set('right',right); history.replaceState(null,'',u);
+});
+
 apply(false);
 </script>
 </body></html>
