@@ -43,9 +43,35 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .note{background:rgba(240,149,149,.06);border:.5px dashed rgba(240,149,149,.3);border-radius:11px;padding:12px 15px;margin-top:16px;font-size:11.5px;color:var(--muted);line-height:1.55}.note b{color:var(--text)}
 .foot{margin-top:14px;color:var(--faint);font-size:10px;font-family:var(--mono)}
 @media(max-width:860px){.pos{grid-template-columns:1fr 1fr;gap:8px}.verdict,.pl{text-align:left}}
+/* ---- éditeur Mes positions ---- */
+.editbtn{background:var(--bg2);border:.5px solid var(--border-2);color:var(--muted);border-radius:8px;padding:6px 11px;font-family:var(--mono);font-size:10.5px;font-weight:600;cursor:pointer;margin-left:auto;display:inline-flex;align-items:center;gap:6px}
+.editbtn:hover{border-color:var(--green);color:var(--text)}
+.pos-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
+.pos-modal{background:var(--bg2);border:.5px solid var(--border-2);border-radius:14px;padding:18px 20px;max-width:780px;width:100%;max-height:88vh;overflow:auto;position:relative}
+.pos-modal h2{font-size:15px;font-weight:800;color:#fff;display:flex;align-items:center;gap:9px;margin-bottom:4px}
+.pos-modal h2 i{color:var(--green)}
+.pos-modal .x{position:absolute;top:13px;right:16px;background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer}
+.pe-intro{font-size:11px;color:var(--muted);line-height:1.55;margin-bottom:11px}.pe-intro b{color:var(--text)}.pe-intro code{font-family:var(--mono);color:var(--blue);font-size:10.5px}
+.pe-wh{width:100%;background:var(--bg1);border:.5px solid var(--border-2);border-radius:7px;padding:8px 10px;color:var(--text);font-family:var(--mono);font-size:11px;outline:none;margin:4px 0 12px}
+.pe-add{display:grid;grid-template-columns:1fr 1fr .8fr .8fr .8fr .7fr auto;gap:7px;align-items:end;background:var(--bg3);border:.5px solid var(--border);border-radius:10px;padding:11px;margin-bottom:13px}
+@media(max-width:720px){.pe-add{grid-template-columns:1fr 1fr 1fr}}
+.pe-fld{display:flex;flex-direction:column;gap:4px}
+.pe-fld label{font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-weight:600}
+.pe-fld input,.pe-fld select{background:var(--bg1);border:.5px solid var(--border-2);border-radius:7px;padding:7px 9px;color:var(--text);font-family:var(--mono);font-size:11.5px;outline:none;width:100%}
+.pe-fld input:focus,.pe-fld select:focus{border-color:var(--blue)}
+.pe-addbtn{background:linear-gradient(135deg,var(--green),#3a8f74);color:#07211b;font-weight:700;font-size:14px;border:none;border-radius:8px;padding:0 12px;cursor:pointer;height:33px;display:inline-flex;align-items:center}
+.pe-tbl{width:100%;border-collapse:collapse}
+.pe-tbl th{text-align:left;font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-weight:600;padding:7px 8px;border-bottom:.5px solid var(--border)}
+.pe-tbl td{padding:9px 8px;border-bottom:.5px solid var(--border);font-size:11.5px}
+.pe-tbl tr:last-child td{border-bottom:none}
+.pe-tbl .tk{font-weight:800;color:#fff}.pe-tbl [data-num]{font-family:var(--mono)}
+.pe-del{background:none;border:.5px solid var(--border);color:var(--muted-soft);border-radius:6px;width:26px;height:26px;cursor:pointer}.pe-del:hover{color:var(--red);border-color:rgba(240,149,149,.4)}
+.pe-save{display:flex;gap:10px;align-items:center;margin-top:13px;flex-wrap:wrap}
+.pe-savebtn{background:linear-gradient(135deg,var(--green),#3a8f74);color:#07211b;font-weight:700;font-size:12px;border:none;border-radius:9px;padding:10px 16px;cursor:pointer}
+.pe-msg{font-size:10.5px;color:var(--muted-soft)}
 </style></head><body>
 <nav class="topnav"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html" class="active"><i class="ti ti-shield-half"></i>Moniteur</a><a href="validateur.html"><i class="ti ti-checkup-list"></i>Validateur</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
-<div class="head"><span class="logo">M</span><h1>Moniteur de position <span style="color:var(--muted-soft);font-weight:600;font-size:14px">— signaux de sortie</span></h1><span class="badge" id="badge"><i class="ti ti-flask" style="font-size:11px"></i>DEMO</span></div>
+<div class="head"><span class="logo">M</span><h1>Moniteur de position <span style="color:var(--muted-soft);font-weight:600;font-size:14px">— signaux de sortie</span></h1><button class="editbtn" onclick="openEditor()"><i class="ti ti-pencil"></i> Mes positions</button><span class="badge" id="badge" style="margin-left:10px"><i class="ti ti-flask" style="font-size:11px"></i>DEMO</span></div>
 <div class="sub">Le robot surveille tes positions : <b style="color:var(--text)">424B5 · Form 4 · lock-up · RVOL ↓ · stop/cible</b> → te dit <b style="color:var(--text)">quand sortir</b>. Savoir sortir = pérennité.</div>
 
 <div class="kpi" id="kpi"></div>
@@ -53,6 +79,31 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 
 <div class="note"><b>D'où viennent les signaux :</b> 424B5 / Form 4 / 13F → <b>EDGAR</b>. RVOL & prix → <b>Yahoo</b>. Lock-up → <b>IPO + 180j</b>. Stop / Cible → tes niveaux. → calculés par le node <b>SmallCap Positions Monitor</b> → <code>data/positions.json</code>.</div>
 <div class="foot" id="foot">DEMO inline · positions & signaux simulés</div>
+
+<!-- éditeur Mes positions -->
+<div class="pos-overlay" id="pos-overlay">
+ <div class="pos-modal">
+  <button class="x" onclick="closeEditor()">&times;</button>
+  <h2><i class="ti ti-briefcase"></i>Mes positions <span style="font-size:11px;color:var(--muted-soft);font-weight:500" id="pe-count"></span></h2>
+  <div class="pe-intro">Tes <b>vraies positions</b>. Au clic <b>Enregistrer</b>, elles partent vers n8n (<code>positions_input.json</code>) ; le robot calcule les verdicts (cours/P&L/SORTIR…) au prochain run. Stocké dans <b>ton navigateur</b> + n8n, jamais dans le repo.</div>
+  <label style="font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-weight:600">URL webhook positions (PRODUCTION)</label>
+  <input class="pe-wh" id="pe-wh" placeholder="https://...app.n8n.cloud/webhook/smallcap-positions">
+  <div class="pe-add">
+   <div class="pe-fld"><label>Ticker</label><input id="pe-tk" placeholder="OKLO" autocomplete="off"></div>
+   <div class="pe-fld"><label>Thème</label><select id="pe-theme"><option>AI-Power</option><option>Métaux</option><option>Défense</option><option>Biotech</option></select></div>
+   <div class="pe-fld"><label>Entrée $</label><input id="pe-entry" placeholder="0.00" inputmode="decimal"></div>
+   <div class="pe-fld"><label>Stop $</label><input id="pe-stop" placeholder="0.00" inputmode="decimal"></div>
+   <div class="pe-fld"><label>Cible $</label><input id="pe-target" placeholder="0.00" inputmode="decimal"></div>
+   <div class="pe-fld"><label>Qté</label><input id="pe-qty" placeholder="opt." inputmode="decimal"></div>
+   <button class="pe-addbtn" onclick="addPos()" title="Ajouter"><i class="ti ti-plus"></i></button>
+  </div>
+  <table class="pe-tbl"><thead><tr><th>Ticker</th><th>Thème</th><th>Entrée</th><th>Stop</th><th>Cible</th><th>Qté</th><th></th></tr></thead><tbody id="pe-body"></tbody></table>
+  <div class="pe-save">
+   <button class="pe-savebtn" id="pe-savebtn" onclick="savePositions()"><i class="ti ti-device-floppy"></i> Enregistrer mes positions</button>
+   <span class="pe-msg">* Cours / P&amp;L / Verdict calculés par le robot, pas saisis ici.</span>
+  </div>
+ </div>
+</div>
 
 <script>
 const VLABEL={sortir:['SORTIR','v-sortir'],trim:['ALLÉGER','v-trim'],hold:['CONSERVER','v-hold']};
@@ -82,6 +133,50 @@ function apply(){const P=DATA.positions||[];
 }
 apply();
 (async()=>{try{const r=await fetch('data/positions.json',{cache:'no-store'});if(!r.ok)throw 0;const j=await r.json();if(j&&j.positions){DATA=j;document.getElementById('badge').innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>LIVE JSON · '+String(j.generatedAt||'').slice(0,10);document.getElementById('foot').textContent='data/positions.json chargé · '+j.positions.length+' positions';apply();}}catch(e){console.warn('positions.json indisponible → DEMO (normal en file://)');}})();
+</script>
+
+<script>
+/* ---- Éditeur "Mes positions" (alimente le node Positions Monitor via webhook) ---- */
+const PWH_KEY='mk_positions_webhook', POS_KEY='mk_positions';
+function peLoad(){try{return JSON.parse(localStorage.getItem(POS_KEY)||'[]');}catch(e){return[];}}
+function peSaveLocal(a){try{localStorage.setItem(POS_KEY,JSON.stringify(a));}catch(e){}}
+let POSED=peLoad();
+function peToast(m,ok){var el=document.getElementById('peToast');if(!el){el=document.createElement('div');el.id='peToast';el.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:200;border-radius:9px;padding:10px 16px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5)';document.body.appendChild(el);}el.style.background=ok?'rgba(93,202,165,.16)':'rgba(240,149,149,.16)';el.style.color=ok?'#5dcaa5':'#f09595';el.style.border='.5px solid '+(ok?'rgba(93,202,165,.4)':'rgba(240,149,149,.4)');el.textContent=m;clearTimeout(el._t);el._t=setTimeout(function(){el.remove();},4000);}
+function openEditor(){document.getElementById('pe-wh').value=localStorage.getItem(PWH_KEY)||'';renderEditor();document.getElementById('pos-overlay').style.display='flex';}
+function closeEditor(){document.getElementById('pos-overlay').style.display='none';}
+function fmt2(v){return (v!=null&&v!=='')?(+v).toFixed(2):'—';}
+function renderEditor(){
+ document.getElementById('pe-body').innerHTML=POSED.length?POSED.map(function(p,i){return '<tr><td class="tk">'+p.tk+'</td><td>'+(p.theme||'—')+'</td><td data-num>'+fmt2(p.entry)+'</td><td data-num>'+fmt2(p.stop)+'</td><td data-num>'+fmt2(p.target)+'</td><td data-num>'+(p.qty||'—')+'</td><td><button class="pe-del" onclick="delPos('+i+')"><i class="ti ti-trash"></i></button></td></tr>';}).join(''):'<tr><td colspan="7" style="text-align:center;color:var(--muted-soft);padding:16px">Aucune position — ajoute ta 1ère ci-dessus.</td></tr>';
+ document.getElementById('pe-count').textContent=POSED.length?('· '+POSED.length+' position'+(POSED.length>1?'s':'')):'';
+}
+function addPos(){
+ var tk=(document.getElementById('pe-tk').value||'').toUpperCase().trim();
+ if(!tk){peToast('Ticker requis',false);return;}
+ var entry=parseFloat(document.getElementById('pe-entry').value);
+ if(isNaN(entry)){peToast('Prix d\'entrée requis',false);return;}
+ var sv=document.getElementById('pe-stop').value, tv=document.getElementById('pe-target').value, qv=document.getElementById('pe-qty').value;
+ var p={tk:tk,theme:document.getElementById('pe-theme').value,entry:entry,
+        stop:sv!==''?parseFloat(sv):'',target:tv!==''?parseFloat(tv):'',qty:qv!==''?parseFloat(qv):''};
+ var ix=POSED.findIndex(function(x){return x.tk===tk;}); if(ix>=0)POSED[ix]=p; else POSED.push(p);
+ peSaveLocal(POSED); renderEditor();
+ ['pe-tk','pe-entry','pe-stop','pe-target','pe-qty'].forEach(function(id){document.getElementById(id).value='';});
+ document.getElementById('pe-tk').focus();
+}
+function delPos(i){POSED.splice(i,1);peSaveLocal(POSED);renderEditor();}
+async function savePositions(){
+ var url=(document.getElementById('pe-wh').value||'').trim();
+ if(url)localStorage.setItem(PWH_KEY,url);
+ if(!url){peToast('Configure l\'URL webhook positions (champ en haut)',false);return;}
+ if(!POSED.length){peToast('Aucune position à envoyer',false);return;}
+ var btn=document.getElementById('pe-savebtn'),old=btn.innerHTML;btn.disabled=true;btn.innerHTML='Envoi…';
+ try{
+  var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({positions:POSED})});
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  peToast(POSED.length+' position(s) envoyée(s) · visibles au Moniteur au prochain run',true);
+ }catch(e){ peToast('Erreur : '+e.message+' — vérifie URL prod + CORS du webhook',false); }
+ btn.disabled=false;btn.innerHTML=old;
+}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeEditor();});
 </script>
 
 <!-- PWA service worker -->
