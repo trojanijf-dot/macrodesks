@@ -24,6 +24,27 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .mbar i{position:absolute;top:0;bottom:0;border-radius:3px}
 .mbar i.neg{right:50%;background:var(--red)}
 .mbar i.pos{left:50%;background:var(--green)}
+.mgrbtn{background:var(--bg2);border:.5px solid var(--border-2);color:var(--muted);border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.mgrbtn:hover{border-color:var(--green);color:var(--text)}
+.uv-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
+.uv-modal{background:var(--bg2);border:.5px solid var(--border-2);border-radius:14px;padding:18px 20px;max-width:740px;width:100%;max-height:88vh;overflow:auto;position:relative}
+.uv-modal h2{font-size:15px;font-weight:800;color:#fff;display:flex;align-items:center;gap:9px;margin-bottom:3px}.uv-modal h2 i{color:var(--green)}
+.uv-modal .x{position:absolute;top:13px;right:16px;background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer}
+.uv-sub{font-size:11px;color:var(--muted-soft);margin-bottom:12px;line-height:1.5}
+.hyg{display:flex;align-items:center;gap:12px;background:linear-gradient(120deg,rgba(239,159,39,.1),rgba(239,159,39,.02));border:.5px solid rgba(239,159,39,.3);border-radius:11px;padding:11px 14px;margin-bottom:13px;flex-wrap:wrap}
+.hyg .ic{font-size:18px;color:var(--amber)}
+.hyg .tx{font-size:11.5px;color:var(--text);flex:1;min-width:180px}.hyg .tx b{color:#fff}
+.hyg .chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.hyg .chip{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--amber);background:rgba(239,159,39,.12);border:.5px solid rgba(239,159,39,.3);border-radius:6px;padding:2px 7px}
+.hyg .rm-all{border:.5px solid rgba(240,149,149,.35);background:rgba(240,149,149,.14);color:var(--red);border-radius:9px;padding:8px 13px;font-size:11.5px;font-weight:600;cursor:pointer}
+.uvrow{display:grid;grid-template-columns:64px 1fr 92px 74px 34px;gap:9px;align-items:center;padding:9px 4px;border-bottom:.5px solid var(--border);font-size:12px}
+.uvrow:last-child{border-bottom:none}
+.uvrow .tk{font-weight:800;color:#fff}
+.uvrow .meta{font-size:9.5px;color:var(--muted-soft)}
+.uvrow .uv-mom{font-family:var(--mono);font-size:11px;font-weight:700}
+.uvrow .uv-rm{background:none;border:.5px solid var(--border);color:var(--muted-soft);border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:13px}
+.uvrow .uv-rm:hover{color:var(--red);border-color:rgba(240,149,149,.4);background:rgba(240,149,149,.06)}
+.uv-stale{color:var(--amber);font-family:var(--mono);font-size:9px;margin-left:5px}
 .hero{display:flex;align-items:center;gap:10px;margin-bottom:4px}
 .hero .logo{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--green),#3a8f74);color:#07211b;font-weight:800;font-size:17px}
 .hero h1{font-size:20px;font-weight:800;color:#fff}
@@ -171,7 +192,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 
 <!-- OPPORTUNITY TABLE -->
 <div class="stitle"><i class="ti ti-target-arrow"></i>Opportunity Score <span class="s2" id="oppSub">— tous thèmes · trié par opportunité</span></div>
-<div class="card" style="padding:5px 6px"><div style="padding:6px 6px 10px"><input id="oppSearch" oninput="SEARCH=this.value.toUpperCase().trim();renderTable()" placeholder="🔍 Rechercher un ticker ou un nom…" style="width:100%;background:var(--bg3);border:.5px solid var(--border-2);border-radius:8px;padding:8px 12px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none"></div><div style="overflow-x:auto">
+<div class="card" style="padding:5px 6px"><div style="padding:6px 6px 10px;display:flex;gap:8px;align-items:center"><input id="oppSearch" oninput="SEARCH=this.value.toUpperCase().trim();renderTable()" placeholder="🔍 Rechercher un ticker ou un nom…" style="flex:1;background:var(--bg3);border:.5px solid var(--border-2);border-radius:8px;padding:8px 12px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none"><button class="mgrbtn" onclick="openUniv()"><i class="ti ti-adjustments"></i> Mon univers</button></div><div style="overflow-x:auto">
   <table class="tbl"><thead><tr><th>Ticker</th><th>Thème</th><th>Float</th><th>Cash runway</th><th>Catalyseur</th><th>Insiders/13F</th><th>Momentum</th><th>Valo</th><th>Opportunity</th><th>Projection</th><th>Statut</th></tr></thead>
     <tbody id="oppBody"></tbody>
   </table>
@@ -459,6 +480,46 @@ function momCell(s){ var p=momParse(s.mom), pct=p.pct, tr=s._momTrend||'new', cl
     bar='<div class="mbar"><span class="mid"></span><i class="'+side+'" style="width:'+w.toFixed(0)+'%"></i></div>'; }
   return '<td data-num class="mom-c '+cls+'">'+s.mom+arr+bar+'</td>';
 }
+/* ---- gestionnaire d'univers (watchlist) : panneau + suppression + hygiène ---- */
+let RUNDATE='';
+function trackEvit(){ var KEY='mk_evit',m={}; try{m=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){}
+  var today=RUNDATE||new Date().toISOString().slice(0,10);
+  Object.keys(STOCKS).forEach(function(k){ var s=STOCKS[k];
+    if(s.status==='ÉVITER'){ if(!m[k]||m[k].cat!==(s.cat||'')) m[k]={since:today,cat:s.cat||''}; } else delete m[k];
+    s._evitDays = m[k]?Math.max(0,Math.round((new Date(today)-new Date(m[k].since))/86400000)):0;
+  });
+  Object.keys(m).forEach(function(k){ if(!STOCKS[k]) delete m[k]; });
+  try{localStorage.setItem(KEY,JSON.stringify(m))}catch(e){}
+}
+function staleList(){ return Object.keys(STOCKS).filter(function(k){return STOCKS[k]._evitDays>=14;}).sort(function(a,b){return STOCKS[b]._evitDays-STOCKS[a]._evitDays;}); }
+function univToast(msg,ok){ var el=document.getElementById('univToast'); if(!el){el=document.createElement('div');el.id='univToast';el.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:300;border-radius:9px;padding:10px 16px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5)';document.body.appendChild(el);} var bad=ok===false; el.style.background=bad?'rgba(240,149,149,.16)':'rgba(93,202,165,.16)';el.style.color=bad?'#f09595':'#5dcaa5';el.style.border='.5px solid '+(bad?'rgba(240,149,149,.4)':'rgba(93,202,165,.4)');el.textContent=msg;clearTimeout(el._t);el._t=setTimeout(function(){el.remove();},4200); }
+function openUniv(){ renderUniv(); document.getElementById('uv-overlay').style.display='flex'; }
+function closeUniv(){ document.getElementById('uv-overlay').style.display='none'; }
+function uvMomCls(s){ var p=momParse(s.mom); if(p.pct==null) return 'flat'; if(p.pct>=0) return 'up'; return s._momTrend==='up'?'flat':'down'; }
+function renderUniv(){
+  var ks=Object.keys(STOCKS).sort(function(a,b){ var ea=STOCKS[a]._evitDays>=14?1:0, eb=STOCKS[b]._evitDays>=14?1:0; if(ea!==eb) return eb-ea; return (STOCKS[b].score||0)-(STOCKS[a].score||0); });
+  var stale=staleList();
+  var hyg = stale.length
+    ? '<div class="hyg"><i class="ti ti-wash-machine ic"></i><div class="tx"><b>Hygiène — poids mort.</b> ÉVITER depuis ≥14 j sans nouveau catalyseur :<div class="chips">'+stale.map(function(k){return '<span class="chip">'+k+'</span>';}).join('')+'</div></div><button class="rm-all" onclick="removeMany()"><i class="ti ti-trash"></i> Retirer ('+stale.length+')</button></div>'
+    : '<div class="uv-sub" style="color:var(--green)">✅ Aucun poids mort — pas d\'ÉVITER périmé.</div>';
+  var rows = ks.map(function(k){ var s=STOCKS[k]; var stcls=s.status==='ÉVITER'?'tag-neutral':(s.score>=80?'tag-long':'tag-blue');
+    return '<div class="uvrow"><span class="tk">'+k+'</span>'
+      +'<div><span class="tag '+(s.tag||'')+'">'+s.theme+'</span> <span class="meta">'+(s.cat||'—')+'</span>'+(s._evitDays>=14?'<span class="uv-stale">périmé '+s._evitDays+'j</span>':'')+'</div>'
+      +'<span class="uv-mom '+uvMomCls(s)+'">'+s.mom+'</span>'
+      +'<span class="tag '+stcls+'" style="font-family:var(--mono);font-size:8.5px;padding:2px 6px">'+s.status+'</span>'
+      +'<button class="uv-rm" onclick="removeTicker(\''+k+'\')" title="Retirer de la watchlist"><i class="ti ti-trash"></i></button></div>';
+  }).join('');
+  document.getElementById('uv-body').innerHTML = hyg + rows;
+  document.getElementById('uv-count').textContent = '· '+ks.length+' titres';
+}
+async function removeOne(k){ var url=localStorage.getItem('mk_webhook')||''; if(!url){ univToast('Configure l\'URL webhook (Découvertes → ⚙ Webhook)',false); return false; }
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'remove',ticker:k})}); delete STOCKS[k]; return true; }
+  catch(e){ univToast('Erreur : '+e.message+' (CORS ? URL prod ?)',false); return false; }
+}
+async function removeTicker(k){ if(await removeOne(k)){ renderUniv(); renderTable(); univToast(k+' retiré · disparaît du Radar au prochain run'); } }
+async function removeMany(){ var list=staleList(),n=0; for(var i=0;i<list.length;i++){ if(await removeOne(list[i])) n++; } renderUniv(); renderTable(); if(n) univToast(n+' titre(s) retiré(s) · prochain run'); }
+document.body.insertAdjacentHTML('beforeend','<div class="uv-overlay" id="uv-overlay"><div class="uv-modal"><button class="x" onclick="closeUniv()">&times;</button><h2><i class="ti ti-adjustments"></i>Mon univers <span style="font-size:11px;color:var(--muted-soft);font-weight:500" id="uv-count"></span></h2><div class="uv-sub">Gère ta watchlist : retire les titres dont la thèse est cassée (🗑). Le robot signale le <b style="color:var(--amber)">poids mort</b> (ÉVITER périmé ≥14j). Retrait via le webhook watchlist → effectif au prochain run.</div><div id="uv-body"></div></div></div>');
+document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeUniv(); });
 /* ---- data loader : smallcap.json sinon DEMO inline ---- */
 function applyData(D){
  if(D.themes&&D.themes.length)THEMES=D.themes;
@@ -469,7 +530,7 @@ function applyData(D){
  if(D.kpi)renderKpi(D.kpi);
  if(D.ipoLockup)renderIpo(D.ipoLockup);
  const badge=document.querySelector('.hero .badge');if(badge)badge.innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>v2 · LIVE JSON'+(D.generatedAt?' · '+String(D.generatedAt).slice(0,10):'');
- FILTER='all';trackMomentum();renderTop();renderLegend();renderDonut();renderTable();
+ FILTER='all';RUNDATE=(D.generatedAt||'').slice(0,10)||new Date().toISOString().slice(0,10);trackMomentum();trackEvit();renderTop();renderLegend();renderDonut();renderTable();
  openStock(Object.keys(STOCKS)[0]);}
 async function loadReal(){try{const r=await fetch('data/smallcap.json',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const D=await r.json();applyData(D);console.info('[smallcap] data/smallcap.json chargé ('+Object.keys(D.stocks||{}).length+' titres)');}catch(e){console.warn('[smallcap] data/smallcap.json indisponible → DEMO inline (normal en file://) :',e.message);}}
 
