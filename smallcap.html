@@ -18,6 +18,12 @@
 body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;line-height:1.55;letter-spacing:-0.005em;-webkit-font-smoothing:antialiased;padding:22px 26px 70px;max-width:1420px;margin:0 auto}
 [data-num]{font-family:var(--mono);letter-spacing:-0.02em}
 .up{color:var(--green)}.down{color:var(--red)}.flat{color:var(--amber)}
+.mom-c{white-space:nowrap}
+.mbar{position:relative;height:4px;width:58px;background:var(--bg4);border-radius:3px;margin-top:4px}
+.mbar .mid{position:absolute;left:50%;top:-1px;bottom:-1px;width:1px;background:var(--border-2)}
+.mbar i{position:absolute;top:0;bottom:0;border-radius:3px}
+.mbar i.neg{right:50%;background:var(--red)}
+.mbar i.pos{left:50%;background:var(--green)}
 .hero{display:flex;align-items:center;gap:10px;margin-bottom:4px}
 .hero .logo{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--green),#3a8f74);color:#07211b;font-weight:800;font-size:17px}
 .hero h1{font-size:20px;font-weight:800;color:#fff}
@@ -283,7 +289,7 @@ renderLegend();
 
 /* ---- TABLE + FILTER ---- */
 function rowHtml(k){const s=STOCKS[k];const col=s.score>=80?'var(--green)':s.score>=60?'var(--blue)':'var(--red)';const stcls=s.status==='ÉVITER'?'tag-neutral':s.score>=80?'tag-long':'tag-blue';
- return `<tr data-k="${k}" data-theme="${s.theme}" onclick="openStock('${k}')"><td style="font-weight:700">${k}${s.star?'<i class="ti ti-star-filled star"></i>':''}</td><td><span class="tag ${s.tag}">${s.theme}</span></td><td data-num>${s.float}</td><td data-num class="${s.runway.indexOf('3 mois')>=0?'down':'up'}">${s.runway}</td><td style="color:var(--muted)">${s.cat}</td><td><span class="mini ${s.ins>=3?'up':'down'}">${[0,1,2,3,4].map(i=>'<b class="'+(i<s.ins?'on':'')+'"></b>').join('')}</span></td><td data-num class="${s.mom.indexOf('−')>=0?'down':'up'}">${s.mom}</td><td class="${s.valo.indexOf('trap')>=0?'down':s.valo.indexOf('décote')>=0?'up':'flat'}">${s.valo}</td><td><span class="opp"><span class="bar"><i style="width:${s.score}%;background:${col}"></i></span><span class="v" style="color:${col}">${s.score}</span></span></td><td style="font-size:10px"><span class="${s.proj[0][0]}">${s.proj[0][2]||'—'}</span></td><td><span class="tag ${stcls}">${s.status}</span></td></tr>`;}
+ return `<tr data-k="${k}" data-theme="${s.theme}" onclick="openStock('${k}')"><td style="font-weight:700">${k}${s.star?'<i class="ti ti-star-filled star"></i>':''}</td><td><span class="tag ${s.tag}">${s.theme}</span></td><td data-num>${s.float}</td><td data-num class="${s.runway.indexOf('3 mois')>=0?'down':'up'}">${s.runway}</td><td style="color:var(--muted)">${s.cat}</td><td><span class="mini ${s.ins>=3?'up':'down'}">${[0,1,2,3,4].map(i=>'<b class="'+(i<s.ins?'on':'')+'"></b>').join('')}</span></td>${momCell(s)}<td class="${s.valo.indexOf('trap')>=0?'down':s.valo.indexOf('décote')>=0?'up':'flat'}">${s.valo}</td><td><span class="opp"><span class="bar"><i style="width:${s.score}%;background:${col}"></i></span><span class="v" style="color:${col}">${s.score}</span></span></td><td style="font-size:10px"><span class="${s.proj[0][0]}">${s.proj[0][2]||'—'}</span></td><td><span class="tag ${stcls}">${s.status}</span></td></tr>`;}
 function renderTable(){const ks=Object.keys(STOCKS).filter(k=>(FILTER==='all'||STOCKS[k].theme===FILTER)&&(!SEARCH||k.includes(SEARCH)||(STOCKS[k].name||'').toUpperCase().includes(SEARCH))).sort((a,b)=>STOCKS[b].score-STOCKS[a].score);if(!ks.length){document.getElementById('oppBody').innerHTML='<tr class="empty"><td colspan="11" style="text-align:center;color:var(--muted-soft);padding:22px"><i class="ti ti-filter-off" style="font-size:14px;vertical-align:-2px"></i> Aucun titre dans ce thème — clique le centre du donut pour revenir à « Tous ».</td></tr>';return;}document.getElementById('oppBody').innerHTML=ks.map(rowHtml).join('');if(CUR){const tr=document.querySelector('#oppBody tr[data-k="'+CUR+'"]');if(tr)tr.classList.add('sel');}}
 function setFilter(k){FILTER=k;const lbl=k==='all'?'Tous thèmes':THEMES.find(t=>t.key===k).label;
  document.getElementById('donutBig').textContent=k==='all'?'Tous':k;
@@ -425,6 +431,34 @@ function renderKpi(k){const m={kpiUniverse:k.universe,kpiOpps:k.opps70,kpiFiling
 function renderIpo(rows){const b=document.getElementById('ipoBody');if(!b||!rows)return;const cls=k=>k==='IPO'?'tag-blue':'tag-neutral';
  b.innerHTML=rows.map(r=>`<tr><td style="font-weight:700">${r.ticker}</td><td><span class="tag ${cls(r.kind)}">${r.kind}</span> ${r.event}</td><td data-num${r.kind!=='IPO'?' class="flat"':''}>${r.date}</td><td>${r.theme}</td></tr>`).join('');}
 
+/* ---- momentum : couleur 3 états (rouge se dégrade / orange s'inverse / vert positif) + flèche + barre ---- */
+function momParse(m){ m=String(m||'');
+  if(/RVOL/i.test(m)) return {isRvol:true,pct:null};
+  if(/^base/i.test(m.trim())) return {isBase:true,pct:0};
+  var mt=m.match(/([+\-−]?)\s*(\d+(?:[.,]\d+)?)\s*%/);
+  if(mt){ var sign=(mt[1]==='-'||mt[1]==='−')?-1:1; return {pct:sign*parseFloat(mt[2].replace(',','.'))}; }
+  return {pct:null};
+}
+function trackMomentum(){ var KEY='mk_mom_prev', prev={}; try{prev=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){}
+  Object.keys(STOCKS).forEach(function(k){ var s=STOCKS[k], cur=momParse(s.mom).pct; s._momPct=cur;
+    var pp=(s.momPrev!=null)?momParse(s.momPrev).pct:prev[k];
+    s._momTrend=(cur!=null&&pp!=null)?((cur>pp+0.3)?'up':(cur<pp-0.3)?'down':'flat'):'new';
+    if(cur!=null) prev[k]=cur;
+  });
+  try{localStorage.setItem(KEY,JSON.stringify(prev))}catch(e){}
+}
+function momCell(s){ var p=momParse(s.mom), pct=p.pct, tr=s._momTrend||'new', cls, ic='';
+  if(p.isRvol){ cls='up'; ic='ti-bolt'; }
+  else if(pct==null){ cls='flat'; }
+  else if(pct>=0){ cls='up'; ic=(tr==='down')?'ti-arrow-down-right':'ti-arrow-up-right'; }
+  else if(tr==='up'){ cls='flat'; ic='ti-arrow-up-right'; }   // négatif mais s'inverse -> orange
+  else { cls='down'; ic='ti-arrow-down-right'; }              // négatif qui se dégrade -> rouge
+  var arr=ic?' <i class="ti '+ic+'" style="font-size:11px;vertical-align:-1px"></i>':'';
+  var bar='';
+  if(pct!=null){ var w=Math.max(2,Math.min(46,Math.abs(pct)/20*50)); var side=pct>=0?'pos':'neg';
+    bar='<div class="mbar"><span class="mid"></span><i class="'+side+'" style="width:'+w.toFixed(0)+'%"></i></div>'; }
+  return '<td data-num class="mom-c '+cls+'">'+s.mom+arr+bar+'</td>';
+}
 /* ---- data loader : smallcap.json sinon DEMO inline ---- */
 function applyData(D){
  if(D.themes&&D.themes.length)THEMES=D.themes;
@@ -435,7 +469,7 @@ function applyData(D){
  if(D.kpi)renderKpi(D.kpi);
  if(D.ipoLockup)renderIpo(D.ipoLockup);
  const badge=document.querySelector('.hero .badge');if(badge)badge.innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>v2 · LIVE JSON'+(D.generatedAt?' · '+String(D.generatedAt).slice(0,10):'');
- FILTER='all';renderTop();renderLegend();renderDonut();renderTable();
+ FILTER='all';trackMomentum();renderTop();renderLegend();renderDonut();renderTable();
  openStock(Object.keys(STOCKS)[0]);}
 async function loadReal(){try{const r=await fetch('data/smallcap.json',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const D=await r.json();applyData(D);console.info('[smallcap] data/smallcap.json chargé ('+Object.keys(D.stocks||{}).length+' titres)');}catch(e){console.warn('[smallcap] data/smallcap.json indisponible → DEMO inline (normal en file://) :',e.message);}}
 
