@@ -26,6 +26,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .mbar i.pos{left:50%;background:var(--green)}
 .mgrbtn{background:var(--bg2);border:.5px solid var(--border-2);color:var(--muted);border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
 .mgrbtn:hover{border-color:var(--green);color:var(--text)}
+.mgrbtn.refresh{border-color:rgba(93,202,165,.3);color:var(--green)}
+.fresh-lbl{font-family:var(--mono);font-size:9.5px;color:var(--muted-soft);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.fresh-lbl .fdot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.spin{animation:mspin 1s linear infinite}@keyframes mspin{to{transform:rotate(360deg)}}
 .uv-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
 .uv-modal{background:var(--bg2);border:.5px solid var(--border-2);border-radius:14px;padding:18px 20px;max-width:740px;width:100%;max-height:88vh;overflow:auto;position:relative}
 .uv-modal h2{font-size:15px;font-weight:800;color:#fff;display:flex;align-items:center;gap:9px;margin-bottom:3px}.uv-modal h2 i{color:var(--green)}
@@ -221,7 +225,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 
 <!-- OPPORTUNITY TABLE -->
 <div class="stitle"><i class="ti ti-target-arrow"></i>Opportunity Score <span class="s2" id="oppSub">— tous thèmes · trié par opportunité</span></div>
-<div class="card" style="padding:5px 6px"><div style="padding:6px 6px 10px;display:flex;gap:8px;align-items:center"><input id="oppSearch" oninput="SEARCH=this.value.toUpperCase().trim();renderTable()" placeholder="🔍 Rechercher un ticker ou un nom…" style="flex:1;background:var(--bg3);border:.5px solid var(--border-2);border-radius:8px;padding:8px 12px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none"><button class="mgrbtn" onclick="openUniv()"><i class="ti ti-adjustments"></i> Mon univers</button></div><div style="overflow-x:auto">
+<div class="card" style="padding:5px 6px"><div style="padding:6px 6px 10px;display:flex;gap:8px;align-items:center"><input id="oppSearch" oninput="SEARCH=this.value.toUpperCase().trim();renderTable()" placeholder="🔍 Rechercher un ticker ou un nom…" style="flex:1;background:var(--bg3);border:.5px solid var(--border-2);border-radius:8px;padding:8px 12px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none"><span class="fresh-lbl" id="freshLbl"></span><button class="mgrbtn refresh" onclick="refreshData(this)" title="Recharger les données"><i class="ti ti-refresh"></i> Refresh</button><button class="mgrbtn" onclick="openUniv()"><i class="ti ti-adjustments"></i> Mon univers</button></div><div style="overflow-x:auto">
   <table class="tbl"><thead><tr><th>Ticker</th><th>Thème</th><th>Float</th><th>Cash runway</th><th>Catalyseur</th><th>Insiders/13F</th><th>Momentum</th><th>Valo</th><th>Opportunity</th><th>Projection</th><th>Statut</th></tr></thead>
     <tbody id="oppBody"></tbody>
   </table>
@@ -556,6 +560,19 @@ function momCell(s){ var p=momParse(s.mom), pct=p.pct, tr=s._momTrend||'new', cl
     bar='<div class="mbar"><span class="mid"></span><i class="'+side+'" style="width:'+w.toFixed(0)+'%"></i></div>'; }
   return '<td data-num class="mom-c '+cls+'">'+s.mom+arr+bar+'</td>';
 }
+/* ---- refresh + fraîcheur des données ---- */
+let LASTGEN='';
+function updateFresh(){ var el=document.getElementById('freshLbl'); if(!el)return; if(!LASTGEN){el.textContent='';return;}
+  var t=new Date(LASTGEN), mins=Math.max(0,Math.round((Date.now()-t.getTime())/60000));
+  var hh=String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0');
+  var rel=mins<1?"à l'instant":mins<60?'il y a '+mins+' min':'il y a '+Math.round(mins/60)+' h';
+  el.innerHTML='<span class="fdot"></span>maj '+hh+' · '+rel;
+}
+async function refreshData(btn){ var ic=btn&&btn.querySelector('i'); if(ic)ic.classList.add('spin'); if(btn)btn.style.opacity='.7';
+  await loadReal(); updateFresh();
+  if(ic)ic.classList.remove('spin'); if(btn)btn.style.opacity='';
+}
+setInterval(updateFresh,60000);
 /* ---- gestionnaire d'univers (watchlist) : panneau + suppression + hygiène ---- */
 let RUNDATE='';
 function trackEvit(){ var KEY='mk_evit',m={}; try{m=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){}
@@ -606,7 +623,7 @@ function applyData(D){
  if(D.kpi)renderKpi(D.kpi);
  if(D.ipoLockup)renderIpo(D.ipoLockup);
  const badge=document.querySelector('.hero .badge');if(badge)badge.innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>v2 · LIVE JSON'+(D.generatedAt?' · '+new Date(D.generatedAt).toLocaleDateString('fr-FR'):'');
- FILTER='all';RUNDATE=(D.generatedAt||'').slice(0,10)||new Date().toISOString().slice(0,10);trackMomentum();trackEvit();renderTop();renderLegend();renderDonut();renderTable();
+ FILTER='all';RUNDATE=(D.generatedAt||'').slice(0,10)||new Date().toISOString().slice(0,10);LASTGEN=D.generatedAt||'';trackMomentum();trackEvit();renderTop();renderLegend();renderDonut();renderTable();updateFresh();
  openStock(Object.keys(STOCKS)[0]);}
 async function loadReal(){try{const r=await fetch('data/smallcap.json',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const D=await r.json();applyData(D);console.info('[smallcap] data/smallcap.json chargé ('+Object.keys(D.stocks||{}).length+' titres)');}catch(e){console.warn('[smallcap] data/smallcap.json indisponible → DEMO inline (normal en file://) :',e.message);}}
 
