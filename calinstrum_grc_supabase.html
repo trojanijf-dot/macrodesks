@@ -1951,9 +1951,9 @@ body.has-dashboard-bg #page-dashboard .metric{
       <div class="form-group"><label>Remarques</label><textarea class="form-textarea" id="dv-notes" rows="3"></textarea></div>
       <div class="form-group"><label>Mention légale TGC</label>
         <select class="form-select" id="dv-tgc-mention">
-          <option value="506-2">Art. Lp.506-2 — Franchise de taxe (services)</option>
-          <option value="514-5">Art. Lp.514-5 10 — Franchise (exportation)</option>
-          <option value="tgc">Soumis à la TGC</option>
+          <option value="tgc">Client soumis — TGC collectée (3 / 6 / 11 / 22 %)</option>
+          <option value="506-2">Client exonéré — achat en franchise (Art. Lp.506-2, mines IS)</option>
+          <option value="514-5">Prestation exportée hors NC — exonérée (Lp.514-5 10°)</option>
         </select>
       </div>
       <details style="background:rgba(96,165,250,.04);border:1px solid rgba(96,165,250,.2);border-radius:6px;padding:8px 10px;margin-bottom:10px">
@@ -2081,9 +2081,9 @@ body.has-dashboard-bg #page-dashboard .metric{
       </div>
       <div class="form-group"><label>Mention TGC</label>
         <select class="form-select" id="fa-tgc-mention">
-          <option value="506-2">Art. Lp.506-2 — Franchise de taxe (services)</option>
-          <option value="514-5">Art. Lp.514-5 10 — Franchise (exportation)</option>
-          <option value="tgc">Soumis à la TGC</option>
+          <option value="tgc">Client soumis — TGC collectée (3 / 6 / 11 / 22 %)</option>
+          <option value="506-2">Client exonéré — achat en franchise (Art. Lp.506-2, mines IS)</option>
+          <option value="514-5">Prestation exportée hors NC — exonérée (Lp.514-5 10°)</option>
         </select>
       </div>
     </div>
@@ -2756,8 +2756,8 @@ body.has-dashboard-bg #page-dashboard .metric{
       <div class="form-group"><label>Téléphone</label><input class="form-input" id="cl-tel"></div>
       <div class="form-group"><label>TGC exonéré</label>
         <select class="form-select" id="cl-exo">
-          <option value="oui">Oui (exonéré)</option>
-          <option value="non">Non (TGC applicable)</option>
+          <option value="non">Non — client soumis (TGC collectée)</option>
+          <option value="oui">Oui — exonéré, achat en franchise Lp.506-2 (mines IS, attestation requise)</option>
         </select>
       </div>
     </div>
@@ -3111,6 +3111,8 @@ const DEFAULT_CLIENTS=[
 ];
 
 // Clients exonérés TGC
+// Exonération = achat en franchise Lp.506-2, réservée aux opérateurs IS mines (attestation à conserver).
+// À ne pas étendre à un client lambda. Vérifier l'éligibilité d'ENERCAL avec le comptable/DSF.
 const TGC_EXEMPT_CLIENTS=['SLN','PRNC','ENERCAL'];
 
 function isClientExo(clientNom){
@@ -3128,12 +3130,12 @@ function isClientExo(clientNom){
 
 const MENTION_TGC={
   'M506-2':'Opération réalisée en franchise de taxe conformément à l\'article Lp.506-2 du code des impôts.',
-  'M514-5':'Opération réalisée en franchise de taxe conformément à l\'article Lp.514-5 10 du code des impôts.',
-  'Mtgc':'Opération réalisée en franchise de taxe conformément à l\'article Lp.514-5 10 du code des impôts.'
+  'M514-5':'Exportation hors Nouvelle-Calédonie — opération exonérée (Art. Lp.514-5 10° du code des impôts).',
+  'Mtgc':''
 };
 function getMention(k){
-  var key='M'+(k||'506-2');
-  return MENTION_TGC[key]||MENTION_TGC['M506-2'];
+  var key='M'+(k||'tgc');
+  return MENTION_TGC[key]||'';
 }
 
 const DEFAULT_INVOICES=[
@@ -21389,9 +21391,9 @@ function showLegacyImportPreview(parsed,rawText,fileName){
         '<div class="form-row">'+
           '<div class="form-group"><label>Validité</label><input class="form-input" id="li-validite" value="'+esc(parsed.validite)+'"></div>'+
           '<div class="form-group"><label>Mention TGC</label><select class="form-select" id="li-tgcM">'+
-            '<option value="506-2"'+(parsed.tgcMention==='506-2'?' selected':'')+'>Lp.506-2 (exonéré)</option>'+
-            '<option value="514-5"'+(parsed.tgcMention==='514-5'?' selected':'')+'>Lp.514-5 (franchise de taxe)</option>'+
-            '<option value="tgc"'+(parsed.tgcMention==='tgc'?' selected':'')+'>TGC applicable</option>'+
+            '<option value="tgc"'+(parsed.tgcMention==='tgc'?' selected':'')+'>Client soumis — TGC collectée</option>'+
+            '<option value="506-2"'+(parsed.tgcMention==='506-2'?' selected':'')+'>Exonéré — achat en franchise (Lp.506-2)</option>'+
+            '<option value="514-5"'+(parsed.tgcMention==='514-5'?' selected':'')+'>Exportation hors NC (Lp.514-5 10°)</option>'+
           '</select></div>'+
         '</div>'+
         '<div class="form-row">'+
@@ -38240,7 +38242,10 @@ function buildTotalsHtml(d,isExo){
   var hasTGC=(d.t6||0)+(d.t11||0)+(d.t22||0)>0;
   if(isExo && !hasTGC){
     // Client exonéré ET aucune ligne avec TGC -> afficher exonération
-    rows+='<tr><td style="text-align:right;color:#888">TGC (exonéré - Art. Lp.514-5)</td><td style="text-align:right;color:#888">0</td></tr>';
+    var lblExo=(d.tgcM==='514-5')
+      ? 'TGC — exportation (hors NC, Lp.514-5 10°)'
+      : 'TGC — exonéré (achat en franchise, Art. Lp.506-2)';
+    rows+='<tr><td style="text-align:right;color:#888">'+lblExo+'</td><td style="text-align:right;color:#888">0</td></tr>';
   } else {
     // Afficher le détail TGC réel des lignes
     if(d.t6>0) rows+='<tr><td style="text-align:right">TGC 6%</td><td style="text-align:right">'+fN(d.t6||0)+'</td></tr>';
@@ -38257,7 +38262,10 @@ function buildTotalsHtml(d,isExo){
 function buildFATotsHtml(f,isExo){
   var rows='<tr><td style="text-align:right">Total HT (XPF)</td><td style="text-align:right">'+fN(f.ht||0)+'</td></tr>';
   if(isExo){
-    rows+='<tr><td style="text-align:right;color:#888">TGC (exonéré)</td><td style="text-align:right;color:#888">0</td></tr>';
+    var lblExoF=(f.tgcM==='514-5')
+      ? 'TGC — exportation (hors NC, Lp.514-5 10°)'
+      : 'TGC — exonéré (achat en franchise, Art. Lp.506-2)';
+    rows+='<tr><td style="text-align:right;color:#888">'+lblExoF+'</td><td style="text-align:right;color:#888">0</td></tr>';
   } else {
     if((f.tgc||0)>0) rows+='<tr><td style="text-align:right">TGC</td><td style="text-align:right">'+fN(f.tgc||0)+'</td></tr>';
   }
