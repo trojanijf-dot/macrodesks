@@ -1996,6 +1996,7 @@ body.has-dashboard-bg #page-dashboard .metric{
 <div class="modal modal-lg">
   <div class="modal-header"><h3 id="mFAtitle">Nouvelle Facture</h3><button class="modal-close" onclick="cm('mFA')">✕</button></div>
   <div class="modal-body">
+    <div id="fa-draft-banner" style="display:none;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.45);border-left:3px solid #f59e0b;border-radius:7px;padding:9px 12px;font-size:12.5px;color:#fcd34d;margin-bottom:12px">⚠ <b>Brouillon</b> — cette facture n'existe pas encore dans la section Factures. Clique <b>💾 Enregistrer</b> pour la créer, ou ferme la fenêtre pour abandonner (rien ne sera créé).</div>
     <div class="tabs">
       <button class="tab active" onclick="st('fat','info')">Informations</button>
       <button class="tab" onclick="st('fat','lignes')">Lignes</button>
@@ -19675,10 +19676,78 @@ function renderPhaseHistoryTable(){
   container.innerHTML=html;
 }
 
-// === GÉNÉRATION AUTOMATIQUE DE LA FACTURE DEPUIS UN DEVIS ACCEPTÉ ===
-// Crée une facture en copiant les données du devis (lignes, client, montants),
-// génère un nouveau N° de facture, lie le devis à la facture (linkFactureId),
-// passe le statut du devis à "Facturé", et ouvre la modale facture pour vérification.
+// === GÉNÉRATION DE LA FACTURE DEPUIS UN DEVIS ACCEPTÉ (mode BROUILLON) ===
+// Prépare une facture pré-remplie depuis le devis et l'ouvre en BROUILLON. La facture
+// n'est créée (et le devis lié + passé "Facturé") QU'à l'enregistrement explicite dans
+// la modale (cf saveFA) — fermer la fenêtre ne crée rien. Helpers ci-dessous.
+//
+// Construit les lignes facture à partir d'un devis : liste PLATE de lignes clonées,
+// chacune taguée avec son _sec (fourniture/service/fret). PAS de ligne section_banner
+// (évite les lignes fantômes dans l'éditeur facture) : les bandeaux de section du PDF
+// sont synthétisés par bFA() via le fallback _sec (cf ≈ ligne "Fallback compat").
+// Partagé par la génération de facture (brouillon) ET la propagation devis→facture.
+function _buildFALinesFromDevis(d){
+  var faLines=[];
+  ['fourniture','service','fret'].forEach(function(sec){
+    var secLines=(d.lines&&d.lines[sec])||[];
+    secLines.forEach(function(l){
+      if(!l)return;
+      var cloned=JSON.parse(JSON.stringify(l)); // deep-clone : pas de référence partagée avec le devis
+      cloned._sec=sec;                           // tag de section pour le rendu PDF
+      faLines.push(cloned);
+    });
+  });
+  return faLines;
+}
+
+// État du brouillon de facture issu d'un devis (Bug B : rien créé tant que pas Enregistré).
+// Posé par generateFactureFromDV, consommé une seule fois par openFA, puis par saveFA
+// (lien devis↔facture établi à l'enregistrement explicite, pas au clic "Générer").
+var _faDraftObj=null, _faDraftSourceDevisId=null, _faDraftBCSLN='', _faDraftBCDate='';
+
+// Affiche/masque le bandeau "Brouillon" de la modale facture + adapte le titre.
+function _setFADraftBanner(on, dvNum){
+  var b=document.getElementById('fa-draft-banner');
+  if(b) b.style.display=on?'block':'none';
+  if(on) sv('mFAtitle','🟠 Brouillon — facture non enregistrée'+(dvNum?(' (depuis '+dvNum+')'):''));
+}
+
+// Bug A (sens devis→facture) : à l'enregistrement d'un devis, resynchronise les lignes +
+// totaux TGC vers SA facture liée tant qu'elle n'est pas soldée. Conservateur par design :
+//   - lien DIRECT uniquement (d.linkFactureId) — pas de match flou par objet ;
+//   - on ne touche JAMAIS une facture Payée (validé utilisateur), ni une facture acompte/
+//     solde (parentId/acompteType/pctOfBC<100), ni une facture importée (Excel/BC).
+// Idempotent : si rien n'a changé, ne réécrit rien (pas de toast parasite).
+function propagateDevisLinesToFacture(d){
+  if(!d || !d.linkFactureId) return;
+  var fi=DB.factures.findIndex(function(x){return x.id===d.linkFactureId;});
+  if(fi<0) return;
+  var f=DB.factures[fi];
+  if(!f) return;
+  if(f.status==='Payée') return;                              // figée une fois soldée
+  if(f.parentId || f.acompteType) return;                     // facture d'acompte/solde
+  if(typeof f.pctOfBC==='number' && f.pctOfBC<100) return;    // facturation partielle
+  if(f._excelImport || f._simpleExcelImport || f._fromBC) return; // origine non-devis
+  var faLines=_buildFALinesFromDevis(d);
+  // Si les lignes sont identiques à celles déjà en facture → rien à propager.
+  if(JSON.stringify(f.lines||[])===JSON.stringify(faLines)) return;
+  var br=_faTgcParTaux(faLines);
+  var ht=0;
+  faLines.forEach(function(l){
+    if(!l||l.type==='header'||l.type==='section_banner')return;
+    if(l._isTaskMain&&Array.isArray(l.subLines)){
+      l.subLines.forEach(function(s){ht+=(Number(s.qte)||0)*(Number(s.pu)||0);});
+      return;
+    }
+    ht+=(Number(l.qte)||0)*(Number(l.pu)||0);
+  });
+  f.lines=faLines;
+  f.ht=ht; f.t6=br.t6; f.t11=br.t11; f.t22=br.t22; f.tgc=br.total; f.ttc=ht+br.total;
+  DB.factures[fi]=f;
+  if(typeof syncFactureToSuivi==='function'){try{syncFactureToSuivi(f);}catch(e){console.warn('syncFactureToSuivi (propagDVlines):',e);}}
+  if(typeof showToast==='function'){try{showToast('✓ Facture '+f.num+' mise à jour depuis le devis','info');}catch(e){}}
+}
+
 function generateFactureFromDV(){
   if(!eDVid){alert('⚠ Veuillez d\'abord enregistrer le devis avant de générer la facture.');return;}
   var d=DB.devis.find(function(x){return x.id===eDVid;});
@@ -19702,47 +19771,22 @@ function generateFactureFromDV(){
       return;
     }
   }
-  // Sauver d'abord le devis pour que les données récentes soient dans DB
+  // Sauver d'abord le devis pour que les données récentes soient dans DB.
+  // ⚠ BUG B : on NE crée PAS la facture ici. Elle n'apparaîtra dans la section Factures
+  // QUE si l'utilisateur clique "Enregistrer" dans la modale (cf saveFA). S'il ferme la
+  // fenêtre → aucune facture créée, devis intact (pas de passage en "Facturé").
   var dvCurrent=getDV();
   var idx=DB.devis.findIndex(function(x){return x.id===eDVid;});
   if(idx>=0)DB.devis[idx]=dvCurrent;
   d=DB.devis[idx];
-  // Construction de la facture
-  // Le préfixe de la facture suit celui du devis source (SLN, PRNC, etc.)
-  var faNum=nxt('fa', getClientPrefix(d.client));
-  var totals=cDVtot();
-  // === COPIE STRUCTURELLE DES LIGNES DEVIS → FACTURE ===
-  // On préserve EXACTEMENT la structure du devis : headers, KIT (1 prix global +
-  // sub-lignes "inclus"), TASK (mère qte=0/pu=0 + sub-lignes chiffrées). Le rendu
-  // PDF facture (renderFAPdfRows) sait afficher ces 3 cas grâce au flag _isTaskMain.
-  // Deep-clone via JSON pour éviter les références partagées avec le devis source.
-  var faLines=[];
-  // Mapping des sections → label banner (identique à bDV.secNames)
-  var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
-  ['fourniture','service','fret'].forEach(function(sec){
-    var secLines=(d.lines&&d.lines[sec])||[];
-    if(!secLines.length)return; // pas de banner si section vide
-    // Pousser un banner de section AVANT les lignes de cette section
-    // (préserve l'affichage FOURNITURE / MAIN D'OEUVRE / FRET dans le PDF facture)
-    faLines.push({type:'section_banner',desc:SEC_LABELS[sec],_sec:sec});
-    secLines.forEach(function(l){
-      if(!l)return;
-      // Headers (sous-titres / KIT / TASK) → conservés tels quels pour structurer le PDF
-      if(l.type==='header'){
-        var clonedH=JSON.parse(JSON.stringify(l));
-        clonedH._sec=sec; // tag de section pour le rendu
-        faLines.push(clonedH);
-        return;
-      }
-      // Ligne normale, KIT ou TASK : deep clone complet (préserve subLines, _isTaskMain)
-      var clonedL=JSON.parse(JSON.stringify(l));
-      clonedL._sec=sec;
-      faLines.push(clonedL);
-    });
-  });
-  var fa={
+  saveDB();
+  // Capturer la date BC AVANT de fermer la modale devis (gvg lit le formulaire).
+  var bcDate=gvg('dv-bc-client-sln-date')||'';
+  // Construire l'objet facture BROUILLON (en mémoire, non persisté).
+  // Le préfixe de la facture suit celui du devis source (SLN, PRNC, ENN, etc.).
+  var faDraft={
     id:Date.now(),
-    num:faNum,
+    num:nxt('fa', getClientPrefix(d.client)),
     date:td(),
     client:d.client,
     contact:d.contact||'',
@@ -19751,39 +19795,29 @@ function generateFactureFromDV(){
     objet:d.objet||'',
     type:d.type||'Fourniture',
     devisLieId:d.id,
-    // [21/05/2026] Pré-remplir les champs lus par openFA depuis le devis source :
-    //   - dvlie          → champ "Devis liés" (openFA lit f.dvlie)
-    //   - dateReceptionBC → champ "Date réception BC client" (openFA lit f.dateReceptionBC)
-    // Avant : seuls bcClientSLN/bcClientSLNDate étaient copiés, mais la modale facture
-    // ne les lit pas pour ces 2 champs → ils restaient vides à l'ouverture.
-    dvlie:d.num||'',
-    dateReceptionBC:gvg('dv-bc-client-sln-date')||'',
-    bcClientSLN:bcSLN, // BC Client SLN reçu
-    bcClientSLNDate:gvg('dv-bc-client-sln-date'),
+    dvlie:d.num||'',                 // champ "Devis lié" (openFA lit f.dvlie)
+    dateReceptionBC:bcDate,          // champ "Date réception BC client"
+    bcClientSLN:bcSLN,
+    bcClientSLNDate:bcDate,
+    status:'En attente',
     statut:'En attente',
     tgcM:d.tgcM||'506-2',
-    lines:faLines,
-    ht:totals.ht,t11:totals.t11,t22:totals.t22,t6:totals.t6,fr:totals.fr,
-    ttc:totals.ttc
+    delai:'Paiement sous 30 jours à reception de la facture',
+    pctOfBC:100,
+    lines:_buildFALinesFromDevis(d)  // lignes plates _sec-taguées (bandeaux PDF via fallback)
+    // Totaux (ht/tgc/ttc) recalculés par rFAlines→cFAtot à l'ouverture, puis par getFA au save.
   };
-  DB.factures.push(fa);
-  // Lier le devis à la facture
-  d.linkFactureId=fa.id;
-  d.status='Facturé';
-  gv('dv-status','Facturé');
-  // Sauver
-  DB.devis[idx]=d;
-  saveDB();
-  renderDV&&renderDV();
-  renderFA&&renderFA();
-  rDash&&rDash();
-  // Synchroniser dans le Suivi Factures (si la fonction existe)
-  if(typeof syncFAToSuivi==='function'){
-    try{syncFAToSuivi(fa);}catch(e){console.warn('Sync Suivi failed:',e);}
-  }
-  alert('✅ Facture générée avec succès !\n\nN° facture : '+faNum+'\nMontant : '+fN(totals.ttc)+' XPF\nBC Client SLN : '+(bcSLN||'(non renseigné)')+'\n\nLe devis est passé en statut "Facturé".\nLa modale de la facture va s\'ouvrir pour vérification.');
+  // Ouvrir la modale facture en BROUILLON, pré-remplie depuis le devis.
   cm('mDV');
-  setTimeout(function(){openFA(fa.id);},250);
+  setTimeout(function(){
+    _faDraftObj=faDraft;                 // consommé une seule fois par openFA
+    openFA(null);                        // charge le brouillon ; eFAid reste null (= nouvelle au save)
+    // openFA a réinitialisé l'état de lien : on le (ré)arme APRÈS pour saveFA.
+    _faDraftSourceDevisId=d.id;
+    _faDraftBCSLN=bcSLN;
+    _faDraftBCDate=bcDate;
+    _setFADraftBanner(true, d.num);
+  },250);
 }
 
 // ===== HELPER : FEEDBACK BOUTON ENREGISTRER =====
@@ -19838,6 +19872,11 @@ async function saveDV(){
   // la facture liée en livre / recu (selon son type) si elle est encore non-billed.
   if(typeof propagateDevisPhaseToFacture==='function'){
     try{ propagateDevisPhaseToFacture(d); }catch(e){console.warn('propagateDevisPhaseToFacture (saveDV):',e);}
+  }
+  // ⭐ Bug A (sens devis→facture) : resync des lignes + totaux TGC vers la facture liée
+  // tant qu'elle n'est pas Payée (snapshot "vivant" jusqu'au solde). Idempotent.
+  if(typeof propagateDevisLinesToFacture==='function'){
+    try{ propagateDevisLinesToFacture(d); }catch(e){console.warn('propagateDevisLinesToFacture (saveDV):',e);}
   }
   saveDB();renderDV();rDash();renderHist();
   // Rafraîchir Factures + Suivi pour refléter la propagation Devis → Facture
@@ -26061,16 +26100,23 @@ function _populateFADvlieDatalist(){
 }
 
 function openFA(id,fromDV,preSelectedClient){
+  // Brouillon facture (Bug B) : consommé une seule fois. Posé par generateFactureFromDV
+  // juste avant l'appel ; on le lit AVANT le reset d'état ci-dessous.
+  var draftObj=_faDraftObj; _faDraftObj=null;
   // === CLIENT PICKER INTERCEPTOR (mai 2026) ===
   // Si pas d'id (= nouvelle facture) ET pas de fromDV (= pas créée depuis un devis)
-  // ET pas de preSelectedClient → on ouvre le picker pour forcer le choix client.
+  // ET pas de preSelectedClient ET pas de brouillon → on ouvre le picker pour forcer le choix client.
   // Le picker rappellera openFA(null, null, clientName) après sélection.
-  if(!id && !fromDV && !preSelectedClient){
+  if(!id && !fromDV && !preSelectedClient && !draftObj){
     if(typeof openClientPicker==='function'){
       openClientPicker('fa');
       return;
     }
   }
+  // Reset de l'état brouillon/lien pour toute ouverture normale ; generateFactureFromDV
+  // le ré-arme APRÈS son appel à openFA (cf _faDraftSourceDevisId / bandeau).
+  _faDraftSourceDevisId=null;_faDraftBCSLN='';_faDraftBCDate='';
+  _setFADraftBanner(false);
   eFAid=id||null;faL=[];faVersements=[];rebuildAllParamSelects();
   buildClientOptions('fa-client',preSelectedClient||'');
   // Peupler le datalist Devis lié et brancher les listeners pour le re-peupler
@@ -26085,8 +26131,8 @@ function openFA(id,fromDV,preSelectedClient){
       el._dvlieListenerAttached=true;
     }
   });
-  if(id){
-    var f=DB.factures.find(function(x){return x.id===id;});
+  if(id || draftObj){
+    var f=id?DB.factures.find(function(x){return x.id===id;}):draftObj;
     if(f){
       gv('fa-num',f.num);gv('fa-date',f.date||td());
       buildClientOptions('fa-client',f.client);
@@ -27820,6 +27866,18 @@ async function saveFA(){
   // Mettre à jour le f dans DB.factures avec le suiviId retourné
   var fi=DB.factures.findIndex(function(x){return x.id===f.id;});
   if(fi>=0) DB.factures[fi]=f;
+  // === BUG B : facture issue d'un devis en BROUILLON ===
+  // Le lien devis↔facture + le passage du devis en "Facturé" ne se font QU'ICI
+  // (enregistrement explicite), jamais au simple clic "Générer la facture".
+  if(wasNew && _faDraftSourceDevisId){
+    var _dvSrc=DB.devis.find(function(x){return x.id===_faDraftSourceDevisId;});
+    if(_dvSrc){ _dvSrc.linkFactureId=f.id; _dvSrc.status='Facturé'; }
+    // bcClientSLN n'est pas capturé par getFA pour une NOUVELLE facture → on le pose ici.
+    if(_faDraftBCSLN && !f.bcClientSLN){ f.bcClientSLN=_faDraftBCSLN; f.bcClientSLNDate=_faDraftBCDate||''; }
+    f.devisLieId=_faDraftSourceDevisId;
+    _faDraftSourceDevisId=null;_faDraftBCSLN='';_faDraftBCDate='';
+    _setFADraftBanner(false);
+  }
   // ⭐ RÈGLES 1 + 3 — Propagation Facture → Devis (phase + statut)
   // Si la facture est en phase billed, on s'assure que le devis lié reflète cette étape.
   // Si la facture est payée/partielle, on ajoute 'facture' au phaseHistory du devis.
@@ -38258,14 +38316,46 @@ function buildTotalsHtml(d,isExo){
   return'<table class="doc-totals">'+rows+'</table>';
 }
 
+// Décompose la TGC d'une facture PAR TAUX (6/11/22) à partir de ses lignes.
+// Même itération que cFAtot (flag _isTaskMain → on lit les subLines chiffrées),
+// mais on ventile par taux au lieu d'agréger. Gère les 2 formats de lines :
+// tableau plat (format faL natif) ET objet {fourniture,service,fret} (imports legacy).
+// La somme des taux est EXACTEMENT égale à f.tgc (même calcul) → total/TTC inchangés.
+function _faTgcParTaux(lines){
+  var t6=0,t11=0,t22=0;
+  function acc(h,rate){rate=Number(rate)||0;if(rate===6)t6+=h*0.06;else if(rate===11)t11+=h*0.11;else if(rate===22)t22+=h*0.22;}
+  function one(l){
+    if(!l||l.type==='header'||l.type==='section_banner')return;
+    if(l._isTaskMain&&Array.isArray(l.subLines)){
+      l.subLines.forEach(function(s){acc((Number(s.qte)||0)*(Number(s.pu)||0),s.tgc);});
+      return;
+    }
+    acc((Number(l.qte)||0)*(Number(l.pu)||0),l.tgc);
+  }
+  if(Array.isArray(lines)){lines.forEach(one);}
+  else if(lines&&typeof lines==='object'){['fourniture','service','fret'].forEach(function(sec){(lines[sec]||[]).forEach(one);});}
+  return {t6:t6,t11:t11,t22:t22,total:t6+t11+t22};
+}
+
 function buildFATotsHtml(f,isExo){
   var rows='<tr><td style="text-align:right">Total HT (XPF)</td><td style="text-align:right">'+fN(f.ht||0)+'</td></tr>';
-  if(isExo){
-    // Libellé court : la mention légale complète est déjà rappelée en pied de page (cf getMention).
+  // Détail TGC par taux (6/11/22) — aligné sur le rendu devis (buildTotalsHtml).
+  var br=_faTgcParTaux(f.lines);
+  var hasTGC=br.total>0 || (f.tgc||0)>0;
+  if(isExo && !hasTGC){
+    // Client exonéré ET aucune ligne avec TGC → mention exonération (libellé court,
+    // mention légale complète déjà en pied de page, cf getMention).
     var lblExoF=(f.tgcM==='514-5') ? 'TGC — exportation' : 'TGC — exonéré';
     rows+='<tr><td style="text-align:right;color:#888">'+lblExoF+'</td><td style="text-align:right;color:#888">0</td></tr>';
-  } else {
-    if((f.tgc||0)>0) rows+='<tr><td style="text-align:right">TGC</td><td style="text-align:right">'+fN(f.tgc||0)+'</td></tr>';
+  } else if(br.total>0){
+    // Détail réel des lignes : on n'affiche un taux que s'il est présent (montant > 0).
+    if(br.t6>0)  rows+='<tr><td style="text-align:right">TGC 6%</td><td style="text-align:right">'+fN(br.t6)+'</td></tr>';
+    if(br.t11>0) rows+='<tr><td style="text-align:right">TGC 11%</td><td style="text-align:right">'+fN(br.t11)+'</td></tr>';
+    if(br.t22>0) rows+='<tr><td style="text-align:right">TGC 22%</td><td style="text-align:right">'+fN(br.t22)+'</td></tr>';
+    rows+='<tr><td style="text-align:right;font-weight:700">Total TGC</td><td style="text-align:right;font-weight:700">'+fN(br.total)+'</td></tr>';
+  } else if((f.tgc||0)>0){
+    // Filet legacy : facture avec un TGC agrégé mais sans détail exploitable par ligne.
+    rows+='<tr><td style="text-align:right">TGC</td><td style="text-align:right">'+fN(f.tgc||0)+'</td></tr>';
   }
   rows+='<tr class="dtf"><td style="text-align:right">Montant à payer TTC (XPF)</td><td style="text-align:right;font-size:14px;font-weight:900">'+fN(f.ttc||0)+'</td></tr>';
   return'<table class="doc-totals">'+rows+'</table>';
