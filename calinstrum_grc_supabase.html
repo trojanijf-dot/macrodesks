@@ -3418,7 +3418,26 @@ function setAutoSaveIndicator(state){
   else if(state==='err'){el.style.background='var(--red)';if(ind)ind.title='⚠ Erreur de sauvegarde à '+hh+':'+mm+':'+ss;}
   else {el.style.background='#f59e0b';if(ind)ind.title='Sauvegarde en cours…';}
 }
+// Ctrl+S (et clic bouton « Sauver ») : committe d'abord la modale d'édition ouverte,
+// PUIS flush global de la base. Sans ce commit, une facture générée depuis un devis et
+// restée en BROUILLON (cf generateFactureFromDV) ne serait jamais persistée par Ctrl+S
+// (saveDB ne sauve que ce qui est déjà en base) — la modale fait foi sur le contenu édité.
+// ⚠ L'auto-save (autoSaveTick) ne fait QUE saveDB et n'appelle PAS ceci → le brouillon
+// n'est créé que sur une action de save EXPLICITE (Ctrl+S, bouton Sauver, Enregistrer).
+var _MODAL_SAVE_FNS=[['mDV','saveDV'],['mFA','saveFA'],['mBC','saveBC'],['mBL','saveBL']];
 function manualSave(){
+  // 1) Committer la modale d'édition ouverte (une seule à la fois).
+  try{
+    for(var _i=0;_i<_MODAL_SAVE_FNS.length;_i++){
+      var _m=document.getElementById(_MODAL_SAVE_FNS[_i][0]);
+      var _fn=window[_MODAL_SAVE_FNS[_i][1]];
+      if(_m && _m.classList.contains('open') && typeof _fn==='function'){
+        _fn();           // saveDV/saveFA/saveBC/saveBL gèrent leur propre validation + saveDB
+        break;
+      }
+    }
+  }catch(e){ console.warn('manualSave: commit de la modale ouverte échoué:',e); }
+  // 2) Flush global (filet) + indicateur.
   saveDB();
   setAutoSaveIndicator('ok');
   try{
