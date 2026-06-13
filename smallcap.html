@@ -158,6 +158,35 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .topnav a{font-family:var(--mono);font-size:11px;color:var(--muted);text-decoration:none;padding:9px 15px;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px;transition:.12s;margin-bottom:-.5px}
 .topnav a:hover{color:var(--text)}
 .topnav a.active{color:var(--blue);border-bottom-color:var(--blue)}
+/* ---- Analyse Claude + Plan de trade ---- */
+#dClaude{margin-top:14px}#dClaude:empty{display:none}
+.cl-act{margin-top:14px}
+.cl-btn{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;padding:9px 14px;border-radius:8px;cursor:pointer;color:var(--green);background:var(--bg3);border:1px solid var(--green)}
+.cl-btn[disabled]{opacity:.6;cursor:wait;color:var(--muted);border-color:var(--border)}
+.cl-card{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg3)}.cl-card+.cl-card{margin-top:10px}
+.cl-h{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border)}
+.cl-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 7px var(--green)}
+.cl-nm{font-weight:700;font-size:12px}
+.cl-mdl{margin-left:auto;font-size:9px;color:var(--muted);border:1px solid var(--border);padding:2px 6px;border-radius:5px}
+.cl-b{padding:11px 12px}.cl-these{font-size:12.5px;line-height:1.55}
+.cl-cols{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px}
+.cl-mini{border:1px solid var(--border);border-radius:8px;padding:9px 10px}
+.cl-mini h5{margin:0 0 6px;font-size:9.5px;letter-spacing:.6px;text-transform:uppercase}
+.cl-mini.f h5{color:var(--green)}.cl-mini.r h5{color:var(--red)}
+.cl-mini ul{margin:0;padding-left:14px}.cl-mini li{font-size:11.5px;margin-bottom:4px;color:var(--muted);line-height:1.45}
+.cl-pills{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.cl-pill{font-size:10px;padding:3px 8px;border-radius:14px;border:1px solid var(--border);color:var(--muted)}
+.cl-pill.up{color:var(--green);border-color:var(--green)}.cl-pill.dn{color:var(--red);border-color:var(--red)}
+.cl-leg{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)}.cl-leg:last-of-type{border-bottom:none}
+.cl-mk{flex:0 0 26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;margin-top:1px;border:1px solid var(--border)}
+.cl-leg.in .cl-mk{color:var(--green)}.cl-leg.out .cl-mk{color:var(--red)}.cl-leg.tgt .cl-mk{color:var(--blue)}
+.cl-lt{font-size:9.5px;letter-spacing:.6px;text-transform:uppercase;margin-bottom:4px}
+.cl-leg.in .cl-lt{color:var(--green)}.cl-leg.out .cl-lt{color:var(--red)}.cl-leg.tgt .cl-lt{color:var(--blue)}
+.cl-ld{font-size:12px;line-height:1.5}.cl-ld b{color:var(--green)}.cl-leg.out .cl-ld b{color:var(--red)}.cl-leg.tgt .cl-ld b{color:var(--blue)}
+.cl-watch{margin-top:10px;border:1px solid var(--blue);border-radius:8px;padding:9px 11px;background:rgba(90,169,230,.06)}
+.cl-wt{font-size:9.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--blue);margin-bottom:6px}
+.cl-watch ul{margin:0;padding-left:15px}.cl-watch li{font-size:11.5px;color:var(--muted);margin-bottom:4px;line-height:1.45}
+.cl-disc{margin-top:9px;font-size:9.5px;color:var(--muted-soft);line-height:1.45}
 </style></head>
 <body>
 
@@ -226,6 +255,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
       <div id="dFeed"></div>
     </div>
   </div>
+  <div class="cl-act"><button id="clBtn" class="cl-btn" onclick="approfondir(CUR)"><i class="ti ti-sparkles"></i> Approfondir avec Claude</button></div>
+  <div id="dClaude"></div>
 </div>
 
 <!-- IPO/LOCKUP + METHODO -->
@@ -320,6 +351,48 @@ function setFilter(k){FILTER=k;const lbl=k==='all'?'Tous thèmes':THEMES.find(t=
  renderDonut();
  renderTable();}
 
+/* ---- ANALYSE CLAUDE (à la demande) ---- */
+const CLAUDE_WEBHOOK='https://jftrojani77.app.n8n.cloud/webhook/claude-approfondir';
+function loadClaudeCache(k,s){try{const raw=localStorage.getItem('claude_'+k);if(raw){const o=JSON.parse(raw);s.claude=o.claude;s.plan=o.plan;}}catch(e){}}
+function renderClaude(s){
+  const box=document.getElementById('dClaude');if(!box)return;
+  if(!s||(!s.claude&&!s.plan)){box.innerHTML='';return;}
+  const c=s.claude||{},p=s.plan||{};
+  const esc=t=>String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const pill=(t,cl)=>'<span class="cl-pill '+(cl||'')+'">'+esc(t)+'</span>';
+  let html='';
+  if(c.these){
+    html+='<div class="cl-card"><div class="cl-h"><span class="cl-dot"></span><span class="cl-nm">Analyse institutionnelle</span><span class="cl-mdl">'+esc(c.model||'claude')+'</span></div><div class="cl-b">';
+    html+='<div class="cl-these">'+esc(c.these)+'</div><div class="cl-cols">';
+    html+='<div class="cl-mini f"><h5>▲ Points forts</h5><ul>'+(c.forts||[]).map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>';
+    html+='<div class="cl-mini r"><h5>▼ Risques</h5><ul>'+(c.risques||[]).map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>';
+    html+='</div></div></div>';
+  }
+  if(p.entry){
+    html+='<div class="cl-card"><div class="cl-h"><span class="cl-dot"></span><span class="cl-nm">🎯 Plan de trade</span><span class="cl-mdl">conditions</span></div><div class="cl-b">';
+    html+='<div class="cl-leg in"><div class="cl-mk">▲</div><div><div class="cl-lt">Entrée</div><div class="cl-ld">'+esc(p.entry.cond)+' · zone <b>'+esc(p.entry.zone)+'</b> · décl. <b>'+esc(p.entry.trigger)+'</b></div><div class="cl-pills">'+(p.entry.chips||[]).map(x=>pill(x,'up')).join('')+'</div></div></div>';
+    if(p.invalidation){html+='<div class="cl-leg out"><div class="cl-mk">▼</div><div><div class="cl-lt">Invalidation / sortie</div><div class="cl-ld">'+esc(p.invalidation.note)+' · niveau <b>'+esc(p.invalidation.level)+'</b></div><div class="cl-pills">'+(p.invalidation.chips||[]).map(x=>pill(x,'dn')).join('')+'</div></div></div>';}
+    if(p.targets&&p.targets.length){html+='<div class="cl-leg tgt"><div class="cl-mk">⤴</div><div><div class="cl-lt">Objectifs</div><div class="cl-ld">'+p.targets.map(t=>'<b>'+esc(t.label)+'</b> '+esc(t.level)+(t.note?' ('+esc(t.note)+')':'')).join(' · ')+'</div></div></div>';}
+    if(p.watch&&p.watch.length){html+='<div class="cl-watch"><div class="cl-wt">✈ Surveillé par Telegram (temps réel)</div><ul>'+p.watch.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>';}
+    html+='<div class="cl-disc">ⓘ Généré par '+esc(c.model||'claude')+' depuis les données du pipeline. Stop dur = IBKR. Aide à la décision, pas un conseil.</div></div></div>';
+  }
+  box.innerHTML=html;
+}
+async function approfondir(k){
+  if(!k)return;const s=STOCKS[k];if(!s)return;
+  const btn=document.getElementById('clBtn');
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> Analyse en cours…';}
+  try{
+    const r=await fetch(CLAUDE_WEBHOOK,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ticker:k,stock:{ticker:k,name:s.name,theme:s.theme,score:s.score,status:s.status,cap:s.cap,float:s.float,runway:s.runway,mom:s.mom,valo:s.valo,cat:s.cat,ins:s.ins,base:s.base,proj:s.proj,feed:s.feed}})});
+    const o=await r.json();
+    s.claude=o.claude;s.plan=o.plan;
+    try{localStorage.setItem('claude_'+k,JSON.stringify({claude:o.claude,plan:o.plan}));}catch(e){}
+    renderClaude(s);
+    if(btn)btn.innerHTML='<i class="ti ti-refresh"></i> Réanalyser';
+  }catch(e){if(btn)btn.innerHTML='<i class="ti ti-alert-triangle"></i> Échec — réessayer';}
+  finally{if(btn)btn.disabled=false;}
+}
+
 /* ---- STOCK DETAIL ---- */
 function openStock(k){CUR=k;const s=STOCKS[k];
  document.getElementById('dTk').textContent=k;
@@ -328,6 +401,9 @@ function openStock(k){CUR=k;const s=STOCKS[k];
  document.getElementById('dKv').innerHTML=[['Opportunity Score','<b style="color:'+(s.score>=80?'var(--green)':'var(--blue)')+'">'+s.score+'/100</b>'],['Statut',s.status],['Float',s.float],['Short %',s.short],['Cash runway',s.runway],['Momentum',s.mom],['Valorisation',s.valo],['Catalyseur',s.cat]].map(r=>'<div class="r"><span class="k">'+r[0]+'</span><span class="v">'+r[1]+'</span></div>').join('');
  document.getElementById('dProj').innerHTML=s.proj.map(p=>'<div class="scn"><span class="ar '+p[0]+'">'+(p[0]==='up'?'▲':p[0]==='down'?'▼':'→')+'</span>'+p[1]+(p[2]?' → <b class="'+p[0]+'">'+p[2]+'</b>':'')+'</div>').join('');
  document.getElementById('dFeed').innerHTML=s.feed.map(f=>'<div class="feed"><div class="tk">'+k+'</div><div><div class="hl"><span class="tag '+(f[0]==='424B5'?'tag-short':f[0]==='S-1'?'tag-neutral':'tag-blue')+'">'+f[0]+'</span> '+f[1]+'</div><div class="meta"><span><i class="ti ti-clock"></i>'+f[2]+'</span>'+(f[3]!=='—'?'<span class="edge"><i class="ti ti-bolt"></i>'+f[3]+'</span>':'')+'</div></div></div>').join('');
+ loadClaudeCache(k,s);
+ renderClaude(s);
+ var _clb=document.getElementById('clBtn'); if(_clb) _clb.innerHTML=(s.claude||s.plan)?'<i class="ti ti-refresh"></i> Réanalyser':'<i class="ti ti-sparkles"></i> Approfondir avec Claude';
  buildStockCharts();
  document.querySelectorAll('#oppBody tr').forEach(tr=>tr.classList.toggle('sel',tr.dataset.k===k));
  document.getElementById('detail').scrollIntoView({behavior:'smooth',block:'nearest'});
