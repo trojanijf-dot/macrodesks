@@ -10712,7 +10712,7 @@ function rDashPro(){
   // NB : dvFy (tous statuts) reste utilisé pour la conversion, les compteurs "émis", la
   // "Décomposition flux" et le graphe d'évolution — qui mesurent l'activité commerciale TOTALE.
   var _DV_COUNTED_STATUSES={'Envoyé':1,'Accepté':1,'Facturé':1};
-  var dvFyCounted=dvFy.filter(function(d){return _DV_COUNTED_STATUSES[d.status] && !d._hasRevisions;});
+  var dvFyCounted=dvFy.filter(function(d){return _DV_COUNTED_STATUSES[d.status] && !_dvIsSuperseded(d);});
   var totalDevisCounted=dvFyCounted.reduce(function(s,d){return s+devisTtc(d);},0);
   var totalFa=faFy.reduce(function(s,f){return s+factureMt(f);},0);
   // Encaissé : utilise factureEncaisse() qui regarde les versements en priorité
@@ -14099,7 +14099,7 @@ function _calcKpiDV(devis){
   // createDVRevision). Validé utilisateur : le KPI "Total devis" reflète ce sous-ensemble.
   // Le reste (Refusé/Obsolète/Cadre/Brouillon) reste visible dans la barre Pipeline et dans
   // le drilldown "Bookings" du Dashboard.
-  function _dvIsCounted(d){return (d.status==='Envoyé'||d.status==='Accepté'||d.status==='Facturé') && !d._hasRevisions;}
+  function _dvIsCounted(d){return (d.status==='Envoyé'||d.status==='Accepté'||d.status==='Facturé') && !_dvIsSuperseded(d);}
   var dvFyCounted=dvFy.filter(_dvIsCounted);
   var totalCounted=dvFyCounted.reduce(function(s,d){return s+ttc(d);},0);
   var countCounted=dvFyCounted.length;
@@ -14107,6 +14107,7 @@ function _calcKpiDV(devis){
   var statusMontant={Brouillon:0,Envoyé:0,Accepté:0,Refusé:0,Facturé:0,Cadre:0,Obsolète:0};
   dvFy.forEach(function(d){
     var st=d.status||'Brouillon';
+    if(_dvIsSuperseded(d)) st='Obsolète'; // une version remplacée par une révision = Obsolète (pipeline)
     if(statusCount[st]!==undefined){
       statusCount[st]++;
       statusMontant[st]+=ttc(d);
@@ -15678,11 +15679,12 @@ function renderDVPro(){
       // 3 cas spéciaux : "Remplacé par REVn" (parent qui a une REV), "Obsolète" (ghost), "Refusé" (rouge clair)
       var statusPillHtml='';
       var statusDateHtml='';
-      if(hasRevs){
-        // Parent avec REV → pill "Remplacé par REVn" cliquable
-        var lastRev=revisionsByParent[d.id][revisionsByParent[d.id].length-1];
-        var lastRevLabel=lastRev.rev||('REV'+(lastRev._revisionNumber||revisionsByParent[d.id].length));
-        statusPillHtml='<span onclick="event.stopPropagation();scrollToDVRev('+d.id+')" title="Aller à '+esc(lastRevLabel)+'" style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:10px;font-size:10.5px;font-weight:500;color:#854F0B;background:rgba(186,117,23,0.18);border:0.5px solid rgba(186,117,23,0.4);cursor:pointer;font-family:JetBrains Mono,monospace"><i class="ti ti-arrow-down-right" style="font-size:11px"></i>Remplacé par '+esc(lastRevLabel)+'</span>';
+      var _succ=_dvSuccessor(d);
+      if(_succ){
+        // CASCADE LINÉAIRE : remplacé par le SUCCESSEUR IMMÉDIAT (REV1→REV2, REV2→REV3),
+        // pas par la dernière révision de la famille.
+        var succLabel=_dvRevLabel(_succ);
+        statusPillHtml='<span onclick="event.stopPropagation();scrollToDVRev('+(_dvRootId(d))+')" title="Aller à '+esc(succLabel)+'" style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:10px;font-size:10.5px;font-weight:500;color:#854F0B;background:rgba(186,117,23,0.18);border:0.5px solid rgba(186,117,23,0.4);cursor:pointer;font-family:JetBrains Mono,monospace"><i class="ti ti-arrow-down-right" style="font-size:11px"></i>Remplacé par '+esc(succLabel)+'</span>';
       } else if(d.status==='Obsolète'){
         // Ghost outline + icône archive
         statusPillHtml='<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:10px;font-size:10.5px;font-weight:500;color:var(--muted-soft);border:0.5px solid var(--border);background:transparent"><i class="ti ti-archive" style="font-size:11px;opacity:0.7"></i>Obsolète</span>';
@@ -25246,6 +25248,42 @@ function scrollToDVRev(parentId){
 // - le parent racine du nouveau devis est : soit sourceDevisId si c'est une racine, soit le _parentDevisId du source
 // - on numérote la révision (1, 2, 3...) en regardant les révisions existantes du parent racine
 // - le devis parent racine passe à "Obsolète" (selon votre règle)
+// === CASCADE DES RÉVISIONS (modèle LINÉAIRE) =================================
+// Chaque version est remplacée par son SUCCESSEUR IMMÉDIAT (REV1→REV2, REV2→REV3),
+// pas par la dernière. La famille est identifiée par le N° de BASE (num sans suffixe
+// REVn, normalisé) → robuste aux 2 modèles (parent/enfant via _parentDevisId ET
+// "champ texte" rev='REVn' sans parent).
+function _dvRevNum(x){
+  if(!x) return 0;
+  var c=[0];
+  if(x._revisionNumber!=null){var a=Number(x._revisionNumber); if(!isNaN(a))c.push(a);}
+  if(x.rev){var b=parseInt(String(x.rev).replace(/\D/g,''),10); if(!isNaN(b))c.push(b);}
+  var mm=String(x.num||'').match(/REV\s*(\d+)\s*$/i); if(mm)c.push(parseInt(mm[1],10));
+  return Math.max.apply(null,c);
+}
+function _dvBaseNum(x){ return String((x&&x.num)||'').replace(/\s*REV\s*\d+\s*$/i,'').replace(/\s+/g,'').toUpperCase(); }
+// Successeur immédiat (révision juste au-dessus dans la même famille). null si dernière version.
+function _dvSuccessor(d){
+  if(!d) return null;
+  var base=_dvBaseNum(d), myRev=_dvRevNum(d), best=null, bestRev=Infinity;
+  (DB.devis||[]).forEach(function(x){
+    if(!x||x.id===d.id) return;
+    if(_dvBaseNum(x)!==base) return;
+    var r=_dvRevNum(x);
+    if(r>myRev && r<bestRev){ best=x; bestRev=r; }
+  });
+  return best;
+}
+// true si le devis a été remplacé par une révision ultérieure (→ ne compte plus / = obsolète).
+function _dvIsSuperseded(d){ return !!_dvSuccessor(d); }
+// Libellé "REVn" pour l'affichage "Remplacé par ...".
+function _dvRevLabel(x){
+  if(!x) return '';
+  if(x.rev && String(x.rev).trim()){ var s=String(x.rev).trim().toUpperCase(); return /^REV/.test(s)?s:'REV'+s; }
+  if(x._revisionNumber) return 'REV'+x._revisionNumber;
+  return 'REV'+_dvRevNum(x);
+}
+
 function createDVRevision(sourceDevisId){
   var source=DB.devis.find(function(x){return x.id===sourceDevisId;});
   if(!source){alert('Devis source introuvable');return;}
@@ -25286,7 +25324,7 @@ function createDVRevision(sourceDevisId){
               '→ Lignes copiées depuis : '+source.num+(source.rev?' '+source.rev:'')+'\n'+
               '→ Statut initial : Brouillon\n'+
               '→ Date : aujourd\'hui (modifiable)\n\n'+
-              '⚠️ Le devis parent ('+root.num+') passera en statut "Obsolète".\n\nConfirmer ?')){return;}
+              '⚠️ La version précédente ('+root.num+(source.rev?' '+source.rev:'')+') passera en "Obsolète".\n\nConfirmer ?')){return;}
   // Construction de la nouvelle révision
   var newId=Date.now();
   var newRev=JSON.parse(JSON.stringify(source)); // copie profonde
@@ -25324,11 +25362,13 @@ function createDVRevision(sourceDevisId){
       revisionCreatedAt:td()
     };
   }
-  // Marquer le parent racine comme révisé + passer en Obsolète
-  root._hasRevisions=true;
-  if(root.status!=='Obsolète'&&root.status!=='Cadre'){
-    root._previousStatus=root.status; // pour traçabilité
-    root.status='Obsolète';
+  // ⚠ CASCADE LINÉAIRE : c'est la version PRÉCÉDENTE (source = le devis qu'on révise) qui
+  // passe en Obsolète/remplacée, PAS la racine. Réviser REV2 → REV3 rend REV2 obsolète ;
+  // REV1 a déjà été passé en obsolète lors de la création de REV2.
+  source._hasRevisions=true;
+  if(source.status!=='Obsolète'&&source.status!=='Cadre'){
+    source._previousStatus=source.status; // pour traçabilité
+    source.status='Obsolète';
   }
   // Sauvegarder
   DB.devis.push(newRev);
@@ -25337,7 +25377,7 @@ function createDVRevision(sourceDevisId){
   if(typeof rDash==='function')rDash();
   // Notification
   alert('✅ Révision créée : '+root.num+' '+newRevLabel+'\n\n'+
-        'Le devis parent '+root.num+' a été passé en "Obsolète".\n'+
+        'La version précédente ('+root.num+(source.rev?' '+source.rev:'')+') est passée en "Obsolète".\n'+
         'La modale d\'édition va s\'ouvrir sur la nouvelle révision.');
   // Ouvrir directement la modale d'édition sur la nouvelle révision
   setTimeout(function(){openDV(newId);},250);
@@ -32506,6 +32546,7 @@ function _bookingsBreakdownTableHtml(items){
   var otherN=0,otherM=0;
   (items||[]).forEach(function(it){
     var st=(it.obj&&it.obj.status)||it.status||'Brouillon';
+    if(it.obj && typeof _dvIsSuperseded==='function' && _dvIsSuperseded(it.obj)) st='Obsolète'; // version remplacée = Obsolète
     if(g[st]){g[st].n++; g[st].m+=Number(it.montant)||0;}
     else {otherN++; otherM+=Number(it.montant)||0;}
   });
