@@ -10704,6 +10704,13 @@ function rDashPro(){
     return 0;
   }
   var totalDevis=dvFy.reduce(function(s,d){return s+devisTtc(d);},0);
+  // [2026-06-14] KPI "Devis" — montant restreint aux devis ACTIFS/GAGNÉS (validé utilisateur) :
+  // Envoyé + Accepté + Facturé. Exclus : Brouillon, Refusé, Obsolète, Cadre (faussaient le montant).
+  // NB : dvFy (tous statuts) reste utilisé pour la conversion, les compteurs "émis", la
+  // "Décomposition flux" et le graphe d'évolution — qui mesurent l'activité commerciale TOTALE.
+  var _DV_COUNTED_STATUSES={'Envoyé':1,'Accepté':1,'Facturé':1};
+  var dvFyCounted=dvFy.filter(function(d){return _DV_COUNTED_STATUSES[d.status];});
+  var totalDevisCounted=dvFyCounted.reduce(function(s,d){return s+devisTtc(d);},0);
   var totalFa=faFy.reduce(function(s,f){return s+factureMt(f);},0);
   // Encaissé : utilise factureEncaisse() qui regarde les versements en priorité
   var totalEnc=faFy.reduce(function(s,f){return s+factureEncaisse(f);},0);
@@ -10716,6 +10723,9 @@ function rDashPro(){
   // dateEnvoi est absent (cf signature getDateField||'date' avec fallback ds=d[field]||d.date).
   var faMonthly=getMonthlyTotals(faFy,factureMt,'dateEnvoi');
   var dvCum=getMonthlyCumulative(dvMonthly);
+  // Sparkline du KPI "Devis" : calculé sur le sous-ensemble compté (cohérent avec le montant).
+  var dvMonthlyCounted=getMonthlyTotals(dvFyCounted,devisTtc);
+  var dvCumCounted=getMonthlyCumulative(dvMonthlyCounted);
   var faCum=getMonthlyCumulative(faMonthly);
   // Encaissé mensuel : utilise les versements (chaque versement compte pour son mois)
   // Fallback : facture Payée sans versements ni dateEncaissement → ignorée du mensuel
@@ -10898,6 +10908,12 @@ function rDashPro(){
     var m=parseInt((d.date||'').substring(5,7),10)-1;
     if(m>=0&&m<=11) dvMonthlyCount[m]++;
   });
+  // Compteur mensuel restreint aux devis comptés (Envoyé/Accepté/Facturé) — tooltip sparkline KPI.
+  var dvMonthlyCountCounted=new Array(12).fill(0);
+  dvFyCounted.forEach(function(d){
+    var m=parseInt((d.date||'').substring(5,7),10)-1;
+    if(m>=0&&m<=11) dvMonthlyCountCounted[m]++;
+  });
   var faMonthlyCount=new Array(12).fill(0);
   faFy.forEach(function(f){
     // Cohérent avec _dashFactureYear ci-dessus : dateEnvoi en priorité,
@@ -10934,28 +10950,30 @@ function rDashPro(){
 
   // KPI Devis (sparkline interactive)
   var sparkDv=(typeof _interactiveSparkline==='function')?
-    _interactiveSparkline(dvCum,'#88aae0',dvMonthly,function(idx,monthlyV,cumV,months){
+    _interactiveSparkline(dvCumCounted,'#88aae0',dvMonthlyCounted,function(idx,monthlyV,cumV,months){
       return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
         '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Émis ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
-        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Devis</span><span class="num" data-money>'+(dvMonthlyCount[idx]||0)+'</span></div>'+
+        '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Devis</span><span class="num" data-money>'+(dvMonthlyCountCounted[idx]||0)+'</span></div>'+
         '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
     },'dash_dv'):
-    makeSparkline(dvCum,'#88aae0',true);
-  var devisHelp = 'DEVIS '+fy+' — Bookings (activité commerciale)\n\n'+
-    '= Somme TTC de tous les devis créés en '+fy+'.\n\n'+
+    makeSparkline(dvCumCounted,'#88aae0',true);
+  var devisHelp = 'DEVIS '+fy+' — devis actifs / gagnés\n\n'+
+    '= Somme TTC des devis '+fy+' au statut Envoyé, Accepté ou Facturé.\n\n'+
     'Inclus :\n'+
-    '• Tous statuts (Brouillon, Envoyé, Accepté, Refusé, Facturé)\n'+
-    '• Tous types (Fourniture, Prestation, Mixte)\n'+
-    '• Tous clients (SLN, PRNC, etc.)\n\n'+
-    'Lien métier :\n'+
-    'Ce chiffre ≠ Facturation à cause du décalage temporel\n'+
-    '(cycle Emerson 3-12 mois). Cf. carte "Décomposition flux".\n\n'+
-    'Conversion : '+dvFacturedCount+'/'+dvFy.length+' devis ont au moins une facture liée.';
+    '• Statuts Envoyé, Accepté, Facturé\n'+
+    '• Tous types (Fourniture, Prestation, Mixte) et clients\n\n'+
+    'Exclus (ne comptent pas dans le montant) :\n'+
+    '• Brouillon (pas encore envoyé)\n'+
+    '• Refusé, Obsolète (devis morts)\n'+
+    '• Cadre (accord-cadre)\n\n'+
+    'Note : l\'activité commerciale TOTALE (tous statuts) reste visible\n'+
+    'dans la carte "Décomposition flux" (Bookings).\n\n'+
+    'Conversion : '+dvFacturedCount+'/'+dvFy.length+' devis '+fy+' ont au moins une facture liée.';
   html+='<div class="kpi-pro kpi-blue" style="position:relative">'+
     dashHelpDot(devisHelp)+
     '<div class="kpi-label"><i class="ti ti-file-text"></i>Devis '+fy+'</div>'+
-    '<div class="kpi-value" data-money>'+fNloc(totalDevis)+'</div>'+
-    '<div class="kpi-sub">XPF · '+dvFy.length+' devis</div>'+
+    '<div class="kpi-value" data-money>'+fNloc(totalDevisCounted)+'</div>'+
+    '<div class="kpi-sub">XPF · '+dvFyCounted.length+' devis <span style="color:var(--muted-soft)">(Envoyé/Accepté/Facturé)</span></div>'+
     sparkDv+
     dashMetaLine('Bookings', '<span style="color:var(--text)">'+dvFacturedCount+'/'+dvFy.length+'</span> facturés <span style="color:var(--muted-soft)">('+conversionPct+'%)</span>')+
     '</div>';
