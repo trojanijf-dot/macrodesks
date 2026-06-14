@@ -25257,11 +25257,16 @@ function createDVRevision(sourceDevisId){
   //     - champ texte    : rev = "REV2"
   //     - REV dans le num : num = "PRNC-DV027 REV2"
   //   + gère les trous (révision supprimée) car on prend le MAX, pas un comptage.
+  // On prend le MAX de TOUS les indices disponibles (et pas seulement _revisionNumber) :
+  // l'ancien bug a pu stocker un _revisionNumber FAUX (ex: REV2 avec _revisionNumber=1).
+  // En prenant le max(_revisionNumber, n° dans "rev", n° dans le num), on est immunisé
+  // contre ce compteur corrompu → "REV2" compte toujours pour au moins 2.
   function _revNumOf(x){
-    if(x._revisionNumber!=null) return Number(x._revisionNumber)||0;
-    if(x.rev){ var n=parseInt(String(x.rev).replace(/\D/g,''),10); return isNaN(n)?0:n; }
-    var mm=String(x.num||'').match(/REV\s*(\d+)\s*$/i);
-    return mm?parseInt(mm[1],10):0;
+    var cand=[0];
+    if(x._revisionNumber!=null){ var a=Number(x._revisionNumber); if(!isNaN(a)) cand.push(a); }
+    if(x.rev){ var b=parseInt(String(x.rev).replace(/\D/g,''),10); if(!isNaN(b)) cand.push(b); }
+    var mm=String(x.num||'').match(/REV\s*(\d+)\s*$/i); if(mm) cand.push(parseInt(mm[1],10));
+    return Math.max.apply(null,cand);
   }
   function _baseNum(s){ return String(s||'').replace(/\s*REV\s*\d+\s*$/i,'').replace(/\s+/g,'').toUpperCase(); }
   var srcBase=_baseNum(source.num);
