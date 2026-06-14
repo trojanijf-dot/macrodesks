@@ -33360,8 +33360,11 @@ function _processDevisPdfFile(f, kind){
         if(typeof showBCSaveToast==='function'){
           showBCSaveToast('✓ PDF '+rmap.label+' attaché ('+(res.replaced?'remplacé':'ajouté')+')');
         }
-        // Auto-fill activé pour les 5 kinds : emerson, act, po_cali, bc_client, quote_emerson
-        return _autoFillFromAttachedPdf(bytes,kind);
+        // Auto-fill activé pour les 5 kinds : emerson, act, po_cali, bc_client, quote_emerson.
+        // force=true (validé utilisateur) : joindre/remplacer un PDF ÉCRASE toujours Réf+Date
+        // avec les valeurs extraites du nouveau document (le PDF fait foi). Si l'extraction
+        // échoue, on ne vide rien et on prévient (cf toast d'avertissement dans la fonction).
+        return _autoFillFromAttachedPdf(bytes,kind,true);
       });
     }).catch(function(err){
       console.error('storeDevisPdf failed:',err);
@@ -33600,7 +33603,12 @@ function _autoFillFromAttachedPdf(bytes,kind,force){
       console.warn('[PDF autofill]',kind,'→ Date extraite vide, rien à poser');
     }
     if(filled.length && typeof showBCSaveToast==='function'){
-      showBCSaveToast('✨ Auto-rempli depuis le PDF : '+filled.join(' + ')+(force?' (écrasé)':''));
+      showBCSaveToast('✨ '+filled.join(' + ')+' '+(filled.length>1?'mises à jour':'mise à jour')+' depuis le PDF');
+    } else if(force && !filled.length && typeof showBCSaveToast==='function'){
+      // Remplacement/jointure forcée mais l'extraction n'a rien donné (PDF illisible ou
+      // format inattendu) : on NE vide pas les champs, mais on prévient pour éviter une
+      // fausse confiance (l'utilisateur garde la main pour vérifier/corriger).
+      showBCSaveToast('⚠ Nouveau PDF joint, mais Réf/Date non lues automatiquement — à vérifier');
     }
   }).catch(function(err){
     // Silencieux : l'utilisateur a quand même son PDF joint
