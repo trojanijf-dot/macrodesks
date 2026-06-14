@@ -25250,9 +25250,27 @@ function createDVRevision(sourceDevisId){
   var rootId=source._parentDevisId||source.id;
   var root=DB.devis.find(function(x){return x.id===rootId;});
   if(!root){alert('Devis racine introuvable');return;}
-  // Compter les révisions existantes pour ce parent racine
-  var existingRevs=DB.devis.filter(function(x){return x._parentDevisId===rootId;});
-  var nextRevNum=existingRevs.length+1;
+  // Prochain numéro de révision = MAX des révisions déjà présentes dans la famille + 1.
+  // ⚠ Robuste aux 3 modèles de données qui cohabitent (sinon le compteur retombait à REV2
+  //   au lieu de REV3 quand la chaîne ne pointe pas toute vers la même racine) :
+  //     - parent/enfant : _revisionNumber
+  //     - champ texte    : rev = "REV2"
+  //     - REV dans le num : num = "PRNC-DV027 REV2"
+  //   + gère les trous (révision supprimée) car on prend le MAX, pas un comptage.
+  function _revNumOf(x){
+    if(x._revisionNumber!=null) return Number(x._revisionNumber)||0;
+    if(x.rev){ var n=parseInt(String(x.rev).replace(/\D/g,''),10); return isNaN(n)?0:n; }
+    var mm=String(x.num||'').match(/REV\s*(\d+)\s*$/i);
+    return mm?parseInt(mm[1],10):0;
+  }
+  function _baseNum(s){ return String(s||'').replace(/\s*REV\s*\d+\s*$/i,'').replace(/\s+/g,'').toUpperCase(); }
+  var srcBase=_baseNum(source.num);
+  var family=DB.devis.filter(function(x){
+    return _baseNum(x.num)===srcBase || x.id===rootId || x._parentDevisId===rootId;
+  });
+  var maxRev=_revNumOf(source);
+  family.forEach(function(x){ var n=_revNumOf(x); if(n>maxRev) maxRev=n; });
+  var nextRevNum=maxRev+1;
   var newRevLabel='REV'+nextRevNum;
   // Confirmation
   if(!confirm('🔄 Créer une révision du devis '+root.num+' ?\n\n'+
