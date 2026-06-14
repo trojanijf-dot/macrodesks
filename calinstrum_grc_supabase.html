@@ -4877,11 +4877,14 @@ function buildClientOptions(selectId, currentVal){
 function getClientPrefix(clientName){
   var raw=String(clientName||'').trim();
   if(!raw) return 'SLN';
-  var sep=raw.indexOf(' - ');
-  var pfx=sep>0?raw.substring(0,sep).trim():raw.trim();
-  // Si le préfixe contient des espaces (ex: "Sté X"), garder tel quel ; sinon
-  // l'utilisateur devra créer un client avec un nom sans espace en préfixe pour
-  // que la numérotation fonctionne (cohérent avec l'existant).
+  // Préfixe = ce qui précède le tiret séparateur "PREFIXE - Contact".
+  // ⚠ TOLÉRANT à l'espacement autour du tiret : on coupe dès qu'il y a un espace
+  //   d'AU MOINS un côté du tiret → gère "PRNC - X", "PRNC- X", "SLN -X" (tous → préfixe).
+  //   Le préfixe peut contenir des espaces (ex: "ENERCAL NEPOUI").
+  //   On NE coupe PAS un tiret collé sans aucun espace ("Jean-Pierre") pour ne pas casser
+  //   les noms composés → dans ce cas on garde le nom entier (séquence dédiée, comme avant).
+  var m=raw.match(/^(.+?)\s+-\s*\S/) || raw.match(/^(.+?)\s*-\s+\S/);
+  var pfx=m?m[1].trim():raw.trim();
   return pfx||'SLN';
 }
 
