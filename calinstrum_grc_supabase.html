@@ -10709,7 +10709,7 @@ function rDashPro(){
   // NB : dvFy (tous statuts) reste utilisé pour la conversion, les compteurs "émis", la
   // "Décomposition flux" et le graphe d'évolution — qui mesurent l'activité commerciale TOTALE.
   var _DV_COUNTED_STATUSES={'Envoyé':1,'Accepté':1,'Facturé':1};
-  var dvFyCounted=dvFy.filter(function(d){return _DV_COUNTED_STATUSES[d.status];});
+  var dvFyCounted=dvFy.filter(function(d){return _DV_COUNTED_STATUSES[d.status] && !d._hasRevisions;});
   var totalDevisCounted=dvFyCounted.reduce(function(s,d){return s+devisTtc(d);},0);
   var totalFa=faFy.reduce(function(s,f){return s+factureMt(f);},0);
   // Encaissé : utilise factureEncaisse() qui regarde les versements en priorité
@@ -11081,7 +11081,7 @@ function rDashPro(){
     '</div>';
   // 3 KPI inline — tous cliquables (drill-down)
   html+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px;padding-top:6px">';
-  html+='<div onclick="openDecompDrilldown(\'bookings\')" title="Cliquer pour voir la liste des devis émis" style="padding:10px 12px;background:rgba(125,211,252,0.06);border:0.5px solid rgba(125,211,252,0.2);border-radius:8px;cursor:pointer;transition:all .15s" onmouseover="this.style.background=\'rgba(125,211,252,0.12)\';this.style.borderColor=\'rgba(125,211,252,0.4)\'" onmouseout="this.style.background=\'rgba(125,211,252,0.06)\';this.style.borderColor=\'rgba(125,211,252,0.2)\'">'+
+  html+='<div onclick="openDecompDrilldown(\'bookings\')" title="Cliquer pour voir le détail par statut (compté vs hors total) + la liste des devis" style="padding:10px 12px;background:rgba(125,211,252,0.06);border:0.5px solid rgba(125,211,252,0.2);border-radius:8px;cursor:pointer;transition:all .15s" onmouseover="this.style.background=\'rgba(125,211,252,0.12)\';this.style.borderColor=\'rgba(125,211,252,0.4)\'" onmouseout="this.style.background=\'rgba(125,211,252,0.06)\';this.style.borderColor=\'rgba(125,211,252,0.2)\'">'+
     '<div style="font-size:10px;color:#7dd3fc;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">📈 Bookings · activité commerciale</div>'+
     '<div style="font-size:20px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums" data-money>'+fNloc(totalDevis)+' <span style="font-size:11px;color:var(--muted-soft);font-weight:400">XPF</span></div>'+
     '<div style="font-size:11px;color:var(--muted-soft);margin-top:2px">'+dvFy.length+' devis émis en '+fy+'</div>'+
@@ -14091,6 +14091,15 @@ function _calcKpiDV(devis){
   var dvFy=devis.filter(function(d){return fy(d)===currentY;});
   function ttc(d){return (typeof _getDevisTTC==='function'?_getDevisTTC(d):d.ttc)||0;}
   var total=dvFy.reduce(function(s,d){return s+ttc(d);},0);
+  // [2026-06-14] Total "comptabilisé" = devis actifs/gagnés : Envoyé + Accepté + Facturé,
+  // hors version remplacée par une révision (_hasRevisions — déjà passée en Obsolète par
+  // createDVRevision). Validé utilisateur : le KPI "Total devis" reflète ce sous-ensemble.
+  // Le reste (Refusé/Obsolète/Cadre/Brouillon) reste visible dans la barre Pipeline et dans
+  // le drilldown "Bookings" du Dashboard.
+  function _dvIsCounted(d){return (d.status==='Envoyé'||d.status==='Accepté'||d.status==='Facturé') && !d._hasRevisions;}
+  var dvFyCounted=dvFy.filter(_dvIsCounted);
+  var totalCounted=dvFyCounted.reduce(function(s,d){return s+ttc(d);},0);
+  var countCounted=dvFyCounted.length;
   var statusCount={Brouillon:0,Envoyé:0,Accepté:0,Refusé:0,Facturé:0,Cadre:0,Obsolète:0};
   var statusMontant={Brouillon:0,Envoyé:0,Accepté:0,Refusé:0,Facturé:0,Cadre:0,Obsolète:0};
   dvFy.forEach(function(d){
@@ -14166,6 +14175,8 @@ function _calcKpiDV(devis){
   var monthlyCount=new Array(12).fill(0);
   var monthlyAccepted=new Array(12).fill(0);
   var monthlyRev=new Array(12).fill(0);  // Nb de révisions par mois (pour sparkline taux rev)
+  var monthlyTotalCounted=new Array(12).fill(0); // sous-ensemble compté (Envoyé/Accepté/Facturé)
+  var monthlyCountCounted=new Array(12).fill(0);
   dvFy.forEach(function(d){
     var m=parseInt((d.date||'').substring(5,7),10)-1;
     if(m<0||m>11)return;
@@ -14173,11 +14184,17 @@ function _calcKpiDV(devis){
     monthlyCount[m]++;
     if(d.status==='Accepté'||d.status==='Facturé') monthlyAccepted[m]++;
     if(d._parentDevisId) monthlyRev[m]++;
+    if(_dvIsCounted(d)){ monthlyTotalCounted[m]+=ttc(d); monthlyCountCounted[m]++; }
   });
   function cum(arr){var o=[],s=0;arr.forEach(function(v){s+=v;o.push(s);});return o;}
   return {
     total:total,
     count:dvFy.length,
+    totalCounted:totalCounted,   // Envoyé+Accepté+Facturé hors révisions remplacées
+    countCounted:countCounted,
+    monthlyTotalCounted:monthlyTotalCounted,
+    monthlyCountCounted:monthlyCountCounted,
+    sparkTotalCounted:cum(monthlyTotalCounted),
     tauxAccept:tauxAccept,
     tauxGagnes:gagnes,        // [22/05/2026] nb devis gagnés (Accepté+Facturé)
     tauxTranches:pertinents,  // nb devis tranchés (gagnés+refusés) = base du taux
@@ -15244,8 +15261,8 @@ function renderDVPro(){
   html+='<div class="dvpro-toolbar" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">';
   html+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
     '<div style="font-size:13px;color:var(--muted);letter-spacing:0.04em" class="no-pm-blur">'+
-      '<span style="color:var(--text);font-weight:500" data-money>'+kpi.count+'</span> devis · '+
-      '<span class="num" style="color:var(--text)" data-money>'+fNloc(kpi.total)+' XPF</span> total émis'+
+      '<span style="color:var(--text);font-weight:500" data-money>'+kpi.countCounted+'</span> devis · '+
+      '<span class="num" style="color:var(--text)" data-money>'+fNloc(kpi.totalCounted)+' XPF</span> <span style="color:var(--muted-soft)">(Envoyé/Accepté/Facturé)</span>'+
     '</div>'+
     '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:10.5px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:0.05em">Année</span>'+_renderFiscalYearSelect('dv')+'</div>'+
     '</div>';
@@ -15267,9 +15284,9 @@ function renderDVPro(){
   // === 1. Total devis (avec crosshair sur sparkline) ===
   // Au survol : tooltip affiche "mois X : N devis émis · Y XPF"
   var sparkTotal=_interactiveSparkline(
-    kpi.sparkTotal, '#88aae0', kpi.monthlyTotal,
+    kpi.sparkTotalCounted, '#88aae0', kpi.monthlyTotalCounted,
     function(idx, monthlyV, cumulV, months){
-      var nMonth=kpi.monthlyCount[idx]||0;
+      var nMonth=kpi.monthlyCountCounted[idx]||0;
       return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy_+'</div>'+
         '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Émis ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
         '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Devis</span><span class="num" data-money>'+nMonth+'</span></div>'+
@@ -15279,8 +15296,8 @@ function renderDVPro(){
   );
   html+='<div class="kpi-pro kpi-blue">'+
     '<div class="kpi-label"><i class="ti ti-file-text"></i>Total devis '+fy_+'</div>'+
-    '<div class="kpi-value" data-money>'+fNloc(kpi.total)+'</div>'+
-    '<div class="kpi-sub">XPF · '+kpi.count+' devis</div>'+
+    '<div class="kpi-value" data-money>'+fNloc(kpi.totalCounted)+'</div>'+
+    '<div class="kpi-sub">XPF · '+kpi.countCounted+' devis <span style="color:var(--muted-soft)">(Envoyé/Accepté/Facturé)</span></div>'+
     sparkTotal+
     '</div>';
 
@@ -32446,6 +32463,57 @@ function openDecompDrilldown(mode){
   setTimeout(function(){if(searchEl)searchEl.focus();},80);
 }
 
+// Tableau de répartition par statut pour le drilldown "Bookings" (Dashboard) :
+// distingue ce qui est COMPTÉ dans le KPI Devis (Envoyé/Accepté/Facturé) du reste
+// (Refusé/Obsolète/Cadre/Brouillon — dont les révisions remplacées passées en Obsolète).
+function _bookingsBreakdownTableHtml(items){
+  var order=[
+    {s:'Envoyé',   label:'Envoyé (en attente client)',          color:'#88aae0', counted:true},
+    {s:'Accepté',  label:'Accepté',                             color:'#5dcaa5', counted:true},
+    {s:'Facturé',  label:'Facturé',                             color:'#a78bfa', counted:true},
+    {s:'Refusé',   label:'Refusé',                              color:'#f09595', counted:false},
+    {s:'Obsolète', label:'Obsolète (dont révisions remplacées)',color:'#a3a39a', counted:false},
+    {s:'Cadre',    label:'Cadre',                               color:'#fbbf24', counted:false},
+    {s:'Brouillon',label:'Brouillon',                           color:'#a3a39a', counted:false}
+  ];
+  var g={}; order.forEach(function(o){g[o.s]={n:0,m:0};});
+  var otherN=0,otherM=0;
+  (items||[]).forEach(function(it){
+    var st=(it.obj&&it.obj.status)||it.status||'Brouillon';
+    if(g[st]){g[st].n++; g[st].m+=Number(it.montant)||0;}
+    else {otherN++; otherM+=Number(it.montant)||0;}
+  });
+  function fN2(n){return Math.round(Number(n)||0).toLocaleString('fr-FR').replace(/ /g,' ');}
+  var compteN=0,compteM=0,horsN=otherN,horsM=otherM;
+  order.forEach(function(o){ if(o.counted){compteN+=g[o.s].n;compteM+=g[o.s].m;} else {horsN+=g[o.s].n;horsM+=g[o.s].m;} });
+  function row(o){
+    return '<tr style="border-bottom:0.5px solid var(--line)">'+
+      '<td style="padding:7px 10px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+o.color+';margin-right:8px"></span>'+o.label+'</td>'+
+      '<td style="padding:7px 10px;color:'+(o.counted?'#9ae6c4':'#f8b4b4')+';font-weight:600">'+(o.counted?'✓ compté':'✕ non')+'</td>'+
+      '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums">'+g[o.s].n+'</td>'+
+      '<td style="padding:7px 10px;text-align:right;font-variant-numeric:tabular-nums">'+fN2(g[o.s].m)+'</td></tr>';
+  }
+  function subRow(label,n,m,col,bg){
+    return '<tr style="background:'+bg+'">'+
+      '<td style="padding:8px 10px;font-weight:800;border-top:2px solid '+col+'">'+label+'</td>'+
+      '<td style="border-top:2px solid '+col+'"></td>'+
+      '<td style="padding:8px 10px;text-align:right;font-weight:800;border-top:2px solid '+col+'">'+n+'</td>'+
+      '<td style="padding:8px 10px;text-align:right;font-weight:800;border-top:2px solid '+col+'">'+fN2(m)+'</td></tr>';
+  }
+  var rowsTop='',rowsBot='';
+  order.forEach(function(o){ if(o.counted) rowsTop+=row(o); else rowsBot+=row(o); });
+  var th=function(t,r){return '<th style="padding:7px 10px;text-align:'+(r?'right':'left')+';color:var(--muted-soft);font-size:10.5px;text-transform:uppercase;letter-spacing:0.04em">'+t+'</th>';};
+  return '<div style="margin-bottom:12px;border:1px solid var(--line);border-radius:8px;overflow:hidden">'+
+    '<table style="width:100%;border-collapse:collapse;font-size:12.5px">'+
+    '<thead><tr style="background:rgba(255,255,255,0.03)">'+th('Statut')+th('Compté ?')+th('Nb',true)+th('Montant TTC',true)+'</tr></thead>'+
+    '<tbody>'+rowsTop+
+      subRow('= Total devis (compté)',compteN,compteM,'rgba(93,202,165,0.35)','rgba(93,202,165,0.07)')+
+      rowsBot+
+      subRow('= Hors total (pipeline / morts)',horsN,horsM,'rgba(240,149,149,0.3)','rgba(240,149,149,0.06)')+
+      subRow('Total général (tous statuts)',compteN+horsN,compteM+horsM,'var(--line)','rgba(255,255,255,0.02)')+
+    '</tbody></table></div>';
+}
+
 function _renderDecompDrillList(){
   var st=window._decompDrillState;
   if(!st) return;
@@ -32460,8 +32528,11 @@ function _renderDecompDrillList(){
   var filteredTotal=items.reduce(function(s,it){return s+it.montant;},0);
   var col=st.color;
   function fNloc(n){return Math.round(Number(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
-  // Bandeau total
-  totalEl.innerHTML='<div style="display:flex;justify-content:space-between;padding:8px 12px;background:rgba(255,255,255,0.02);border-left:2px solid '+col+';border-radius:0 6px 6px 0;margin-bottom:10px;font-size:12.5px">'+
+  // Bandeau total (+ tableau de répartition par statut pour le mode "bookings").
+  // Le tableau est calculé sur TOUS les items (st.items), pas la liste filtrée par recherche.
+  var breakdownHtml=(st.mode==='bookings')?_bookingsBreakdownTableHtml(st.items):'';
+  totalEl.innerHTML=breakdownHtml+
+    '<div style="display:flex;justify-content:space-between;padding:8px 12px;background:rgba(255,255,255,0.02);border-left:2px solid '+col+';border-radius:0 6px 6px 0;margin-bottom:10px;font-size:12.5px">'+
     '<span style="color:var(--muted-soft)">Total'+(search?' filtré':'')+'</span>'+
     '<span style="color:'+col+';font-weight:600;font-variant-numeric:tabular-nums">'+fNloc(filteredTotal)+' XPF · '+items.length+' '+(st.kind==='dv'?'devis':'factures')+'</span>'+
     '</div>';
