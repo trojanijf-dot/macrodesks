@@ -38,6 +38,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .row .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .row .srcbtn{flex:none;display:inline-flex;align-items:center;gap:4px;border:.5px solid rgba(136,170,224,.4);background:rgba(136,170,224,.09);color:var(--blue);border-radius:6px;padding:4px 8px;font-family:var(--mono);font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap}
 .row .srcbtn:hover{background:rgba(136,170,224,.18)}.row .srcbtn i{font-size:11px}
+.row input.rwout{width:118px;color:var(--green);background:#0c0f0c;border-color:rgba(93,202,165,.35);font-weight:700;cursor:not-allowed}
+.row label .fhint{color:var(--muted-soft);font-size:9px}
 .srctoast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:300;background:rgba(239,159,39,.13);color:var(--amber);border:.5px solid rgba(239,159,39,.4);border-radius:10px;padding:10px 16px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);display:flex;align-items:center;gap:9px;max-width:520px;line-height:1.4}
 .srctoast i{font-size:16px;flex:none}.srctoast b{color:#fff}
 .bg-tres{background:var(--green)}.bg-pot{background:var(--amber)}.bg-evit{background:var(--red)}.bg-na{background:var(--faint)}
@@ -92,7 +94,9 @@ const DIMS=[
  {key:'sur',name:'Survie',icon:'ti-shield-half',w:25,fields:[
    {id:'de',lab:'Debt / Equity',th:v=>isNaN(v)?null:(v<1?2:v<=2?1:0)},
    {id:'cr',lab:'Current Ratio',th:v=>isNaN(v)?null:(v>1.5?2:v>=1?1:0)},
-   {id:'rw',lab:'Cash runway (mois)',th:v=>isNaN(v)?null:(v>18?2:v>=6?1:0)} ]},
+   {id:'cash',lab:'Cash & équiv. (M$)',meta:'input'},
+   {id:'fcf',lab:'Free Cash Flow / an (M$)',hint:'— négatif = brûle',meta:'input'},
+   {id:'rw',lab:'Cash runway (mois)',meta:'computed',th:v=>isNaN(v)?null:(v>18?2:v>=6?1:0)} ]},
  {key:'sqz',name:'Squeeze / Accumul.',icon:'ti-flame',w:20,fields:[
    {id:'fl',lab:'Float (M)',th:v=>isNaN(v)?null:(v<20?2:v<=50?1:0)},
    {id:'sh',lab:'Short Float %',th:v=>isNaN(v)?null:(v>15?2:v>=8?1:0)},
@@ -100,7 +104,8 @@ const DIMS=[
 ];
 // sources des 4 champs manuels (bouton ↗ → ouvre la page du ticker en cours, nouvel onglet)
 const SRC={
- rw:{lab:'StockAnalysis',url:t=>'https://stockanalysis.com/stocks/'+t+'/financials/',home:'https://stockanalysis.com/'},
+ cash:{lab:'Balance Sheet',url:t=>'https://stockanalysis.com/stocks/'+t+'/financials/balance-sheet/',home:'https://stockanalysis.com/'},
+ fcf:{lab:'Income',url:t=>'https://stockanalysis.com/stocks/'+t+'/financials/',home:'https://stockanalysis.com/'},
  fl:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t,home:'https://finviz.com/'},
  sh:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t,home:'https://finviz.com/'},
  ins:{lab:'OpenInsider',url:t=>'http://openinsider.com/'+t,home:'http://openinsider.com/'},
@@ -111,7 +116,16 @@ function openSrc(id){const s=SRC[id];if(!s)return;const t=($('tk').value||'').tr
  if(!t){srcToast('Renseigne d\'abord un <b>ticker</b> dans le champ en haut.');return;}
  if(DEMO_TK.indexOf(t)>=0){srcToast('« <b>'+t+'</b> » est un ticker démo — tape un vrai ticker (OKLO, RCAT…) avant d\'ouvrir une source.');return;}
  window.open(s.url(t),'_blank','noopener');}
-$('dims').innerHTML=DIMS.map(d=>`<div class="dim"><h3><i class="ti ${d.icon}"></i>${d.name}<span class="dw">poids ${d.w}%</span></h3><div class="dscore"><i id="ds_${d.key}"></i></div>${d.fields.map(f=>`<div class="row"><label>${f.lab}</label><input id="f_${f.id}" type="number" step="any"><span class="dot bg-na" id="dot_${f.id}"></span>${SRC[f.id]?`<button type="button" class="srcbtn" title="Ouvrir ${SRC[f.id].lab} pour ce ticker (nouvel onglet)" onclick="openSrc('${f.id}')"><i class="ti ti-external-link"></i>${SRC[f.id].lab}</button>`:''}</div>`).join('')}</div>`).join('');
+// Cash runway = résultat auto de Cash & FCF (saisis à la main)
+function recomputeRunway(){var c=num($('f_cash').value),f=num($('f_fcf').value),o=$('f_rw');if(!o)return;
+ if(isNaN(c)||isNaN(f))o.value='';else if(f>=0)o.value='∞ · rentable';else o.value=Math.round(c*12/(-f))+' mois';
+ calc();}
+function srcBtn(f){return SRC[f.id]?`<button type="button" class="srcbtn" title="Ouvrir ${SRC[f.id].lab} pour ce ticker (nouvel onglet)" onclick="openSrc('${f.id}')"><i class="ti ti-external-link"></i>${SRC[f.id].lab}</button>`:'';}
+function fieldHtml(f){var lab=`<label>${f.lab}${f.hint?` <span class="fhint">${f.hint}</span>`:''}</label>`;
+ if(f.meta==='input')return `<div class="row">${lab}<input id="f_${f.id}" type="number" step="any" inputmode="decimal">${srcBtn(f)}</div>`;
+ if(f.meta==='computed')return `<div class="row"><label><i class="ti ti-calculator" style="font-size:12px;vertical-align:-2px"></i> ${f.lab} <span class="fhint">auto</span></label><input id="f_${f.id}" type="text" class="rwout" readonly><span class="dot bg-na" id="dot_${f.id}"></span></div>`;
+ return `<div class="row">${lab}<input id="f_${f.id}" type="number" step="any"><span class="dot bg-na" id="dot_${f.id}"></span>${srcBtn(f)}</div>`;}
+$('dims').innerHTML=DIMS.map(d=>`<div class="dim"><h3><i class="ti ${d.icon}"></i>${d.name}<span class="dw">poids ${d.w}%</span></h3><div class="dscore"><i id="ds_${d.key}"></i></div>${d.fields.map(fieldHtml).join('')}</div>`).join('');
 const PRESETS={
  aapl:{pe:37.65,ps:10.13,pb:42.87,revg:12.76,epsg:28.91,peg:2.58,roe:141.47,roic:67.76,nm:27.15,de:0.80,cr:1.07,rw:'',fl:14670,sh:0.95,ins:0},
  xmet:{pe:12,ps:1.4,pb:1.6,revg:35,epsg:40,peg:0.7,roe:22,roic:14,nm:15,de:0.4,cr:2.1,rw:'',fl:25,sh:18,ins:1},
@@ -136,7 +150,7 @@ async function loadFinnhub(){
 function calc(){
  let wTot=0,wScore=0,filled=0;const reasons=[];
  DIMS.forEach(d=>{let pts=0,cnt=0;
-  d.fields.forEach(f=>{const v=num($('f_'+f.id).value);let lvl=$('f_'+f.id).value===''?'na':f.th(v);if(lvl==null)lvl='na';$('dot_'+f.id).className='dot '+LVL[lvl][1];if(lvl!=='na'){pts+=lvl;cnt++;}});
+  d.fields.forEach(f=>{if(f.meta==='input')return;const raw=$('f_'+f.id).value;const v=(raw.indexOf('∞')>=0)?Infinity:num(raw);let lvl=raw===''?'na':f.th(v);if(lvl==null)lvl='na';$('dot_'+f.id).className='dot '+LVL[lvl][1];if(lvl!=='na'){pts+=lvl;cnt++;}});
   const ds=cnt?(pts/cnt/2*100):null;const bar=$('ds_'+d.key);
   if(ds==null){bar.style.width='0%';bar.style.background='var(--faint)';}else{bar.style.width=ds.toFixed(0)+'%';bar.style.background=ds>=70?'var(--green)':ds>=45?'var(--amber)':'var(--red)';}
   if(ds!=null){wTot+=d.w;wScore+=ds*d.w;filled++;if(ds<45)reasons.push(d.name.toLowerCase());}});
@@ -159,7 +173,7 @@ function saveVerdict(lvl,score,filled,wTot){
   all[tk]={lvl:lvl,score:score,at:new Date().toISOString(),filled:filled};
   localStorage.setItem('mk_validations',JSON.stringify(all));}catch(e){}
 }
-DIMS.forEach(d=>d.fields.forEach(f=>$('f_'+f.id).addEventListener('input',calc)));
+DIMS.forEach(d=>d.fields.forEach(f=>{var el=$('f_'+f.id);if(!el)return;if(f.meta==='input')el.addEventListener('input',recomputeRunway);else if(f.meta!=='computed')el.addEventListener('input',calc);}));
 $('key').value=localStorage.getItem('fh_key')||'';
 // deeplink depuis le Radar : validateur.html?tk=OKLO -> pré-remplit le ticker
 (function(){var dl=(new URLSearchParams(location.search).get('tk')||'').trim().toUpperCase();
