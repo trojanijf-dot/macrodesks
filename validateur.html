@@ -143,7 +143,12 @@ async function loadFinnhub(){
   const pick=(...ks)=>{for(const k of ks){if(m[k]!=null)return m[k];}return '';};
   const map={pe:pick('peTTM','peExclExtraTTM','peAnnual'),ps:pick('psTTM','psAnnual'),pb:pick('pbAnnual','pbQuarterly'),revg:pick('revenueGrowthTTMYoy','revenueGrowthQuarterlyYoy'),epsg:pick('epsGrowthTTMYoy','epsGrowthQuarterlyYoy'),peg:pick('pegTTM'),roe:pick('roeTTM','roeRfy'),roic:pick('roiTTM','roicTTM'),nm:pick('netProfitMarginTTM','netMarginTTM'),de:pick('totalDebt/totalEquityQuarterly','totalDebt/totalEquityAnnual','longTermDebt/equityQuarterly'),cr:pick('currentRatioQuarterly','currentRatioAnnual')};
   for(const k in map)$('f_'+k).value=map[k];
-  $('status').innerHTML='<span class="tres">Finnhub OK</span> — '+tk+' rempli. ⚠️ Float/Short/Insiders à compléter (EDGAR/Finviz).';
+  var nFilled=Object.keys(map).filter(function(k){return map[k]!==''&&map[k]!=null;}).length;
+  if(nFilled===0){
+    $('status').innerHTML='<span class="evit">Finnhub n\'a aucun fondamental pour '+tk+'</span> — titre pré-revenu ou non couvert. Remplis Survie + Squeeze à la main (boutons ↗) ; ce n\'est pas un cas « fondamental ».';
+  } else {
+    $('status').innerHTML='<span class="tres">Finnhub OK</span> — '+tk+' : '+nFilled+'/11 champ(s) auto rempli(s). ⚠️ Complète Cash/FCF + Float/Short/Insiders (boutons ↗).';
+  }
   calc();
  }catch(e){$('status').innerHTML='<span class="evit">Échec fetch Finnhub : '+e.message+'</span>';}
 }
