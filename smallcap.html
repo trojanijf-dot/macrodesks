@@ -30,6 +30,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .fresh-lbl{font-family:var(--mono);font-size:9.5px;color:var(--muted-soft);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .fresh-lbl .fdot{width:6px;height:6px;border-radius:50%;background:var(--green)}
 .spin{animation:mspin 1s linear infinite}@keyframes mspin{to{transform:rotate(360deg)}}
+.wait-zone{display:none;align-items:center;gap:13px;background:linear-gradient(120deg,rgba(136,170,224,.12),rgba(136,170,224,.02));border:.5px solid rgba(136,170,224,.32);border-radius:11px;padding:12px 15px;margin-top:8px;flex-wrap:wrap}
+.wait-zone .wic{font-size:20px;color:var(--blue)}
+.wait-zone .wtx{flex:1;min-width:240px;font-size:11.5px;color:var(--muted);line-height:1.5}.wait-zone .wtx b{color:var(--text)}
+.wait-zone .wcount{font-family:var(--mono);color:var(--blue);font-weight:700}
+.wait-zone .wchips{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+.wait-zone .wchip{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--blue);background:rgba(136,170,224,.14);border:.5px solid rgba(136,170,224,.32);border-radius:6px;padding:2px 8px}
+.wait-zone .wlink{font-size:11px;color:var(--blue);text-decoration:none;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;align-self:flex-start;margin-top:2px}
+.wait-zone .wlink:hover{text-decoration:underline}
 .uv-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
 .uv-modal{background:var(--bg2);border:.5px solid var(--border-2);border-radius:14px;padding:18px 20px;max-width:740px;width:100%;max-height:88vh;overflow:auto;position:relative}
 .uv-modal h2{font-size:15px;font-weight:800;color:#fff;display:flex;align-items:center;gap:9px;margin-bottom:3px}.uv-modal h2 i{color:var(--green)}
@@ -230,6 +238,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
     <tbody id="oppBody"></tbody>
   </table>
 </div></div>
+
+<!-- ZONE : titres de la watchlist pas encore au Radar (watchlist − scorés) -->
+<div class="wait-zone" id="waitZone"></div>
 
 <!-- STOCK DETAIL -->
 <div class="stitle"><i class="ti ti-chart-candle"></i>Analyse du titre <span class="s2">— graphique multi-TF + crosshair + RVOL + scénarios</span></div>
@@ -569,10 +580,27 @@ function updateFresh(){ var el=document.getElementById('freshLbl'); if(!el)retur
   el.innerHTML='<span class="fdot"></span>maj '+hh+' · '+rel;
 }
 async function refreshData(btn){ var ic=btn&&btn.querySelector('i'); if(ic)ic.classList.add('spin'); if(btn)btn.style.opacity='.7';
-  await loadReal(); updateFresh();
+  await loadReal(); await loadWatchlist(); updateFresh();
   if(ic)ic.classList.remove('spin'); if(btn)btn.style.opacity='';
 }
 setInterval(updateFresh,60000);
+/* ---- zone "Pas encore au Radar" : tickers watchlist absents du tableau scoré ---- */
+let WATCH=null;
+async function loadWatchlist(){ try{ const r=await fetch('data/watchlist.json',{cache:'no-store'}); if(!r.ok)throw new Error('HTTP '+r.status);
+    const w=await r.json(); var s=new Set(); var th=w.themes||{};
+    Object.keys(th).forEach(function(k){ (th[k]||[]).forEach(function(t){ if(t)s.add(String(t).toUpperCase()); }); });
+    WATCH=s; renderWait(); console.info('[smallcap] watchlist.json chargé ('+s.size+' tickers univers)'); }
+  catch(e){ WATCH=null; renderWait(); console.warn('[smallcap] watchlist.json indisponible (zone En attente masquée) :',e.message); } }
+function renderWait(){ var el=document.getElementById('waitZone'); if(!el)return;
+  if(!WATCH||!WATCH.size){ el.style.display='none'; el.innerHTML=''; return; }
+  var scored={}; Object.keys(STOCKS).forEach(function(k){ scored[k.toUpperCase()]=1; });
+  var pend=[]; WATCH.forEach(function(t){ if(!scored[t]) pend.push(t); }); pend.sort();
+  if(!pend.length){ el.style.display='none'; el.innerHTML=''; return; }
+  var chips=pend.map(function(t){ return '<span class="wchip">'+t+'</span>'; }).join('');
+  el.innerHTML='<i class="ti ti-clock-hour-4 wic"></i>'
+    +'<div class="wtx"><b>⏳ Pas encore au Radar</b> <span class="wcount">· '+pend.length+' titre'+(pend.length>1?'s':'')+'</span> — dans ta watchlist mais <b>pas encore scorés</b> : soit ajoutés récemment (classés au prochain run), soit en attente de données FMP (IPO fraîche). Ils montent dans le tableau dès que le pipeline les couvre.<div class="wchips">'+chips+'</div></div>'
+    +'<a class="wlink" href="decouvertes.html"><i class="ti ti-external-link"></i> Voir dans Découvertes</a>';
+  el.style.display='flex'; }
 /* ---- gestionnaire d'univers (watchlist) : panneau + suppression + hygiène ---- */
 let RUNDATE='';
 function trackEvit(){ var KEY='mk_evit',m={}; try{m=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){}
@@ -606,11 +634,11 @@ function renderUniv(){
   document.getElementById('uv-count').textContent = '· '+ks.length+' titres';
 }
 async function removeOne(k){ var url=localStorage.getItem('mk_webhook')||''; if(!url){ univToast('Configure l\'URL webhook (Découvertes → ⚙ Webhook)',false); return false; }
-  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'remove',ticker:k})}); delete STOCKS[k]; return true; }
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'remove',ticker:k})}); delete STOCKS[k]; if(WATCH)WATCH.delete(String(k).toUpperCase()); return true; }
   catch(e){ univToast('Erreur : '+e.message+' (CORS ? URL prod ?)',false); return false; }
 }
-async function removeTicker(k){ if(await removeOne(k)){ renderUniv(); renderTable(); univToast(k+' retiré · disparaît du Radar au prochain run'); } }
-async function removeMany(){ var list=staleList(),n=0; for(var i=0;i<list.length;i++){ if(await removeOne(list[i])) n++; } renderUniv(); renderTable(); if(n) univToast(n+' titre(s) retiré(s) · prochain run'); }
+async function removeTicker(k){ if(await removeOne(k)){ renderUniv(); renderTable(); renderWait(); univToast(k+' retiré · disparaît du Radar au prochain run'); } }
+async function removeMany(){ var list=staleList(),n=0; for(var i=0;i<list.length;i++){ if(await removeOne(list[i])) n++; } renderUniv(); renderTable(); renderWait(); if(n) univToast(n+' titre(s) retiré(s) · prochain run'); }
 document.body.insertAdjacentHTML('beforeend','<div class="uv-overlay" id="uv-overlay"><div class="uv-modal"><button class="x" onclick="closeUniv()">&times;</button><h2><i class="ti ti-adjustments"></i>Mon univers <span style="font-size:11px;color:var(--muted-soft);font-weight:500" id="uv-count"></span></h2><div class="uv-sub">Gère ta watchlist : retire les titres dont la thèse est cassée (🗑). Le robot signale le <b style="color:var(--amber)">poids mort</b> (ÉVITER périmé ≥14j). Retrait via le webhook watchlist → effectif au prochain run.</div><div id="uv-body"></div></div></div>');
 document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeUniv(); });
 /* ---- data loader : smallcap.json sinon DEMO inline ---- */
@@ -623,7 +651,7 @@ function applyData(D){
  if(D.kpi)renderKpi(D.kpi);
  if(D.ipoLockup)renderIpo(D.ipoLockup);
  const badge=document.querySelector('.hero .badge');if(badge)badge.innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>v2 · LIVE JSON'+(D.generatedAt?' · '+new Date(D.generatedAt).toLocaleDateString('fr-FR'):'');
- FILTER='all';RUNDATE=(D.generatedAt||'').slice(0,10)||new Date().toISOString().slice(0,10);LASTGEN=D.generatedAt||'';trackMomentum();trackEvit();renderTop();renderLegend();renderDonut();renderTable();updateFresh();
+ FILTER='all';RUNDATE=(D.generatedAt||'').slice(0,10)||new Date().toISOString().slice(0,10);LASTGEN=D.generatedAt||'';trackMomentum();trackEvit();renderTop();renderLegend();renderDonut();renderTable();updateFresh();renderWait();
  openStock(Object.keys(STOCKS)[0]);}
 async function loadReal(){try{const r=await fetch('data/smallcap.json',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const D=await r.json();applyData(D);console.info('[smallcap] data/smallcap.json chargé ('+Object.keys(D.stocks||{}).length+' titres)');}catch(e){console.warn('[smallcap] data/smallcap.json indisponible → DEMO inline (normal en file://) :',e.message);}}
 
@@ -645,6 +673,7 @@ function handleDeepLink(){try{
     radarToast('⚠️ <b>'+tk+'</b> n\'est pas encore dans ton univers Radar. Ajoute-le à la watchlist (Découvertes ➕) — il sera scoré au prochain run.');}
 }catch(e){}}
 loadReal().then(handleDeepLink);
+loadWatchlist();
 </script>
 
 <!-- PWA service worker -->
