@@ -38,6 +38,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .row .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .row .srcbtn{flex:none;display:inline-flex;align-items:center;gap:4px;border:.5px solid rgba(136,170,224,.4);background:rgba(136,170,224,.09);color:var(--blue);border-radius:6px;padding:4px 8px;font-family:var(--mono);font-size:9px;font-weight:700;cursor:pointer;white-space:nowrap}
 .row .srcbtn:hover{background:rgba(136,170,224,.18)}.row .srcbtn i{font-size:11px}
+.srctoast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:300;background:rgba(239,159,39,.13);color:var(--amber);border:.5px solid rgba(239,159,39,.4);border-radius:10px;padding:10px 16px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);display:flex;align-items:center;gap:9px;max-width:520px;line-height:1.4}
+.srctoast i{font-size:16px;flex:none}.srctoast b{color:#fff}
 .bg-tres{background:var(--green)}.bg-pot{background:var(--amber)}.bg-evit{background:var(--red)}.bg-na{background:var(--faint)}
 .tres{color:var(--green)}.pot{color:var(--amber)}.evit{color:var(--red)}.na{color:var(--muted-soft)}
 .verdict{margin-top:16px;border-radius:13px;padding:18px 22px;border:.5px solid var(--border-2);display:flex;align-items:center;gap:20px}
@@ -103,7 +105,12 @@ const SRC={
  sh:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t,home:'https://finviz.com/'},
  ins:{lab:'OpenInsider',url:t=>'http://openinsider.com/'+t,home:'http://openinsider.com/'},
 };
-function openSrc(id){const s=SRC[id];if(!s)return;const t=($('tk').value||'').trim().toUpperCase();window.open(t?s.url(t):s.home,'_blank','noopener');}
+const DEMO_TK=['XMET','XBIO']; // presets synthétiques (pas de vraie cote)
+function srcToast(msg){var el=$('srcToast');if(!el){el=document.createElement('div');el.id='srcToast';el.className='srctoast';document.body.appendChild(el);}el.innerHTML='<i class="ti ti-alert-triangle"></i><span>'+msg+'</span>';clearTimeout(el._t);el._t=setTimeout(function(){el.remove();},4200);}
+function openSrc(id){const s=SRC[id];if(!s)return;const t=($('tk').value||'').trim().toUpperCase();
+ if(!t){srcToast('Renseigne d\'abord un <b>ticker</b> dans le champ en haut.');return;}
+ if(DEMO_TK.indexOf(t)>=0){srcToast('« <b>'+t+'</b> » est un ticker démo — tape un vrai ticker (OKLO, RCAT…) avant d\'ouvrir une source.');return;}
+ window.open(s.url(t),'_blank','noopener');}
 $('dims').innerHTML=DIMS.map(d=>`<div class="dim"><h3><i class="ti ${d.icon}"></i>${d.name}<span class="dw">poids ${d.w}%</span></h3><div class="dscore"><i id="ds_${d.key}"></i></div>${d.fields.map(f=>`<div class="row"><label>${f.lab}</label><input id="f_${f.id}" type="number" step="any"><span class="dot bg-na" id="dot_${f.id}"></span>${SRC[f.id]?`<button type="button" class="srcbtn" title="Ouvrir ${SRC[f.id].lab} pour ce ticker (nouvel onglet)" onclick="openSrc('${f.id}')"><i class="ti ti-external-link"></i>${SRC[f.id].lab}</button>`:''}</div>`).join('')}</div>`).join('');
 const PRESETS={
  aapl:{pe:37.65,ps:10.13,pb:42.87,revg:12.76,epsg:28.91,peg:2.58,roe:141.47,roic:67.76,nm:27.15,de:0.80,cr:1.07,rw:'',fl:14670,sh:0.95,ins:0},
