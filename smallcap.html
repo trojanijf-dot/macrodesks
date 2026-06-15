@@ -172,8 +172,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .topnav a.active{color:var(--blue);border-bottom-color:var(--blue)}
 /* ---- Analyse Claude + Plan de trade ---- */
 #dClaude{margin-top:14px}#dClaude:empty{display:none}
-.cl-act{margin-top:14px}
+.cl-act{margin-top:14px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .cl-btn{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;padding:9px 14px;border-radius:8px;cursor:pointer;color:var(--green);background:var(--bg3);border:1px solid var(--green)}
+.cl-btn.val{color:var(--blue);border-color:var(--blue)}
+.valpill{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;font-weight:700;padding:4px 9px;border-radius:6px}
+.valpill.tres{background:rgba(93,202,165,.14);color:var(--green)}.valpill.pot{background:rgba(239,159,39,.13);color:var(--amber)}.valpill.evit{background:rgba(240,149,149,.13);color:var(--red)}.valpill.none{background:var(--bg4);color:var(--muted-soft)}.valpill.old{background:rgba(136,170,224,.12);color:var(--blue)}
 .cl-btn[disabled]{opacity:.6;cursor:wait;color:var(--muted);border-color:var(--border)}
 .cl-card{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg3)}.cl-card+.cl-card{margin-top:10px}
 .cl-h{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border)}
@@ -270,7 +273,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
       <div id="dFeed"></div>
     </div>
   </div>
-  <div class="cl-act"><button id="clBtn" class="cl-btn" onclick="approfondir(CUR)"><i class="ti ti-sparkles"></i> Approfondir avec Claude</button></div>
+  <div class="cl-act"><button id="clBtn" class="cl-btn" onclick="approfondir(CUR)"><i class="ti ti-sparkles"></i> Approfondir avec Claude</button><button id="valBtn" class="cl-btn val" onclick="validerTicker()" title="Ouvrir le Validateur fondamental sur ce titre"><i class="ti ti-shield-check"></i> Valider avant position</button><span id="valPill"></span></div>
   <div id="dClaude"></div>
 </div>
 
@@ -419,9 +422,23 @@ function openStock(k){CUR=k;const s=STOCKS[k];
  loadClaudeCache(k,s);
  renderClaude(s);
  var _clb=document.getElementById('clBtn'); if(_clb) _clb.innerHTML=(s.claude||s.plan)?'<i class="ti ti-refresh"></i> Réanalyser':'<i class="ti ti-sparkles"></i> Approfondir avec Claude';
+ renderValPill(k);
  buildStockCharts();
  document.querySelectorAll('#oppBody tr').forEach(tr=>tr.classList.toggle('sel',tr.dataset.k===k));
  document.getElementById('detail').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+/* ---- pare-feu Validateur : deeplink + pastille du verdict connu ---- */
+function validerTicker(){ if(!CUR)return; location.href='validateur.html?tk='+encodeURIComponent(CUR); }
+function renderValPill(tk){ var el=document.getElementById('valPill'); if(!el)return;
+ var v=null; try{v=(JSON.parse(localStorage.getItem('mk_validations')||'{}'))[String(tk).toUpperCase()];}catch(e){}
+ if(!v){ el.className='valpill none'; el.innerHTML='<i class="ti ti-shield-off"></i> non validé'; return; }
+ var VL={tres:'Très potentiel',pot:'Potentiel',evit:'Éviter'};
+ var stale=v.at&&(Date.now()-new Date(v.at).getTime())>14*86400000;
+ var cls=(v.lvl==='evit')?'evit':(stale?'old':v.lvl);
+ var ic=(v.lvl==='evit')?'ti-shield-x':(v.lvl==='tres'?'ti-shield-check':'ti-shield-half');
+ var d=v.at?new Date(v.at):null, ds=d?(String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')):'';
+ el.className='valpill '+cls;
+ el.innerHTML='<i class="ti '+ic+'"></i> '+(VL[v.lvl]||v.lvl)+' · '+v.score+(ds?' · '+ds:'')+((stale&&v.lvl!=='evit')?' · ancien':'');
 }
 /* ===== moteur charts mix ===== */
 const CC={blue:css('--blue'),green:css('--green'),red:css('--red'),amber:css('--amber'),border:css('--border'),muted:css('--muted-soft'),faint:css('--faint')};

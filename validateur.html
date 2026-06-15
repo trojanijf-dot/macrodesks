@@ -134,12 +134,12 @@ async function loadFinnhub(){
  }catch(e){$('status').innerHTML='<span class="evit">Échec fetch Finnhub : '+e.message+'</span>';}
 }
 function calc(){
- let wTot=0,wScore=0;const reasons=[];
+ let wTot=0,wScore=0,filled=0;const reasons=[];
  DIMS.forEach(d=>{let pts=0,cnt=0;
   d.fields.forEach(f=>{const v=num($('f_'+f.id).value);let lvl=$('f_'+f.id).value===''?'na':f.th(v);if(lvl==null)lvl='na';$('dot_'+f.id).className='dot '+LVL[lvl][1];if(lvl!=='na'){pts+=lvl;cnt++;}});
   const ds=cnt?(pts/cnt/2*100):null;const bar=$('ds_'+d.key);
   if(ds==null){bar.style.width='0%';bar.style.background='var(--faint)';}else{bar.style.width=ds.toFixed(0)+'%';bar.style.background=ds>=70?'var(--green)':ds>=45?'var(--amber)':'var(--red)';}
-  if(ds!=null){wTot+=d.w;wScore+=ds*d.w;if(ds<45)reasons.push(d.name.toLowerCase());}});
+  if(ds!=null){wTot+=d.w;wScore+=ds*d.w;filled++;if(ds<45)reasons.push(d.name.toLowerCase());}});
  const overall=wTot?wScore/wTot:0;
  const pe=num($('f_pe').value),roe=num($('f_roe').value);const nonProfit=(pe<=0)||(roe<0);
  let lvlTxt,cv,expl;
@@ -149,10 +149,25 @@ function calc(){
  if(nonProfit)expl+=' ⚠️ Non rentable → Valeur/Qualité peu fiables : le verdict repose surtout sur Survie + Squeeze + catalyseur.';
  const col=overall>=70?'var(--green)':overall>=45?'var(--amber)':'var(--red)';
  $('verdict').innerHTML=`<div class="big ${cv}">${lvlTxt}</div><div class="meter"><div class="bar"><i style="width:${overall.toFixed(0)}%;background:${col}"></i></div><div class="expl"><span class="pct">${overall.toFixed(0)}/100</span> &nbsp;·&nbsp; ${expl}</div></div>`;
+ saveVerdict(cv,Math.round(overall),filled,wTot);
+}
+// enregistre le verdict partagé (lu par le pare-feu du Moniteur) — pas pour ticker vide/démo
+function saveVerdict(lvl,score,filled,wTot){
+ const tk=($('tk').value||'').trim().toUpperCase();
+ if(!tk||DEMO_TK.indexOf(tk)>=0||!wTot)return;
+ try{const all=JSON.parse(localStorage.getItem('mk_validations')||'{}');
+  all[tk]={lvl:lvl,score:score,at:new Date().toISOString(),filled:filled};
+  localStorage.setItem('mk_validations',JSON.stringify(all));}catch(e){}
 }
 DIMS.forEach(d=>d.fields.forEach(f=>$('f_'+f.id).addEventListener('input',calc)));
 $('key').value=localStorage.getItem('fh_key')||'';
-preset('xmet');
+// deeplink depuis le Radar : validateur.html?tk=OKLO -> pré-remplit le ticker
+(function(){var dl=(new URLSearchParams(location.search).get('tk')||'').trim().toUpperCase();
+ if(dl){ $('tk').value=dl;
+  if(($('key').value||'').trim()){ loadFinnhub(); }
+  else { $('status').innerHTML='Ticker <b>'+dl+'</b> chargé. Colle ta clé Finnhub puis « Charger », et complète les 4 champs manuels (boutons ↗).'; }
+ } else { preset('xmet'); }
+})();
 </script>
 
 <!-- PWA service worker -->

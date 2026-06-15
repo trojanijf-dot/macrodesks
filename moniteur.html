@@ -69,6 +69,16 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .pe-save{display:flex;gap:10px;align-items:center;margin-top:13px;flex-wrap:wrap}
 .pe-savebtn{background:linear-gradient(135deg,var(--green),#3a8f74);color:#07211b;font-weight:700;font-size:12px;border:none;border-radius:9px;padding:10px 16px;cursor:pointer}
 .pe-msg{font-size:10.5px;color:var(--muted-soft)}
+.pe-fw{display:none;border-radius:10px;padding:11px 14px;margin-bottom:13px;gap:11px;align-items:flex-start}
+.pe-fw .fic{font-size:18px;flex:none;margin-top:1px}
+.pe-fw .ftx{flex:1;font-size:11.5px;line-height:1.5;color:var(--muted)}.pe-fw .ftx b{color:var(--text)}
+.pe-fw .facts{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+.pe-fw .fbtn{border-radius:7px;padding:6px 11px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;border:.5px solid var(--border-2);background:var(--bg3);color:var(--text);display:inline-flex;align-items:center;gap:5px;text-decoration:none}
+.pe-fw .fbtn.val{border-color:rgba(93,202,165,.45);color:var(--green)}.pe-fw .fbtn.go{border-color:rgba(136,170,224,.45);color:var(--blue)}.pe-fw .fbtn.danger{border-color:rgba(240,149,149,.5);color:var(--red)}
+.pe-fw.none{background:rgba(136,170,224,.1);border:.5px solid rgba(136,170,224,.32)}.pe-fw.none .fic{color:var(--blue)}
+.pe-fw.evit{background:rgba(240,149,149,.1);border:.5px solid rgba(240,149,149,.34)}.pe-fw.evit .fic{color:var(--red)}
+.vbadge{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:8.5px;font-weight:700;padding:2px 6px;border-radius:5px;margin-left:7px;vertical-align:middle}
+.vbadge.tres{background:rgba(93,202,165,.14);color:var(--green)}.vbadge.pot{background:rgba(239,159,39,.13);color:var(--amber)}.vbadge.evit{background:rgba(240,149,149,.13);color:var(--red)}.vbadge.none{background:var(--bg4);color:var(--muted-soft)}.vbadge.old{background:rgba(136,170,224,.12);color:var(--blue)}
 </style></head><body>
 <nav class="topnav"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html" class="active"><i class="ti ti-shield-half"></i>Moniteur</a><a href="validateur.html"><i class="ti ti-checkup-list"></i>Validateur</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
 <div class="head"><span class="logo">M</span><h1>Moniteur de position <span style="color:var(--muted-soft);font-weight:600;font-size:14px">— signaux de sortie</span></h1><button class="editbtn" onclick="openEditor()"><i class="ti ti-pencil"></i> Mes positions</button><span class="badge" id="badge" style="margin-left:10px"><i class="ti ti-flask" style="font-size:11px"></i>DEMO</span></div>
@@ -97,6 +107,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
    <div class="pe-fld"><label>Qté</label><input id="pe-qty" placeholder="opt." inputmode="decimal"></div>
    <button class="pe-addbtn" onclick="addPos()" title="Ajouter"><i class="ti ti-plus"></i></button>
   </div>
+  <div class="pe-fw" id="pe-fw"></div>
   <table class="pe-tbl"><thead><tr><th>Ticker</th><th>Thème</th><th>Entrée</th><th>Stop</th><th>Cible</th><th>Qté</th><th></th></tr></thead><tbody id="pe-body"></tbody></table>
   <div class="pe-save">
    <button class="pe-savebtn" id="pe-savebtn" onclick="savePositions()"><i class="ti ti-device-floppy"></i> Enregistrer mes positions</button>
@@ -145,20 +156,51 @@ function peToast(m,ok){var el=document.getElementById('peToast');if(!el){el=docu
 function openEditor(){document.getElementById('pe-wh').value=localStorage.getItem(PWH_KEY)||'';renderEditor();document.getElementById('pos-overlay').style.display='flex';}
 function closeEditor(){document.getElementById('pos-overlay').style.display='none';}
 function fmt2(v){return (v!=null&&v!=='')?(+v).toFixed(2):'—';}
+/* ---- pare-feu Validateur : lecture du verdict partagé (localStorage mk_validations) ---- */
+var VLAB={tres:'Très potentiel',pot:'Potentiel',evit:'Éviter'};
+function getVerdict(tk){try{return (JSON.parse(localStorage.getItem('mk_validations')||'{}'))[String(tk).toUpperCase()]||null;}catch(e){return null;}}
+function vStale(v){return !!(v&&v.at&&(Date.now()-new Date(v.at).getTime())>14*86400000);}
+function vBadge(tk){var v=getVerdict(tk);
+ if(!v)return '<span class="vbadge none"><i class="ti ti-shield-off"></i>non validé</span>';
+ var stale=vStale(v), cls=(v.lvl==='evit')?'evit':(stale?'old':v.lvl);
+ var ic=(v.lvl==='evit')?'ti-shield-x':(v.lvl==='tres'?'ti-shield-check':'ti-shield-half');
+ return '<span class="vbadge '+cls+'"><i class="ti '+ic+'"></i>'+(VLAB[v.lvl]||v.lvl)+' '+v.score+((stale&&v.lvl!=='evit')?' · ancien':'')+'</span>';
+}
+function clearFw(){var el=document.getElementById('pe-fw');if(el){el.style.display='none';el.className='pe-fw';el.innerHTML='';}}
+function renderFw(tk,state,v){var el=document.getElementById('pe-fw');if(!el)return;
+ var vurl='validateur.html?tk='+encodeURIComponent(tk);
+ if(state==='none'){el.className='pe-fw none';
+  el.innerHTML='<i class="ti ti-shield-question fic"></i><div class="ftx"><b>⛡ '+tk+' n\'a pas passé le Validateur.</b> Tu vas enregistrer une position sans pare-feu fondamental. Recommandé : valider d\'abord.<div class="facts"><a class="fbtn val" href="'+vurl+'"><i class="ti ti-shield-check"></i> Valider maintenant</a><button class="fbtn go" onclick="addPos(true)"><i class="ti ti-arrow-right"></i> Ajouter quand même</button></div></div>';
+ }else{el.className='pe-fw evit';
+  el.innerHTML='<i class="ti ti-alert-triangle fic"></i><div class="ftx"><b>⛔ Validateur : Éviter · '+v.score+'/100.</b> Prendre cette position va à l\'encontre du pare-feu fondamental.<div class="facts"><a class="fbtn val" href="'+vurl+'"><i class="ti ti-refresh"></i> Re-valider</a><button class="fbtn danger" onclick="addPos(true)"><i class="ti ti-arrow-right"></i> Ajouter quand même</button></div></div>';
+ }
+ el.style.display='flex';
+}
 function renderEditor(){
- document.getElementById('pe-body').innerHTML=POSED.length?POSED.map(function(p,i){return '<tr><td class="tk">'+p.tk+'</td><td>'+(p.theme||'—')+'</td><td data-num>'+fmt2(p.entry)+'</td><td data-num>'+fmt2(p.stop)+'</td><td data-num>'+fmt2(p.target)+'</td><td data-num>'+(p.qty||'—')+'</td><td><button class="pe-del" onclick="delPos('+i+')"><i class="ti ti-trash"></i></button></td></tr>';}).join(''):'<tr><td colspan="7" style="text-align:center;color:var(--muted-soft);padding:16px">Aucune position — ajoute ta 1ère ci-dessus.</td></tr>';
+ document.getElementById('pe-body').innerHTML=POSED.length?POSED.map(function(p,i){return '<tr><td class="tk">'+p.tk+vBadge(p.tk)+'</td><td>'+(p.theme||'—')+'</td><td data-num>'+fmt2(p.entry)+'</td><td data-num>'+fmt2(p.stop)+'</td><td data-num>'+fmt2(p.target)+'</td><td data-num>'+(p.qty||'—')+'</td><td><button class="pe-del" onclick="delPos('+i+')"><i class="ti ti-trash"></i></button></td></tr>';}).join(''):'<tr><td colspan="7" style="text-align:center;color:var(--muted-soft);padding:16px">Aucune position — ajoute ta 1ère ci-dessus.</td></tr>';
  document.getElementById('pe-count').textContent=POSED.length?('· '+POSED.length+' position'+(POSED.length>1?'s':'')):'';
 }
-function addPos(){
+function addPos(force){
  var tk=(document.getElementById('pe-tk').value||'').toUpperCase().trim();
  if(!tk){peToast('Ticker requis',false);return;}
  var entry=parseFloat(document.getElementById('pe-entry').value);
  if(isNaN(entry)){peToast('Prix d\'entrée requis',false);return;}
+ // PARE-FEU : bloque (contournable) si pas de verdict OU verdict Éviter
+ var v=getVerdict(tk);
+ if(!force){
+  if(!v){ renderFw(tk,'none'); return; }
+  if(v.lvl==='evit'){ renderFw(tk,'evit',v); return; }
+ }
  var sv=document.getElementById('pe-stop').value, tv=document.getElementById('pe-target').value, qv=document.getElementById('pe-qty').value;
  var p={tk:tk,theme:document.getElementById('pe-theme').value,entry:entry,
         stop:sv!==''?parseFloat(sv):'',target:tv!==''?parseFloat(tv):'',qty:qv!==''?parseFloat(qv):''};
  var ix=POSED.findIndex(function(x){return x.tk===tk;}); if(ix>=0)POSED[ix]=p; else POSED.push(p);
- peSaveLocal(POSED); renderEditor();
+ peSaveLocal(POSED); renderEditor(); clearFw();
+ // rappels NON bloquants (verdict ≥ Potentiel mais ancien ou maigre)
+ if(!force&&v&&v.lvl!=='evit'){
+  if(vStale(v)) peToast('⏳ '+tk+' ajouté — verdict ancien ('+v.score+'/100, >14j), pense à re-valider',true);
+  else if((v.filled||0)<4) peToast('⚠️ '+tk+' ajouté — verdict sur '+(v.filled||0)+'/5 dimensions, à confirmer',true);
+ }
  ['pe-tk','pe-entry','pe-stop','pe-target','pe-qty'].forEach(function(id){document.getElementById(id).value='';});
  document.getElementById('pe-tk').focus();
 }
