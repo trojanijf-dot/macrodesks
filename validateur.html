@@ -51,6 +51,15 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .verdict .vwarn{margin-top:9px;font-size:11px;line-height:1.5;color:var(--amber);background:rgba(239,159,39,.1);border:.5px solid rgba(239,159,39,.3);border-radius:8px;padding:8px 11px}.verdict .vwarn b{color:var(--text)}.verdict .vwarn i{font-size:13px;vertical-align:-2px}
 .legend{display:flex;gap:15px;margin-top:13px;font-size:10.5px;color:var(--muted-soft);font-family:var(--mono);flex-wrap:wrap}.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
 .hint{font-size:10px;color:var(--muted-soft);margin:-3px 0 9px 0}
+.modebar{display:flex;align-items:center;gap:10px;background:var(--bg2);border:.5px solid var(--border);border-radius:11px;padding:9px 12px;margin-bottom:14px;flex-wrap:wrap}
+.modebar .mlbl{font-size:9px;font-family:var(--mono);color:var(--muted-soft);text-transform:uppercase;letter-spacing:.05em}
+.toggle{display:inline-flex;background:var(--bg1);border:.5px solid var(--border-2);border-radius:9px;padding:3px}
+.toggle button{font-family:var(--mono);font-size:11px;font-weight:700;border:none;background:transparent;color:var(--muted);padding:6px 12px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.toggle button.on{background:rgba(136,170,224,.16);color:var(--blue)}
+.modebar .mauto{font-size:10.5px;color:var(--muted-soft)}.modebar .mauto b{color:var(--blue)}.modebar .mauto i{font-size:12px;vertical-align:-1px}
+.seg{display:inline-flex;gap:3px;flex-wrap:wrap}
+.seg b{font-family:var(--mono);font-size:9px;font-weight:700;padding:3px 8px;border-radius:5px;background:var(--bg4);color:var(--muted-soft);cursor:pointer}
+.seg b.on-g{background:rgba(93,202,165,.16);color:var(--green)}.seg b.on-a{background:rgba(239,159,39,.14);color:var(--amber)}.seg b.on-r{background:rgba(240,149,149,.14);color:var(--red)}
 @media(max-width:900px){.dimgrid{grid-template-columns:1fr 1fr}}@media(max-width:620px){.dimgrid{grid-template-columns:1fr}}
 </style></head><body>
 <nav class="topnav"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html"><i class="ti ti-shield-half"></i>Moniteur</a><a href="validateur.html" class="active"><i class="ti ti-checkup-list"></i>Validateur</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
@@ -67,6 +76,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
   <button class="btn ghost" onclick="preset('xbio')">Biotech pré-revenu</button>
 </div>
 <div class="hint" id="status"></div>
+
+<div class="modebar">
+  <span class="mlbl">Mode</span>
+  <div class="toggle"><button id="mode-rentable" onclick="setMode('rentable',true)"><i class="ti ti-coin"></i> Rentable</button><button id="mode-emergent" onclick="setMode('emergent',true)"><i class="ti ti-seeding"></i> Émergent</button></div>
+  <span class="mauto" id="modeAuto"><i class="ti ti-coin"></i> dimensions classiques : valeur · croissance · qualité</span>
+</div>
 
 <div class="dimgrid" id="dims"></div>
 <div class="verdict" id="verdict"></div>
@@ -103,6 +118,31 @@ const DIMS=[
    {id:'sh',lab:'Short Float %',th:v=>isNaN(v)?null:(v>15?2:v>=8?1:0)},
    {id:'ins',lab:'Insiders achat (1=oui)',th:v=>isNaN(v)?null:(v>=1?2:1)} ]},
 ];
+// Mode Émergent : dimensions adaptées aux small caps pré-revenu (P/E/croissance/ROE N/A)
+const DIMS_EMERGENT=[
+ {key:'tres',name:'Trésorerie & survie',icon:'ti-shield-half',w:30,fields:[
+   {id:'de',lab:'Debt / Equity',th:v=>isNaN(v)?null:(v<1?2:v<=2?1:0)},
+   {id:'cash',lab:'Cash & équiv. (M$)',meta:'input'},
+   {id:'fcf',lab:'Free Cash Flow / an (M$)',hint:'— négatif = brûle',meta:'input'},
+   {id:'rw',lab:'Cash runway (mois)',meta:'computed',th:v=>isNaN(v)?null:(v>18?2:v>=6?1:0)},
+   {id:'dil',lab:'Dilution actions / an (%)',th:v=>isNaN(v)?null:(v<10?2:v<=30?1:0)} ]},
+ {key:'cata',name:'Catalyseur & exécution',icon:'ti-rocket',w:25,fields:[
+   {id:'backlog',lab:'Backlog / contrats signés',meta:'seg',opts:[['Oui',2],['Partiel',1],['Non',0]]},
+   {id:'jalon',lab:'Jalon daté',meta:'seg',opts:[['Proche',2],['Lointain',1],['Flou',0]]},
+   {id:'partner',lab:'Partenaire / client ancré',meta:'seg',opts:[['Oui',2],['Non',0]]} ]},
+ {key:'accu',name:'Accumulation',icon:'ti-users',w:20,fields:[
+   {id:'insem',lab:'Achats d\'initiés (Form 4)',meta:'seg',opts:[['Oui',2],['Non',1]]},
+   {id:'f13f',lab:'13F institutionnels',meta:'seg',opts:[['Hausse',2],['Stable',1],['Sortie',0]]} ]},
+ {key:'valr',name:'Valorisation relative',icon:'ti-scale',w:15,fields:[
+   {id:'cashmcap',lab:'Cash / market cap (%)',th:v=>isNaN(v)?null:(v>20?2:v>=8?1:0)},
+   {id:'evtam',lab:'EV vs TAM',meta:'seg',opts:[['Favorable',2],['Neutre',1],['Tendu',0]]},
+   {id:'ps',lab:'P/S (si revenu)',th:v=>v<0?null:(v<2?2:v<=5?1:0)} ]},
+ {key:'flot',name:'Flottant & momentum',icon:'ti-flame',w:10,fields:[
+   {id:'fl',lab:'Float (M)',th:v=>isNaN(v)?null:(v<20?2:v<=50?1:0)},
+   {id:'sh',lab:'Short Float %',th:v=>isNaN(v)?null:(v>15?2:v>=8?1:0)} ]},
+];
+let MODE='rentable', MODE_LOCK=false;
+function activeDims(){return MODE==='emergent'?DIMS_EMERGENT:DIMS;}
 // sources des 4 champs manuels (bouton ↗ → ouvre la page du ticker en cours, nouvel onglet)
 const SRC={
  cash:{lab:'Balance Sheet',url:t=>'https://stockanalysis.com/stocks/'+t+'/financials/balance-sheet/',home:'https://stockanalysis.com/'},
@@ -110,6 +150,9 @@ const SRC={
  fl:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t,home:'https://finviz.com/'},
  sh:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t,home:'https://finviz.com/'},
  ins:{lab:'OpenInsider',url:t=>'http://openinsider.com/'+t,home:'http://openinsider.com/'},
+ insem:{lab:'OpenInsider',url:t=>'http://openinsider.com/'+t,home:'http://openinsider.com/'},
+ dil:{lab:'Income',url:t=>'https://stockanalysis.com/stocks/'+t+'/financials/',home:'https://stockanalysis.com/'},
+ cashmcap:{lab:'Stats',url:t=>'https://stockanalysis.com/stocks/'+t+'/statistics/',home:'https://stockanalysis.com/'},
 };
 const DEMO_TK=['XMET','XBIO']; // presets synthétiques (pas de vraie cote)
 function srcToast(msg){var el=$('srcToast');if(!el){el=document.createElement('div');el.id='srcToast';el.className='srctoast';document.body.appendChild(el);}el.innerHTML='<i class="ti ti-alert-triangle"></i><span>'+msg+'</span>';clearTimeout(el._t);el._t=setTimeout(function(){el.remove();},4200);}
@@ -125,14 +168,34 @@ function srcBtn(f){return SRC[f.id]?`<button type="button" class="srcbtn" title=
 function fieldHtml(f){var lab=`<label>${f.lab}${f.hint?` <span class="fhint">${f.hint}</span>`:''}</label>`;
  if(f.meta==='input')return `<div class="row">${lab}<input id="f_${f.id}" type="number" step="any" inputmode="decimal">${srcBtn(f)}</div>`;
  if(f.meta==='computed')return `<div class="row"><label><i class="ti ti-calculator" style="font-size:12px;vertical-align:-2px"></i> ${f.lab} <span class="fhint">auto</span></label><input id="f_${f.id}" type="text" class="rwout" readonly><span class="dot bg-na" id="dot_${f.id}"></span></div>`;
+ if(f.meta==='seg'){var pills=f.opts.map(o=>`<b data-v="${o[1]}" onclick="setSeg('${f.id}',${o[1]})">${o[0]}</b>`).join('');
+   return `<div class="row">${lab}<span class="seg" id="seg_${f.id}">${pills}</span><input type="hidden" id="f_${f.id}">${srcBtn(f)}</div>`;}
  return `<div class="row">${lab}<input id="f_${f.id}" type="number" step="any"><span class="dot bg-na" id="dot_${f.id}"></span>${srcBtn(f)}</div>`;}
-$('dims').innerHTML=DIMS.map(d=>`<div class="dim"><h3><i class="ti ${d.icon}"></i>${d.name}<span class="dw">poids ${d.w}%</span></h3><div class="dscore"><i id="ds_${d.key}"></i></div>${d.fields.map(fieldHtml).join('')}</div>`).join('');
+function setSeg(id,v){var el=$('f_'+id);if(el)el.value=v;updateSegUI(id);calc();}
+function updateSegUI(id){var w=$('seg_'+id);if(!w)return;var val=(($('f_'+id)||{}).value)||'';
+ w.querySelectorAll('b').forEach(function(b){var on=b.getAttribute('data-v')===val;b.className=on?('on '+(val==='2'?'on-g':val==='1'?'on-a':'on-r')):'';});}
+function renderDims(){var dims=activeDims();
+ var keep={};document.querySelectorAll('#dims [id^="f_"]').forEach(function(e){keep[e.id]=e.value;});
+ $('dims').innerHTML=dims.map(d=>`<div class="dim"><h3><i class="ti ${d.icon}"></i>${d.name}<span class="dw">poids ${d.w}%</span></h3><div class="dscore"><i id="ds_${d.key}"></i></div>${d.fields.map(fieldHtml).join('')}</div>`).join('');
+ Object.keys(keep).forEach(function(id){var e=document.getElementById(id);if(e)e.value=keep[id];});
+ dims.forEach(d=>d.fields.forEach(f=>{
+   if(f.meta==='seg'){updateSegUI(f.id);return;}
+   var el=$('f_'+f.id);if(!el)return;
+   if(f.meta==='input')el.addEventListener('input',recomputeRunway);
+   else if(f.meta!=='computed')el.addEventListener('input',calc);
+ }));
+ var rb=$('mode-rentable'),eb=$('mode-emergent');if(rb&&eb){rb.classList.toggle('on',MODE==='rentable');eb.classList.toggle('on',MODE==='emergent');}
+ recomputeRunway();
+}
+function setMode(m,manual){MODE=m;if(manual)MODE_LOCK=true;renderDims();
+ var ma=$('modeAuto');if(ma)ma.innerHTML=(MODE==='emergent'?'<i class="ti ti-seeding"></i> dimensions pré-revenu : catalyseur · dilution · accumulation':'<i class="ti ti-coin"></i> dimensions classiques : valeur · croissance · qualité');}
+renderDims();
 const PRESETS={
  aapl:{pe:37.65,ps:10.13,pb:42.87,revg:12.76,epsg:28.91,peg:2.58,roe:141.47,roic:67.76,nm:27.15,de:0.80,cr:1.07,rw:'',fl:14670,sh:0.95,ins:0},
  xmet:{pe:12,ps:1.4,pb:1.6,revg:35,epsg:40,peg:0.7,roe:22,roic:14,nm:15,de:0.4,cr:2.1,rw:'',fl:25,sh:18,ins:1},
  xbio:{pe:-8,ps:8,pb:3,revg:5,epsg:-30,peg:-2,roe:-25,roic:-15,nm:-40,de:0.1,cr:3.5,rw:18,fl:40,sh:25,ins:1},
 };
-function preset(p){const P=PRESETS[p];for(const k in P)$('f_'+k).value=P[k];$('status').textContent='Preset chargé : '+p.toUpperCase()+' (champs éditables).';calc();}
+function preset(p){if(MODE!=='rentable')setMode('rentable',false);const P=PRESETS[p];for(const k in P){var el=$('f_'+k);if(el)el.value=P[k];}$('status').textContent='Preset chargé : '+p.toUpperCase()+' (champs éditables).';calc();}
 async function loadFinnhub(){
  const tk=$('tk').value.trim().toUpperCase(), key=$('key').value.trim();
  if(!key){$('status').innerHTML='<span class="evit">Colle ta clé Finnhub (gardée dans ton navigateur uniquement) ou utilise un preset.</span>';return;}
@@ -143,7 +206,9 @@ async function loadFinnhub(){
   const j=await r.json(); const m=j.metric||{};
   const pick=(...ks)=>{for(const k of ks){if(m[k]!=null)return m[k];}return '';};
   const map={pe:pick('peTTM','peExclExtraTTM','peAnnual'),ps:pick('psTTM','psAnnual'),pb:pick('pbAnnual','pbQuarterly'),revg:pick('revenueGrowthTTMYoy','revenueGrowthQuarterlyYoy'),epsg:pick('epsGrowthTTMYoy','epsGrowthQuarterlyYoy'),peg:pick('pegTTM'),roe:pick('roeTTM','roeRfy'),roic:pick('roiTTM','roicTTM'),nm:pick('netProfitMarginTTM','netMarginTTM'),de:pick('totalDebt/totalEquityQuarterly','totalDebt/totalEquityAnnual','longTermDebt/equityQuarterly'),cr:pick('currentRatioQuarterly','currentRatioAnnual')};
-  for(const k in map)$('f_'+k).value=map[k];
+  var preRev=(map.pe===''||Number(map.pe)<=0);
+  if(!MODE_LOCK)setMode(preRev?'emergent':'rentable',false);
+  for(const k in map){var el=$('f_'+k);if(el)el.value=map[k];}
   var nFilled=Object.keys(map).filter(function(k){return map[k]!==''&&map[k]!=null;}).length;
   if(nFilled===0){
     $('status').innerHTML='<span class="evit">Finnhub n\'a aucun fondamental pour '+tk+'</span> — titre pré-revenu ou non couvert. Remplis Survie + Squeeze à la main (boutons ↗) ; ce n\'est pas un cas « fondamental ».';
@@ -155,20 +220,26 @@ async function loadFinnhub(){
 }
 function calc(){
  let wTot=0,wScore=0,filled=0;const reasons=[];
- DIMS.forEach(d=>{let pts=0,cnt=0;
-  d.fields.forEach(f=>{if(f.meta==='input')return;const raw=$('f_'+f.id).value;const v=(raw.indexOf('∞')>=0)?Infinity:num(raw);let lvl=raw===''?'na':f.th(v);if(lvl==null)lvl='na';$('dot_'+f.id).className='dot '+LVL[lvl][1];if(lvl!=='na'){pts+=lvl;cnt++;}});
+ activeDims().forEach(d=>{let pts=0,cnt=0;
+  d.fields.forEach(f=>{if(f.meta==='input')return;const el=$('f_'+f.id);if(!el)return;const raw=el.value;
+   let lvl;
+   if(f.meta==='seg'){lvl=raw===''?'na':Number(raw);}
+   else{const v=(raw.indexOf('∞')>=0)?Infinity:num(raw);lvl=raw===''?'na':f.th(v);}
+   if(lvl==null)lvl='na';
+   const dotEl=$('dot_'+f.id);if(dotEl)dotEl.className='dot '+LVL[lvl][1];
+   if(lvl!=='na'){pts+=lvl;cnt++;}});
   const ds=cnt?(pts/cnt/2*100):null;const bar=$('ds_'+d.key);
   if(ds==null){bar.style.width='0%';bar.style.background='var(--faint)';}else{bar.style.width=ds.toFixed(0)+'%';bar.style.background=ds>=70?'var(--green)':ds>=45?'var(--amber)':'var(--red)';}
   if(ds!=null){wTot+=d.w;wScore+=ds*d.w;filled++;if(ds<45)reasons.push(d.name.toLowerCase());}});
  const overall=wTot?wScore/wTot:0;
- const pe=num($('f_pe').value),roe=num($('f_roe').value);const nonProfit=(pe<=0)||(roe<0);
+ var peEl=$('f_pe'),roeEl=$('f_roe');const pe=peEl?num(peEl.value):NaN,roe=roeEl?num(roeEl.value):NaN;const nonProfit=(pe<=0)||(roe<0);
  let lvlTxt,cv,expl;
- if(overall>=70){lvlTxt='Très potentiel';cv='tres';expl='Solide sur la plupart des dimensions. Combine avec thème chaud + catalyseur EDGAR pour viser la ★.';}
+ if(overall>=70){lvlTxt='Très potentiel';cv='tres';expl=MODE==='emergent'?'Solide : survie + catalyseur + accumulation alignés. Joue sur confirmation d\'entrée (cassure + volume).':'Solide sur la plupart des dimensions. Combine avec thème chaud + catalyseur EDGAR pour viser la ★.';}
  else if(overall>=45){lvlTxt='Potentiel';cv='pot';expl='Profil correct. Points faibles : '+(reasons.join(', ')||'—')+'. À confirmer par un catalyseur.';}
  else{lvlTxt='Éviter / Spéculatif';cv='evit';expl='Faible sur : '+(reasons.join(', ')||'—')+'.';}
- if(nonProfit)expl+=' ⚠️ Non rentable → Valeur/Qualité peu fiables : le verdict repose surtout sur Survie + Squeeze + catalyseur.';
+ if(nonProfit&&MODE!=='emergent')expl+=' ⚠️ Non rentable → bascule en <b>Mode Émergent</b> pour une lecture adaptée (dilution, catalyseur, accumulation).';
  const col=overall>=70?'var(--green)':overall>=45?'var(--amber)':'var(--red)';
- const warn=(wTot>0&&filled<4)?`<div class="vwarn"><i class="ti ti-alert-triangle"></i> Verdict calculé sur <b>${filled}/5 dimensions</b> seulement — peu fiable. Complète Valeur / Croissance / Qualité, ou s'il s'agit d'un titre <b>pré-revenu</b> appuie-toi sur Survie + Squeeze + catalyseur (le fondamental est muet, pas mauvais).</div>`:'';
+ const warn=(wTot>0&&filled<4)?`<div class="vwarn"><i class="ti ti-alert-triangle"></i> Verdict sur <b>${filled}/5 dimensions</b> seulement — peu fiable. ${MODE==='emergent'?'Complète Catalyseur / Accumulation / Valorisation.':'Complète Valeur / Croissance / Qualité, ou (titre pré-revenu) bascule en <b>Mode Émergent</b>.'}</div>`:'';
  $('verdict').innerHTML=`<div class="big ${cv}">${lvlTxt}</div><div class="meter"><div class="bar"><i style="width:${overall.toFixed(0)}%;background:${col}"></i></div><div class="expl"><span class="pct">${overall.toFixed(0)}/100</span> &nbsp;·&nbsp; ${expl}</div>${warn}</div>`;
  saveVerdict(cv,Math.round(overall),filled,wTot);
 }
@@ -177,10 +248,9 @@ function saveVerdict(lvl,score,filled,wTot){
  const tk=($('tk').value||'').trim().toUpperCase();
  if(!tk||DEMO_TK.indexOf(tk)>=0||!wTot)return;
  try{const all=JSON.parse(localStorage.getItem('mk_validations')||'{}');
-  all[tk]={lvl:lvl,score:score,at:new Date().toISOString(),filled:filled};
+  all[tk]={lvl:lvl,score:score,at:new Date().toISOString(),filled:filled,mode:MODE};
   localStorage.setItem('mk_validations',JSON.stringify(all));}catch(e){}
 }
-DIMS.forEach(d=>d.fields.forEach(f=>{var el=$('f_'+f.id);if(!el)return;if(f.meta==='input')el.addEventListener('input',recomputeRunway);else if(f.meta!=='computed')el.addEventListener('input',calc);}));
 $('key').value=localStorage.getItem('fh_key')||'';
 // deeplink depuis le Radar : validateur.html?tk=OKLO -> pré-remplit le ticker
 (function(){var dl=(new URLSearchParams(location.search).get('tk')||'').trim().toUpperCase();
