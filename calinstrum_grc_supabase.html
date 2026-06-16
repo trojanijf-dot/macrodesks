@@ -41494,6 +41494,11 @@ function doPrint(){
   var isFactureDoc=docTitle && /^Facture\s/i.test(docTitle);
   // Détection d'un BC (Purchase Order) pour appliquer la police Arial globale
   var isBCDoc=docTitle && /^BC\s|Purchase\s*Order|^PO\s/i.test(docTitle);
+  // [2026-06-15] DEVIS — mention légale rouge ÉPINGLÉE dans la marge d'impression
+  // (@page @bottom-center, cf pageRule) → GARANTIE en pied de page, jamais coupée par
+  // l'overflow:hidden de .doc-page quand le contenu déborde. Texte lu depuis l'aperçu
+  // (.doc-legal) ; la version en flux est masquée pour éviter le doublon.
+  var devisLegalText = isDevisDoc ? (((c.querySelector('.doc-legal')||{}).textContent)||'').trim() : '';
 
   // === Nom de fichier PDF safe pour tous les OS ===
   // Le <title> de la fenêtre d'impression devient le nom suggéré du PDF lors
@@ -41554,7 +41559,7 @@ function doPrint(){
   //   nécessaire pour que le footer (bandeau bleu + mention rouge) ne soit pas clippé
   //   par overflow:hidden de .doc-page (cf fix footer visibility ci-dessous).
   var pageRule=(isDevisDoc||isFactureDoc)
-    ? `@page{size:A4 portrait;margin:10mm 12mm 12mm 12mm;@bottom-right{content: "Page " counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}}`
+    ? `@page{size:A4 portrait;margin:10mm 12mm 12mm 12mm;@bottom-right{content: "Page " counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}${devisLegalText?`@bottom-center{content: "${devisLegalText.replace(/\\/g,'\\\\').replace(/"/g,'\\"')}";font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 7pt;font-style: italic;color: #cc2200;}`:''}}${devisLegalText?' .doc-legal{display:none!important;}':''}`
     : `@page{size:A4 portrait;margin:8mm 10mm 20mm 10mm;@bottom-right{content: "Page " counter(page) " / " counter(pages);font-family: Calibri, Trebuchet MS, Arial, sans-serif;font-size: 10px;color: #64748b;padding-right: 2mm;}} @page :first{ margin-top:8mm; }`;
 
   // Règles spéciales BC : Arial uniforme + rendu haute résolution sur TOUT le document
