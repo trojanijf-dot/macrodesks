@@ -202,6 +202,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .cl-wt{font-size:9.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--blue);margin-bottom:6px}
 .cl-watch ul{margin:0;padding-left:15px}.cl-watch li{font-size:11.5px;color:var(--muted);margin-bottom:4px;line-height:1.45}
 .cl-disc{margin-top:9px;font-size:9.5px;color:var(--muted-soft);line-height:1.45}
+.cl-dot.amb{background:var(--amber);box-shadow:0 0 7px var(--amber)}
+.cl-vintro{font-size:10.5px;color:var(--amber);margin-bottom:8px;display:flex;align-items:flex-start;gap:6px}.cl-vintro i{font-size:13px;margin-top:1px}
+.cl-verif{list-style:none;margin:0;padding:0}
+.cl-verif li{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-bottom:1px solid var(--border)}.cl-verif li:last-child{border-bottom:none}
+.cl-ck{flex:none;width:15px;height:15px;border:1.5px solid var(--amber);border-radius:4px;margin-top:1px}
+.cl-vc{flex:1;font-size:11.5px;color:var(--text);line-height:1.4}
+.cl-vsrc{flex:none;display:inline-flex;align-items:center;gap:4px;border:.5px solid rgba(136,170,224,.4);background:rgba(136,170,224,.09);color:var(--blue);border-radius:6px;padding:4px 8px;font-family:var(--mono);font-size:9px;font-weight:700;text-decoration:none;white-space:nowrap}.cl-vsrc i{font-size:11px}
 </style></head>
 <body>
 
@@ -385,6 +392,27 @@ function renderClaude(s){
     html+='<div class="cl-mini f"><h5>▲ Points forts</h5><ul>'+(c.forts||[]).map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>';
     html+='<div class="cl-mini r"><h5>▼ Risques</h5><ul>'+(c.risques||[]).map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul></div>';
     html+='</div></div></div>';
+  }
+  if(c.aVerifier&&c.aVerifier.length){
+    const VSRC={
+      openinsider:{lab:'OpenInsider',u:t=>'http://openinsider.com/'+t},
+      stockanalysis:{lab:'StockAnalysis',u:t=>'https://stockanalysis.com/stocks/'+t+'/financials/'},
+      edgar:{lab:'EDGAR 8-K',u:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=8-K&dateb=&owner=include&count=40'},
+      whalewisdom:{lab:'WhaleWisdom',u:t=>'https://whalewisdom.com/stock/'+String(t).toLowerCase()},
+      finviz:{lab:'Finviz',u:t=>'https://finviz.com/quote.ashx?t='+t}
+    };
+    const vkey=x=>{x=String(x||'').toLowerCase();
+      if(/openinsider|initi|insider/.test(x))return'openinsider';
+      if(/whale|13f|institu/.test(x))return'whalewisdom';
+      if(/edgar|\bsec\b|8-?k|filing|contrat|catalys/.test(x))return'edgar';
+      if(/finviz|rvol|cours|prix|momentum|volume/.test(x))return'finviz';
+      if(/stockanalys|cash|runway|dilution|fcf|float|short/.test(x))return'stockanalysis';
+      return null;};
+    const tk=String(CUR||s.ticker||'').toUpperCase();
+    html+='<div class="cl-card"><div class="cl-h"><span class="cl-dot amb"></span><span class="cl-nm">✓ À vérifier à la source</span><span class="cl-mdl">avant d\'engager</span></div><div class="cl-b">';
+    html+='<div class="cl-vintro"><i class="ti ti-alert-triangle"></i>Claude n\'a pas le temps réel — confirme CHAQUE point à la source :</div><ul class="cl-verif">';
+    html+=c.aVerifier.map(v=>{const item=esc(v&&v.item!=null?v.item:v);const key=vkey((v&&v.src)||item);let sb='';if(key&&tk){const S=VSRC[key];sb='<a class="cl-vsrc" href="'+S.u(tk)+'" target="_blank" rel="noopener"><i class="ti ti-external-link"></i>'+S.lab+'</a>';}return '<li><span class="cl-ck"></span><span class="cl-vc">'+item+'</span>'+sb+'</li>';}).join('');
+    html+='</ul><div class="cl-disc">ⓘ Checklist générée par Claude. La source prime toujours sur le narratif.</div></div></div>';
   }
   if(p.entry){
     html+='<div class="cl-card"><div class="cl-h"><span class="cl-dot"></span><span class="cl-nm">🎯 Plan de trade</span><span class="cl-mdl">conditions</span></div><div class="cl-b">';
