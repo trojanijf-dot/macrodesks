@@ -282,12 +282,13 @@ function renderRegime(){
  }).join('');
  $('regime').innerHTML=cells+'<div class="rcell verdict-cell"><div class="rk">Feu de trading</div><div id="regimeFeu"><span class="pill a">à renseigner</span></div></div>';
 }
-function regimeFeu(){var hasR=false,allG=true,any=false;
- REGIME.forEach(function(it){var c=pillColorOf(it.id);if(!c){allG=false;return;}any=true;if(c==='r')hasR=true;if(c!=='g')allG=false;});
+function regimeFeu(){var hasR=false,hasA=false,any=false;
+ // on ne juge QUE les champs renseignés : un champ vide (ex. Force relative) ne bloque plus le vert
+ REGIME.forEach(function(it){var c=pillColorOf(it.id);if(!c)return;any=true;if(c==='r')hasR=true;else if(c==='a')hasA=true;});
  if(!any)return {c:'a',t:'à renseigner'};
  if(hasR)return {c:'r',t:'RISK-OFF'};
- if(allG)return {c:'g',t:'FEU VERT'};
- return {c:'a',t:'mitigé'};}
+ if(hasA)return {c:'a',t:'mitigé'};
+ return {c:'g',t:'FEU VERT'};}
 // ----- rendu pare-feu -----
 function renderFirewall(){
  var html='<div style="font-size:10.5px;color:var(--muted-soft);margin:0 0 6px">6 disqualifiants — un seul <b style="color:var(--red)">rouge</b> plafonne le verdict à « Attendre ».</div>';
