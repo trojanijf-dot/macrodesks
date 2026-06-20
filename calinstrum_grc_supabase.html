@@ -29752,6 +29752,17 @@ var _bcLinkBCclientIsAuto = true;
 // à la main → on ne le recalcule plus au changement de client final.
 var _bcNumIsAuto = true;
 
+// Clé de tri chronologique d'un BC, format "YYYYMMDD" (comparable en string).
+// Source primaire = la date EMBARQUÉE dans le N° PO (DDMMYYYY), qui est la date du
+// PO ; repli sur b.date (ISO YYYY-MM-DD). '00000000' si rien d'exploitable.
+function _bcDateKey(b){
+  var num=String((b&&b.num)||'');
+  var m=num.match(/^(\d{2})(\d{2})(\d{4})/); // DD MM YYYY
+  if(m) return m[3]+m[2]+m[1];               // → YYYYMMDD
+  var d=String((b&&b.date)||'').replace(/-/g,'');
+  return d || '00000000';
+}
+
 // ============================================================================
 // _nextBCNum(clientFinal) — N° PO suivant pour la SÉRIE du client final.
 // ----------------------------------------------------------------------------
@@ -29760,9 +29771,12 @@ var _bcNumIsAuto = true;
 // les devis/factures. Deux entités peuvent donc porter le même NNN (PRNC/043 et
 // SLN/043) : le N° PO est unique PAR client, pas globalement (assumé, cf mockup 8).
 //
-//   - clientFinal renseigné → on ne scanne que les BCs du même préfixe.
-//   - clientFinal vide       → repli sur la série GLOBALE (tous les BCs), pour ne
-//                              jamais laisser le champ sans numéro.
+//   - clientFinal renseigné → on continue à partir du BC le PLUS RÉCENT de cette
+//     série (par date), +1. ⚠ PAS le max : à l'époque Excel la numérotation était
+//     globale, donc PRNC a de vieux n° hauts (079, 081) puis a redémarré bas (042).
+//     On veut repartir du dernier réel (042 → 043), pas du max (082).
+//   - clientFinal vide → repli sur la série GLOBALE = MAX de tous les BCs (legacy,
+//     ne descend jamais sous un n° existant), pour ne jamais laisser le champ vide.
 //
 // Regex NNN tolérante aux formats historiques : "28042026/97", "20102025 060",
 // "12112025/063-001", "20102025 061rev1".  Fonction PURE (aucun saveDB) car
@@ -29771,21 +29785,35 @@ var _bcNumIsAuto = true;
 function _nextBCNum(clientFinal){
   var pfx = clientFinal ? getClientPrefix(clientFinal) : null;
   var reBC = /^\d{8}[\s\/](\d+)/;
-  var max = 0;
-  (DB.bcs||[]).forEach(function(b){
-    if(pfx){
+  var base = 0; // NNN de référence dont on dérive le suivant
+  if(pfx){
+    // Série client : on prend le NNN du BC le plus RÉCENT (date desc, puis NNN desc).
+    var bestKey=null, bestNnn=0;
+    (DB.bcs||[]).forEach(function(b){
       // getClientPrefix('') === 'SLN' → les BCs sans client final rejoignent la
       // série SLN (cohérent avec le défaut clientFinal='SLN' du reste de l'app).
       if(getClientPrefix(b.clientFinal||'') !== pfx) return;
-    }
-    var m = String((b&&b.num)||'').match(reBC);
-    if(m){ var n=parseInt(m[1],10); if(n>max) max=n; }
-  });
+      var m = String((b&&b.num)||'').match(reBC);
+      if(!m) return;
+      var nnn=parseInt(m[1],10);
+      var key=_bcDateKey(b);
+      if(bestKey===null || key>bestKey || (key===bestKey && nnn>bestNnn)){
+        bestKey=key; bestNnn=nnn;
+      }
+    });
+    base = bestNnn;
+  } else {
+    // Repli global : max de tous les BCs.
+    (DB.bcs||[]).forEach(function(b){
+      var m = String((b&&b.num)||'').match(reBC);
+      if(m){ var n=parseInt(m[1],10); if(n>base) base=n; }
+    });
+  }
   var now=new Date();
   var dd=String(now.getDate()).padStart(2,'0');
   var mm=String(now.getMonth()+1).padStart(2,'0');
   var yy=now.getFullYear();
-  return dd+mm+yy+'/'+pad(max+1);
+  return dd+mm+yy+'/'+pad(base+1);
 }
 
 // Recalcule le N° PO selon le client final courant, SI le champ est encore en
