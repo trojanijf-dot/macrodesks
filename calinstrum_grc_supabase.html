@@ -3470,6 +3470,7 @@ function checkDraftRecovery(){
             try{
               eBCid=bcDraft.id||null;bcL=bcDraft.lines||[];
               om('mBC');
+              if(typeof _bcNumIsAuto!=='undefined')_bcNumIsAuto=false; // brouillon : garder son N° PO, pas de renumérotation auto
               gv('bc-num',bcDraft.num||'');gv('bc-date',bcDraft.date||td());gv('bc-devise',bcDraft.devise||'AUD');
               gv('bc-status',bcDraft.status||'En attente');populateBCClientFinalSelect(bcDraft.clientFinal||'');gv('bc-client-final',bcDraft.clientFinal||'');
               gv('bc-cref2',bcDraft.cref2||bcDraft.cref||'');
@@ -29746,6 +29747,56 @@ var _bcSelectedDevisIds = [];
 // Devient false dès que l'utilisateur tape autre chose dans le champ → on ne touche plus.
 var _bcLinkBCclientIsAuto = true;
 
+// Marqueur : true tant que le N° PO (bc-num) est la valeur auto-attribuée par notre
+// code (numérotation par client). Devient false dès que l'utilisateur édite le N° PO
+// à la main → on ne le recalcule plus au changement de client final.
+var _bcNumIsAuto = true;
+
+// ============================================================================
+// _nextBCNum(clientFinal) — N° PO suivant pour la SÉRIE du client final.
+// ----------------------------------------------------------------------------
+// Format : {DDMMYYYY}/{NNN}. La série est regroupée par PRÉFIXE ENTITÉ du client
+// final (SLN, PRNC, ENERCAL NEPOUI…) via getClientPrefix — même découpage que
+// les devis/factures. Deux entités peuvent donc porter le même NNN (PRNC/043 et
+// SLN/043) : le N° PO est unique PAR client, pas globalement (assumé, cf mockup 8).
+//
+//   - clientFinal renseigné → on ne scanne que les BCs du même préfixe.
+//   - clientFinal vide       → repli sur la série GLOBALE (tous les BCs), pour ne
+//                              jamais laisser le champ sans numéro.
+//
+// Regex NNN tolérante aux formats historiques : "28042026/97", "20102025 060",
+// "12112025/063-001", "20102025 061rev1".  Fonction PURE (aucun saveDB) car
+// appelée à chaque changement de client final.
+// ============================================================================
+function _nextBCNum(clientFinal){
+  var pfx = clientFinal ? getClientPrefix(clientFinal) : null;
+  var reBC = /^\d{8}[\s\/](\d+)/;
+  var max = 0;
+  (DB.bcs||[]).forEach(function(b){
+    if(pfx){
+      // getClientPrefix('') === 'SLN' → les BCs sans client final rejoignent la
+      // série SLN (cohérent avec le défaut clientFinal='SLN' du reste de l'app).
+      if(getClientPrefix(b.clientFinal||'') !== pfx) return;
+    }
+    var m = String((b&&b.num)||'').match(reBC);
+    if(m){ var n=parseInt(m[1],10); if(n>max) max=n; }
+  });
+  var now=new Date();
+  var dd=String(now.getDate()).padStart(2,'0');
+  var mm=String(now.getMonth()+1).padStart(2,'0');
+  var yy=now.getFullYear();
+  return dd+mm+yy+'/'+pad(max+1);
+}
+
+// Recalcule le N° PO selon le client final courant, SI le champ est encore en
+// mode auto. Appelé au onchange du select client final et à l'auto-fill devis.
+function _recomputeBCNumFromClient(){
+  if(!_bcNumIsAuto) return;
+  var cf = document.getElementById('bc-client-final');
+  var clientFinal = cf ? (cf.value||'') : '';
+  gv('bc-num', _nextBCNum(clientFinal));
+}
+
 // Retourne TOUJOURS un array d'IDs (number), avec migration legacy automatique.
 function getBCsDevisIds(bc){
   if(!bc) return [];
@@ -29917,6 +29968,9 @@ function _autoFillClientFinalFromDevis(){
   if(clients.length === 1){
     populateBCClientFinalSelect(clients[0]);
     cf.value = clients[0];
+    // Recalcul du N° PO selon la série du client auto-rempli (l'événement change
+    // ne se déclenche pas sur une affectation programmatique).
+    _recomputeBCNumFromClient();
   } else if(clients.length > 1){
     // Multi-clients : warn console mais ne touche pas au champ (l'utilisateur doit choisir)
     console.warn('BC lié à '+clients.length+' clients différents:', clients);
@@ -29946,7 +30000,7 @@ function openBC(id){
   _refreshBCClientDatalist();
   if(id){
     var b=DB.bcs.find(function(x){return x.id===id;});
-    if(b){gv('bc-num',b.num);gv('bc-date',b.date||td());gv('bc-devise',b.devise);gv('bc-cal-contact',b.calContact||'Fabrice RIZZO');setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();
+    if(b){_bcNumIsAuto=false;gv('bc-num',b.num);gv('bc-date',b.date||td());gv('bc-devise',b.devise);gv('bc-cal-contact',b.calContact||'Fabrice RIZZO');setEmersonContactUI(b.vcont||'',b.vemail||'',b.vphone||'');gv('bc-vaddr',b.vaddr||'');gv('bc-inco',b.inco||'');gv('bc-fret',b.fret||'');gv('bc-status',b.status||'En attente');bcL=JSON.parse(JSON.stringify(b.lines||[]));migrateLegacyKits(bcL);populateBCDevisSelect();
     // Multi-devis : charger via getBCsDevisIds (gère migration legacy devisLieId → devisLieIds)
     _setBCSelectedDevisIds(getBCsDevisIds(b));
     populateBCClientFinalSelect(b.clientFinal||'');gv('bc-client-final',b.clientFinal||'');gv('bc-cref2',b.cref2!=null?b.cref2:(b.cref||''));
@@ -29976,7 +30030,7 @@ function openBC(id){
     bindCoutReelLive();updateCoutReelPreview();
     sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
-    gv('bc-num',nxt('bc'));gv('bc-date',td());gv('bc-devise','AUD');gv('bc-cal-contact','Fabrice RIZZO');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();
+    _bcNumIsAuto=true;gv('bc-num',_nextBCNum(''));gv('bc-date',td());gv('bc-devise','AUD');gv('bc-cal-contact','Fabrice RIZZO');setEmersonContactUI('Pacheco, Jose');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();
     _setBCSelectedDevisIds([]); // nouveau BC : aucun devis lié
     populateBCClientFinalSelect('');gv('bc-client-final','');gv('bc-cref2','');
     bcProps=[];renderEmersonProps();
@@ -29994,6 +30048,19 @@ function openBC(id){
   if(bcClientInp && !bcClientInp.dataset.manualEditBound){
     bcClientInp.addEventListener('input', function(){ _bcLinkBCclientIsAuto = false; });
     bcClientInp.dataset.manualEditBound = '1';
+  }
+  // Numérotation par client : recalcule le N° PO quand le client final change
+  // (si encore en mode auto). Bind une seule fois par session.
+  var bcCfInp = document.getElementById('bc-client-final');
+  if(bcCfInp && !bcCfInp.dataset.bcNumBound){
+    bcCfInp.addEventListener('change', _recomputeBCNumFromClient);
+    bcCfInp.dataset.bcNumBound = '1';
+  }
+  // Édition manuelle du N° PO → on verrouille (plus de recalcul auto).
+  var bcNumInp = document.getElementById('bc-num');
+  if(bcNumInp && !bcNumInp.dataset.manualEditBound){
+    bcNumInp.addEventListener('input', function(){ _bcNumIsAuto = false; });
+    bcNumInp.dataset.manualEditBound = '1';
   }
   rBClines();om('mBC');
 }
