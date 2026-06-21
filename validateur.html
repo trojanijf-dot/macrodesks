@@ -356,6 +356,17 @@ function preset(p){if(MODE!=='rentable')setMode('rentable',false);const P=PRESET
 // ----- feed n8n -----
 async function loadValidatorFeed(tk){try{const r=await fetch('data/validator.json',{cache:'no-store'});if(!r.ok)return null;const all=await r.json();return all[tk]||all[tk.toUpperCase()]||null;}catch(e){return null;}}
 function mapDir(d){return d==='rising'?2:d==='falling'?0:1;}
+// badge "1.01 détecté · date" + tag force, injecté à côté du pill Backlog (↗ EDGAR conservé)
+function setCatBadge(date,force){
+  var seg=$('seg_backlog');if(!seg)return;var row=seg.parentNode;if(!row)return;
+  var b=$('cat101badge');
+  if(!date&&!force){if(b)b.remove();return;}
+  if(!b){b=document.createElement('span');b.id='cat101badge';b.style.cssText='display:inline-flex;gap:5px;align-items:center;font-family:var(--mono);font-size:9px;font-weight:700';row.insertBefore(b,row.querySelector('.srcbtn'));}
+  var h='';
+  if(date)h+='<span title="Item 1.01 détecté sur EDGAR (déterministe)" style="color:var(--blue);background:rgba(136,170,224,.10);border:.5px solid rgba(136,170,224,.3);border-radius:5px;padding:2px 7px"><i class="ti ti-robot" style="font-size:10px;vertical-align:-1px"></i> 1.01 · '+date+'</span>';
+  if(force){var c=force==='fort'?'background:rgba(93,202,165,.16);color:var(--green)':force==='moyen'?'background:rgba(136,170,224,.12);color:var(--blue)':'background:rgba(239,159,39,.14);color:var(--amber)';h+='<span title="Force du catalyseur (Claude)" style="border-radius:5px;padding:2px 7px;'+c+'">force '+force+'</span>';}
+  b.innerHTML=h;
+}
 function applyFeed(f){if(!f)return;var R=f.regime||{},N=f.narrative||{},W=f.firewall||{};
  if(R.iwm_trend)setSeg('iwm',R.iwm_trend);if(R.risk)setSeg('risk',R.risk);
  if(R.theme&&R.theme.heat)setSeg('theme',R.theme.heat);if(R.rel_strength)setSeg('rs',R.rel_strength);
@@ -364,6 +375,16 @@ function applyFeed(f){if(!f)return;var R=f.regime||{},N=f.narrative||{},W=f.fire
  if(W.shelf_atm)setSeg('shelf',W.shelf_atm);if(W.warrants)setSeg('warr',W.warrants);
  if(W.lockup&&W.lockup.status)setSeg('lockup',W.lockup.status);if(W.credibility)setSeg('cred',W.credibility);
  if(f.mcap){var me=$('f_mcap');if(me&&!me.value){me.value=f.mcap;recomputeCashMcap();}}
+ // Catalyseur : Claude (backlog/jalon/partner) > détection 1.01 (=Partiel) ; jamais par-dessus une saisie manuelle
+ var C=f.catalyseur||{};
+ var bk=$('f_backlog');
+ if(bk&&!bk.value){
+   if(f.backlog)setSeg('backlog',f.backlog==='Oui'?2:f.backlog==='Partiel'?1:0);
+   else if(C.has101)setSeg('backlog',1);
+ }
+ var jl=$('f_jalon');if(jl&&!jl.value&&f.jalon)setSeg('jalon',f.jalon==='Proche'?2:f.jalon==='Lointain'?1:0);
+ var pa=$('f_partner');if(pa&&!pa.value&&f.partner)setSeg('partner',f.partner==='Oui'?2:0);
+ setCatBadge(C.has101?C.date:null, f.catalyst_force);
  if(Array.isArray(f.catalysts))CATALYSTS=CATALYSTS.concat(f.catalysts);renderCalendar();
 }
 async function loadFinnhub(){
