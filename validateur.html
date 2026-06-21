@@ -165,6 +165,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 <script>
 const $=id=>document.getElementById(id);
 const num=v=>{const n=parseFloat(v);return isFinite(n)?n:NaN;};
+// parse "2.22B" / "850M" / "1.2T" / "500K" / nombre nu -> MILLIONS de $
+function parseMoney(str){var s=String(str==null?'':str).trim().replace(/[\s$,]/g,'').toUpperCase();if(!s)return NaN;var m=s.match(/^([0-9]*\.?[0-9]+)([KMBT])?$/);if(!m)return NaN;var n=parseFloat(m[1]),u=m[2]||'';return u==='K'?n/1000:u==='M'?n:u==='B'?n*1000:u==='T'?n*1e6:n;}
 const LVL={2:['tres','bg-tres'],1:['pot','bg-pot'],0:['evit','bg-evit'],na:['na','bg-na']};
 function fmtDate(d){var m=('0'+(d.getMonth()+1)).slice(-2),day=('0'+d.getDate()).slice(-2);return d.getFullYear()+'-'+m+'-'+day;}
 const DIMS=[
@@ -211,7 +213,8 @@ const DIMS_EMERGENT=[
    {id:'insem',lab:'Achats d\'initiés (Form 4)',meta:'seg',opts:[['Oui',2],['Non',1]]},
    {id:'f13f',lab:'13F institutionnels',meta:'seg',opts:[['Hausse',2],['Stable',1],['Sortie',0]]} ]},
  {key:'valr',name:'Valorisation relative',icon:'ti-scale',w:10,fields:[
-   {id:'cashmcap',lab:'Cash / market cap (%)',th:v=>isNaN(v)?null:(v>20?2:v>=8?1:0)},
+   {id:'mcap',lab:'Market Cap',hint:'B / M / K · nombre = M$',meta:'money'},
+   {id:'cashmcap',lab:'Cash / market cap (%)',meta:'computed',th:v=>isNaN(v)?null:(v>20?2:v>=8?1:0)},
    {id:'evtam',lab:'EV vs TAM',meta:'seg',opts:[['Favorable',2],['Neutre',1],['Tendu',0]]} ]},
  {key:'flot',name:'Flottant & momentum',icon:'ti-flame',w:10,fields:[
    {id:'fl',lab:'Float (M)',th:v=>isNaN(v)?null:(v<20?2:v<=50?1:0)},
@@ -247,6 +250,7 @@ const SRC={
  backlog:{lab:'EDGAR 8-K',url:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=8-K&dateb=&owner=include&count=40'},
  dil:{lab:'Stats',url:t=>'https://stockanalysis.com/stocks/'+t+'/statistics/'},
  cashmcap:{lab:'Stats',url:t=>'https://stockanalysis.com/stocks/'+t+'/statistics/'},
+ mcap:{lab:'Stats',url:t=>'https://stockanalysis.com/stocks/'+t+'/statistics/'},
  shelf:{lab:'EDGAR S-3',url:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=S-3&dateb=&owner=include&count=40'},
  warr:{lab:'EDGAR 10-K',url:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=10-K&dateb=&owner=include&count=10'},
  borrow:{lab:'Fintel',url:t=>'https://fintel.io/ss/us/'+t},
@@ -263,10 +267,14 @@ function openSrc(id){const s=SRC[id];if(!s)return;const t=($('tk').value||'').tr
 function recomputeRunway(){var c=num($('f_cash').value),f=num($('f_fcf').value),o=$('f_rw');if(!o)return;
  if(isNaN(c)||isNaN(f))o.value='';else if(f>=0)o.value='∞ · rentable';else o.value=Math.round(c*12/(-f))+' mois';
  calc();}
+// Cash / market cap (%) = Cash (M$, Trésorerie) / Market Cap (parsé en M$) — SET seulement, calc() s'en charge
+function recomputeCashMcap(){var o=$('f_cashmcap');if(!o)return;var cash=num(($('f_cash')||{}).value),mc=parseMoney(($('f_mcap')||{}).value);o.value=(isNaN(cash)||isNaN(mc)||mc<=0)?'':(cash/mc*100).toFixed(1)+' %';}
+function onMcapInput(){recomputeCashMcap();calc();}
 function srcBtn(f){return SRC[f.id]?`<button type="button" class="srcbtn" title="Ouvrir ${SRC[f.id].lab} pour ce ticker (nouvel onglet)" onclick="openSrc('${f.id}')"><i class="ti ti-external-link"></i>${SRC[f.id].lab}</button>`:'';}
 function segPills(id,opts){return opts.map(o=>{var c=(o.length>2)?o[2]:(o[1]===2?'g':o[1]===1?'a':'r');return `<b data-v="${o[1]}" data-c="${c}" onclick="setSeg('${id}','${o[1]}')">${o[0]}</b>`;}).join('');}
 function fieldHtml(f){var lab=`<label>${f.lab}${f.hint?` <span class="fhint">${f.hint}</span>`:''}</label>`;
  if(f.meta==='input')return `<div class="row">${lab}<input id="f_${f.id}" type="number" step="any" inputmode="decimal">${srcBtn(f)}</div>`;
+ if(f.meta==='money')return `<div class="row">${lab}<input id="f_${f.id}" type="text" inputmode="text" placeholder="ex 2.22B">${srcBtn(f)}</div>`;
  if(f.meta==='computed')return `<div class="row"><label><i class="ti ti-calculator" style="font-size:12px;vertical-align:-2px"></i> ${f.lab} <span class="fhint">auto</span></label><input id="f_${f.id}" type="text" class="rwout" readonly><span class="dot bg-na" id="dot_${f.id}"></span></div>`;
  if(f.meta==='seg'){return `<div class="row">${lab}<span class="seg" id="seg_${f.id}">${segPills(f.id,f.opts)}</span><input type="hidden" id="f_${f.id}">${srcBtn(f)}</div>`;}
  return `<div class="row">${lab}<input id="f_${f.id}" type="number" step="any"><span class="dot bg-na" id="dot_${f.id}"></span>${srcBtn(f)}</div>`;}
@@ -330,6 +338,7 @@ function renderDims(){var dims=activeDims();
    if(f.meta==='seg'){updateSegUI(f.id);return;}
    var el=$('f_'+f.id);if(!el)return;
    if(f.meta==='input')el.addEventListener('input',recomputeRunway);
+   else if(f.meta==='money')el.addEventListener('input',onMcapInput);
    else if(f.meta!=='computed')el.addEventListener('input',calc);
  }));
  var rb=$('mode-rentable'),eb=$('mode-emergent');if(rb&&eb){rb.classList.toggle('on',MODE==='rentable');eb.classList.toggle('on',MODE==='emergent');}
@@ -399,9 +408,10 @@ async function loadFinnhub(){
  }catch(e){$('status').innerHTML='<span class="evit">Échec fetch Finnhub : '+e.message+'</span>';}
 }
 function calc(){
+ recomputeCashMcap();
  let wTot=0,wScore=0,filled=0;const reasons=[];
  activeDims().forEach(d=>{let pts=0,cnt=0;
-  d.fields.forEach(f=>{if(f.meta==='input')return;const el=$('f_'+f.id);if(!el)return;const raw=el.value;
+  d.fields.forEach(f=>{if(f.meta==='input'||f.meta==='money')return;const el=$('f_'+f.id);if(!el)return;const raw=el.value;
    let lvl;
    if(f.meta==='seg'){lvl=raw===''?'na':Number(raw);}
    else{const v=(raw.indexOf('∞')>=0)?Infinity:num(raw);lvl=raw===''?'na':f.th(v);}
