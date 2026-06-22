@@ -99,6 +99,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 .btns{display:flex;gap:8px;margin-top:11px;flex-wrap:wrap}
 .dim{color:var(--muted-soft);font-style:italic;font-size:11.5px}
 @media(max-width:780px){.cand{grid-template-columns:1fr;gap:8px}.score,.act{text-align:left}.score .bar{margin:4px 0 0 0}}
+.dtfbar{display:inline-flex;gap:3px;background:var(--bg1);border:.5px solid var(--border-2);border-radius:8px;padding:3px;margin-bottom:8px;align-items:center}
+.dtfbar button{font-family:var(--mono);font-size:10px;font-weight:700;border:none;background:transparent;color:var(--muted);padding:4px 11px;border-radius:6px;cursor:pointer}
+.dtfbar button.on{background:rgba(93,202,165,.16);color:var(--green)}
+.dtfbar .chg{margin-left:8px;font-family:var(--mono);font-size:11px;font-weight:700}
+svg.dspark{width:100%;height:110px;display:block;background:var(--bg3);border:.5px solid var(--border);border-radius:9px}
 </style></head><body>
 <nav class="topnav"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html" class="active"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html"><i class="ti ti-shield-half"></i>Moniteur</a><a href="validateur.html"><i class="ti ti-checkup-list"></i>Validateur</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
 <div class="head"><span class="logo">M</span><h1>Découvertes <span style="color:var(--muted-soft);font-weight:600;font-size:14px">— sourcing automatique</span></h1><button onclick="openWh()" title="Config webhook Watchlist" style="background:none;border:.5px solid var(--border);color:var(--muted);border-radius:7px;padding:5px 9px;font-family:var(--mono);font-size:10px;cursor:pointer;margin-right:8px"><i class="ti ti-settings"></i> Webhook</button><span class="badge" id="badge"><i class="ti ti-flask" style="font-size:11px"></i>DEMO</span></div>
@@ -138,6 +143,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 const TH={'AI-Power':'t-blue','Métaux':'t-green','Défense':'t-amber','Biotech':'t-purple','?':'t-grey'};
 const SIG={'8K':['t-blue','ti-file-text','8-K'],'S1':['t-purple','ti-rocket','S-1 / IPO'],'424':['t-red','ti-arrow-down','424B5'],'13F':['t-green','ti-building-bank','13F'],'F4':['t-green','ti-user-check','Form 4'],'GOV':['t-amber','ti-building-community','Contrat gov']};
 const fmtCap=n=>!n?'—':(n>=1e9?(n/1e9).toFixed(2)+' B':n>=1e6?Math.round(n/1e6)+' M':n)+' $';
+let DSERIES=null;
 /* fallback DEMO (enrichi pour 2 fiches) si data/discoveries.json absent */
 const DEMO={generatedAt:'2026-06-05',window:{startdt:'2026-05-29',enddt:'2026-06-05'},count:4,govCount:2,
  discoveries:[
@@ -209,6 +215,8 @@ function render(){
  document.getElementById('gov').innerHTML=g.length?g.map(a=>`<div class="gov"><span class="tag ${TH[a.theme]||'t-grey'}">${a.theme}</span><b style="color:#fff">${a.recipient}</b><span style="color:var(--muted-soft);font-size:11px">${a.agency||''} · ${a.kw||''}</span><span class="amt">${a.amountM?'$'+a.amountM+'M':'—'}</span></div>`).join(''):'<div class="nm" style="color:var(--muted-soft);padding:6px">Aucun contrat.</div>';
 }
 function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'];
+ DSERIES=c.series||null;
+ const chartSec=DSERIES?`<div class="sec"><h3><i class="ti ti-chart-line"></i>Cours</h3><div class="dtfbar" id="dtf"></div><svg class="dspark" id="dspark" viewBox="0 0 320 110" preserveAspectRatio="none"><defs><linearGradient id="dg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgba(93,202,165,.35)"/><stop offset="1" stop-color="rgba(93,202,165,0)"/></linearGradient></defs><path id="darea" fill="url(#dg)"></path><polyline id="dline" fill="none" stroke="var(--green)" stroke-width="1.5"></polyline><circle id="ddot" r="2.6" fill="var(--green)"></circle></svg></div>`:'';
  const news=(c.news&&c.news.length)?`<div class="sec"><h3><i class="ti ti-news"></i>Actualité récente</h3><div class="mnews">${c.news.map(n=>`<a href="${n.url||'#'}" target="_blank"><span class="d">${(n.date||'').slice(5)}</span><span class="js-news">${n.headline}</span></a>`).join('')}</div><div class="meta">source : Finnhub /company-news · trad. auto FR</div></div>`:'';
  const profile=c.profile?`<p class="js-prof">${c.profile}</p><div class="meta">source : FMP /stable/profile · trad. auto FR</div>`:`<p class="dim">Profil non chargé — relance le node Discovery (enrichi) puis Publish.</p>`;
  const thesis=c.thesis?`<div class="thesis"><p>${c.thesis}</p></div>`:`<p class="dim">Thèse non générée (enrichissement requis).</p>`;
@@ -241,13 +249,37 @@ function openDetail(i){const c=LIST[i];if(!c)return;const s=SIG[c.sig]||SIG['8K'
    <span class="fkv">Détecté<b>${c.date||'—'}</b></span>
    ${c.marketCap?`<span class="fkv">Market cap<b>${fmtCap(c.marketCap)}</b></span>`:''}
   </div>
-  ${idcard}<div class="sec"><h3><i class="ti ti-building"></i>Profil</h3>${profile}</div>
+  ${idcard}${chartSec}<div class="sec"><h3><i class="ti ti-building"></i>Profil</h3>${profile}</div>
   <div class="sec"><h3><i class="ti ti-bolt"></i>Le catalyseur <span style="color:var(--green);text-transform:none;letter-spacing:0;font-weight:400">— vérifiable</span></h3><div class="cat"><p>${c.reason}</p><div class="btns">${filingBtn}</div></div></div>
   ${accum}<div class="sec"><h3><i class="ti ti-target"></i>Pourquoi ça compte <span style="color:var(--muted-soft);text-transform:none;letter-spacing:0;font-weight:400">— la thèse</span></h3>${thesis}</div>
   ${news}
   <div class="btns" style="margin-top:16px"><button class="btn" onclick="addToWatchlist('${c.ticker}','${c.theme||''}',this)"><i class="ti ti-plus"></i>Ajouter à la watchlist</button><button class="btn src" onclick="openInRadar('${c.ticker}')"><i class="ti ti-external-link"></i>Ouvrir dans le Radar</button></div>`;
  document.getElementById('overlay').classList.add('on');
  translateModal();
+ if(DSERIES)initDiscoChart();
+}
+function initDiscoChart(){
+ var order=['1D','1M','6M','1Y','5Y','All'];
+ var keys=order.filter(k=>DSERIES&&Array.isArray(DSERIES[k])&&DSERIES[k].length>1);
+ if(!keys.length)return;
+ var bar=document.getElementById('dtf');if(!bar)return;
+ bar.innerHTML=keys.map(k=>'<button data-tf="'+k+'" onclick="drawDisco(\''+k+'\')">'+k+'</button>').join('')+'<span class="chg" id="dchg"></span>';
+ drawDisco(keys.indexOf('1Y')>=0?'1Y':keys[keys.length-1]);
+}
+function drawDisco(tf){
+ var a=DSERIES&&DSERIES[tf];if(!a||a.length<2)return;
+ document.querySelectorAll('#dtf button').forEach(b=>b.classList.toggle('on',b.getAttribute('data-tf')===tf));
+ var n=a.length,mn=Math.min.apply(null,a),mx=Math.max.apply(null,a),W=320,H=110,pad=8,rng=(mx-mn)||1;
+ var pts=a.map((v,i)=>[pad+(W-2*pad)*i/(n-1),pad+(H-2*pad)*(1-(v-mn)/rng)]);
+ var line=pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+ var L=document.getElementById('dline'),A=document.getElementById('darea'),D=document.getElementById('ddot'),C=document.getElementById('dchg');
+ if(!L)return;
+ L.setAttribute('points',line);
+ A.setAttribute('d','M'+pts[0][0].toFixed(1)+','+(H-pad)+' L'+line.replace(/ /g,' L')+' L'+pts[n-1][0].toFixed(1)+','+(H-pad)+' Z');
+ var last=pts[n-1];D.setAttribute('cx',last[0].toFixed(1));D.setAttribute('cy',last[1].toFixed(1));
+ var chg=(a[n-1]-a[0])/a[0]*100,col=chg>=0?'var(--green)':'var(--red)';
+ if(C){C.textContent=(chg>=0?'+':'')+chg.toFixed(1)+'% '+tf;C.style.color=col;}
+ L.setAttribute('stroke',col);D.setAttribute('fill',col);
 }
 const TC={};
 async function tr(t){ if(!t)return t; if(TC[t])return TC[t]; try{ const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(t.slice(0,480))}&langpair=en|fr`); const j=await r.json(); const o=(j&&j.responseData&&j.responseData.translatedText)||t; TC[t]=o; return o; }catch(e){ return t; } }
