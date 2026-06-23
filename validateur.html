@@ -330,23 +330,27 @@ const FIREWALL=[
 let MODE='rentable', MODE_LOCK=false, CATALYSTS=[];
 function activeDims(){return MODE==='emergent'?DIMS_EMERGENT:DIMS;}
 // sources (bouton ↗ -> ouvre la page du ticker en cours, nouvel onglet)
+let CURRENT_CIK=''; // CIK numérique du ticker chargé (extrait des filings du feed) → liens EDGAR fiables
+function cikFromFilings(f){ if(f&&Array.isArray(f.filings)){ for(var i=0;i<f.filings.length;i++){ var m=/\/edgar\/data\/(\d+)\//.exec(((f.filings[i]||{}).url)||''); if(m)return m[1]; } } return ''; }
+function edgarSrcUrl(t,type,count){ var who=CURRENT_CIK?('CIK='+CURRENT_CIK):('ticker='+encodeURIComponent(t)); return 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&'+who+'&type='+type+'&dateb=&owner=include&count='+(count||40); }
 const SRC={
  cash:{lab:'Balance Sheet',url:t=>'https://stockanalysis.com/stocks/'+t+'/financials/balance-sheet/'},
  fcf:{lab:'Income',url:t=>'https://stockanalysis.com/stocks/'+t+'/financials/'},
+ de:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t},
  fl:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t},
  sh:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t},
  ins:{lab:'OpenInsider',url:t=>'http://openinsider.com/'+t},
  insem:{lab:'OpenInsider',url:t=>'http://openinsider.com/'+t},
  f13f:{lab:'Nasdaq Inst.',url:t=>'https://www.nasdaq.com/market-activity/stocks/'+t.toLowerCase()+'/institutional-holdings'},
- backlog:{lab:'EDGAR 8-K',url:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=8-K&dateb=&owner=include&count=40'},
+ backlog:{lab:'EDGAR 8-K',url:t=>edgarSrcUrl(t,'8-K',40)},
  dil:{lab:'Stats',url:t=>'https://stockanalysis.com/stocks/'+t+'/statistics/'},
  cashmcap:{lab:'Stats',url:t=>'https://stockanalysis.com/stocks/'+t+'/statistics/'},
  mcap:{lab:'Stats',url:t=>'https://stockanalysis.com/stocks/'+t+'/statistics/'},
- shelf:{lab:'EDGAR S-3',url:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=S-3&dateb=&owner=include&count=40'},
- warr:{lab:'EDGAR 10-K',url:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=10-K&dateb=&owner=include&count=10'},
+ shelf:{lab:'EDGAR S-3',url:t=>edgarSrcUrl(t,'S-3',40)},
+ warr:{lab:'EDGAR 10-K',url:t=>edgarSrcUrl(t,'10-K',10)},
  borrow:{lab:'Fintel',url:t=>'https://fintel.io/ss/us/'+t},
- lockup:{lab:'EDGAR S-1',url:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=S-1&dateb=&owner=include&count=10'},
- cred:{lab:'EDGAR 10-K',url:t=>'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker='+t+'&type=10-K&dateb=&owner=include&count=10'},
+ lockup:{lab:'EDGAR S-1',url:t=>edgarSrcUrl(t,'S-1',10)},
+ cred:{lab:'EDGAR 10-K',url:t=>edgarSrcUrl(t,'10-K',10)},
  liq:{lab:'Finviz',url:t=>'https://finviz.com/quote.ashx?t='+t},
 };
 const DEMO_TK=['XMET','XBIO'];
@@ -564,6 +568,7 @@ function renderInstAnalysis(d){var c=$('instAnalysis');if(!c)return;if(!d){rende
  c.innerHTML=head+verdict+factsSec+supplySec+narrSec+forceSec+srcSec+'<div class="ia-warn"><b>⚠ Pré-lecture IA</b> — Opus a lu les documents ; les <b>chiffres sont vérifiés/calculés</b> (non-IA). Le call <b>achat / pas-achat reste le tien</b>.</div>';
 }
 function applyFeed(f){if(!f)return;var R=f.regime||{},N=f.narrative||{},W=f.firewall||{};
+ CURRENT_CIK = cikFromFilings(f) || (f.cik?String(f.cik):'') || CURRENT_CIK; // CIK pour liens EDGAR fiables
  if(R.iwm_trend)setSeg('iwm',R.iwm_trend);if(R.risk)setSeg('risk',R.risk);
  if(R.theme&&R.theme.heat)setSeg('theme',R.theme.heat);if(R.rel_strength)setSeg('rs',R.rel_strength);
  if(N.retail)setSeg('retail',mapDir(N.retail));if(N.trends)setSeg('trends',mapDir(N.trends));
@@ -588,7 +593,7 @@ async function loadFinnhub(){
  const tk=$('tk').value.trim().toUpperCase(), key=$('key').value.trim();
  if(!key){$('status').innerHTML='<span class="evit">Colle ta clé Finnhub (gardée dans ton navigateur uniquement) ou utilise un preset.</span>';return;}
  localStorage.setItem('fh_key',key);
- $('status').textContent='Chargement '+tk+'…';CATALYSTS=[];renderEdgar([],tk);
+ $('status').textContent='Chargement '+tk+'…';CATALYSTS=[];CURRENT_CIK='';renderEdgar([],tk);
  try{
   const r=await fetch(`https://finnhub.io/api/v1/stock/metric?symbol=${tk}&metric=all&token=${key}`);
   const j=await r.json(); const m=j.metric||{};
