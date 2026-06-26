@@ -39614,7 +39614,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   var lastS='';
   var itemNum=0;
   allL.forEach(function(l,i){
-    if(l.sec!==lastS){lineData.push({isSec:true,label:l.sec});lastS=l.sec;}
+    if(l.sec && l.sec!==lastS){lineData.push({isSec:true,label:l.sec});lastS=l.sec;}
     if(l.type==='header'){
       lineData.push({isHeader:true,mode:l.mode||'items',desc:l.desc||''});
       return;
@@ -40084,30 +40084,28 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
   var allL=[];
   var currentSecLabel='';
+  // CALQUE EXACT de bFA (aperçu) : si des bandeaux explicites existent, eux seuls
+  // définissent les sections (le _sec des lignes est ignoré). Sinon, chaque ligne
+  // prend la section de SON propre _sec (bandeau virtuel émis au changement). Une
+  // ligne sans section → sec='' → AUCUN bandeau (jamais de faux "MAIN D'OEUVRE").
+  var _hasBanner=(f.lines||[]).some(function(l){return l && l.type==='section_banner';});
   (f.lines||[]).forEach(function(l){
     if(!l) return;
     if(l.type==='section_banner'){
       currentSecLabel=l.desc||'';
       return; // on consomme le banner, on n'ajoute pas la ligne (le label est tracké)
     }
-    // Fallback _sec → label si pas de section_banner
-    if(l._sec && SEC_LABELS[l._sec] && !currentSecLabel){
-      currentSecLabel=SEC_LABELS[l._sec];
-    }
-    allL.push(Object.assign({},l,{sec:currentSecLabel||"MAIN D'OEUVRE"}));
-    // Pour les lignes suivantes : si on change de _sec, on doit re-changer le label
-    // (cas où plusieurs sections coexistent sans section_banner explicite)
-    // → géré par le test l.sec!==lastS dans la boucle lineData
-    if(l._sec && SEC_LABELS[l._sec]){
-      currentSecLabel=SEC_LABELS[l._sec];
-    }
+    var lineSec;
+    if(!_hasBanner && l._sec && SEC_LABELS[l._sec]) lineSec=SEC_LABELS[l._sec]; // section propre à la ligne
+    else lineSec=currentSecLabel||''; // dernier bandeau explicite, ou aucun
+    allL.push(Object.assign({},l,{sec:lineSec}));
   });
   // === Construction lineData (identique à buildPaginatedDV) ===
   var lineData=[];
   var lastS='';
   var itemNum=0;
   allL.forEach(function(l,i){
-    if(l.sec!==lastS){lineData.push({isSec:true,label:l.sec});lastS=l.sec;}
+    if(l.sec && l.sec!==lastS){lineData.push({isSec:true,label:l.sec});lastS=l.sec;}
     if(l.type==='header'){
       lineData.push({isHeader:true,mode:l.mode||'items',desc:l.desc||''});
       return;
