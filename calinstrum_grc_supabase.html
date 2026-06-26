@@ -40453,8 +40453,8 @@ function printPreviewBC(){
   //                (préfixe + n°facture + " BC" + PO Client extrait de _importPONum)
   //   - BC       : "CALINSTRUM Purchase Order 07052026 098_Customer Ref 300004202740031"
   //                (date DDMMYYYY + suffixe NNN extrait de b.num "DDMMYYYY/NNN" + cref2)
-  //   - BL       : "BL22042026_084 BC734811"
-  //                (date DDMMYYYY + _NNN extrait de b.num + PO Client lié)
+  //   - BL       : "BL CALINSTRUM 15052026 087_BC00737738-01"
+  //                ("BL CALINSTRUM" + date DDMMYYYY + NNN extrait de b.num + "_BC" + PO Client lié)
   // Si une donnée est absente, on omet la partie correspondante (le PDF reste valide).
   //
   // Implémentation : on extrait le n° du document depuis docTitleStr (le titre de la modal
@@ -40577,16 +40577,21 @@ function printPreviewBC(){
         if(blRec){
           blDateStr=_ddmmyyyy(blRec.date);
           // Suffixe : on extrait le numéro pur de bl.num (ex "BL-040" → "040", "084" → "084")
-          blSuffix=String(blRec.num||'').replace(/^BL[-\s]*/i,'').replace(/[^\d]/g,'');
+          // Format actuel "BL{DDMMYYYY}/{NNN}" (ex "BL29062026/95") : on parse date + NNN
+          // separement. NE PAS replace(/[^\d]/g,'') sur tout le num (collait 29062026+95
+          // = 2906202695). Fallback legacy "BL-040" / "084" sinon.
+          var _mBL=String(blRec.num||'').match(/^BL\s*(\d{8})\s*[\/\s]\s*(\d+)/i);
+          if(_mBL){ blDateStr=_mBL[1]; blSuffix=_mBL[2]; }
+          else { blSuffix=String(blRec.num||'').replace(/^BL[-\s]*/i,'').replace(/[^\d]/g,''); }
           blPo=blRec.po||'';
         }
       }
-      var blStr='BL';
-      if(blDateStr) blStr += blDateStr;
-      if(blSuffix) blStr += '_'+blSuffix;
+      var blStr='BL CALINSTRUM';
+      if(blDateStr) blStr += ' '+blDateStr;
+      if(blSuffix) blStr += ' '+blSuffix;
       if(blPo){
         var poClean=String(blPo).split('/')[0].trim();
-        if(poClean) blStr += ' BC'+poClean;
+        if(poClean) blStr += '_BC'+poClean;
       }
       printWindowTitle=_cleanTitle(blStr);
     } else {
