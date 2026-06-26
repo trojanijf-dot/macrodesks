@@ -41674,7 +41674,7 @@ function doPrint(){
     var fileTitleRaw='DEVIS CALINSTRUM '+dvNumForFile+(objetForFile?' '+objetForFile:'');
     safeDocTitle=fileTitleRaw.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
   } else if(isFactureDoc){
-    // Nom fichier facture : "FACTURE CALINSTRUM SLN-F098 BC743380" (numFA + BC client si dispo)
+    // Nom fichier facture : "FACTURE CALINSTRUM SLN-F097 BC 742887" (numFA + " BC " + N° PO client si dispo)
     var faNumForFile=docTitle.replace(/^Facture\s*[\u2014\-]\s*/i,'').trim();
     var bcSLNForFile='';
     if(typeof DB!=='undefined' && Array.isArray(DB.factures)){
@@ -41684,7 +41684,13 @@ function doPrint(){
         faRec=DB.factures.find(function(x){return x.id===window._prvFaSourceId;});
       }
       if(!faRec) faRec=DB.factures.find(function(x){return (x.num||'')===faNumForFile;});
-      if(faRec && faRec.bcClientSLN) bcSLNForFile='BC'+String(faRec.bcClientSLN).replace(/[\\\/:*?"<>|\s]+/g,'');
+      // PO source = champ unifié _importPONum (= champ fa-po), fallback bcClientSLN.
+      // ⚠ Avant on ne lisait que bcClientSLN → BC absent quand le PO est dans _importPONum.
+      if(faRec){
+        var poRawFA=faRec._importPONum || faRec.bcClientSLN || '';
+        var poCleanFA=String(poRawFA).replace(/[\\\/:*?"<>|]/g,'-').replace(/\s+/g,' ').trim();
+        if(poCleanFA) bcSLNForFile='BC '+poCleanFA;
+      }
     }
     var fileTitleRawF='FACTURE CALINSTRUM '+faNumForFile+(bcSLNForFile?' '+bcSLNForFile:'');
     safeDocTitle=fileTitleRawF.replace(/[\\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim();
