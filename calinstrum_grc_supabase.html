@@ -4177,6 +4177,12 @@ setTimeout(function(){
     try{ normalizeAllBcClientSLN(); }
     catch(e){ console.warn('[CALINSTRUM] Normalisation bcClientSLN échouée :', e); }
   }
+  // Normalisation de la casse des unités de ligne ('forfait'→'Forfait', etc.) pour
+  // que le menu Uté matche et que l'impression soit cohérente (cf imports REAPPRO/Excel).
+  if(typeof normalizeAllUnites==='function'){
+    try{ normalizeAllUnites(); }
+    catch(e){ console.warn('[CALINSTRUM] Normalisation unités échouée :', e); }
+  }
   // Migration des prix Catalogue : split prix → prixVenteXPF + prixAchatAUD
   // + application de la grille tarifaire officielle 2026 (corrige 3051TG3 et complète prixAchatAUD).
   if(typeof migrateCataloguePrices==='function'){
@@ -4500,6 +4506,71 @@ function nxt(t, prefix){
   }
 
   return 0;
+}
+
+// =============================================================================
+// UNITÉS DE LIGNE — normalisation de casse + menu déroulant tolérant
+// =============================================================================
+// Problème historique : les imports (Excel l.~9626, REAPPRO, invoices) écrivent
+// l'unité en minuscule ('forfait'), alors que le menu propose 'Forfait'. La
+// comparaison stricte (l.unite===v) échouait → aucune option sélectionnée → le
+// navigateur affichait 'U' (1ère option) TOUT EN gardant 'forfait' en mémoire →
+// modale qui ment + impression incohérente. Solution : normaliser les données +
+// rendre le menu tolérant à la casse et préservant les valeurs inconnues.
+var UNITE_CANON=['U','Lot','H sup','H tech','Forfait','M','Kg'];
+// Ramène une unité à sa forme canonique (insensible à la casse). Valeur inconnue
+// (non vide) → préservée telle quelle. Vide/null → renvoyé tel quel.
+function _normUnite(u){
+  if(u==null) return u;
+  var s=String(u).trim();
+  if(!s) return s;
+  for(var i=0;i<UNITE_CANON.length;i++){
+    if(UNITE_CANON[i].toLowerCase()===s.toLowerCase()) return UNITE_CANON[i];
+  }
+  return s; // unité custom : on ne la perd pas
+}
+// Normalise en place la casse des unités d'un tableau de lignes (+ sous-lignes).
+function _normUniteArr(arr){
+  if(!Array.isArray(arr)) return;
+  arr.forEach(function(l){
+    if(!l) return;
+    if(l.unite!=null) l.unite=_normUnite(l.unite);
+    if(Array.isArray(l.subLines)) _normUniteArr(l.subLines);
+  });
+}
+// Construit les <option> d'un menu Uté en sélectionnant la valeur courante de
+// façon TOLÉRANTE (casse), et en ajoutant la valeur si elle n'est dans aucune
+// option (jamais de reset silencieux vers 'U').
+function _uteOpts(cur, base){
+  base=(base&&base.length)?base:['U','Lot','H sup','H tech','Forfait'];
+  var s=(cur==null?'':String(cur)).trim();
+  var sel=null;
+  for(var i=0;i<base.length;i++){ if(base[i].toLowerCase()===s.toLowerCase()){ sel=base[i]; break; } }
+  var opts=base.slice();
+  if(!sel && s){ opts.unshift(s); sel=s; } // valeur custom préservée et sélectionnée
+  if(!sel) sel=base[0];
+  return opts.map(function(v){ return '<option'+(v===sel?' selected':'')+'>'+esc(v)+'</option>'; }).join('');
+}
+// Migration one-shot : normalise la casse de toutes les unités de ligne
+// (factures + devis, lignes ET sous-lignes). Guard DB._unitesNormalizedV1.
+function normalizeAllUnites(){
+  if(!DB || DB._unitesNormalizedV1) return 0;
+  var changed=0;
+  function fixArr(arr){
+    if(!Array.isArray(arr)) return;
+    arr.forEach(function(l){
+      if(!l) return;
+      if(l.unite!=null){ var n=_normUnite(l.unite); if(n!==l.unite){ l.unite=n; changed++; } }
+      if(Array.isArray(l.subLines)) fixArr(l.subLines);
+    });
+  }
+  (DB.factures||[]).forEach(function(f){ if(f && Array.isArray(f.lines)) fixArr(f.lines); });
+  (DB.devis||[]).forEach(function(d){
+    if(d && d.lines){ ['fourniture','service','fret'].forEach(function(s){ fixArr(d.lines[s]); }); }
+  });
+  DB._unitesNormalizedV1=true;
+  if(changed>0){ console.log('[CALINSTRUM] Normalisation unités : '+changed+' ligne(s) corrigée(s)'); saveDB(); }
+  return changed;
 }
 
 // =============================================================================
@@ -6719,7 +6790,7 @@ function convertInvoiceToFacture(inv){
     lines:[{
       ref:'',
       designation:inv.intitule||'(sans description)',
-      tgc:0,unite:'forfait',qte:1,pu:inv.montant||0
+      tgc:0,unite:'Forfait',qte:1,pu:inv.montant||0
     }],
     ht:inv.montant||0,tgc:0,ttc:inv.montant||0,
     // Flags de traçabilité de la migration
@@ -9623,7 +9694,7 @@ function performImport(factures,devis,fileName,clientName){
         lines:[{
           ref:'',
           designation:row.intitule||row.num,
-          tgc:0,unite:'forfait',qte:1,pu:ttc
+          tgc:0,unite:'Forfait',qte:1,pu:ttc
         }],
         ht:ttc,tgc:0,ttc:ttc,
         phase:row.phase||phase,
@@ -18838,7 +18909,7 @@ function rDVlines(){
       if((isKitMain||isTaskMain) && !Array.isArray(l.subLines)) l.subLines=[];
 
       var tgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(l.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
-      var uteOpts=['U','Lot','H sup','H tech','Forfait','M'].map(function(v){return'<option'+(l.unite===v?' selected':'')+'>'+v+'</option>';}).join('');
+      var uteOpts=_uteOpts(l.unite, ['U','Lot','H sup','H tech','Forfait','M']);
       var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100));
 
       // === Sous-row AUD calculator (fourniture uniquement, sauf TASK où ça n'a pas de sens) ===
@@ -18892,7 +18963,7 @@ function rDVlines(){
         }
         var rowspan=subs.length;
         var taskTgcOpts=function(curT){return [0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(curT)===v?' selected':'')+'>'+v+'%</option>';}).join('');};
-        var taskUteOpts=function(curU){return ['U','Lot','H sup','H tech','Forfait','M'].map(function(v){return'<option'+(curU===v?' selected':'')+'>'+v+'</option>';}).join('');};
+        var taskUteOpts=function(curU){return _uteOpts(curU, ['U','Lot','H sup','H tech','Forfait','M']);};
         var totalTask=computeTaskTotal(l);
 
         // Helper : génère le HTML <td>×N pour une sous-ligne (TGC, Uté, Qté, PU, Total).
@@ -19138,6 +19209,7 @@ function markDVAsImported(devisId){
 }
 
 function getDV(){
+  if(dvL){['fourniture','service','fret'].forEach(function(s){_normUniteArr(dvL[s]);});} // unités canoniques
   var t=cDVtot();
   // Récupérer le linkFactureId + flags d'origine déjà existants pour ne pas les perdre lors d'un re-save
   var existing=eDVid?DB.devis.find(function(x){return x.id===eDVid;}):null;
@@ -26807,7 +26879,7 @@ function rFAlines(){
     _itemNo++;
     // === LIGNE NORMALE / KIT PRINCIPALE / TASK PRINCIPALE ===
     var tgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(l.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
-    var uteOpts=['U','Lot','H sup','H tech','Forfait'].map(function(v){return'<option'+(l.unite===v?' selected':'')+'>'+v+'</option>';}).join('');
+    var uteOpts=_uteOpts(l.unite);
     var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
     // Détection TASK : flag _isTaskMain OU (subLines présentes ET ligne mère sans prix ET sub-lignes chiffrées).
     // KIT : ligne mère porte le prix global, sub-lignes à pu=0 et descriptives.
@@ -26843,7 +26915,7 @@ function rFAlines(){
     if(hasSubLines){
       l.subLines.forEach(function(sub,si){
         var subTgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(sub.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
-        var subUteOpts=['U','Lot','H sup','H tech','Forfait'].map(function(v){return'<option'+(sub.unite===v?' selected':'')+'>'+v+'</option>';}).join('');
+        var subUteOpts=_uteOpts(sub.unite);
         var subBgColor = isTaskMain ? 'rgba(167,139,250,.02)' : 'rgba(59,130,246,.02)';
         var arrowColor = isTaskMain ? '#a78bfa' : '#3b82f6';
         if(isTaskMain){
@@ -27089,6 +27161,7 @@ function autoSplitVersements(){
 }
 
 function getFA(){
+  _normUniteArr(faL); // unités canoniques dans l'objet sauvé ET prévisualisé/imprimé
   var t=cFAtot();
   var totVerse=faVersements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
   // Récupérer suiviId existant + flags d'origine si on modifie une facture
