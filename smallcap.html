@@ -453,24 +453,56 @@ async function loadValidatorFeed(){
   renderTable();
 }
 function _claudeFor(k){ return CLAUDE_ANALYSIS[String(k).toUpperCase()]||null; }
+/* === Réconciliation — INVARIANT : on ne va vers le VERT que sur PREUVE DURE ; l'absence ne lève jamais un risque === */
 function reconcilePivots(k, analysis){
   var V=VALIDATOR_FEED[String(k).toUpperCase()]||{}, f=V.fundamentals||{}, ov=f.overhang||{}, ins=f.insiders||{}, filings=V.filings||[];
   var now=Date.now(), adate=(analysis&&analysis.date)?Date.parse(analysis.date):0;
   return ((analysis&&analysis.pivots)||[]).map(function(p){
-    var st=p.status||'active';
-    if(p.key==='lockup'){ var d=(ov.lockup&&ov.lockup.date)?Date.parse(ov.lockup.date):null; if(d){ st=(d<now)?'lifted':'pending'; } }
-    else if(p.key==='insider_buy'){ if(ins&&(ins.openMarketBuysN>0||ins.verdict==='strong'||ins.verdict==='neutral')) st='detected'; }
-    else if(p.key==='shelf'){ var hasShelf=!!ov.shelf||filings.some(function(x){return /S-3|424B/.test(x.form||'');}); if(!hasShelf) st='lifted'; }
-    else if(p.key==='warrants'){ if(ov.warrants&&ov.warrants.strike&&ov.warrants.price&&Number(ov.warrants.price)<Number(ov.warrants.strike)) st='lifted'; }
-    else if(p.key==='contract_101'){ var hit=filings.some(function(x){ return (x.items||[]).indexOf('1.01')>=0 && x.nature==='contrat' && (!adate||Date.parse(x.date)>=adate); }); if(hit) st='detected'; }
-    return {type:p.type,key:p.key,label:p.label,watch:p.watch,status:st};
+    var st=p.status||(p.type==='veto'?'active':'pending'), live=false;
+    if(p.key==='lockup'){
+      var d=(ov.lockup&&ov.lockup.date)?Date.parse(ov.lockup.date):null, estimated=(ov.lockup&&ov.lockup.source==='estimated');
+      if(d){ live=true;
+        if(d<now) st='lifted';                            // preuve dure : date passée → levé
+        else if(st!=='lifted'&&!estimated) st='pending';  // future fiable → à surveiller ; n'écrase JAMAIS un 'lifted' Opus, ni sur estimation
+      }
+    } else if(p.key==='warrants'){
+      if(ov.warrants&&ov.warrants.strike!=null&&ov.warrants.price!=null){ live=true;
+        st=(Number(ov.warrants.price)<Number(ov.warrants.strike))?'dormant':'active'; // hors-monnaie = DORMANT (pas levé : un rallye les ré-arme)
+      }
+    } else if(p.key==='insider_buy'){
+      if(ins&&ins.verdict){ live=true;
+        if(ins.verdict==='strong') st='detected';          // cluster + dirigeants clés + open-market
+        else if(ins.verdict==='neutral') st='partial';     // achats modestes → ambre, pas vert
+        // 'noise'/'sell' → reste en attente
+      }
+    } else if(p.key==='contract_101'){
+      live=true;
+      var hit=adate && filings.some(function(x){ return (x.items||[]).indexOf('1.01')>=0 && x.nature==='contrat' && Date.parse(x.date)>=adate; });
+      if(hit) st='unverified';   // nouveau 1.01 : détecté MAIS un 1.01 peut être du capex → à confirmer (ambre), jamais vert sans ré-analyse
+    }
+    // shelf / governance / inst_13f / … : aucune levée automatique possible → statut Opus conservé (instantané)
+    return {type:p.type,key:p.key,label:p.label,watch:p.watch,status:st,isLive:live};
   });
 }
-function pivotChipCls(p){ if(p.status==='lifted'||p.status==='detected')return 'p-green'; if(p.type==='veto')return (p.key==='lockup'&&p.status==='pending')?'p-amber':'p-red'; return 'p-gray'; }
+/* === Source UNIQUE de vérité couleur/label (type × statut) — utilisée par cellule, drawer, surbrillance === */
+function pivotView(p){
+  if(p.type==='veto'){
+    if(p.status==='lifted')  return {bucket:'green',label:'LEVÉ',icon:'ti-circle-check'};
+    if(p.status==='dormant') return {bucket:'amber',label:'DORMANT',icon:'ti-alert-triangle'};
+    if(p.status==='pending') return {bucket:'amber',label:'À SURVEILLER',icon:'ti-alert-triangle'};
+    return {bucket:'red',label:'ACTIF',icon:'ti-shield-half'};
+  }
+  if(p.status==='detected')   return {bucket:'green',label:'DÉTECTÉ',icon:'ti-circle-check'};
+  if(p.status==='partial')    return {bucket:'amber',label:'PARTIEL',icon:'ti-alert-triangle'};
+  if(p.status==='unverified') return {bucket:'amber',label:'À CONFIRMER',icon:'ti-alert-triangle'};
+  return {bucket:'gray',label:'EN ATTENTE',icon:'ti-clock'};
+}
+var _PB2CLS={red:'p-red',amber:'p-amber',green:'p-green',gray:'p-gray'};
 function pivotsCellHtml(k){
   var a=_claudeFor(k); if(!a) return '<span class="cl-na">—</span>';
   var pivs=reconcilePivots(k,a); if(!pivs.length) return '<span class="cl-na">—</span>';
-  return '<div class="piv">'+pivs.slice(0,3).map(function(p){ var ok=(p.status==='lifted'||p.status==='detected'); return '<span class="pchip '+pivotChipCls(p)+'">'+esc0(p.label)+(ok?' ✓':'')+'</span>'; }).join('')+'</div>';
+  return '<div class="piv">'+pivs.slice(0,3).map(function(p){ var v=pivotView(p), green=(v.bucket==='green');
+    return '<span class="pchip '+_PB2CLS[v.bucket]+'"'+(!p.isLive?' title="instantané de l\'analyse — non re-confronté au feed"':'')+'>'+esc0(p.label)+(green?' ✓':'')+(!p.isLive?' <span class="snap">◷</span>':'')+'</span>'; }).join('')+'</div>';
 }
 function claudeCellHtml(k){
   var a=_claudeFor(k); if(!a) return '<span class="cl-none">—</span>';
@@ -478,20 +510,21 @@ function claudeCellHtml(k){
   var rel=(days==null)?'':(days<=0?"auj.":days===1?'hier':'il y a '+days+' j');
   return '<button class="cbtn" onclick="event.stopPropagation();openClaudeDrawer(\''+k+'\')"><i class="ti ti-sparkles"></i> Voir</button><span class="cdate">'+dd+(rel?' · '+rel:'')+'</span>';
 }
-function rowIsBright(k){ var a=_claudeFor(k); if(!a)return false; var pivs=reconcilePivots(k,a); var hasRed=pivs.some(function(p){return pivotChipCls(p)==='p-red';}); var hasGreenCat=pivs.some(function(p){return p.type==='catalyst'&&p.status==='detected';}); return !hasRed&&hasGreenCat; }
+function rowIsBright(k){ var a=_claudeFor(k); if(!a)return false; var pivs=reconcilePivots(k,a);
+  var blocked=pivs.some(function(p){ var b=pivotView(p).bucket; return p.type==='veto'&&(b==='red'||b==='amber'); }); // un véto rouge OU ambre suffit à NE PAS illuminer
+  var greenCat=pivs.some(function(p){ return p.type==='catalyst'&&pivotView(p).bucket==='green'; });
+  return !blocked&&greenCat; }
 function openClaudeDrawer(k){
   var a=_claudeFor(k); if(!a)return; var m=document.getElementById('clDrawer'); if(!m)return;
   var pivs=reconcilePivots(k,a), V=a.verdict||{}, vtxt=V.text?esc0(V.text):'', vlab=V.label?esc0(V.label):'';
-  var rows=pivs.map(function(p){ var cls=pivotChipCls(p), ok=(p.status==='lifted'||p.status==='detected');
-    var stLab=ok?(p.status==='lifted'?'LEVÉ':'DÉTECTÉ'):(p.type==='veto'?(cls==='p-amber'?'À SURVEILLER':'ACTIF'):'EN ATTENTE');
-    var ic=ok?'ti-circle-check':(p.type==='veto'?'ti-shield-half':'ti-clock');
-    return '<div class="dpiv"><div class="ico '+cls+'"><i class="ti '+ic+'"></i></div><div><div class="lab">'+esc0(p.label)+'</div>'+(p.watch?'<div class="watch">attend : '+esc0(p.watch)+'</div>':'')+'</div><span class="stt '+cls+'">'+stLab+'</span></div>'; }).join('');
+  var rows=pivs.map(function(p){ var v=pivotView(p), cls=_PB2CLS[v.bucket];
+    return '<div class="dpiv"><div class="ico '+cls+'"><i class="ti '+v.icon+'"></i></div><div><div class="lab">'+esc0(p.label)+(!p.isLive?' <span class="snap" title="instantané — non re-confronté au feed">◷</span>':'')+'</div>'+(p.watch?'<div class="watch">attend : '+esc0(p.watch)+'</div>':'')+'</div><span class="stt '+cls+'">'+v.label+'</span></div>'; }).join('');
   var dd=(a.date||'').slice(0,10);
   document.getElementById('clDrawerBody').innerHTML=
     '<div class="dh"><span class="tk">'+esc0(k)+'</span><span class="badge"><i class="ti ti-sparkles"></i> Validateur · Opus</span><span class="ts">analysé le '+dd+'</span></div>'
    +(vtxt?'<div class="dv">'+(vlab?'<b>'+vlab+'</b> — ':'')+vtxt+'</div>':'')
    +(rows?'<div class="dpivs">'+rows+'</div>':'<div class="cl-na" style="padding:8px 0">Aucun point de bascule enregistré.</div>')
-   +'<div class="dnote"><i class="ti ti-history"></i> Instantané du '+dd+' — statuts re-confrontés au feed à chaque refresh.</div>'
+   +'<div class="dnote"><i class="ti ti-history"></i> Les points sans <span class="snap">◷</span> sont <b>re-confrontés au feed</b> (évoluent en live) ; ceux marqués <span class="snap">◷</span> sont l\'<b>instantané du '+dd+'</b> — relance « Approfondir » pour les rafraîchir.</div>'
    +'<a class="dbtn" href="validateur.html?tk='+encodeURIComponent(k)+'"><i class="ti ti-external-link"></i> Rouvrir dans le Validateur (analyse fraîche)</a>';
   m.classList.add('open');
 }
@@ -795,6 +828,7 @@ loadValidatorFeed();
 .pchip.p-amber{background:rgba(239,159,39,.14);color:var(--amber)}
 .pchip.p-green{background:rgba(93,202,165,.16);color:var(--green)}
 .pchip.p-gray{background:var(--bg4);color:var(--muted-soft)}
+.snap{opacity:.55;font-size:8.5px;font-weight:400}
 tr.row-bright>td{background:rgba(93,202,165,.045)}
 .cldrawer{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;z-index:9998;padding:40px 16px;overflow-y:auto}
 .cldrawer.open{display:flex}
