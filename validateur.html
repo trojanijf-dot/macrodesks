@@ -770,7 +770,10 @@ async function loadInstAnalysis(){
  $('instAnalysis').innerHTML='<div class="ia-empty"><i class="ti ti-loader-2"></i> Opus lit les documents EDGAR de '+iaEsc(tk)+'… (15-40 s)</div>';
  try{
   var r=await fetch(INST_WEBHOOK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:tk})});
-  var d=await r.json();if(d&&d.analysis)d=d.analysis; // tolère {analysis:{…}} ou {…}
+  var txt=await r.text(); // lecture tolérante : un corps vide ne casse plus avec un message cryptique
+  var d=null; try{ d=txt?JSON.parse(txt):null; }catch(e){ d=null; }
+  if(d&&d.analysis)d=d.analysis; // tolère {analysis:{…}} ou {…}
+  if(!d){ renderInstEmpty('⚠️ <b>Réponse vide du webhook.</b> Vérifie côté n8n : le node <b>Webhook</b> doit répondre via <b>« Using Respond to Webhook Node »</b> (sinon il attend le dernier node). HTTP '+r.status+'.'); return; }
   renderInstAnalysis(d);
  }catch(e){renderInstEmpty('❌ Échec de l\'analyse ('+iaEsc(e.message||e)+'). Réessaie.');}
  finally{if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-scan"></i> Approfondir (Opus)';}}
