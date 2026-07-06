@@ -1584,10 +1584,19 @@ body.has-dashboard-bg #page-dashboard .metric{
 
   <!-- Onglet PAIE (Phase 2) -->
   <div class="tab-pane" id="ptTab-paie">
-    <div style="padding:30px;text-align:center;color:var(--muted);font-size:13px">
-      💰 <b>Paie — agrégation mois civil</b><br><br>Phase 2 du chantier Pointage (à venir) :<br>
-      ventilation HNJ / HS+25% / HS+50% / Dim+75% / Nuit+100% / Férié par salarié,<br>brut heures chiffré (tarif paie × majorations) et export PDF pour le comptable.
+    <div class="flex-between mb12 no-print" style="flex-wrap:wrap;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-ghost btn-sm" onclick="ptPaieNav(-1)">◀</button>
+        <span id="ptPaieLabel" style="font-weight:700;font-size:13px;min-width:170px;text-align:center"></span>
+        <button class="btn btn-ghost btn-sm" onclick="ptPaieNav(1)">▶</button>
+        <button class="btn btn-ghost btn-sm" onclick="ptPaieToday()">Mois courant</button>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <label class="no-pm-blur" style="font-size:11px;color:var(--muted)" title="Majoration paie d'un jour férié travaillé (barème A.I.T. — modifiable)">Férié travaillé : +<input type="number" id="ptFerieMaj" min="0" max="200" step="5" style="width:56px;text-align:center;padding:3px 5px;margin:0 2px" onchange="ptSetFerieMaj(this.value)">%</label>
+        <button class="btn btn-ghost btn-sm" onclick="ptPaiePrint()" title="Imprimer / PDF du récapitulatif paie du mois pour le comptable">🖨 Export PDF paie</button>
+      </div>
     </div>
+    <div id="ptPaieBody"></div>
   </div>
 
   <!-- Onglet FACTURATION (Phase 3) -->
@@ -5464,6 +5473,7 @@ function st(grp,tab){
   if(grp==='suiviTab'&&tab==='dossiers') renderDossiers();
   if(grp==='ptTab'&&tab==='saisie') renderPtSaisie();
   if(grp==='ptTab'&&tab==='salaries') renderEmployes();
+  if(grp==='ptTab'&&tab==='paie') renderPtPaie();
 }
 
 // ===== SUIVI FACTURES =====
@@ -38191,6 +38201,190 @@ function ptDelTarifClient(cl){
   _ensurePointageShape();
   delete DB.tarifsPointage[cl];
   saveDB();renderPtTarifs();
+}
+
+// =============================================================================
+// AGRÉGATEUR DE PÉRIODE — cœur réutilisé par Paie (mois civil) ET facturation
+// (MMB 21→20, shutdown). Somme les résultats JOUR PAR JOUR de ptComputeWeek
+// pour tous les jours compris dans [startIso, endIso] inclus. C'est ce qui
+// gère proprement les semaines à cheval (un même lundi-vendredi peut être
+// scindé entre 2 mois/MMB), car ptComputeWeek renvoie days[7].
+// -----------------------------------------------------------------------------
+// Retour : { byEmp:{ empId:{hnj,hs25,hs50,dim,fer,nuit,totalJour,totalNuit,
+//                          joursConges,joursChome,joursFerie} },
+//            emps:[employés concernés], weeks:[mondays contributifs],
+//            totals:{...somme globale...} }
+// Filtre optionnel opts.site : ne compter que les semaines de ce site/client.
+// =============================================================================
+function ptAggregatePeriod(startIso,endIso,opts){
+  _ensurePointageShape();
+  opts=opts||{};
+  var byEmp={},weeksSet={};
+  var totals={hnj:0,hs25:0,hs50:0,dim:0,fer:0,nuit:0,totalJour:0,totalNuit:0};
+  (DB.pointages||[]).forEach(function(w){
+    if(!w||!w.monday)return;
+    if(opts.site && (w.site||'')!==opts.site)return;
+    // La semaine chevauche-t-elle la période ? (lundi..dimanche)
+    var wEnd=_ptAddDays(w.monday,6);
+    if(wEnd<startIso || w.monday>endIso)return;
+    weeksSet[w.monday]=true;
+    var entries=w.entries||{};
+    Object.keys(entries).forEach(function(empId){
+      var calc=ptComputeWeek(entries[empId]);
+      for(var i=0;i<7;i++){
+        var dIso=_ptAddDays(w.monday,i);
+        if(dIso<startIso || dIso>endIso)continue; // jour hors période
+        var d=calc.days[i];
+        var acc=byEmp[empId]||(byEmp[empId]={hnj:0,hs25:0,hs50:0,dim:0,fer:0,nuit:0,totalJour:0,totalNuit:0,joursConges:0,joursChome:0,joursFerie:0});
+        acc.hnj+=d.hnj;acc.hs25+=d.hs25;acc.hs50+=d.hs50;acc.dim+=d.dim;acc.fer+=d.fer;acc.nuit+=d.nuit;
+        var hj=(Number(entries[empId].jour&&entries[empId].jour[i])||0);
+        acc.totalJour+=hj;acc.totalNuit+=(Number(entries[empId].nuit&&entries[empId].nuit[i])||0);
+        var st=(entries[empId].statut&&entries[empId].statut[i])||'';
+        if(st==='C')acc.joursConges++;else if(st==='CH')acc.joursChome++;else if(st==='F')acc.joursFerie++;
+        totals.hnj+=d.hnj;totals.hs25+=d.hs25;totals.hs50+=d.hs50;totals.dim+=d.dim;totals.fer+=d.fer;totals.nuit+=d.nuit;
+        totals.totalJour+=hj;totals.totalNuit+=(Number(entries[empId].nuit&&entries[empId].nuit[i])||0);
+      }
+    });
+  });
+  var emps=(DB.employes||[]).filter(function(e){return byEmp[e.id];});
+  return {byEmp:byEmp,emps:emps,weeks:Object.keys(weeksSet).sort(),totals:totals};
+}
+
+// Coefficients de majoration (base = tarif horaire, multiplié). Le férié est
+// paramétrable (barème A.I.T.) via DB.params.paieFerieMaj (défaut +50%).
+function _ptFerieMaj(){
+  _ensurePointageShape();
+  var v=(DB.params&&DB.params.paieFerieMaj);
+  return (v==null||isNaN(Number(v)))?50:Number(v);
+}
+// Total d'heures pondérées (pour le brut) d'un bloc agrégé, à partir d'un tarif.
+function _ptBrut(agg,tarif){
+  var ferMult=1+_ptFerieMaj()/100;
+  return Math.round(tarif*(agg.hnj + 1.25*agg.hs25 + 1.5*agg.hs50 + 1.75*agg.dim + ferMult*agg.fer + 2*agg.nuit));
+}
+
+// =============================================================================
+// UI — PAIE (mois civil)
+// =============================================================================
+var ptPaieMonth=null; // {y, m} m=1..12
+function _ptMonthBounds(y,m){
+  var start=y+'-'+String(m).padStart(2,'0')+'-01';
+  var last=new Date(y,m,0).getDate();
+  var end=y+'-'+String(m).padStart(2,'0')+'-'+String(last).padStart(2,'0');
+  return {start:start,end:end};
+}
+var _PT_MOIS=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+function renderPtPaie(){
+  seedEmployes();
+  if(!ptPaieMonth){var t=td().split('-');ptPaieMonth={y:+t[0],m:+t[1]};}
+  var mi=document.getElementById('ptFerieMaj');if(mi&&mi.value==='')mi.value=_ptFerieMaj();
+  sv('ptPaieLabel',_PT_MOIS[ptPaieMonth.m-1]+' '+ptPaieMonth.y);
+  var b=_ptMonthBounds(ptPaieMonth.y,ptPaieMonth.m);
+  var agg=ptAggregatePeriod(b.start,b.end);
+  var body=document.getElementById('ptPaieBody');
+  if(!body)return;
+  if(!agg.emps.length){
+    body.innerHTML='<div style="padding:26px;text-align:center;color:var(--muted);font-size:13px">Aucune heure pointée sur '+_PT_MOIS[ptPaieMonth.m-1]+' '+ptPaieMonth.y+'.</div>';
+    return;
+  }
+  var rows=agg.emps.map(function(e){
+    var a=agg.byEmp[e.id];
+    var totalH=a.hnj+a.hs25+a.hs50+a.dim+a.fer+a.nuit;
+    var brut=_ptBrut(a,Number(e.tarifPaie)||0);
+    var joursOff=[];
+    if(a.joursConges)joursOff.push(a.joursConges+' C');
+    if(a.joursChome)joursOff.push(a.joursChome+' Ch');
+    if(a.joursFerie)joursOff.push(a.joursFerie+' F');
+    return '<tr><td><b>'+esc(e.nom)+'</b> '+esc(e.prenom||'')+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(a.hnj)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);color:#fbbf24">'+fH(a.hs25)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);color:#f87171">'+fH(a.hs50)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);color:#f59e0b">'+fH(a.dim)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);color:#a78bfa">'+fH(a.nuit)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(a.fer)+'</td>'+
+      '<td style="text-align:right;font-weight:700;font-family:var(--mono)">'+fH(totalH)+'</td>'+
+      '<td style="text-align:right;font-size:10px;color:var(--muted)">'+(joursOff.join(' · ')||'—')+'</td>'+
+      '<td style="text-align:right;font-weight:700;font-family:var(--mono);color:var(--teal)"><span data-money>'+fN(brut)+'</span></td></tr>';
+  }).join('');
+  var T=agg.totals;
+  var totBrut=agg.emps.reduce(function(s,e){return s+_ptBrut(agg.byEmp[e.id],Number(e.tarifPaie)||0);},0);
+  var totalHAll=T.hnj+T.hs25+T.hs50+T.dim+T.fer+T.nuit;
+  body.innerHTML='<div class="tbl-wrap"><table>'+
+    '<thead class="no-pm-blur"><tr><th>Salarié</th><th style="text-align:right">HNJ</th><th style="text-align:right">+25%</th><th style="text-align:right">+50%</th><th style="text-align:right">Dim +75%</th><th style="text-align:right">Nuit +100%</th><th style="text-align:right">Férié</th><th style="text-align:right">Total h</th><th style="text-align:right">Jours off</th><th style="text-align:right">Brut heures (XPF)</th></tr></thead>'+
+    '<tbody>'+rows+'</tbody>'+
+    '<tfoot><tr style="border-top:2px solid var(--border);font-weight:700">'+
+      '<td>TOTAL</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(T.hnj)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(T.hs25)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(T.hs50)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(T.dim)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(T.nuit)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(T.fer)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(totalHAll)+'</td>'+
+      '<td></td>'+
+      '<td style="text-align:right;font-family:var(--mono);color:var(--teal)"><span data-money>'+fN(totBrut)+'</span></td>'+
+    '</tr></tfoot></table></div>'+
+    '<div class="no-pm-blur" style="margin-top:8px;font-size:10.5px;color:var(--muted-soft)">Brut heures = tarif horaire paie du salarié × (HNJ + 1,25·HS25 + 1,5·HS50 + 1,75·Dim + '+(1+_ptFerieMaj()/100).toString().replace('.',',')+'·Férié + 2·Nuit). Répartition jour par jour → un mois à cheval sur une semaine est découpé exactement. Jours off : C=congés, Ch=chômé, F=férié.</div>';
+}
+function ptPaieNav(dir){
+  if(!ptPaieMonth){var t=td().split('-');ptPaieMonth={y:+t[0],m:+t[1]};}
+  var m=ptPaieMonth.m+dir,y=ptPaieMonth.y;
+  if(m<1){m=12;y--;}if(m>12){m=1;y++;}
+  ptPaieMonth={y:y,m:m};renderPtPaie();
+}
+function ptPaieToday(){var t=td().split('-');ptPaieMonth={y:+t[0],m:+t[1]};renderPtPaie();}
+function ptSetFerieMaj(v){
+  _ensurePointageShape();
+  if(!DB.params)DB.params={};
+  var n=Number(v);DB.params.paieFerieMaj=(isNaN(n)||n<0)?50:n;
+  saveDB();renderPtPaie();
+}
+// Impression du récap paie (document blanc, moteur natif window.open comme les BC/BL)
+function ptPaiePrint(){
+  if(!ptPaieMonth)return;
+  var b=_ptMonthBounds(ptPaieMonth.y,ptPaieMonth.m);
+  var agg=ptAggregatePeriod(b.start,b.end);
+  var moisLbl=_PT_MOIS[ptPaieMonth.m-1]+' '+ptPaieMonth.y;
+  if(!agg.emps.length){alert('Aucune heure pointée sur '+moisLbl);return;}
+  var ferMult=(1+_ptFerieMaj()/100).toString().replace('.',',');
+  var rows=agg.emps.map(function(e){
+    var a=agg.byEmp[e.id];
+    var totalH=a.hnj+a.hs25+a.hs50+a.dim+a.fer+a.nuit;
+    var brut=_ptBrut(a,Number(e.tarifPaie)||0);
+    var off=[];if(a.joursConges)off.push(a.joursConges+'C');if(a.joursChome)off.push(a.joursChome+'Ch');if(a.joursFerie)off.push(a.joursFerie+'F');
+    return '<tr><td>'+esc(e.nom)+' '+esc(e.prenom||'')+'</td>'+
+      '<td class="n">'+fH(a.hnj)+'</td><td class="n">'+fH(a.hs25)+'</td><td class="n">'+fH(a.hs50)+'</td>'+
+      '<td class="n">'+fH(a.dim)+'</td><td class="n">'+fH(a.nuit)+'</td><td class="n">'+fH(a.fer)+'</td>'+
+      '<td class="n" style="font-weight:700">'+fH(totalH)+'</td><td class="n">'+(off.join(' ')||'—')+'</td>'+
+      '<td class="n" style="font-weight:700">'+fN(brut)+'</td></tr>';
+  }).join('');
+  var T=agg.totals,totalHAll=T.hnj+T.hs25+T.hs50+T.dim+T.fer+T.nuit;
+  var totBrut=agg.emps.reduce(function(s,e){return s+_ptBrut(agg.byEmp[e.id],Number(e.tarifPaie)||0);},0);
+  var logo=(typeof LG_PLACEHOLDER!=='undefined')?LG_PLACEHOLDER:'';
+  var html='<div class="doc">'+
+    '<div class="dh"><div><div class="dt">RÉCAPITULATIF PAIE — HEURES</div><div class="ds">Mois : '+esc(moisLbl)+' · période du '+fD(b.start)+' au '+fD(b.end)+'</div></div>'+
+    '<div class="bd"><img src="'+logo+'" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div>'+
+    '<table class="t"><thead><tr><th>Salarié</th><th class="n">HNJ</th><th class="n">+25%</th><th class="n">+50%</th><th class="n">Dim+75%</th><th class="n">Nuit+100%</th><th class="n">Férié</th><th class="n">Total h</th><th class="n">Jours off</th><th class="n">Brut heures (XPF)</th></tr></thead>'+
+    '<tbody>'+rows+'</tbody>'+
+    '<tfoot><tr><td>TOTAL</td><td class="n">'+fH(T.hnj)+'</td><td class="n">'+fH(T.hs25)+'</td><td class="n">'+fH(T.hs50)+'</td><td class="n">'+fH(T.dim)+'</td><td class="n">'+fH(T.nuit)+'</td><td class="n">'+fH(T.fer)+'</td><td class="n">'+fH(totalHAll)+'</td><td></td><td class="n">'+fN(totBrut)+'</td></tr></tfoot></table>'+
+    '<div class="note">Brut heures = tarif horaire × (HNJ + 1,25·HS25 + 1,5·HS50 + 1,75·Dim + '+ferMult+'·Férié + 2·Nuit). Document interne CALINSTRUM — base pour l\'établissement des fiches de paie.</div>'+
+    '</div>';
+  var css='body{font-family:Calibri,Arial,sans-serif;margin:0;padding:16px;color:#111;font-size:11px}'+
+    '.doc{max-width:900px;margin:0 auto}'+
+    '.dh{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:12px}'+
+    '.dt{font-size:17px;font-weight:900;color:#1e3a5f}.ds{font-size:10px;color:#555;margin-top:2px}'+
+    '.bd{text-align:center}.bd img{height:46px;display:block;margin:0 auto 3px}.bn{font-size:12px;font-weight:900;color:#1e3a5f;letter-spacing:1px}'+
+    '.t{width:100%;border-collapse:collapse;font-size:10.5px}'+
+    '.t th{background:#1e3a5f;color:#fff;padding:5px 6px;text-align:left;font-size:9.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    '.t td{border:1px solid #d7dee8;padding:4px 6px}.t .n{text-align:right;font-variant-numeric:tabular-nums}'+
+    '.t tfoot td{background:#eef2f7;font-weight:800;color:#1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    '.note{margin-top:10px;font-size:9.5px;color:#555;font-style:italic}';
+  var title='PAIE CALINSTRUM '+moisLbl.replace(/\s/g,' ');
+  var w=window.open('','_blank','');
+  if(!w){alert('Autorisez les popups pour imprimer.');return;}
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
+  w.document.close();w.focus();
+  setTimeout(function(){try{w.print();}catch(e){}},350);
 }
 
 // ===== CLIENTS =====
