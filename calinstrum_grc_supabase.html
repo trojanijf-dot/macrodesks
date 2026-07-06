@@ -1563,6 +1563,22 @@ body.has-dashboard-bg #page-dashboard .metric{
       <table><thead><tr><th>Nom</th><th>Prénom</th><th>Poste</th><th>Qualification</th><th style="text-align:right">Tarif horaire paie (XPF)</th><th>Régime</th><th>Actif</th><th class="no-print">Actions</th></tr></thead>
       <tbody id="tbEMP"></tbody></table>
     </div>
+    <!-- Grilles de tarifs de VENTE par client : tarif de base éditable par salarié,
+         majorations +25/+50/+75/+100% dérivées automatiquement. Appliquées dans la
+         Saisie semaine dès que le Site/Client de la semaine est choisi. -->
+    <div style="margin-top:22px">
+      <div class="flex-between mb12" style="flex-wrap:wrap;gap:8px">
+        <div>
+          <div style="font-weight:700;font-size:13px">💱 Tarifs horaires de VENTE par client</div>
+          <div style="font-size:11px;color:var(--muted)">Tarif de base (heures normales) par salarié et par client — les majorations se calculent automatiquement. Modifiables à tout moment.</div>
+        </div>
+        <div class="no-print" style="display:flex;gap:8px;align-items:center">
+          <select class="filter-sel" id="ptTarifNewClient"></select>
+          <button class="btn btn-ghost" onclick="ptAddTarifClient()">+ Ajouter une grille client</button>
+        </div>
+      </div>
+      <div id="ptTarifsWrap"></div>
+    </div>
   </div>
 
   <!-- Onglet PAIE (Phase 2) -->
@@ -37879,6 +37895,7 @@ function ptWeekToday(){ptMonday=_ptMondayOf(td());renderPtSaisie();}
 function ptSetSite(v){
   var rec=_ptGetWeek(ptMonday,true);
   rec.site=v;saveDB();
+  renderPtSaisie(); // rafraîchit les pastilles tarif par salarié
 }
 // Liste des sites/clients proposés : clients de la DB + Atelier
 function _ptSiteOptions(cur){
@@ -37924,9 +37941,19 @@ function renderPtSaisie(){
     var entry=(rec.entries&&rec.entries[emp.id])||{jour:[],nuit:[],statut:[]};
     var calc=ptComputeWeek(entry);
     var regBadge=emp.regime==='Quart 4x4'?' <span style="background:rgba(245,158,11,.14);color:#f59e0b;font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:8px">4x4</span>':'';
+    // Pastille tarif : le Site/Client de la semaine applique la grille configurée
+    // dans l'onglet Salariés (tarif de base × majorations auto).
+    var tarifChip='';
+    var site=(rec.site||'');
+    if(site&&site.indexOf('Atelier')<0){
+      var tf=_ptTarifFor(site,emp.id);
+      tarifChip=tf
+        ? '<div style="margin-top:3px"><span style="background:rgba(45,212,191,.12);color:var(--teal);font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px" title="Tarif de vente '+esc(site)+' : base '+fN(tf)+' XPF/h (majorations auto ×1,25 / ×1,5 / ×1,75 / ×2)">'+esc(site)+' '+fN(tf)+'/h</span></div>'
+        : '<div style="margin-top:3px"><span style="background:rgba(245,158,11,.12);color:#f59e0b;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px" title="Aucun tarif configuré pour '+esc(site)+' — onglet Salariés → Tarifs horaires de vente par client">⚠ tarif '+esc(site)+' ?</span></div>';
+    }
     // Ligne JOUR
     html+='<tr><td rowspan="2" style="vertical-align:middle"><b>'+esc(emp.nom)+' '+esc((emp.prenom||'').charAt(0))+'.</b>'+regBadge+
-      '<button class="btn btn-ghost btn-sm no-print" style="font-size:9px;padding:1px 6px;margin-left:6px" onclick="ptFill4x4('+emp.id+')" title="Pré-remplir le quart 4x4 : 11,5 h sur L-M-M-J (ajuste ensuite les jours réels)">⚡</button></td>'+
+      '<button class="btn btn-ghost btn-sm no-print" style="font-size:9px;padding:1px 6px;margin-left:6px" onclick="ptFill4x4('+emp.id+')" title="Pré-remplir le quart 4x4 : 11,5 h sur L-M-M-J (ajuste ensuite les jours réels)">⚡</button>'+tarifChip+'</td>'+
       '<td style="color:var(--muted);font-size:10px">Jour</td>';
     for(var i=0;i<7;i++){
       var stKey=(entry.statut&&entry.statut[i])||'';
@@ -38025,6 +38052,7 @@ function renderEmployes(){
       '<td class="no-print"><button class="btn btn-ghost btn-sm" onclick="openEMP('+e.id+')">✏️</button> '+
       '<button class="btn btn-ghost btn-sm" onclick="delEMP('+e.id+')" title="Désactive le salarié (historique de pointage conservé)">🗑</button></td></tr>';
   }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px">Aucun salarié</td></tr>';
+  renderPtTarifs();
 }
 function openEMP(id){
   eEMPid=id||null;
@@ -38070,6 +38098,97 @@ function delEMP(id){
     DB.employes=DB.employes.filter(function(x){return x.id!==id;});
   }
   saveDB();renderEmployes();
+}
+
+// =============================================================================
+// TARIFS DE VENTE PAR CLIENT × SALARIÉ
+// -----------------------------------------------------------------------------
+// DB.tarifsPointage = { [clientPrefix]: { [empId]: tarifBaseXPF } }
+// Le tarif de BASE (heures normales) est saisi par salarié dans la grille du
+// client ; les majorations sont DÉRIVÉES : +25% ×1,25 · +50% ×1,5 · Dim ×1,75 ·
+// Nuit ×2 (conforme facture AEI réelle : 5 000 → 6 250 = ×1,25).
+// Appliqué dans la Saisie semaine via le Site/Client de la semaine.
+// =============================================================================
+function _ptTarifFor(clientPfx,empId){
+  _ensurePointageShape();
+  var g=DB.tarifsPointage[clientPfx];
+  if(!g)return null;
+  var v=Number(g[empId]);
+  return (v>0)?v:null;
+}
+// Préfixes clients disponibles pour une nouvelle grille (pas encore configurés)
+function _ptTarifAvailableClients(){
+  var have=Object.keys(DB.tarifsPointage||{});
+  var opts=[];
+  (DB.clients||[]).forEach(function(c){
+    var pfx=getClientPrefix(c.nom||'');
+    if(pfx&&have.indexOf(pfx)<0&&opts.indexOf(pfx)<0)opts.push(pfx);
+  });
+  return opts;
+}
+function renderPtTarifs(){
+  _ensurePointageShape();
+  // Select des clients ajoutables
+  var sel=document.getElementById('ptTarifNewClient');
+  if(sel){
+    var avail=_ptTarifAvailableClients();
+    sel.innerHTML=avail.length
+      ? avail.map(function(o){return '<option value="'+esc(o)+'">'+esc(o)+'</option>';}).join('')
+      : '<option value="">(tous les clients ont une grille)</option>';
+  }
+  var wrap=document.getElementById('ptTarifsWrap');
+  if(!wrap)return;
+  var clients=Object.keys(DB.tarifsPointage||{}).sort();
+  if(!clients.length){
+    wrap.innerHTML='<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px;border:1px dashed var(--border);border-radius:8px">Aucune grille tarifaire — ajoute un client ci-dessus (ex : PRNC, AEI, SLN) puis renseigne le tarif de base de chaque salarié.</div>';
+    return;
+  }
+  var emps=(DB.employes||[]).filter(function(e){return e.actif!==false;});
+  wrap.innerHTML=clients.map(function(cl){
+    var g=DB.tarifsPointage[cl]||{};
+    var rows=emps.map(function(e){
+      var base=Number(g[e.id])||'';
+      var b=Number(base)||0;
+      function m(x){return b>0?fN(Math.round(b*x)):'—';}
+      return '<tr><td><b>'+esc(e.nom)+'</b> '+esc(e.prenom||'')+' <span style="color:var(--muted-soft);font-size:10px">'+esc(e.qualification||e.poste||'')+'</span></td>'+
+        '<td style="text-align:right"><input type="number" min="0" step="50" value="'+base+'" placeholder="—" '+
+          'onchange="ptSetTarif(\''+esc(cl)+'\','+e.id+',this.value)" '+
+          'style="width:90px;text-align:right;padding:4px 6px;font-family:var(--mono)"></td>'+
+        '<td style="text-align:right;font-family:var(--mono);color:#fbbf24">'+m(1.25)+'</td>'+
+        '<td style="text-align:right;font-family:var(--mono);color:#f87171">'+m(1.5)+'</td>'+
+        '<td style="text-align:right;font-family:var(--mono);color:#f59e0b">'+m(1.75)+'</td>'+
+        '<td style="text-align:right;font-family:var(--mono);color:#a78bfa">'+m(2)+'</td></tr>';
+    }).join('');
+    return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px">'+
+      '<div class="flex-between" style="margin-bottom:8px">'+
+        '<div style="font-weight:700;font-size:12.5px;color:var(--teal)">'+esc(cl)+'</div>'+
+        '<button class="btn btn-ghost btn-sm no-print" onclick="ptDelTarifClient(\''+esc(cl)+'\')" title="Supprimer cette grille tarifaire">🗑</button>'+
+      '</div>'+
+      '<table style="width:100%"><thead><tr><th>Salarié</th><th style="text-align:right">Tarif base HNJ (XPF/h)</th><th style="text-align:right">+25%</th><th style="text-align:right">+50%</th><th style="text-align:right">Dim +75%</th><th style="text-align:right">Nuit +100%</th></tr></thead>'+
+      '<tbody>'+rows+'</tbody></table></div>';
+  }).join('');
+}
+function ptAddTarifClient(){
+  var sel=document.getElementById('ptTarifNewClient');
+  var cl=sel?sel.value:'';
+  if(!cl){alert('Tous les clients ont déjà une grille (ou aucun client en base).');return;}
+  _ensurePointageShape();
+  if(!DB.tarifsPointage[cl])DB.tarifsPointage[cl]={};
+  saveDB();renderPtTarifs();
+}
+function ptSetTarif(cl,empId,val){
+  _ensurePointageShape();
+  if(!DB.tarifsPointage[cl])DB.tarifsPointage[cl]={};
+  var v=Number(val);
+  if(v>0)DB.tarifsPointage[cl][empId]=v;
+  else delete DB.tarifsPointage[cl][empId];
+  saveDB();renderPtTarifs();
+}
+function ptDelTarifClient(cl){
+  if(!confirm('Supprimer la grille tarifaire « '+cl+' » ?\n\n(Les heures pointées ne sont pas touchées — seuls les tarifs de ce client sont effacés.)'))return;
+  _ensurePointageShape();
+  delete DB.tarifsPointage[cl];
+  saveDB();renderPtTarifs();
 }
 
 // ===== CLIENTS =====
