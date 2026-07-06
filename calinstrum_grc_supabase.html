@@ -1601,11 +1601,13 @@ body.has-dashboard-bg #page-dashboard .metric{
 
   <!-- Onglet FACTURATION (Phase 3) -->
   <div class="tab-pane" id="ptTab-fact">
-    <div style="padding:30px;text-align:center;color:var(--muted);font-size:13px">
-      🧾 <b>Facturation client par période</b><br><br>Phase 3 du chantier Pointage (à venir) :<br>
-      période MMB 21→20 pour PRNC · période de shutdown pour AEI · grille tarifaire de vente par client × qualification,<br>
-      Time Sheet à faire valider puis remplissage de la <b>pré-facture au n° verrouillé</b>.
+    <div class="no-print" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">
+      <div><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Client</label>
+        <select class="filter-sel" id="ptFactClient" onchange="renderPtFact()" style="min-width:180px"></select></div>
+      <div id="ptFactPeriodBox"></div>
+      <div style="margin-left:auto"><button class="btn btn-teal" id="ptFactGenBtn" onclick="ptFactGenerate()" style="display:none">🧾 Générer / remplir la facture</button></div>
     </div>
+    <div id="ptFactBody"></div>
   </div>
 </div>
 
@@ -2900,6 +2902,13 @@ body.has-dashboard-bg #page-dashboard .metric{
       </div>
     </div>
     <div class="form-group"><label>Adresse</label><textarea class="form-textarea" id="cl-addr"></textarea></div>
+    <div class="form-group"><label>🗓 Circuit de facturation POINTAGE <span style="color:var(--muted);font-weight:400;font-size:10px">(module Heures — définit la période de facturation)</span></label>
+      <select class="form-select" id="cl-circuit">
+        <option value="libre">Libre / mois civil (défaut — SLN, autres)</option>
+        <option value="mmb">MMB 21→20 (PRNC — période du 21 au 20 du mois suivant)</option>
+        <option value="shutdown">Shutdown / dates de chantier (AEI — période saisie manuellement)</option>
+      </select>
+    </div>
     <div class="form-group"><label>Notes</label><textarea class="form-textarea" id="cl-notes"></textarea></div>
     <!-- Flag client prioritaire : apparaît dans le menu rapide d'import devis→facture.
          Limite douce de 5 (avertissement à la sauvegarde, sans blocage). -->
@@ -5474,6 +5483,7 @@ function st(grp,tab){
   if(grp==='ptTab'&&tab==='saisie') renderPtSaisie();
   if(grp==='ptTab'&&tab==='salaries') renderEmployes();
   if(grp==='ptTab'&&tab==='paie') renderPtPaie();
+  if(grp==='ptTab'&&tab==='fact') renderPtFact();
 }
 
 // ===== SUIVI FACTURES =====
@@ -38387,16 +38397,201 @@ function ptPaiePrint(){
   setTimeout(function(){try{w.print();}catch(e){}},350);
 }
 
+// =============================================================================
+// UI — FACTURATION CLIENT PAR PÉRIODE (Phase 3)
+// Circuit selon la fiche client : mmb (PRNC 21→20) · shutdown (AEI, dates) ·
+// libre (mois civil). Agrège les heures (ptAggregatePeriod filtré par site),
+// applique la grille tarifaire du client, BLOQUE si un salarié n'a pas de tarif,
+// prévisualise les lignes de facture agrégées par (type × taux).
+// =============================================================================
+var ptFactState={pfx:'',y:null,m:null,start:'',end:''};
+// Circuit d'un préfixe client (depuis la fiche client correspondante)
+function _ptClientCircuit(pfx){
+  if(!pfx)return 'libre';
+  var exact=(DB.clients||[]).find(function(c){return (c.nom||'')===pfx;});
+  var c=exact||(DB.clients||[]).find(function(x){return getClientPrefix(x.nom||'')===pfx;});
+  return (c&&c.circuitFacturation)||'libre';
+}
+function _pad2(n){return String(n).padStart(2,'0');}
+function _ptMMBBounds(y,m){
+  var start=y+'-'+_pad2(m)+'-21';
+  var em=m+1,ey=y;if(em>12){em=1;ey++;}
+  return {start:start,end:ey+'-'+_pad2(em)+'-20'};
+}
+// Préfixes clients qui ont des heures pointées OU une grille tarifaire
+function _ptFactClients(){
+  var set={};
+  (DB.pointages||[]).forEach(function(w){if(w.site&&w.site.indexOf('Atelier')<0&&w.site!=='')set[w.site]=true;});
+  Object.keys(DB.tarifsPointage||{}).forEach(function(k){set[k]=true;});
+  return Object.keys(set).sort();
+}
+function renderPtFact(){
+  seedEmployes();
+  var sel=document.getElementById('ptFactClient');
+  var clients=_ptFactClients();
+  if(sel){
+    var cur=ptFactState.pfx||clients[0]||'';
+    sel.innerHTML='<option value="">— Choisir un client —</option>'+clients.map(function(c){return '<option value="'+esc(c)+'"'+(c===cur?' selected':'')+'>'+esc(c)+'</option>';}).join('');
+    ptFactState.pfx=sel.value;
+  }
+  _ptFactRenderPeriodBox();
+  _ptFactCompute();
+}
+function _ptFactRenderPeriodBox(){
+  var box=document.getElementById('ptFactPeriodBox');if(!box)return;
+  var pfx=ptFactState.pfx;
+  if(!pfx){box.innerHTML='';return;}
+  var circuit=_ptClientCircuit(pfx);
+  if(!ptFactState.y){var t=td().split('-');ptFactState.y=+t[0];ptFactState.m=+t[1];}
+  if(circuit==='shutdown'){
+    box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Période shutdown <span style="color:#a78bfa">(dates)</span></label>'+
+      '<div style="display:flex;gap:6px;align-items:center"><input type="date" id="ptFactStart" value="'+(ptFactState.start||'')+'" onchange="ptFactSetDates()" style="padding:6px 8px">'+
+      '<span style="color:var(--muted)">→</span><input type="date" id="ptFactEnd" value="'+(ptFactState.end||'')+'" onchange="ptFactSetDates()" style="padding:6px 8px"></div>';
+  } else {
+    // mmb ou libre : sélecteur mois
+    var lbl=circuit==='mmb'?'Mois MMB <span style="color:#f472b6">(21→20)</span>':'Mois civil';
+    var opts='';for(var mm=1;mm<=12;mm++)opts+='<option value="'+mm+'"'+(mm===ptFactState.m?' selected':'')+'>'+_PT_MOIS[mm-1]+'</option>';
+    box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">'+lbl+'</label>'+
+      '<div style="display:flex;gap:6px"><select id="ptFactMonth" onchange="ptFactSetMonth()" style="padding:6px 8px">'+opts+'</select>'+
+      '<input type="number" id="ptFactYear" value="'+ptFactState.y+'" onchange="ptFactSetMonth()" style="width:74px;padding:6px 8px">'+
+      (circuit==='mmb'?'<span style="align-self:center;font-size:10px;color:var(--muted-soft)" id="ptFactMmbHint"></span>':'')+'</div>';
+  }
+}
+function ptFactSetMonth(){
+  ptFactState.m=+document.getElementById('ptFactMonth').value;
+  ptFactState.y=+document.getElementById('ptFactYear').value;
+  _ptFactCompute();
+}
+function ptFactSetDates(){
+  ptFactState.start=document.getElementById('ptFactStart').value;
+  ptFactState.end=document.getElementById('ptFactEnd').value;
+  _ptFactCompute();
+}
+// Types de ligne facturables + coefficient de majoration
+function _ptFactTypes(){
+  return [
+    {key:'hnj',lbl:'Heures normales',coef:1},
+    {key:'hs25',lbl:'Heures majorées +25%',coef:1.25},
+    {key:'hs50',lbl:'Heures majorées +50%',coef:1.5},
+    {key:'dim',lbl:'Heures dimanche +75%',coef:1.75},
+    {key:'fer',lbl:'Heures fériées',coef:1+_ptFerieMaj()/100},
+    {key:'nuit',lbl:'Heures de nuit +100%',coef:2}
+  ];
+}
+// Calcule les bornes courantes selon circuit
+function _ptFactBounds(){
+  var pfx=ptFactState.pfx,circuit=_ptClientCircuit(pfx);
+  if(circuit==='shutdown')return {start:ptFactState.start,end:ptFactState.end,circuit:circuit};
+  if(circuit==='mmb'){var b=_ptMMBBounds(ptFactState.y,ptFactState.m);return {start:b.start,end:b.end,circuit:circuit};}
+  var b2=_ptMonthBounds(ptFactState.y,ptFactState.m);return {start:b2.start,end:b2.end,circuit:circuit};
+}
+// Construit les lignes de facture agrégées par (type × taux de base).
+// Retour {lines:[{desc,qte,pu,total}], missing:[emp...], totalHT, agg, bounds}
+function ptFactBuildLines(){
+  var pfx=ptFactState.pfx;
+  var bd=_ptFactBounds();
+  if(!pfx||!bd.start||!bd.end)return null;
+  var agg=ptAggregatePeriod(bd.start,bd.end,{site:pfx});
+  var missing=agg.emps.filter(function(e){return _ptTarifFor(pfx,e.id)==null;});
+  var lines=[],totalHT=0;
+  _ptFactTypes().forEach(function(t){
+    // Regrouper les heures de ce type par taux de base
+    var byRate={};
+    agg.emps.forEach(function(e){
+      var h=agg.byEmp[e.id][t.key]||0;if(h<=0)return;
+      var base=_ptTarifFor(pfx,e.id);if(base==null)return; // salarié sans tarif : ignoré ici (bloqué avant génération)
+      if(!byRate[base])byRate[base]={h:0,n:0};
+      byRate[base].h+=h;byRate[base].n++;
+    });
+    Object.keys(byRate).map(Number).sort(function(a,b){return b-a;}).forEach(function(base){
+      var g=byRate[base];
+      var pu=Math.round(base*t.coef);
+      var tot=Math.round(pu*g.h);
+      totalHT+=tot;
+      lines.push({desc:t.lbl+(Object.keys(byRate).length>1?' (base '+fN(base)+')':''),qte:g.h,pu:pu,total:tot});
+    });
+  });
+  return {lines:lines,missing:missing,totalHT:totalHT,agg:agg,bounds:bd};
+}
+function _ptFactCompute(){
+  var body=document.getElementById('ptFactBody');
+  var btn=document.getElementById('ptFactGenBtn');
+  if(!body)return;
+  if(btn)btn.style.display='none';
+  var pfx=ptFactState.pfx;
+  if(!pfx){body.innerHTML='<div style="padding:26px;text-align:center;color:var(--muted)">Choisis un client pour préparer sa facturation.</div>';return;}
+  var res=ptFactBuildLines();
+  if(!res){body.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted)">Renseigne la période.</div>';return;}
+  var bd=res.bounds;
+  var circuitLbl={mmb:'MMB',shutdown:'Shutdown',libre:'Mois civil'}[bd.circuit];
+  // MMB hint
+  var mh=document.getElementById('ptFactMmbHint');if(mh)mh.textContent='→ '+fD(bd.start)+' au '+fD(bd.end);
+  var periodTxt=fD(bd.start)+' → '+fD(bd.end);
+  if(!res.agg.emps.length){
+    body.innerHTML='<div class="note" style="border-left-color:var(--muted)">Aucune heure pointée pour <b>'+esc(pfx)+'</b> sur la période <b>'+periodTxt+'</b> ('+circuitLbl+'). Vérifie le Site/Client des semaines dans l\'onglet Saisie.</div>';
+    return;
+  }
+  var html='<div class="note no-pm-blur" style="margin-bottom:12px"><b>'+esc(pfx)+'</b> · circuit <b>'+circuitLbl+'</b> · période <b>'+periodTxt+'</b> · '+res.agg.emps.length+' salarié(s) · '+res.agg.weeks.length+' semaine(s)</div>';
+  // BLOCAGE tarif manquant
+  if(res.missing.length){
+    html+='<div class="q" style="border-left-color:var(--red)"><b style="color:var(--red)">⛔ Facturation bloquée — tarif manquant pour ce client :</b><br>'+
+      res.missing.map(function(e){return '• '+esc(e.nom)+' '+esc(e.prenom||'');}).join('<br>')+
+      '<br><br>Configure leur tarif de base dans <b>onglet Salariés → Tarifs horaires de vente par client → '+esc(pfx)+'</b>, puis reviens ici.</div>';
+    body.innerHTML=html;
+    return;
+  }
+  // Aperçu lignes facture
+  html+='<div class="tbl-wrap"><table><thead class="no-pm-blur"><tr><th>#</th><th>Désignation</th><th style="text-align:right">Qté (h)</th><th style="text-align:right">PU (XPF)</th><th style="text-align:right">Total HT</th></tr></thead><tbody>';
+  res.lines.forEach(function(l,i){
+    html+='<tr><td>'+(i+1)+'</td><td>'+esc(l.desc)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fH(l.qte)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)"><span data-money>'+fN(l.pu)+'</span></td>'+
+      '<td style="text-align:right;font-family:var(--mono);font-weight:700"><span data-money>'+fN(l.total)+'</span></td></tr>';
+  });
+  html+='</tbody><tfoot><tr style="border-top:2px solid var(--border);font-weight:700"><td colspan="4" style="text-align:right">TOTAL HT (XPF)</td><td style="text-align:right;color:var(--teal)"><span data-money>'+fN(res.totalHT)+'</span></td></tr></tfoot></table></div>';
+  // Sélecteur devis accepté → pré-facture liée
+  var devs=(DB.devis||[]).filter(function(d){
+    return getClientPrefix(d.client||'')===pfx && ['Accepté','Facturé','Envoyé'].indexOf(d.status)>=0;
+  });
+  html+='<div style="margin-top:14px" class="no-print"><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Devis accepté → pré-facture à remplir</label>';
+  if(devs.length){
+    html+='<select class="filter-sel" id="ptFactDevis" onchange="_ptFactDevisInfo()" style="min-width:340px"><option value="">— Choisir le devis lié —</option>'+
+      devs.map(function(d){
+        var fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+        return '<option value="'+d.id+'">'+esc(d.num||'?')+' — '+esc((d.objet||'').substring(0,45))+(fa?' → '+esc(fa.num)+' 🔒':' (pas encore de facture)')+'</option>';
+      }).join('')+'</select><div id="ptFactDevisInfo" style="font-size:11px;color:var(--muted);margin-top:6px"></div>';
+  } else {
+    html+='<div style="font-size:12px;color:var(--amber)">⚠ Aucun devis Accepté/Envoyé/Facturé pour '+esc(pfx)+'. Crée/accepte d\'abord le devis de prestation pour réserver le n° de facture.</div>';
+  }
+  html+='</div>';
+  body.innerHTML=html;
+  if(btn){btn.style.display='';btn.disabled=false;}
+}
+function _ptFactDevisInfo(){
+  var sel=document.getElementById('ptFactDevis');var info=document.getElementById('ptFactDevisInfo');
+  if(!sel||!info)return;
+  var d=DB.devis.find(function(x){return String(x.id)===sel.value;});
+  if(!d){info.textContent='';return;}
+  var fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+  info.innerHTML=fa
+    ? 'La génération <b>remplira la pré-facture existante <span style="color:var(--amber)">'+esc(fa.num)+'</span></b> (n° verrouillé) avec les lignes ci-dessus.'
+    : 'Aucune facture liée à ce devis → la génération <b>créera la facture</b> (n° '+esc(getClientPrefix(d.client))+'-Fxxx) et la liera au devis.';
+}
+// Phase 3b (à venir) : écrit réellement les lignes dans la pré-facture liée.
+function ptFactGenerate(){
+  alert('Aperçu Phase 3a ✓\n\nLe remplissage effectif de la pré-facture (écriture des lignes dans la facture au n° verrouillé) arrive en Phase 3b — je le code juste après validation de cet aperçu, avec test jusqu\'au PDF final de la facture.');
+}
+
 // ===== CLIENTS =====
 var eCLid=null;
 function openCL(id){
   eCLid=id||null;
   if(id){
     var c=DB.clients.find(function(x){return x.id===id;});
-    if(c){gv('cl-nom',c.nom);gv('cl-contact',c.contact||'');gv('cl-email',c.email||'');gv('cl-tel',c.tel||'');gv('cl-exo',c.exo||'non');gv('cl-addr',c.adresse||'');gv('cl-notes',c.notes||'');document.getElementById('cl-priority').checked=!!c.priority;sv('mCLtitle','Modifier '+c.nom);}
+    if(c){gv('cl-nom',c.nom);gv('cl-contact',c.contact||'');gv('cl-email',c.email||'');gv('cl-tel',c.tel||'');gv('cl-exo',c.exo||'non');gv('cl-addr',c.adresse||'');gv('cl-circuit',c.circuitFacturation||'libre');gv('cl-notes',c.notes||'');document.getElementById('cl-priority').checked=!!c.priority;sv('mCLtitle','Modifier '+c.nom);}
   } else {
     ['cl-nom','cl-contact','cl-email','cl-tel','cl-addr','cl-notes'].forEach(function(i){gv(i,'');});
-    gv('cl-exo','non');document.getElementById('cl-priority').checked=false;sv('mCLtitle','Nouveau client');
+    gv('cl-exo','non');gv('cl-circuit','libre');document.getElementById('cl-priority').checked=false;sv('mCLtitle','Nouveau client');
   }
   om('mCL');
 }
@@ -38409,6 +38604,7 @@ async function saveCL(){
   var priorityChk=document.getElementById('cl-priority').checked;
   var c={id:eCLid||Date.now(),nom:gvg('cl-nom'),contact:gvg('cl-contact'),email:gvg('cl-email'),
     tel:gvg('cl-tel'),tel2:'',exo:gvg('cl-exo'),adresse:gvg('cl-addr'),notes:gvg('cl-notes'),
+    circuitFacturation:gvg('cl-circuit')||'libre',
     priority:priorityChk};
   if(!c.nom){alert('Nom obligatoire');return;}
   // Avertissement (non bloquant) si plus de 5 clients prioritaires : la barre d'import
