@@ -1033,6 +1033,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="nav('suivi')" title="Suivi Factures · Alt+W/X pour naviguer · Ctrl+F : rechercher"><span class="ico"><span class="ico-classic">📈</span><i class="ti ti-trending-up ico-pro"></i></span>Suivi Factures</button>
   <button class="sb-item" onclick="nav('bc')" title="Bons de commande · Alt+W/X pour naviguer · Ctrl+N : nouveau BC · Ctrl+F : rechercher"><span class="ico"><span class="ico-classic">📦</span><i class="ti ti-clipboard-list ico-pro"></i></span>Bons de commande</button>
   <button class="sb-item" onclick="nav('bl')" title="Bons de livraison · Alt+W/X pour naviguer · Ctrl+N : nouveau BL · Ctrl+F : rechercher"><span class="ico"><span class="ico-classic">🚚</span><i class="ti ti-truck ico-pro"></i></span>Bons de livraison</button>
+  <button class="sb-item" onclick="nav('pointage')" title="Pointage / Heures · saisie hebdo des heures, salariés, paie et facturation par période"><span class="ico"><span class="ico-classic">⏱</span><i class="ti ti-clock-hour-4 ico-pro"></i></span>Pointage / Heures</button>
   <div class="sb-sec">Gestion</div>
   <button class="sb-item" onclick="nav('clients')" title="Clients · Alt+W/X pour naviguer · Ctrl+N : nouveau client · Ctrl+F : rechercher"><span class="ico"><span class="ico-classic">🏢</span><i class="ti ti-users ico-pro"></i></span>Clients</button>
   <button class="sb-item" onclick="nav('historique')" title="Historique · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">📅</span><i class="ti ti-history ico-pro"></i></span>Historique</button>
@@ -1516,6 +1517,69 @@ body.has-dashboard-bg #page-dashboard .metric{
   <div class="tbl-wrap">
     <table><thead><tr><th>N° BL</th><th>Date</th><th>Client</th><th>Lieu</th><th>Contact</th><th>Montant</th><th>Statut</th><th class="no-print">Actions</th></tr></thead>
     <tbody id="tbBL"></tbody></table>
+  </div>
+</div>
+
+<!-- POINTAGE / HEURES -->
+<div class="page" id="page-pointage">
+  <div class="tabs no-print" style="margin-bottom:12px">
+    <button class="tab active" onclick="st('ptTab','saisie')">📝 Saisie semaine</button>
+    <button class="tab" onclick="st('ptTab','salaries')">👷 Salariés</button>
+    <button class="tab" onclick="st('ptTab','paie')">💰 Paie (mois civil)</button>
+    <button class="tab" onclick="st('ptTab','fact')">🧾 Facturation client</button>
+  </div>
+
+  <!-- Onglet SAISIE SEMAINE -->
+  <div class="tab-pane active" id="ptTab-saisie">
+    <div class="flex-between mb12 no-print" style="flex-wrap:wrap;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="ptWeekNav(-1)" title="Semaine précédente">◀</button>
+        <span id="ptWeekLabel" style="font-weight:700;font-size:13px;min-width:250px;text-align:center"></span>
+        <button class="btn btn-ghost btn-sm" onclick="ptWeekNav(1)" title="Semaine suivante">▶</button>
+        <button class="btn btn-ghost btn-sm" onclick="ptWeekToday()" title="Revenir à la semaine en cours">Aujourd'hui</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <label style="font-size:11px;color:var(--muted)">Site / Client :</label>
+        <select class="filter-sel" id="ptSite" onchange="ptSetSite(this.value)"></select>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table><thead id="ptGridHead"></thead><tbody id="ptGrid"></tbody></table>
+    </div>
+    <div class="no-print" style="margin-top:10px;font-size:11px;color:var(--muted);line-height:1.6">
+      <b style="color:var(--text)">Rappels :</b> clic droit sur une case = statut du jour (Travail / Congés / Chômé / Férié) ·
+      ⚡ = pré-remplir le quart 4x4 (11,5 h × 4 j) ·
+      Règles : ≤39h = normal · 39ᵉ→47ᵉ = +25% (max 8h) · 48ᵉ+ = +50% · nuit 20h–3h = +100% · dimanche = +75% · férié travaillé = barème ·
+      <span style="color:var(--red)">alerte &gt; 60h/sem</span>. Sauvegarde automatique à chaque saisie.
+    </div>
+  </div>
+
+  <!-- Onglet SALARIÉS -->
+  <div class="tab-pane" id="ptTab-salaries">
+    <div class="flex-between mb12 no-print"><div></div>
+      <button class="btn btn-teal" onclick="openEMP()">+ Ajouter un salarié</button>
+    </div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>Nom</th><th>Prénom</th><th>Poste</th><th>Qualification</th><th style="text-align:right">Tarif horaire paie (XPF)</th><th>Régime</th><th>Actif</th><th class="no-print">Actions</th></tr></thead>
+      <tbody id="tbEMP"></tbody></table>
+    </div>
+  </div>
+
+  <!-- Onglet PAIE (Phase 2) -->
+  <div class="tab-pane" id="ptTab-paie">
+    <div style="padding:30px;text-align:center;color:var(--muted);font-size:13px">
+      💰 <b>Paie — agrégation mois civil</b><br><br>Phase 2 du chantier Pointage (à venir) :<br>
+      ventilation HNJ / HS+25% / HS+50% / Dim+75% / Nuit+100% / Férié par salarié,<br>brut heures chiffré (tarif paie × majorations) et export PDF pour le comptable.
+    </div>
+  </div>
+
+  <!-- Onglet FACTURATION (Phase 3) -->
+  <div class="tab-pane" id="ptTab-fact">
+    <div style="padding:30px;text-align:center;color:var(--muted);font-size:13px">
+      🧾 <b>Facturation client par période</b><br><br>Phase 3 du chantier Pointage (à venir) :<br>
+      période MMB 21→20 pour PRNC · période de shutdown pour AEI · grille tarifaire de vente par client × qualification,<br>
+      Time Sheet à faire valider puis remplissage de la <b>pré-facture au n° verrouillé</b>.
+    </div>
   </div>
 </div>
 
@@ -2749,6 +2813,48 @@ body.has-dashboard-bg #page-dashboard .metric{
 </div></div>
 
 <!-- CLIENT FULL -->
+<div class="modal-overlay" id="mEMP">
+<div class="modal">
+  <div class="modal-header"><h3 id="mEMPtitle">Nouveau salarié</h3><button class="modal-close" onclick="cm('mEMP')">✕</button></div>
+  <div class="modal-body">
+    <div class="form-row">
+      <div class="form-group"><label>Nom <span class="req">*</span></label><input class="form-input" id="emp-nom" style="text-transform:uppercase"></div>
+      <div class="form-group"><label>Prénom <span class="req">*</span></label><input class="form-input" id="emp-prenom"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Poste</label><input class="form-input" id="emp-poste" placeholder="ex: Technicien instrumentation"></div>
+      <div class="form-group"><label>Qualification <span style="color:var(--muted);font-weight:400;font-size:10px">(pilote le tarif de vente)</span></label>
+        <input class="form-input" id="emp-qualif" list="emp-qualif-list" placeholder="ex: Technicien Expert instrumentation">
+        <datalist id="emp-qualif-list">
+          <option>Technicien Expert instrumentation</option>
+          <option>Technicien Confirmé instrumentation</option>
+          <option>Technicien Junior instrumentation</option>
+          <option>Licence Métrologie Instrumentation et Contrôle des Procédés Industriels</option>
+        </datalist>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Tarif horaire PAIE (XPF) <span style="color:var(--muted);font-weight:400;font-size:10px">(coût — distinct du tarif de vente)</span></label><input type="number" class="form-input" id="emp-tarif" placeholder="5000"></div>
+      <div class="form-group"><label>Régime</label>
+        <select class="form-select" id="emp-regime">
+          <option>Semaine</option><option>Quart 4x4</option><option>Mixte</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label>Actif</label>
+      <select class="form-select" id="emp-actif">
+        <option value="oui">Oui — apparaît dans la grille de saisie</option>
+        <option value="non">Non — archivé (historique conservé)</option>
+      </select>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mEMP')">Annuler</button>
+    <button class="btn btn-teal" onclick="saveEMP()">✓ Enregistrer</button>
+  </div>
+</div>
+</div>
+
 <div class="modal-overlay" id="mCL">
 <div class="modal">
   <div class="modal-header"><h3 id="mCLtitle">Nouveau client</h3><button class="modal-close" onclick="cm('mCL')">✕</button></div>
@@ -3252,6 +3358,13 @@ function dedupeDB(db){
 function defDB(){
   return{devis:[],factures:[],bcs:[],bls:[],
     clients:JSON.parse(JSON.stringify(DEFAULT_CLIENTS)),
+    // ===== MODULE POINTAGE / HEURES =====
+    // Ces clés ne sont PAS des tables Supabase dédiées : elles syncent via le
+    // canal params (key/value) — cf _supaSyncFlush qui pousse toute clé DB hors
+    // TABLES. Persistance locale automatique (saveDB sérialise tout DB).
+    employes:[],      // fiches salariés {id,nom,prenom,poste,qualification,tarifPaie,regime,actif}
+    pointages:[],     // 1 enregistrement par semaine {id,monday,site,entries:{empId:{jour[7],nuit[7],statut[7]}}}
+    tarifsPointage:{},// grille de vente par client × qualification + taux férié (Phase 3)
     articles:[],nid:{dv:160,fa:94,bc:90,bl:40},
     invoices:DEFAULT_INVOICES.map(function(x){return Object.assign({},x);}),iid:DEFAULT_INVOICES.length,
     // Emails de comptabilité utilisés pour le destinataire des factures.
@@ -5274,7 +5387,7 @@ function nav(p){
   // le seul endroit où il était mis à jour).
   if(typeof _refreshAlertPill==='function') _refreshAlertPill();
   var T={dashboard:'Dashboard',devis:'Devis',factures:'Factures',suivi:'Suivi Factures',
-    bc:'Bons de commande',bl:'Bons de livraison',clients:'Clients',historique:'Historique',catalogue:'Catalogue'};
+    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue'};
   sv('topTitle',T[p]||p);
   // Sous-titre informatif (visible uniquement en mode pro via CSS)
   var fy=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
@@ -5285,6 +5398,7 @@ function nav(p){
     suivi:'Suivi des factures et marges',
     bc:'Bons de commande Emerson',
     bl:'Bons de livraison',
+    pointage:'Heures de prestation · paie et facturation par période',
     clients:'Annuaire clients',
     historique:'Historique des modifications',
     catalogue:'Articles et tarifs'
@@ -5297,6 +5411,7 @@ function nav(p){
   if(p==='suivi')renderSuivi();
   if(p==='bc')renderBC();
   if(p==='bl'){rebuildClientSelects();renderBL();}
+  if(p==='pointage')renderPointage();
   if(p==='clients')rClients();
   if(p==='historique')renderHist();
   if(p==='catalogue'){
@@ -5330,6 +5445,8 @@ function st(grp,tab){
   if(grp==='suiviTab'&&tab==='liste') renderTable();
   if(grp==='suiviTab'&&tab==='alertes') renderAlertes();
   if(grp==='suiviTab'&&tab==='dossiers') renderDossiers();
+  if(grp==='ptTab'&&tab==='saisie') renderPtSaisie();
+  if(grp==='ptTab'&&tab==='salaries') renderEmployes();
 }
 
 // ===== SUIVI FACTURES =====
@@ -37616,6 +37733,343 @@ function renderBL(){
     renderDataRow:renderBLRow,
     emptyMsg:'Aucun bon de livraison'
   });
+}
+
+// =============================================================================
+// ===== MODULE POINTAGE / HEURES ==============================================
+// =============================================================================
+// Remplace le fichier Excel "Tableau calcul pointage automatique AEI".
+// UNE saisie hebdo → paie (mois civil, Phase 2) + facturation client par
+// période (PRNC = MMB 21→20, AEI = shutdown — Phase 3).
+// Règles (Convention Commerce et Divers NC + CTNC, PDF validé 2026-07-06) :
+//   ≤39h/sem = normal · 39e→47e = +25% (max 8h) · 48e+ = +50% (alerte >60h)
+//   Nuit 20h–3h = +100% · Dimanche = +75% · Férié travaillé = barème A.I.T.
+// Données : DB.employes / DB.pointages / DB.tarifsPointage — clés hors TABLES
+// Supabase → syncent automatiquement via le canal params (cf _supaSyncFlush).
+// =============================================================================
+
+// --- Garde de forme : les 3 clés peuvent manquer sur une vieille DB locale ou
+// un fetch Supabase antérieur au module. Appelée en tête de chaque entrée UI.
+function _ensurePointageShape(){
+  if(!Array.isArray(DB.employes))DB.employes=[];
+  if(!Array.isArray(DB.pointages))DB.pointages=[];
+  if(!DB.tarifsPointage||typeof DB.tarifsPointage!=='object')DB.tarifsPointage={};
+}
+
+// --- Seed one-shot des 4 salariés historiques (guard DB._employesSeededV1).
+function seedEmployes(){
+  _ensurePointageShape();
+  if(DB._employesSeededV1)return;
+  if(DB.employes.length===0){
+    var base=Date.now();
+    DB.employes=[
+      {id:base+1,nom:'RIZZO',prenom:'Fabrice',poste:'Gérant / Technicien sénior',qualification:'Technicien Expert instrumentation',tarifPaie:5000,regime:'Mixte',actif:true},
+      {id:base+2,nom:'WENEGUEI',prenom:'Jean-Marie',poste:'Technicien instrumentation',qualification:'',tarifPaie:5000,regime:'Mixte',actif:true},
+      {id:base+3,nom:'GATA',prenom:'Isidore',poste:'Technicien instrumentation',qualification:'',tarifPaie:5000,regime:'Quart 4x4',actif:true},
+      {id:base+4,nom:'ATTI',prenom:'Jorame',poste:'Technicien instrumentation',qualification:'',tarifPaie:5000,regime:'Quart 4x4',actif:true}
+    ];
+  }
+  DB._employesSeededV1=true;
+  saveDB();
+}
+
+// --- Helpers dates (local, pas d'UTC — cohérent avec td()) ---
+function _ptMondayOf(iso){
+  var p=iso.split('-');var d=new Date(+p[0],+p[1]-1,+p[2]);
+  var wd=(d.getDay()+6)%7; // 0=lundi
+  d.setDate(d.getDate()-wd);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function _ptAddDays(iso,n){
+  var p=iso.split('-');var d=new Date(+p[0],+p[1]-1,+p[2]);
+  d.setDate(d.getDate()+n);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+// N° de semaine ISO 8601
+function _ptWeekNum(mondayIso){
+  var p=mondayIso.split('-');var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
+  var dayNum=(d.getUTCDay()+6)%7;
+  d.setUTCDate(d.getUTCDate()-dayNum+3); // jeudi de la semaine
+  var firstThursday=new Date(Date.UTC(d.getUTCFullYear(),0,4));
+  var ftDayNum=(firstThursday.getUTCDay()+6)%7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate()-ftDayNum+3);
+  return 1+Math.round((d-firstThursday)/(7*24*3600*1000));
+}
+// Format heures : 46 → "46", 11.5 → "11,5"
+function fH(n){
+  var v=Math.round((Number(n)||0)*100)/100;
+  return String(v).replace('.',',');
+}
+
+// --- Accès à l'enregistrement d'une semaine (créé à la volée) ---
+function _ptGetWeek(mondayIso,createIfMissing){
+  _ensurePointageShape();
+  var rec=DB.pointages.find(function(w){return w.monday===mondayIso;});
+  if(!rec&&createIfMissing){
+    rec={id:Date.now(),monday:mondayIso,site:'',entries:{}};
+    DB.pointages.push(rec);
+  }
+  return rec||null;
+}
+function _ptGetEntry(rec,empId,create){
+  if(!rec.entries)rec.entries={};
+  var e=rec.entries[empId];
+  if(!e&&create){
+    e={jour:[null,null,null,null,null,null,null],nuit:[null,null,null,null,null,null,null],statut:['','','','','','','']};
+    rec.entries[empId]=e;
+  }
+  return e||null;
+}
+
+// =============================================================================
+// MOTEUR DE CALCUL — répartition CHRONOLOGIQUE jour par jour.
+// Chaque heure est rattachée à SON jour → l'agrégation paie (mois civil) et
+// MMB (21→20) découpera au jour près, y compris les semaines à cheval.
+// Entrée : entry {jour[7], nuit[7], statut[7]} (index 0=Lundi … 6=Dimanche)
+// Sortie : {days:[{hnj,hs25,hs50,dim,fer,nuit}×7], tot:{...,totalJour,totalNuit}, over60}
+// Règles d'affectation :
+//   - Jour L→S (idx 0..5), statut normal → base hebdo : cumul ≤39 → hnj,
+//     39→47 → hs25 (max 8), >47 → hs50.
+//   - Dimanche jour (idx 6) → dim (+75%), HORS base hebdo (travail exceptionnel).
+//   - Jour avec statut 'F' (férié) ET heures>0 → fer (barème), HORS base.
+//   - Nuit (toute la ligne nuit) → nuit (+100%), HORS base.
+//   - Statuts C (congés)/CH (chômé)/F sans heures : 0h travaillées (suivi paie Phase 2).
+// =============================================================================
+function ptComputeWeek(entry){
+  var days=[],cum=0;
+  var tot={hnj:0,hs25:0,hs50:0,dim:0,fer:0,nuit:0,totalJour:0,totalNuit:0};
+  for(var i=0;i<7;i++){
+    var st=(entry.statut&&entry.statut[i])||'';
+    var hj=Number(entry.jour&&entry.jour[i])||0;
+    var hn=Number(entry.nuit&&entry.nuit[i])||0;
+    var d={hnj:0,hs25:0,hs50:0,dim:0,fer:0,nuit:hn};
+    if(hj>0){
+      if(st==='F'){ d.fer=hj; }
+      else if(i===6){ d.dim=hj; }
+      else{
+        // Répartition chronologique dans les seuils hebdo 39/47
+        var start=cum,end=cum+hj;
+        d.hnj =Math.max(0,Math.min(end,39)-Math.min(start,39));
+        d.hs25=Math.max(0,Math.min(end,47)-Math.max(start,39));
+        d.hs50=Math.max(0,end-Math.max(start,47));
+        cum=end;
+      }
+    }
+    tot.hnj+=d.hnj;tot.hs25+=d.hs25;tot.hs50+=d.hs50;tot.dim+=d.dim;tot.fer+=d.fer;tot.nuit+=d.nuit;
+    tot.totalJour+=hj;tot.totalNuit+=hn;
+    days.push(d);
+  }
+  return {days:days,tot:tot,over60:(cum>60)};
+}
+
+// =============================================================================
+// UI — SAISIE SEMAINE
+// =============================================================================
+var ptMonday=null; // lundi de la semaine affichée (ISO)
+function renderPointage(){
+  seedEmployes();
+  if(!ptMonday)ptMonday=_ptMondayOf(td());
+  // Rendre l'onglet actif
+  var act=document.querySelector('#page-pointage .tab-pane.active');
+  if(act&&act.id==='ptTab-salaries')renderEmployes();
+  else renderPtSaisie();
+}
+function ptWeekNav(dir){ptMonday=_ptAddDays(ptMonday,dir*7);renderPtSaisie();}
+function ptWeekToday(){ptMonday=_ptMondayOf(td());renderPtSaisie();}
+function ptSetSite(v){
+  var rec=_ptGetWeek(ptMonday,true);
+  rec.site=v;saveDB();
+}
+// Liste des sites/clients proposés : clients de la DB + Atelier
+function _ptSiteOptions(cur){
+  var opts=['','Atelier (non facturable)'];
+  (DB.clients||[]).forEach(function(c){
+    var pfx=getClientPrefix(c.nom||'');
+    if(pfx&&opts.indexOf(pfx)<0)opts.push(pfx);
+  });
+  return opts.map(function(o){
+    var lbl=o===''?'— Choisir —':o;
+    return '<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(lbl)+'</option>';
+  }).join('');
+}
+var PT_STATUTS={'':{lbl:'Travail',sym:'',bg:''},
+  'C':{lbl:'Congés',sym:'C',bg:'rgba(56,189,248,.16)'},
+  'CH':{lbl:'Chômé',sym:'CH',bg:'rgba(148,163,184,.16)'},
+  'F':{lbl:'Férié',sym:'F',bg:'rgba(245,158,11,.16)'}};
+function renderPtSaisie(){
+  _ensurePointageShape();
+  if(!ptMonday)ptMonday=_ptMondayOf(td());
+  var rec=_ptGetWeek(ptMonday,false)||{monday:ptMonday,site:'',entries:{}};
+  // Label semaine + n°
+  var sunday=_ptAddDays(ptMonday,6);
+  var lbl='Semaine '+_ptWeekNum(ptMonday)+' · '+fD(ptMonday)+' → '+fD(sunday);
+  sv('ptWeekLabel',lbl);
+  // Site
+  var siteSel=document.getElementById('ptSite');
+  if(siteSel)siteSel.innerHTML=_ptSiteOptions(rec.site||'');
+  // En-tête : jours + dates
+  var JOURS=['L','M','M','J','V','S','D'];
+  var head='<tr><th style="min-width:150px">Salarié</th><th>Ligne</th>';
+  for(var i=0;i<7;i++){
+    var dIso=_ptAddDays(ptMonday,i);
+    head+='<th style="text-align:center'+(i===6?';color:#f59e0b':'')+'">'+JOURS[i]+' '+dIso.split('-')[2]+'/'+dIso.split('-')[1]+'</th>';
+  }
+  head+='<th style="text-align:right">Total</th><th style="text-align:right">HNJ</th><th style="text-align:right">+25%</th><th style="text-align:right">+50%</th><th style="text-align:right">Spé</th></tr>';
+  var headEl=document.getElementById('ptGridHead');
+  if(headEl)headEl.innerHTML=head;
+  // Corps : 2 lignes (Jour/Nuit) par salarié actif
+  var emps=DB.employes.filter(function(e){return e.actif!==false;});
+  var html='';
+  emps.forEach(function(emp){
+    var entry=(rec.entries&&rec.entries[emp.id])||{jour:[],nuit:[],statut:[]};
+    var calc=ptComputeWeek(entry);
+    var regBadge=emp.regime==='Quart 4x4'?' <span style="background:rgba(245,158,11,.14);color:#f59e0b;font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:8px">4x4</span>':'';
+    // Ligne JOUR
+    html+='<tr><td rowspan="2" style="vertical-align:middle"><b>'+esc(emp.nom)+' '+esc((emp.prenom||'').charAt(0))+'.</b>'+regBadge+
+      '<button class="btn btn-ghost btn-sm no-print" style="font-size:9px;padding:1px 6px;margin-left:6px" onclick="ptFill4x4('+emp.id+')" title="Pré-remplir le quart 4x4 : 11,5 h sur L-M-M-J (ajuste ensuite les jours réels)">⚡</button></td>'+
+      '<td style="color:var(--muted);font-size:10px">Jour</td>';
+    for(var i=0;i<7;i++){
+      var stKey=(entry.statut&&entry.statut[i])||'';
+      var stMeta=PT_STATUTS[stKey]||PT_STATUTS[''];
+      var v=(entry.jour&&entry.jour[i]!=null&&entry.jour[i]!=='')?entry.jour[i]:'';
+      html+='<td style="text-align:center;padding:2px'+(stMeta.bg?';background:'+stMeta.bg:'')+'" oncontextmenu="ptStatutMenu(event,'+emp.id+','+i+')" title="'+stMeta.lbl+' — clic droit pour changer le statut">'+
+        '<input type="number" step="0.5" min="0" max="24" value="'+v+'" data-pt="jour" data-emp="'+emp.id+'" data-day="'+i+'" style="width:52px;text-align:center;padding:3px 2px;font-size:11.5px"'+(stKey==='C'||stKey==='CH'?' disabled':'')+'>'+
+        (stMeta.sym?'<div style="font-size:8px;font-weight:700;color:var(--muted)">'+stMeta.sym+'</div>':'')+'</td>';
+    }
+    var spe=[];
+    if(calc.tot.dim>0)spe.push('D:'+fH(calc.tot.dim));
+    if(calc.tot.fer>0)spe.push('F:'+fH(calc.tot.fer));
+    html+='<td style="text-align:right;font-weight:700;font-family:var(--mono)'+(calc.over60?';color:#f87171':'')+'" title="'+(calc.over60?'⚠ Plus de 60h dans la semaine — limite légale dépassée':'Total heures jour')+'">'+fH(calc.tot.totalJour)+(calc.over60?' ⚠':'')+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);color:var(--teal)">'+fH(calc.tot.hnj)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);color:#fbbf24">'+fH(calc.tot.hs25)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);color:#f87171">'+fH(calc.tot.hs50)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted)" title="Dimanche +75% · Férié travaillé (barème)">'+(spe.join(' ')||'—')+'</td></tr>';
+    // Ligne NUIT
+    html+='<tr style="border-bottom:2px solid var(--border)"><td style="color:var(--muted);font-size:10px">Nuit <span style="font-size:8.5px">(+100%)</span></td>';
+    for(var j=0;j<7;j++){
+      var vn=(entry.nuit&&entry.nuit[j]!=null&&entry.nuit[j]!=='')?entry.nuit[j]:'';
+      html+='<td style="text-align:center;padding:2px"><input type="number" step="0.5" min="0" max="24" value="'+vn+'" data-pt="nuit" data-emp="'+emp.id+'" data-day="'+j+'" style="width:52px;text-align:center;padding:3px 2px;font-size:11.5px;opacity:.85"></td>';
+    }
+    html+='<td style="text-align:right;font-family:var(--mono);color:#a78bfa">'+fH(calc.tot.totalNuit)+'</td>'+
+      '<td colspan="4" style="font-size:9.5px;color:var(--muted-soft);text-align:center">heures de nuit majorées +100%</td></tr>';
+  });
+  if(!emps.length)html='<tr><td colspan="14" style="text-align:center;color:var(--muted);padding:20px">Aucun salarié actif — ajoute-les dans l\'onglet 👷 Salariés</td></tr>';
+  var tb=document.getElementById('ptGrid');
+  if(tb){
+    tb.innerHTML=html;
+    // Binding des inputs (change = commit + recalcul)
+    tb.querySelectorAll('input[data-pt]').forEach(function(inp){
+      inp.addEventListener('change',function(){
+        var empId=Number(this.dataset.emp),day=Number(this.dataset.day),kind=this.dataset.pt;
+        var rec2=_ptGetWeek(ptMonday,true);
+        var e2=_ptGetEntry(rec2,empId,true);
+        var val=this.value===''?null:Math.max(0,Math.min(24,Number(this.value)||0));
+        e2[kind][day]=val;
+        saveDB();
+        renderPtSaisie(); // recalcul live des colonnes
+      });
+    });
+  }
+}
+// Pré-remplissage 4x4 : 11,5h L-M-M-J sur la ligne Jour (les jours réels du cycle
+// se décalent — l'utilisateur ajuste ensuite, c'est un gain de saisie pas un planning)
+function ptFill4x4(empId){
+  var rec=_ptGetWeek(ptMonday,true);
+  var e=_ptGetEntry(rec,empId,true);
+  for(var i=0;i<4;i++){if(e.jour[i]==null||e.jour[i]==='')e.jour[i]=11.5;}
+  saveDB();renderPtSaisie();
+}
+// Menu contextuel statut du jour (clic droit sur la case)
+function ptStatutMenu(ev,empId,day){
+  ev.preventDefault();
+  var old=document.getElementById('ptStMenu');if(old)old.remove();
+  var m=document.createElement('div');
+  m.id='ptStMenu';
+  m.style.cssText='position:fixed;left:'+ev.clientX+'px;top:'+ev.clientY+'px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:4px;z-index:99999;box-shadow:0 8px 30px rgba(0,0,0,.5)';
+  [['','🔧 Travail'],['C','🏖 Congés'],['CH','🚫 Chômé'],['F','🎌 Férié']].forEach(function(opt){
+    var b=document.createElement('button');
+    b.textContent=opt[1];
+    b.style.cssText='display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);padding:6px 14px;font-size:12px;cursor:pointer;border-radius:5px';
+    b.onmouseover=function(){this.style.background='rgba(45,212,191,.12)';};
+    b.onmouseout=function(){this.style.background='none';};
+    b.onclick=function(){
+      var rec=_ptGetWeek(ptMonday,true);
+      var e=_ptGetEntry(rec,empId,true);
+      e.statut[day]=opt[0];
+      // Congés/Chômé : on efface les heures du jour (non travaillé)
+      if(opt[0]==='C'||opt[0]==='CH'){e.jour[day]=null;e.nuit[day]=null;}
+      saveDB();m.remove();renderPtSaisie();
+    };
+    m.appendChild(b);
+  });
+  document.body.appendChild(m);
+  setTimeout(function(){
+    document.addEventListener('click',function h(){m.remove();document.removeEventListener('click',h);});
+  },0);
+}
+
+// =============================================================================
+// UI — SALARIÉS (CRUD)
+// =============================================================================
+var eEMPid=null;
+function renderEmployes(){
+  seedEmployes();
+  var tb=document.getElementById('tbEMP');if(!tb)return;
+  tb.innerHTML=(DB.employes||[]).map(function(e){
+    return '<tr style="'+(e.actif===false?'opacity:.45':'')+'">'+
+      '<td><b>'+esc(e.nom||'')+'</b></td><td>'+esc(e.prenom||'')+'</td>'+
+      '<td>'+esc(e.poste||'')+'</td><td>'+esc(e.qualification||'—')+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fN(e.tarifPaie||0)+'</td>'+
+      '<td>'+esc(e.regime||'Semaine')+'</td>'+
+      '<td>'+(e.actif===false?'—':'✅')+'</td>'+
+      '<td class="no-print"><button class="btn btn-ghost btn-sm" onclick="openEMP('+e.id+')">✏️</button> '+
+      '<button class="btn btn-ghost btn-sm" onclick="delEMP('+e.id+')" title="Désactive le salarié (historique de pointage conservé)">🗑</button></td></tr>';
+  }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px">Aucun salarié</td></tr>';
+}
+function openEMP(id){
+  eEMPid=id||null;
+  var e=id?(DB.employes||[]).find(function(x){return x.id===id;}):null;
+  gv('emp-nom',e?e.nom:'');gv('emp-prenom',e?e.prenom:'');
+  gv('emp-poste',e?e.poste:'');gv('emp-qualif',e?e.qualification:'');
+  gv('emp-tarif',e?(e.tarifPaie!=null?e.tarifPaie:''):'');
+  gv('emp-regime',e?(e.regime||'Semaine'):'Semaine');
+  gv('emp-actif',(e&&e.actif===false)?'non':'oui');
+  sv('mEMPtitle',e?('Modifier — '+e.nom+' '+(e.prenom||'')):'Nouveau salarié');
+  om('mEMP');
+}
+function saveEMP(){
+  var nom=(gvg('emp-nom')||'').trim().toUpperCase();
+  var prenom=(gvg('emp-prenom')||'').trim();
+  if(!nom){alert('Nom manquant');return;}
+  _ensurePointageShape();
+  var rec={
+    id:eEMPid||Date.now(),
+    nom:nom,prenom:prenom,
+    poste:(gvg('emp-poste')||'').trim(),
+    qualification:(gvg('emp-qualif')||'').trim(),
+    tarifPaie:Number(gvg('emp-tarif'))||0,
+    regime:gvg('emp-regime')||'Semaine',
+    actif:gvg('emp-actif')!=='non'
+  };
+  var i=DB.employes.findIndex(function(x){return x.id===rec.id;});
+  if(i>=0)DB.employes[i]=rec;else DB.employes.push(rec);
+  saveDB();cm('mEMP');renderEmployes();
+}
+// Suppression = DÉSACTIVATION (jamais de perte d'historique de pointage).
+// Un salarié sans aucune heure pointée peut être supprimé physiquement.
+function delEMP(id){
+  _ensurePointageShape();
+  var e=DB.employes.find(function(x){return x.id===id;});
+  if(!e)return;
+  var hasHours=DB.pointages.some(function(w){return w.entries&&w.entries[id];});
+  if(hasHours){
+    if(!confirm(e.nom+' '+(e.prenom||'')+' a des heures pointées.\n\nIl sera DÉSACTIVÉ (retiré de la grille, historique conservé). Continuer ?'))return;
+    e.actif=false;
+  } else {
+    if(!confirm('Supprimer définitivement '+e.nom+' '+(e.prenom||'')+' (aucune heure pointée) ?'))return;
+    DB.employes=DB.employes.filter(function(x){return x.id!==id;});
+  }
+  saveDB();renderEmployes();
 }
 
 // ===== CLIENTS =====
