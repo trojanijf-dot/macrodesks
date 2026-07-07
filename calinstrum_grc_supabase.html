@@ -38624,16 +38624,26 @@ function _ptFactCompute(){
       '<td style="text-align:right;font-family:var(--mono);font-weight:700"><span data-money>'+fN(l.total)+'</span></td></tr>';
   });
   html+='</tbody><tfoot><tr style="border-top:2px solid var(--border);font-weight:700"><td colspan="4" style="text-align:right">TOTAL HT (XPF)</td><td style="text-align:right;color:var(--teal)"><span data-money>'+fN(res.totalHT)+'</span></td></tr></tfoot></table></div>';
-  // Infos MMB éditables (circuit mmb uniquement) — Demandeur / Désignation / N° PO
+  // Infos MMB éditables (circuit mmb uniquement) — Demandeur (déroulant contacts) / Désignation / N° PO
   if(bd.circuit==='mmb'){
     var mm=_ptMmbMeta(pfx);var pJs=esc(pfx).replace(/'/g,"\\'");
     var lblCss='display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:3px';
+    // Demandeurs proposés = contacts des fiches de cette entité (PRNC - FICHTER, - CANEL…)
+    var contacts=(DB.clients||[]).filter(function(c){return getClientPrefix(c.nom||'')===pfx;})
+      .map(function(c){return (c.contact&&c.contact.trim())||String(c.nom||'').replace(/^.+?-\s*/,'').trim();})
+      .filter(function(v,i,a){return v&&a.indexOf(v)===i;});
+    if(mm.demandeur&&contacts.indexOf(mm.demandeur)<0)contacts.unshift(mm.demandeur);
+    // Pré-remplissage Désignation / PO depuis le 1er devis actif de l'entité (si pas déjà saisi)
+    var dv0=(DB.devis||[]).find(function(d){return getClientPrefix(d.client||'')===pfx&&['Accepté','Facturé','Envoyé'].indexOf(d.status)>=0;});
+    var defTravaux=(mm.travaux&&mm.travaux.trim())||(dv0&&dv0.objet)||'';
+    var defPo=(mm.po&&mm.po.trim())||(dv0&&dv0.bcClientSLN)||'';
+    var demOpts='<option value="">— Choisir le demandeur —</option>'+contacts.map(function(ct){return '<option'+(ct===mm.demandeur?' selected':'')+'>'+esc(ct)+'</option>';}).join('');
     html+='<div class="no-print" style="margin-top:14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">'+
-      '<div style="font-weight:700;font-size:12px;margin-bottom:9px">📄 Infos du MMB <span style="color:var(--muted-soft);font-weight:400;font-size:10.5px">(éditable, mémorisé pour ce client)</span></div>'+
+      '<div style="font-weight:700;font-size:12px;margin-bottom:9px">📄 Infos du MMB <span style="color:var(--muted-soft);font-weight:400;font-size:10.5px">(mémorisé pour ce client)</span></div>'+
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'+
-        '<div><label style="'+lblCss+'">Demandeur</label><input class="form-input" value="'+esc(mm.demandeur||'')+'" oninput="_ptSetMmbMeta(\''+pJs+'\',\'demandeur\',this.value)" placeholder="ex : ROSTOUCHER"></div>'+
-        '<div><label style="'+lblCss+'">N° PO</label><input class="form-input" value="'+esc(mm.po||'')+'" oninput="_ptSetMmbMeta(\''+pJs+'\',\'po\',this.value)" placeholder="ex : L50197"></div>'+
-        '<div style="grid-column:1/3"><label style="'+lblCss+'">Désignation des travaux / tâches</label><input class="form-input" value="'+esc(mm.travaux||'')+'" oninput="_ptSetMmbMeta(\''+pJs+'\',\'travaux\',this.value)" placeholder="ex : STRATÉGIE DE MAINTENANCE / SJ MMR&CC"></div>'+
+        '<div><label style="'+lblCss+'">Demandeur</label><select class="form-select" onchange="_ptSetMmbMeta(\''+pJs+'\',\'demandeur\',this.value)">'+demOpts+'</select></div>'+
+        '<div><label style="'+lblCss+'">N° PO</label><input class="form-input" value="'+esc(defPo)+'" oninput="_ptSetMmbMeta(\''+pJs+'\',\'po\',this.value)" placeholder="ex : L50197"></div>'+
+        '<div style="grid-column:1/3"><label style="'+lblCss+'">Désignation des travaux / tâches</label><input class="form-input" value="'+esc(defTravaux)+'" oninput="_ptSetMmbMeta(\''+pJs+'\',\'travaux\',this.value)" placeholder="ex : STRATÉGIE DE MAINTENANCE / SJ MMR&CC"></div>'+
       '</div></div>';
   }
   // Documents à imprimer (client + période sélectionnés)
