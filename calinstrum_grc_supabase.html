@@ -38401,7 +38401,7 @@ function ptPaiePrint(){
     '.t td{border:1px solid #d7dee8;padding:4px 6px}.t .n{text-align:right;font-variant-numeric:tabular-nums}'+
     '.t tfoot td{background:#eef2f7;font-weight:800;color:#1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
     '.note{margin-top:10px;font-size:9.5px;color:#555;font-style:italic}';
-  var title='PAIE CALINSTRUM '+moisLbl.replace(/\s/g,' ');
+  var title='PAIE CALINSTRUM '+_ptFn(b.start)+' au '+_ptFn(b.end);
   var w=window.open('','_blank','');
   if(!w){alert('Autorisez les popups pour imprimer.');return;}
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
@@ -38756,6 +38756,8 @@ function ptFactGenerate(){
 // PHASE 4 — DOCUMENTS TIME SHEET + MMB (impression)
 // =============================================================================
 var _PT_DOW=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+// ISO 'YYYY-MM-DD' → 'DD-MM-YYYY' pour les noms de fichiers (tirets, pas de "/" interdit).
+function _ptFn(iso){if(!iso)return '';var p=String(iso).split('-');return p.length===3?(p[2]+'-'+p[1]+'-'+p[0]):iso;}
 function _ptDowName(iso){var p=iso.split('-');var d=new Date(+p[0],+p[1]-1,+p[2]);return _PT_DOW[(d.getDay()+6)%7];}
 // Détail JOUR PAR JOUR par salarié pour une période/site : {empId:[{date,dow,jour,nuit,statut}]}.
 function _ptDailyByEmp(start,end,site){
@@ -38847,7 +38849,7 @@ function ptTimeSheetPrint(){
     '<div class="box">Visa Client (nom, date, signature + tampon) :</div></div>'+
     '<div class="note">Document à faire viser par le client. Heures majorées calculées selon la Convention Commerce et Divers NC (≤39h normal, 39→47 +25%, 48+ +50%, dimanche +75%, nuit +100%, férié barème).</div>'+
     '</div>';
-  _ptOpenPrintDoc('TIME SHEET CALINSTRUM '+pfx+' '+fD(bd.start)+' au '+fD(bd.end),body);
+  _ptOpenPrintDoc('TIME SHEET CALINSTRUM_'+pfx+' '+_ptFn(bd.start)+' au '+_ptFn(bd.end),body);
 }
 // ---- MMB (PRNC) ----
 function ptMMBPrint(){
@@ -38886,7 +38888,7 @@ function ptMMBPrint(){
     '<div class="sig"><div class="box">Validation Prestataire (nom, prénom, date et visa) :<br><br>RIZZO, FABRICE, le '+fD(bd.end)+'</div><div class="box">Validation Client :</div></div>'+
     '<div class="note">Montant mensuel : majorations incluses (voir facture pour détails).</div>'+
     '</div>';
-  _ptOpenPrintDoc('MMB CALINSTRUM '+pfx+' '+fD(bd.start)+' au '+fD(bd.end),body);
+  _ptOpenPrintDoc('MMB CALINSTRUM_'+pfx+' '+_ptFn(bd.start)+' au '+_ptFn(bd.end),body);
 }
 
 // ===== CLIENTS =====
