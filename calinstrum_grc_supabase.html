@@ -38493,6 +38493,11 @@ function ptFactBuildLines(){
   if(!pfx||!bd.start||!bd.end)return null;
   var agg=ptAggregatePeriod(bd.start,bd.end,{site:pfx});
   var missing=agg.emps.filter(function(e){return _ptTarifFor(pfx,e.id)==null;});
+  // Bases distinctes sur TOUTE la facture : si >1 (ex AEI Expert 5600 / Junior 5200),
+  // on précise " (base X)" sur CHAQUE ligne pour lever toute ambiguïté (demande utilisateur).
+  var distinctBases={};
+  agg.emps.forEach(function(e){var b=_ptTarifFor(pfx,e.id);if(b!=null)distinctBases[b]=true;});
+  var multiBase=Object.keys(distinctBases).length>1;
   var lines=[],totalHT=0;
   _ptFactTypes().forEach(function(t){
     // Regrouper les heures de ce type par taux de base
@@ -38508,7 +38513,7 @@ function ptFactBuildLines(){
       var pu=Math.round(base*t.coef);
       var tot=Math.round(pu*g.h);
       totalHT+=tot;
-      lines.push({desc:t.lbl+(Object.keys(byRate).length>1?' (base '+fN(base)+')':''),qte:g.h,pu:pu,total:tot});
+      lines.push({desc:t.lbl+(multiBase?' (base '+fN(base)+')':''),qte:g.h,pu:pu,total:tot});
     });
   });
   return {lines:lines,missing:missing,totalHT:totalHT,agg:agg,bounds:bd};
