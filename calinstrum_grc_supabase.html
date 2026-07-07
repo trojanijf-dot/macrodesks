@@ -3395,6 +3395,7 @@ function defDB(){
     pointages:[],     // 1 enregistrement par semaine {id,monday,site,entries:{empId:{jour[7],nuit[7],statut[7]}}}
     tarifsPointage:{},// grille de vente PAR PRÉFIXE ENTITÉ {PRNC:{empId:base},...}
     pointageCircuits:{},// circuit de facturation PAR PRÉFIXE ENTITÉ {PRNC:'mmb',AEI SNC:'shutdown',...}
+    mmbMeta:{},       // infos éditables du MMB PAR PRÉFIXE {PRNC:{demandeur,travaux,po}}
     articles:[],nid:{dv:160,fa:94,bc:90,bl:40},
     invoices:DEFAULT_INVOICES.map(function(x){return Object.assign({},x);}),iid:DEFAULT_INVOICES.length,
     // Emails de comptabilité utilisés pour le destinataire des factures.
@@ -37787,6 +37788,17 @@ function _ensurePointageShape(){
   if(!Array.isArray(DB.pointages))DB.pointages=[];
   if(!DB.tarifsPointage||typeof DB.tarifsPointage!=='object')DB.tarifsPointage={};
   if(!DB.pointageCircuits||typeof DB.pointageCircuits!=='object')DB.pointageCircuits={};
+  if(!DB.mmbMeta||typeof DB.mmbMeta!=='object')DB.mmbMeta={};
+}
+// Infos MMB éditables pour une entité (pré-remplies depuis le devis lié si vide).
+function _ptMmbMeta(pfx){
+  _ensurePointageShape();
+  return DB.mmbMeta[pfx]||(DB.mmbMeta[pfx]={demandeur:'',travaux:'',po:''});
+}
+function _ptSetMmbMeta(pfx,field,val){
+  _ensurePointageShape();
+  var m=DB.mmbMeta[pfx]||(DB.mmbMeta[pfx]={demandeur:'',travaux:'',po:''});
+  m[field]=val;saveDB();
 }
 
 // --- Seed one-shot des 4 salariés historiques (guard DB._employesSeededV1).
@@ -38612,6 +38624,18 @@ function _ptFactCompute(){
       '<td style="text-align:right;font-family:var(--mono);font-weight:700"><span data-money>'+fN(l.total)+'</span></td></tr>';
   });
   html+='</tbody><tfoot><tr style="border-top:2px solid var(--border);font-weight:700"><td colspan="4" style="text-align:right">TOTAL HT (XPF)</td><td style="text-align:right;color:var(--teal)"><span data-money>'+fN(res.totalHT)+'</span></td></tr></tfoot></table></div>';
+  // Infos MMB éditables (circuit mmb uniquement) — Demandeur / Désignation / N° PO
+  if(bd.circuit==='mmb'){
+    var mm=_ptMmbMeta(pfx);var pJs=esc(pfx).replace(/'/g,"\\'");
+    var lblCss='display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:3px';
+    html+='<div class="no-print" style="margin-top:14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">'+
+      '<div style="font-weight:700;font-size:12px;margin-bottom:9px">📄 Infos du MMB <span style="color:var(--muted-soft);font-weight:400;font-size:10.5px">(éditable, mémorisé pour ce client)</span></div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'+
+        '<div><label style="'+lblCss+'">Demandeur</label><input class="form-input" value="'+esc(mm.demandeur||'')+'" oninput="_ptSetMmbMeta(\''+pJs+'\',\'demandeur\',this.value)" placeholder="ex : ROSTOUCHER"></div>'+
+        '<div><label style="'+lblCss+'">N° PO</label><input class="form-input" value="'+esc(mm.po||'')+'" oninput="_ptSetMmbMeta(\''+pJs+'\',\'po\',this.value)" placeholder="ex : L50197"></div>'+
+        '<div style="grid-column:1/3"><label style="'+lblCss+'">Désignation des travaux / tâches</label><input class="form-input" value="'+esc(mm.travaux||'')+'" oninput="_ptSetMmbMeta(\''+pJs+'\',\'travaux\',this.value)" placeholder="ex : STRATÉGIE DE MAINTENANCE / SJ MMR&CC"></div>'+
+      '</div></div>';
+  }
   // Documents à imprimer (client + période sélectionnés)
   html+='<div class="no-print" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
     '<button class="btn btn-ghost" onclick="ptTimeSheetPrint()" title="Time Sheet à faire viser par le client">🖨 Time Sheet</button>'+
@@ -38820,8 +38844,11 @@ function ptMMBPrint(){
   var res=ptFactBuildLines();if(!res||!res.agg.emps.length){alert('Aucune heure à imprimer.');return;}
   var bd=res.bounds,pfx=ptFactState.pfx;
   var dv=_ptFactSelectedDevis();
-  var po=(dv&&dv.bcClientSLN)||'';
-  var objet=(dv&&dv.objet)||'STRATÉGIE DE MAINTENANCE / SJ MMR&CC';
+  // Infos MMB éditées par l'utilisateur (prioritaires), sinon fallback devis/défauts.
+  var mm=_ptMmbMeta(pfx);
+  var po=(mm.po&&mm.po.trim())||(dv&&dv.bcClientSLN)||'';
+  var objet=(mm.travaux&&mm.travaux.trim())||(dv&&dv.objet)||'STRATÉGIE DE MAINTENANCE / SJ MMR&CC';
+  var demandeur=(mm.demandeur&&mm.demandeur.trim())||(DB.clients.find(function(c){return getClientPrefix(c.nom)===pfx;})||{}).contact||'';
   // Cumul sur le PO : somme des factures déjà émises liées à ce devis (mois précédent) + courant
   var previous=0;
   if(dv){previous=(DB.factures||[]).filter(function(f){return (f.dvlie||'')===dv.num;}).reduce(function(s,f){return s+(Number(f.ttc)||0);},0);}
@@ -38842,12 +38869,12 @@ function ptMMBPrint(){
     '<div class="bd"><img src="{{LOGO}}" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div></td></tr>';
   var body='<div class="doc">'+
     '<table><thead>'+mmbHd+'<tr><th>Prestataire</th><th>Demandeur</th><th>Désignation des travaux</th><th class="c">PO</th><th class="c">Début prestation</th><th class="c">Début travaux</th><th class="c">Fin travaux</th></tr></thead>'+
-    '<tbody><tr><td><b>CALINSTRUM</b></td><td>'+esc((DB.clients.find(function(c){return getClientPrefix(c.nom)===pfx;})||{}).contact||'')+'</td><td>'+esc(objet)+'</td><td class="c">'+esc(po||'—')+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.end)+'</td></tr></tbody></table>'+
+    '<tbody><tr><td><b>CALINSTRUM</b></td><td>'+esc(demandeur)+'</td><td>'+esc(objet)+'</td><td class="c">'+esc(po||'—')+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.end)+'</td></tr></tbody></table>'+
     '<table><thead><tr><th>Description des tâches</th><th>Qualification</th><th class="c">Nb pers.</th><th>Nom</th><th>Prénom</th><th class="c">Durée</th><th class="n">Montant mensuel</th><th class="n">Mois précédent</th><th class="n">Total annuel</th></tr></thead>'+
     '<tbody>'+rows+
     '<tr class="tot"><td colspan="6">TOTAL</td><td class="n">'+fN(totalMensuel)+'</td><td class="n">'+fN(previous)+'</td><td class="n">'+fN(totalAnnuel)+'</td></tr></tbody></table>'+
     '<div class="sig"><div class="box">Validation Prestataire (nom, prénom, date et visa) :<br><br>RIZZO, FABRICE, le '+fD(bd.end)+'</div><div class="box">Validation Client :</div></div>'+
-    '<div class="note">Montant mensuel = heures × grille tarifaire de vente '+esc(pfx)+' (majorations incluses). Cumul « Mois précédent »/« Total annuel » sur le PO'+(po?' '+esc(po):'')+' d\'après les factures déjà émises liées au devis.</div>'+
+    '<div class="note">Montant mensuel : majorations incluses (voir facture pour détails).</div>'+
     '</div>';
   _ptOpenPrintDoc('MMB CALINSTRUM '+pfx+' '+fD(bd.start)+' au '+fD(bd.end),body);
 }
