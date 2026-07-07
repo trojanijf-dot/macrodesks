@@ -38434,9 +38434,14 @@ function renderPtFact(){
   var sel=document.getElementById('ptFactClient');
   var clients=_ptFactClients();
   if(sel){
-    var cur=ptFactState.pfx||clients[0]||'';
-    sel.innerHTML='<option value="">— Choisir un client —</option>'+clients.map(function(c){return '<option value="'+esc(c)+'"'+(c===cur?' selected':'')+'>'+esc(c)+'</option>';}).join('');
-    ptFactState.pfx=sel.value;
+    // BUG FIX : lire le choix COURANT de l'utilisateur (onchange) AVANT de reconstruire
+    // les options — sinon on re-sélectionnait l'ancienne valeur (ptFactState.pfx) et le
+    // menu revenait toujours au 1er client. Priorité : sélection utilisateur valide.
+    var chosen=sel.value;
+    if(!chosen||clients.indexOf(chosen)<0) chosen=(clients.indexOf(ptFactState.pfx)>=0?ptFactState.pfx:(clients[0]||''));
+    sel.innerHTML='<option value="">— Choisir un client —</option>'+clients.map(function(c){return '<option value="'+esc(c)+'"'+(c===chosen?' selected':'')+'>'+esc(c)+'</option>';}).join('');
+    sel.value=chosen;
+    ptFactState.pfx=chosen;
   }
   _ptFactRenderPeriodBox();
   _ptFactCompute();
