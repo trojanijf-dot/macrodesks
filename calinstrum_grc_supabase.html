@@ -38471,6 +38471,31 @@ function ptFactSetDates(){
   ptFactState.end=document.getElementById('ptFactEnd').value;
   _ptFactCompute();
 }
+// Saut direct vers une période (année/mois) — utilisé par les puces "heures trouvées".
+function ptFactJumpTo(y,m){ptFactState.y=y;ptFactState.m=m;_ptFactRenderPeriodBox();_ptFactCompute();}
+// Périodes (selon circuit) qui contiennent des heures pour ce client — pour guider
+// l'utilisateur quand la période affichée est vide (piège du décalage MMB 21→20).
+function _ptPeriodsWithHours(pfx,circuit){
+  var map={};
+  (DB.pointages||[]).forEach(function(w){
+    if(!w||!w.monday||(w.site||'')!==pfx)return;
+    var entries=w.entries||{};
+    for(var i=0;i<7;i++){
+      var dIso=_ptAddDays(w.monday,i),h=0;
+      Object.keys(entries).forEach(function(id){var e=entries[id];h+=(Number(e.jour&&e.jour[i])||0)+(Number(e.nuit&&e.nuit[i])||0);});
+      if(h<=0)continue;
+      var p=dIso.split('-'),y=+p[0],m=+p[1],day=+p[2];
+      if(circuit==='mmb'&&day<21){m--;if(m<1){m=12;y--;}}
+      var key=y+'-'+m;
+      if(!map[key])map[key]={y:y,m:m,hours:0};
+      map[key].hours+=h;
+    }
+  });
+  return Object.keys(map).map(function(k){
+    var o=map[k],b=(circuit==='mmb')?_ptMMBBounds(o.y,o.m):_ptMonthBounds(o.y,o.m);
+    return {y:o.y,m:o.m,hours:o.hours,start:b.start,end:b.end};
+  }).sort(function(a,b){return a.start<b.start?-1:1;});
+}
 // Types de ligne facturables + coefficient de majoration
 function _ptFactTypes(){
   return [
@@ -38537,7 +38562,15 @@ function _ptFactCompute(){
   var mh=document.getElementById('ptFactMmbHint');if(mh)mh.textContent='→ '+fD(bd.start)+' au '+fD(bd.end);
   var periodTxt=fD(bd.start)+' → '+fD(bd.end);
   if(!res.agg.emps.length){
-    body.innerHTML='<div class="note" style="border-left-color:var(--muted)">Aucune heure pointée pour <b>'+esc(pfx)+'</b> sur la période <b>'+periodTxt+'</b> ('+circuitLbl+'). Vérifie le Site/Client des semaines dans l\'onglet Saisie.</div>';
+    var found=(bd.circuit!=='shutdown')?_ptPeriodsWithHours(pfx,bd.circuit):[];
+    var extra='';
+    if(found.length){
+      extra='<div style="margin-top:10px;font-size:12px">👉 Heures trouvées pour <b>'+esc(pfx)+'</b> sur :<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">'+
+        found.map(function(p){return '<button class="btn btn-ghost btn-sm no-print" onclick="ptFactJumpTo('+p.y+','+p.m+')" title="Aller à cette période">'+fD(p.start)+' → '+fD(p.end)+' · <b>'+fH(p.hours)+' h</b></button>';}).join('')+'</div></div>';
+    }
+    var mmbWarn=(bd.circuit==='mmb')?' <span style="color:var(--amber)">⚠ Le MMB va du 21 au 20 : des heures de début de mois appartiennent au MMB précédent.</span>':'';
+    body.innerHTML='<div class="note" style="border-left-color:var(--amber)">Aucune heure pour <b>'+esc(pfx)+'</b> sur la période <b>'+periodTxt+'</b> ('+circuitLbl+').'+mmbWarn+extra+
+      (found.length?'':'<div style="margin-top:8px;color:var(--muted)">Vérifie le Site/Client des semaines dans l\'onglet Saisie.</div>')+'</div>';
     return;
   }
   var html='<div class="note no-pm-blur" style="margin-bottom:12px"><b>'+esc(pfx)+'</b> · circuit <b>'+circuitLbl+'</b> · période <b>'+periodTxt+'</b> · '+res.agg.emps.length+' salarié(s) · '+res.agg.weeks.length+' semaine(s)</div>';
