@@ -38368,6 +38368,13 @@ function ptPaiePrint(){
   var agg=ptAggregatePeriod(b.start,b.end);
   var moisLbl=_PT_MOIS[ptPaieMonth.m-1]+' '+ptPaieMonth.y;
   if(!agg.emps.length){alert('Aucune heure pointée sur '+moisLbl);return;}
+  // Client(s) présent(s) dans le mois → suffixe du nom de fichier (ex "_AEI", "_AEI-PRNC")
+  var _sitesSet={};(DB.pointages||[]).forEach(function(w){
+    if(!w||!w.monday)return;var we=_ptAddDays(w.monday,6);if(we<b.start||w.monday>b.end)return;
+    if(w.site&&w.site.indexOf('Atelier')<0&&w.site!=='')_sitesSet[w.site]=true;
+  });
+  var _sites=Object.keys(_sitesSet).sort();
+  var clientSuffix=_sites.length?('_'+_sites.join('-')):'';
   var ferMult=(1+_ptFerieMaj()/100).toString().replace('.',',');
   var rows=agg.emps.map(function(e){
     var a=agg.byEmp[e.id];
@@ -38401,7 +38408,7 @@ function ptPaiePrint(){
     '.t td{border:1px solid #d7dee8;padding:4px 6px}.t .n{text-align:right;font-variant-numeric:tabular-nums}'+
     '.t tfoot td{background:#eef2f7;font-weight:800;color:#1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
     '.note{margin-top:10px;font-size:9.5px;color:#555;font-style:italic}';
-  var title='RECAP POINTAGE CALINSTRUM '+moisLbl; // mois civil, tous clients (ex: "... Juillet 2026")
+  var title='RECAP POINTAGE CALINSTRUM'+clientSuffix+' '+moisLbl; // ex: "RECAP POINTAGE CALINSTRUM_AEI Juillet 2026"
   var w=window.open('','_blank','');
   if(!w){alert('Autorisez les popups pour imprimer.');return;}
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
