@@ -38577,9 +38577,77 @@ function _ptFactDevisInfo(){
     ? 'La génération <b>remplira la pré-facture existante <span style="color:var(--amber)">'+esc(fa.num)+'</span></b> (n° verrouillé) avec les lignes ci-dessus.'
     : 'Aucune facture liée à ce devis → la génération <b>créera la facture</b> (n° '+esc(getClientPrefix(d.client))+'-Fxxx) et la liera au devis.';
 }
-// Phase 3b (à venir) : écrit réellement les lignes dans la pré-facture liée.
+// Convertit les lignes agrégées (ptFactBuildLines) en lignes de facture (format faL) :
+// un bandeau de section MAIN D'OEUVRE + une ligne par (type × taux). TGC selon exo client.
+function _ptFactToFALines(res, clientNom){
+  var exo=(typeof isClientExo==='function')?isClientExo(clientNom):false;
+  var tgc=exo?0:6; // AEI (soumis) = 6% ; PRNC/SLN exo = 0% (cf factures réelles)
+  var lines=[{type:'section_banner',desc:"MAIN D'OEUVRE",_sec:'service'}];
+  res.lines.forEach(function(l){
+    lines.push({ref:'',designation:l.desc,tgc:tgc,unite:'H',qte:l.qte,pu:l.pu,_sec:'service'});
+  });
+  return lines;
+}
+// Objet de facture : objet du devis + période (format des factures réelles PRNC/AEI)
+function _ptFactObjet(devis, bd){
+  var base=(devis&&devis.objet&&devis.objet.trim())?devis.objet.trim():'Prestation de service — Main d\'œuvre';
+  return base+' — Période du '+fD(bd.start)+' au '+fD(bd.end);
+}
+// Phase 3b : remplit la pré-facture liée au devis (n° verrouillé) OU crée le brouillon.
 function ptFactGenerate(){
-  alert('Aperçu Phase 3a ✓\n\nLe remplissage effectif de la pré-facture (écriture des lignes dans la facture au n° verrouillé) arrive en Phase 3b — je le code juste après validation de cet aperçu, avec test jusqu\'au PDF final de la facture.');
+  var res=ptFactBuildLines();
+  if(!res){alert('Renseigne la période.');return;}
+  if(res.missing.length){alert('⛔ Tarif manquant pour : '+res.missing.map(function(e){return e.nom+' '+(e.prenom||'');}).join(', ')+'\n\nConfigure-les dans Salariés → Tarifs de vente, puis réessaie.');return;}
+  if(!res.lines.length){alert('Aucune heure à facturer sur cette période.');return;}
+  var selD=document.getElementById('ptFactDevis');
+  if(!selD||!selD.value){alert('Choisis le devis accepté dont découle la pré-facture (sélecteur en bas de l\'aperçu).');return;}
+  var d=DB.devis.find(function(x){return String(x.id)===selD.value;});
+  if(!d){alert('Devis introuvable.');return;}
+  var bd=res.bounds;
+  var faLines=_ptFactToFALines(res,d.client);
+  var objet=_ptFactObjet(d,bd);
+  var periodStr='du '+fD(bd.start)+' au '+fD(bd.end);
+  // Garde anti-doublon souple : une AUTRE facture couvre déjà cette période pour ce client ?
+  var dup=(DB.factures||[]).find(function(f){
+    return f.id!==d.linkFactureId && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
+  });
+  if(dup){
+    if(!confirm('⚠ La facture '+dup.num+' semble déjà couvrir la période '+periodStr+' pour '+ptFactState.pfx+'.\n\nContinuer quand même ?'))return;
+  }
+  // CAS A : la pré-facture existe déjà (n° verrouillé) → on la remplit.
+  var existingFa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+  if(existingFa){
+    var hadLines=Array.isArray(existingFa.lines)&&existingFa.lines.filter(function(l){return l&&l.type!=='section_banner';}).length>0;
+    if(hadLines && !confirm('La pré-facture '+existingFa.num+' contient déjà des lignes.\n\nLes REMPLACER par les heures pointées ('+periodStr+') ?\n\nLe n° de facture ('+existingFa.num+') est conservé.'))return;
+    openFA(existingFa.id);
+    // openFA a chargé la facture ; on remplace les lignes + l'objet par le pointage.
+    faL=JSON.parse(JSON.stringify(faLines));
+    gv('fa-objet',objet);
+    if(typeof rFAlines==='function')rFAlines();
+    if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Pré-facture '+existingFa.num+' remplie — vérifie puis Enregistre');
+    return;
+  }
+  // CAS B : pas encore de facture → brouillon lié au devis (créé au save, n° réservé).
+  var faDraft={
+    id:Date.now(),
+    num:nxt('fa',getClientPrefix(d.client)),
+    date:td(),client:d.client,contact:d.contact||'',email:d.email||'',adresse:d.adresse||'',
+    objet:objet,type:d.type||'Prestation de service',
+    devisLieId:d.id,dvlie:d.num||'',
+    bcClientSLN:d.bcClientSLN||'',
+    status:'En attente',statut:'En attente',
+    tgcM:d.tgcM||'506-2',
+    delai:'Paiement sous 30 jours à reception de la facture',
+    pctOfBC:100,
+    lines:faLines
+  };
+  setTimeout(function(){
+    _faDraftObj=faDraft;
+    openFA(null);
+    _faDraftSourceDevisId=d.id;
+    if(typeof _setFADraftBanner==='function')_setFADraftBanner(true,d.num);
+    if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Brouillon facture '+faDraft.num+' — vérifie puis Enregistre pour créer');
+  },80);
 }
 
 // ===== CLIENTS =====
