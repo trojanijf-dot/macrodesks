@@ -1602,8 +1602,9 @@ body.has-dashboard-bg #page-dashboard .metric{
   <!-- Onglet FACTURATION (Phase 3) -->
   <div class="tab-pane" id="ptTab-fact">
     <div class="no-print" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">
-      <div><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Client</label>
-        <select class="filter-sel" id="ptFactClient" onchange="renderPtFact()" style="min-width:180px"></select></div>
+      <div><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Client (entité)</label>
+        <select class="filter-sel" id="ptFactClient" onchange="renderPtFact()" style="min-width:160px"></select></div>
+      <div id="ptFactCircuitBox"></div>
       <div id="ptFactPeriodBox"></div>
       <div style="margin-left:auto"><button class="btn btn-teal" id="ptFactGenBtn" onclick="ptFactGenerate()" style="display:none">🧾 Générer / remplir la facture</button></div>
     </div>
@@ -2902,13 +2903,6 @@ body.has-dashboard-bg #page-dashboard .metric{
       </div>
     </div>
     <div class="form-group"><label>Adresse</label><textarea class="form-textarea" id="cl-addr"></textarea></div>
-    <div class="form-group"><label>🗓 Circuit de facturation POINTAGE <span style="color:var(--muted);font-weight:400;font-size:10px">(module Heures — définit la période de facturation)</span></label>
-      <select class="form-select" id="cl-circuit">
-        <option value="libre">Libre / mois civil (défaut — SLN, autres)</option>
-        <option value="mmb">MMB 21→20 (PRNC — période du 21 au 20 du mois suivant)</option>
-        <option value="shutdown">Shutdown / dates de chantier (AEI — période saisie manuellement)</option>
-      </select>
-    </div>
     <div class="form-group"><label>Notes</label><textarea class="form-textarea" id="cl-notes"></textarea></div>
     <!-- Flag client prioritaire : apparaît dans le menu rapide d'import devis→facture.
          Limite douce de 5 (avertissement à la sauvegarde, sans blocage). -->
@@ -3399,7 +3393,8 @@ function defDB(){
     // TABLES. Persistance locale automatique (saveDB sérialise tout DB).
     employes:[],      // fiches salariés {id,nom,prenom,poste,qualification,tarifPaie,regime,actif}
     pointages:[],     // 1 enregistrement par semaine {id,monday,site,entries:{empId:{jour[7],nuit[7],statut[7]}}}
-    tarifsPointage:{},// grille de vente par client × qualification + taux férié (Phase 3)
+    tarifsPointage:{},// grille de vente PAR PRÉFIXE ENTITÉ {PRNC:{empId:base},...}
+    pointageCircuits:{},// circuit de facturation PAR PRÉFIXE ENTITÉ {PRNC:'mmb',AEI SNC:'shutdown',...}
     articles:[],nid:{dv:160,fa:94,bc:90,bl:40},
     invoices:DEFAULT_INVOICES.map(function(x){return Object.assign({},x);}),iid:DEFAULT_INVOICES.length,
     // Emails de comptabilité utilisés pour le destinataire des factures.
@@ -37791,6 +37786,7 @@ function _ensurePointageShape(){
   if(!Array.isArray(DB.employes))DB.employes=[];
   if(!Array.isArray(DB.pointages))DB.pointages=[];
   if(!DB.tarifsPointage||typeof DB.tarifsPointage!=='object')DB.tarifsPointage={};
+  if(!DB.pointageCircuits||typeof DB.pointageCircuits!=='object')DB.pointageCircuits={};
 }
 
 // --- Seed one-shot des 4 salariés historiques (guard DB._employesSeededV1).
@@ -38409,12 +38405,20 @@ function ptPaiePrint(){
 // prévisualise les lignes de facture agrégées par (type × taux).
 // =============================================================================
 var ptFactState={pfx:'',y:null,m:null,start:'',end:''};
-// Circuit d'un préfixe client (depuis la fiche client correspondante)
+// Circuit de facturation d'une ENTITÉ (préfixe : PRNC, SLN, AEI SNC…) — stocké
+// une seule fois par préfixe (pas par fiche contact, car un client a plusieurs
+// contacts : PRNC - FICHTER, PRNC - CANEL… partagent le même circuit MMB).
 function _ptClientCircuit(pfx){
   if(!pfx)return 'libre';
-  var exact=(DB.clients||[]).find(function(c){return (c.nom||'')===pfx;});
-  var c=exact||(DB.clients||[]).find(function(x){return getClientPrefix(x.nom||'')===pfx;});
-  return (c&&c.circuitFacturation)||'libre';
+  _ensurePointageShape();
+  return DB.pointageCircuits[pfx]||'libre';
+}
+function _ptSetCircuit(pfx,val){
+  _ensurePointageShape();
+  DB.pointageCircuits[pfx]=val||'libre';
+  saveDB();
+  ptFactState.start='';ptFactState.end=''; // reset dates shutdown si on change de circuit
+  _ptFactRenderPeriodBox();_ptFactCompute();
 }
 function _pad2(n){return String(n).padStart(2,'0');}
 function _ptMMBBounds(y,m){
@@ -38443,8 +38447,20 @@ function renderPtFact(){
     sel.value=chosen;
     ptFactState.pfx=chosen;
   }
+  _ptFactRenderCircuitBox();
   _ptFactRenderPeriodBox();
   _ptFactCompute();
+}
+// Sélecteur de circuit de facturation pour l'entité choisie (réglé ici, par préfixe).
+function _ptFactRenderCircuitBox(){
+  var box=document.getElementById('ptFactCircuitBox');if(!box)return;
+  var pfx=ptFactState.pfx;
+  if(!pfx){box.innerHTML='';return;}
+  var cur=_ptClientCircuit(pfx);
+  var opts=[['libre','Mois civil'],['mmb','MMB 21→20'],['shutdown','Shutdown (dates)']]
+    .map(function(o){return '<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>';}).join('');
+  box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Circuit de <b>'+esc(pfx)+'</b></label>'+
+    '<select class="filter-sel" onchange="_ptSetCircuit(\''+esc(pfx).replace(/'/g,"\\'")+'\',this.value)" style="min-width:150px">'+opts+'</select>';
 }
 function _ptFactRenderPeriodBox(){
   var box=document.getElementById('ptFactPeriodBox');if(!box)return;
@@ -38842,10 +38858,10 @@ function openCL(id){
   eCLid=id||null;
   if(id){
     var c=DB.clients.find(function(x){return x.id===id;});
-    if(c){gv('cl-nom',c.nom);gv('cl-contact',c.contact||'');gv('cl-email',c.email||'');gv('cl-tel',c.tel||'');gv('cl-exo',c.exo||'non');gv('cl-addr',c.adresse||'');gv('cl-circuit',c.circuitFacturation||'libre');gv('cl-notes',c.notes||'');document.getElementById('cl-priority').checked=!!c.priority;sv('mCLtitle','Modifier '+c.nom);}
+    if(c){gv('cl-nom',c.nom);gv('cl-contact',c.contact||'');gv('cl-email',c.email||'');gv('cl-tel',c.tel||'');gv('cl-exo',c.exo||'non');gv('cl-addr',c.adresse||'');gv('cl-notes',c.notes||'');document.getElementById('cl-priority').checked=!!c.priority;sv('mCLtitle','Modifier '+c.nom);}
   } else {
     ['cl-nom','cl-contact','cl-email','cl-tel','cl-addr','cl-notes'].forEach(function(i){gv(i,'');});
-    gv('cl-exo','non');gv('cl-circuit','libre');document.getElementById('cl-priority').checked=false;sv('mCLtitle','Nouveau client');
+    gv('cl-exo','non');document.getElementById('cl-priority').checked=false;sv('mCLtitle','Nouveau client');
   }
   om('mCL');
 }
@@ -38858,7 +38874,6 @@ async function saveCL(){
   var priorityChk=document.getElementById('cl-priority').checked;
   var c={id:eCLid||Date.now(),nom:gvg('cl-nom'),contact:gvg('cl-contact'),email:gvg('cl-email'),
     tel:gvg('cl-tel'),tel2:'',exo:gvg('cl-exo'),adresse:gvg('cl-addr'),notes:gvg('cl-notes'),
-    circuitFacturation:gvg('cl-circuit')||'libre',
     priority:priorityChk};
   if(!c.nom){alert('Nom obligatoire');return;}
   // Avertissement (non bloquant) si plus de 5 clients prioritaires : la barre d'import
