@@ -38558,6 +38558,11 @@ function _ptFactCompute(){
       '<td style="text-align:right;font-family:var(--mono);font-weight:700"><span data-money>'+fN(l.total)+'</span></td></tr>';
   });
   html+='</tbody><tfoot><tr style="border-top:2px solid var(--border);font-weight:700"><td colspan="4" style="text-align:right">TOTAL HT (XPF)</td><td style="text-align:right;color:var(--teal)"><span data-money>'+fN(res.totalHT)+'</span></td></tr></tfoot></table></div>';
+  // Documents à imprimer (client + période sélectionnés)
+  html+='<div class="no-print" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button class="btn btn-ghost" onclick="ptTimeSheetPrint()" title="Time Sheet à faire viser par le client">🖨 Time Sheet</button>'+
+    (bd.circuit==='mmb'?'<button class="btn btn-ghost" onclick="ptMMBPrint()" title="Monthly Measurement Bulletin (PRNC)">📄 MMB CALINSTRUM</button>':'')+
+    '</div>';
   // Sélecteur devis accepté → pré-facture liée
   var devs=(DB.devis||[]).filter(function(d){
     return getClientPrefix(d.client||'')===pfx && ['Accepté','Facturé','Envoyé'].indexOf(d.status)>=0;
@@ -38657,6 +38662,134 @@ function ptFactGenerate(){
     if(typeof _setFADraftBanner==='function')_setFADraftBanner(true,d.num);
     if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Brouillon facture '+faDraft.num+' — vérifie puis Enregistre pour créer');
   },80);
+}
+
+// =============================================================================
+// PHASE 4 — DOCUMENTS TIME SHEET + MMB (impression)
+// =============================================================================
+var _PT_DOW=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+function _ptDowName(iso){var p=iso.split('-');var d=new Date(+p[0],+p[1]-1,+p[2]);return _PT_DOW[(d.getDay()+6)%7];}
+// Détail JOUR PAR JOUR par salarié pour une période/site : {empId:[{date,dow,jour,nuit,statut}]}.
+function _ptDailyByEmp(start,end,site){
+  var byEmp={};
+  (DB.pointages||[]).forEach(function(w){
+    if(!w||!w.monday)return;
+    if(site&&(w.site||'')!==site)return;
+    var wEnd=_ptAddDays(w.monday,6);
+    if(wEnd<start||w.monday>end)return;
+    var entries=w.entries||{};
+    Object.keys(entries).forEach(function(empId){
+      var e=entries[empId];
+      for(var i=0;i<7;i++){
+        var dIso=_ptAddDays(w.monday,i);
+        if(dIso<start||dIso>end)continue;
+        var hj=Number(e.jour&&e.jour[i])||0,hn=Number(e.nuit&&e.nuit[i])||0,st=(e.statut&&e.statut[i])||'';
+        if(hj===0&&hn===0&&!st)continue;
+        (byEmp[empId]||(byEmp[empId]=[])).push({date:dIso,dow:_ptDowName(dIso),jour:hj,nuit:hn,statut:st});
+      }
+    });
+  });
+  Object.keys(byEmp).forEach(function(k){byEmp[k].sort(function(a,b){return a.date<b.date?-1:1;});});
+  return byEmp;
+}
+// Ouvre une fenêtre d'impression (document blanc, logo CALINSTRUM).
+function _ptOpenPrintDoc(title,bodyHtml,extraCss){
+  var css='body{font-family:Calibri,Arial,sans-serif;margin:0;padding:16px;color:#111;font-size:11px}'+
+    '.doc{max-width:1000px;margin:0 auto}'+
+    '.dh{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:12px}'+
+    '.dt{font-size:17px;font-weight:900;color:#1e3a5f}.ds{font-size:10px;color:#555;margin-top:2px}'+
+    '.bd{text-align:center}.bd img{height:46px;display:block;margin:0 auto 3px}.bn{font-size:12px;font-weight:900;color:#1e3a5f;letter-spacing:1px}'+
+    'table{width:100%;border-collapse:collapse;font-size:10.5px;margin-bottom:10px}'+
+    'th{background:#1e3a5f;color:#fff;padding:5px 6px;text-align:left;font-size:9.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    'td{border:1px solid #d7dee8;padding:4px 6px}.n{text-align:right;font-variant-numeric:tabular-nums}.c{text-align:center}'+
+    'tr.emp td{background:#eef2f7;font-weight:700;color:#1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    'tr.sub td{background:#f8fafc;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    'tr.tot td{background:#eef2f7;font-weight:800;color:#1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    '.we{background:#f4f6f9}.sig{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:16px;font-size:10.5px}'+
+    '.sig .box{border-top:1px solid #94a3b8;padding-top:6px;min-height:60px;color:#374151}'+
+    '.note{margin-top:8px;font-size:9.5px;color:#555;font-style:italic}'+(extraCss||'');
+  var logo=(typeof LG_PLACEHOLDER!=='undefined')?LG_PLACEHOLDER:'';
+  var w=window.open('','_blank','');
+  if(!w){alert('Autorisez les popups pour imprimer.');return;}
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+
+    bodyHtml.replace('{{LOGO}}',logo)+'</body></html>');
+  w.document.close();w.focus();
+  setTimeout(function(){try{w.print();}catch(e){}},350);
+}
+// Devis sélectionné dans l'onglet Facturation (pour PO / objet), sinon null.
+function _ptFactSelectedDevis(){
+  var sel=document.getElementById('ptFactDevis');
+  if(sel&&sel.value)return DB.devis.find(function(x){return String(x.id)===sel.value;});
+  return null;
+}
+// ---- TIME SHEET ----
+function ptTimeSheetPrint(){
+  var res=ptFactBuildLines();if(!res||!res.agg.emps.length){alert('Aucune heure à imprimer.');return;}
+  var bd=res.bounds,pfx=ptFactState.pfx;
+  var daily=_ptDailyByEmp(bd.start,bd.end,pfx);
+  var dv=_ptFactSelectedDevis();
+  var po=(dv&&dv.bcClientSLN)||'';
+  var STL={C:'Congés',CH:'Chômé',F:'Férié'};
+  var rows='';
+  res.agg.emps.forEach(function(e){
+    var a=res.agg.byEmp[e.id];
+    rows+='<tr class="emp"><td colspan="7">'+esc(e.nom)+' '+esc(e.prenom||'')+' — '+esc(e.qualification||e.poste||'')+'</td></tr>';
+    (daily[e.id]||[]).forEach(function(d){
+      var isWe=(d.dow==='Sam'||d.dow==='Dim');
+      rows+='<tr'+(isWe?' class="we"':'')+'><td>'+fD(d.date)+'</td><td>'+d.dow+'</td>'+
+        '<td class="n">'+(d.jour>0?fH(d.jour):'—')+'</td><td class="n">'+(d.nuit>0?fH(d.nuit):'—')+'</td>'+
+        '<td class="c">'+(d.statut?(STL[d.statut]||d.statut):'Travail')+'</td>'+
+        '<td colspan="2"></td></tr>';
+    });
+    var totalH=a.hnj+a.hs25+a.hs50+a.dim+a.fer+a.nuit;
+    rows+='<tr class="sub"><td colspan="2">TOTAL '+esc(e.nom)+' '+esc(e.prenom||'')+'</td>'+
+      '<td class="n">'+fH(a.totalJour)+'</td><td class="n">'+fH(a.totalNuit)+'</td>'+
+      '<td colspan="3" class="n">HNJ '+fH(a.hnj)+' · +25% '+fH(a.hs25)+' · +50% '+fH(a.hs50)+' · Dim '+fH(a.dim)+' · Nuit '+fH(a.nuit)+' · Fér '+fH(a.fer)+' → Total '+fH(totalH)+' h</td></tr>';
+  });
+  var body='<div class="doc">'+
+    '<div class="dh"><div><div class="dt">TIME SHEET</div><div class="ds">Client : <b>'+esc(pfx)+'</b> · Période du '+fD(bd.start)+' au '+fD(bd.end)+(po?' · PO : <b>'+esc(po)+'</b>':'')+'</div></div>'+
+    '<div class="bd"><img src="{{LOGO}}" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div>'+
+    '<table><thead><tr><th>Date</th><th>Jour</th><th class="n">H jour</th><th class="n">H nuit</th><th class="c">Statut</th><th colspan="2">Tâches / repère</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+    '<div class="sig"><div class="box">Visa Prestataire (nom, date, signature) :<br><br>CALINSTRUM — le '+fD(bd.end)+'</div>'+
+    '<div class="box">Visa Client (nom, date, signature + tampon) :</div></div>'+
+    '<div class="note">Document à faire viser par le client. Heures majorées calculées selon la Convention Commerce et Divers NC (≤39h normal, 39→47 +25%, 48+ +50%, dimanche +75%, nuit +100%, férié barème).</div>'+
+    '</div>';
+  _ptOpenPrintDoc('TIME SHEET CALINSTRUM '+pfx+' '+fD(bd.start)+' au '+fD(bd.end),body);
+}
+// ---- MMB (PRNC) ----
+function ptMMBPrint(){
+  var res=ptFactBuildLines();if(!res||!res.agg.emps.length){alert('Aucune heure à imprimer.');return;}
+  var bd=res.bounds,pfx=ptFactState.pfx;
+  var dv=_ptFactSelectedDevis();
+  var po=(dv&&dv.bcClientSLN)||'';
+  var objet=(dv&&dv.objet)||'STRATÉGIE DE MAINTENANCE / SJ MMR&CC';
+  // Cumul sur le PO : somme des factures déjà émises liées à ce devis (mois précédent) + courant
+  var previous=0;
+  if(dv){previous=(DB.factures||[]).filter(function(f){return (f.dvlie||'')===dv.num;}).reduce(function(s,f){return s+(Number(f.ttc)||0);},0);}
+  var rows='',totalMensuel=0;
+  res.agg.emps.forEach(function(e){
+    var a=res.agg.byEmp[e.id];
+    var base=_ptTarifFor(pfx,e.id)||0;
+    var montant=_ptBrut(a,base);
+    totalMensuel+=montant;
+    var duree=Math.round((a.hnj+a.hs25+a.hs50+a.dim+a.fer+a.nuit)*10)/10;
+    rows+='<tr><td>'+esc(objet)+'</td><td>'+esc(e.qualification||e.poste||'')+'</td><td class="c">1</td>'+
+      '<td>'+esc(e.nom)+'</td><td>'+esc(e.prenom||'')+'</td><td class="c">'+fH(duree)+'H</td>'+
+      '<td class="n">'+fN(montant)+'</td><td class="n">—</td><td class="n">—</td></tr>';
+  });
+  var totalAnnuel=previous+totalMensuel;
+  var body='<div class="doc">'+
+    '<div class="dh"><div><div class="dt">MONTHLY MEASUREMENT BULLETIN</div><div class="ds">MMB du '+fD(bd.start)+' au '+fD(bd.end)+'</div></div>'+
+    '<div class="bd"><img src="{{LOGO}}" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div>'+
+    '<table><thead><tr><th>Prestataire</th><th>Demandeur</th><th>Désignation des travaux</th><th class="c">PO</th><th class="c">Début prestation</th><th class="c">Début travaux</th><th class="c">Fin travaux</th></tr></thead>'+
+    '<tbody><tr><td><b>CALINSTRUM</b></td><td>'+esc((DB.clients.find(function(c){return getClientPrefix(c.nom)===pfx;})||{}).contact||'')+'</td><td>'+esc(objet)+'</td><td class="c">'+esc(po||'—')+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.end)+'</td></tr></tbody></table>'+
+    '<table><thead><tr><th>Description des tâches</th><th>Qualification</th><th class="c">Nb pers.</th><th>Nom</th><th>Prénom</th><th class="c">Durée</th><th class="n">Montant mensuel</th><th class="n">Mois précédent</th><th class="n">Total annuel</th></tr></thead>'+
+    '<tbody>'+rows+
+    '<tr class="tot"><td colspan="6">TOTAL</td><td class="n">'+fN(totalMensuel)+'</td><td class="n">'+fN(previous)+'</td><td class="n">'+fN(totalAnnuel)+'</td></tr></tbody></table>'+
+    '<div class="sig"><div class="box">Validation Prestataire (nom, prénom, date et visa) :<br><br>RIZZO, FABRICE, le '+fD(bd.end)+'</div><div class="box">Validation Client :</div></div>'+
+    '<div class="note">Montant mensuel = heures × grille tarifaire de vente '+esc(pfx)+' (majorations incluses). Cumul « Mois précédent »/« Total annuel » sur le PO'+(po?' '+esc(po):'')+' d\'après les factures déjà émises liées au devis.</div>'+
+    '</div>';
+  _ptOpenPrintDoc('MMB CALINSTRUM '+pfx+' '+fD(bd.start)+' au '+fD(bd.end),body);
 }
 
 // ===== CLIENTS =====
