@@ -38702,6 +38702,10 @@ function _ptOpenPrintDoc(title,bodyHtml,extraCss){
     'table{width:100%;border-collapse:collapse;font-size:10.5px;margin-bottom:10px}'+
     'th{background:#1e3a5f;color:#fff;padding:5px 6px;text-align:left;font-size:9.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
     'td{border:1px solid #d7dee8;padding:4px 6px}.n{text-align:right;font-variant-numeric:tabular-nums}.c{text-align:center}'+
+    'thead{display:table-header-group}'+ /* répète l\'en-tête (doc + colonnes) sur chaque page imprimée */
+    'td.rh{border:none;background:#fff;padding:6px 0 8px 0;border-bottom:2.5px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    'td.rh .rh-in{display:flex;justify-content:space-between;align-items:flex-end}'+
+    'td.rh .bd img{height:42px}'+
     'tr.emp td{background:#eef2f7;font-weight:700;color:#1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
     'tr.sub td{background:#f8fafc;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
     'tr.tot td{background:#eef2f7;font-weight:800;color:#1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
@@ -38746,10 +38750,11 @@ function ptTimeSheetPrint(){
       '<td class="n">'+fH(a.totalJour)+'</td><td class="n">'+fH(a.totalNuit)+'</td>'+
       '<td colspan="3" class="n">HNJ '+fH(a.hnj)+' · +25% '+fH(a.hs25)+' · +50% '+fH(a.hs50)+' · Dim '+fH(a.dim)+' · Nuit '+fH(a.nuit)+' · Fér '+fH(a.fer)+' → Total '+fH(totalH)+' h</td></tr>';
   });
+  var docHd='<tr><td colspan="7" class="rh"><div class="rh-in">'+
+    '<div><div class="dt">TIME SHEET</div><div class="ds">Client : <b>'+esc(pfx)+'</b> · Période du '+fD(bd.start)+' au '+fD(bd.end)+(po?' · PO : <b>'+esc(po)+'</b>':'')+'</div></div>'+
+    '<div class="bd"><img src="{{LOGO}}" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div></td></tr>';
   var body='<div class="doc">'+
-    '<div class="dh"><div><div class="dt">TIME SHEET</div><div class="ds">Client : <b>'+esc(pfx)+'</b> · Période du '+fD(bd.start)+' au '+fD(bd.end)+(po?' · PO : <b>'+esc(po)+'</b>':'')+'</div></div>'+
-    '<div class="bd"><img src="{{LOGO}}" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div>'+
-    '<table><thead><tr><th>Date</th><th>Jour</th><th class="n">H jour</th><th class="n">H nuit</th><th class="c">Statut</th><th colspan="2">Tâches / repère</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+    '<table><thead>'+docHd+'<tr><th>Date</th><th>Jour</th><th class="n">H jour</th><th class="n">H nuit</th><th class="c">Statut</th><th colspan="2">Tâches / repère</th></tr></thead><tbody>'+rows+'</tbody></table>'+
     '<div class="sig"><div class="box">Visa Prestataire (nom, date, signature) :<br><br>CALINSTRUM — le '+fD(bd.end)+'</div>'+
     '<div class="box">Visa Client (nom, date, signature + tampon) :</div></div>'+
     '<div class="note">Document à faire viser par le client. Heures majorées calculées selon la Convention Commerce et Divers NC (≤39h normal, 39→47 +25%, 48+ +50%, dimanche +75%, nuit +100%, férié barème).</div>'+
@@ -38778,10 +38783,11 @@ function ptMMBPrint(){
       '<td class="n">'+fN(montant)+'</td><td class="n">—</td><td class="n">—</td></tr>';
   });
   var totalAnnuel=previous+totalMensuel;
+  var mmbHd='<tr><td colspan="7" class="rh"><div class="rh-in">'+
+    '<div><div class="dt">MONTHLY MEASUREMENT BULLETIN</div><div class="ds">MMB du '+fD(bd.start)+' au '+fD(bd.end)+(po?' · PO : <b>'+esc(po)+'</b>':'')+'</div></div>'+
+    '<div class="bd"><img src="{{LOGO}}" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div></td></tr>';
   var body='<div class="doc">'+
-    '<div class="dh"><div><div class="dt">MONTHLY MEASUREMENT BULLETIN</div><div class="ds">MMB du '+fD(bd.start)+' au '+fD(bd.end)+'</div></div>'+
-    '<div class="bd"><img src="{{LOGO}}" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div>'+
-    '<table><thead><tr><th>Prestataire</th><th>Demandeur</th><th>Désignation des travaux</th><th class="c">PO</th><th class="c">Début prestation</th><th class="c">Début travaux</th><th class="c">Fin travaux</th></tr></thead>'+
+    '<table><thead>'+mmbHd+'<tr><th>Prestataire</th><th>Demandeur</th><th>Désignation des travaux</th><th class="c">PO</th><th class="c">Début prestation</th><th class="c">Début travaux</th><th class="c">Fin travaux</th></tr></thead>'+
     '<tbody><tr><td><b>CALINSTRUM</b></td><td>'+esc((DB.clients.find(function(c){return getClientPrefix(c.nom)===pfx;})||{}).contact||'')+'</td><td>'+esc(objet)+'</td><td class="c">'+esc(po||'—')+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.end)+'</td></tr></tbody></table>'+
     '<table><thead><tr><th>Description des tâches</th><th>Qualification</th><th class="c">Nb pers.</th><th>Nom</th><th>Prénom</th><th class="c">Durée</th><th class="n">Montant mensuel</th><th class="n">Mois précédent</th><th class="n">Total annuel</th></tr></thead>'+
     '<tbody>'+rows+
