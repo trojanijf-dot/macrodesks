@@ -38401,7 +38401,7 @@ function ptPaiePrint(){
     '.t td{border:1px solid #d7dee8;padding:4px 6px}.t .n{text-align:right;font-variant-numeric:tabular-nums}'+
     '.t tfoot td{background:#eef2f7;font-weight:800;color:#1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
     '.note{margin-top:10px;font-size:9.5px;color:#555;font-style:italic}';
-  var title='PAIE CALINSTRUM '+_ptFn(b.start)+' au '+_ptFn(b.end);
+  var title='RECAP POINTAGE CALINSTRUM '+moisLbl; // mois civil, tous clients (ex: "... Juillet 2026")
   var w=window.open('','_blank','');
   if(!w){alert('Autorisez les popups pour imprimer.');return;}
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
@@ -38684,7 +38684,10 @@ function _ptFactDevisInfo(){
 function _ptFactToFALines(res, clientNom){
   var exo=(typeof isClientExo==='function')?isClientExo(clientNom):false;
   var tgc=exo?0:6; // AEI (soumis) = 6% ; PRNC/SLN exo = 0% (cf factures réelles)
-  var lines=[{type:'section_banner',desc:"MAIN D'OEUVRE",_sec:'service'}];
+  // PAS de section_banner explicite : l'éditeur rFAlines ne gère pas ce type (il le
+  // rendait en ligne VIDE). Les lignes portent _sec:'service' → l'aperçu (bFA) et
+  // l'impression (buildPaginatedFA) régénèrent le bandeau "MAIN D'OEUVRE" automatiquement.
+  var lines=[];
   res.lines.forEach(function(l){
     lines.push({ref:'',designation:l.desc,tgc:tgc,unite:'H',qte:l.qte,pu:l.pu,_sec:'service'});
   });
