@@ -2890,9 +2890,12 @@ body.has-dashboard-bg #page-dashboard .metric{
   <div class="modal-body">
     <div class="form-group"><label>Société <span class="req">*</span></label><input class="form-input" id="cl-nom"></div>
     <div class="form-row">
-      <div class="form-group"><label>Contact principal</label><input class="form-input" id="cl-contact"></div>
-      <div class="form-group"><label>Email</label><input class="form-input" id="cl-email"></div>
+      <div class="form-group"><label>Contact principal</label><input class="form-input" id="cl-contact" oninput="_clCivauto()"></div>
+      <div class="form-group"><label>Civilité <span style="color:var(--muted);font-weight:400;font-size:10px">(auto-détectée, modifiable — sur les documents)</span></label>
+        <select class="form-select" id="cl-civilite" onchange="_clCivManual=true"><option value="M">M.</option><option value="Mme">Mme</option></select>
+      </div>
     </div>
+    <div class="form-group"><label>Email</label><input class="form-input" id="cl-email"></div>
     <div class="form-row">
       <div class="form-group"><label>Téléphone</label><input class="form-input" id="cl-tel"></div>
       <div class="form-group"><label>TGC exonéré</label>
@@ -5107,6 +5110,42 @@ function getClientPrefix(clientName){
   var m=raw.match(/^(.+?)\s+-\s*\S/) || raw.match(/^(.+?)\s*-\s+\S/);
   var pfx=m?m[1].trim():raw.trim();
   return pfx||'SLN';
+}
+
+// =============================================================================
+// CIVILITÉ M. / Mme (sur les documents)
+// -----------------------------------------------------------------------------
+// Réglée sur la fiche client (client.civilite = 'M'|'Mme'), défaut auto-détecté
+// depuis le prénom, + rappel modifiable par document (doc.civilite).
+// Liste enrichissable de prénoms féminins (métropole + NC/kanak courants).
+// =============================================================================
+var PRENOMS_F=['deborah','déborah','marie','sophie','julie','sefelosa','sarah','sara','laura','emma','lea','léa',
+  'camille','manon','chloe','chloé','ines','inès','clara','anna','eva','léana','leana','emilie','émilie','celine','céline',
+  'nathalie','sandrine','isabelle','christine','catherine','sylvie','valerie','valérie','stephanie','stéphanie','caroline',
+  'aurelie','aurélie','elodie','élodie','melanie','mélanie','audrey','sabrina','jessica','vanessa','laetitia','lætitia',
+  'fabienne','patricia','veronique','véronique','florence','delphine','virginie','helene','hélène','laure','claire',
+  'agnes','agnès','beatrice','béatrice','monique','jacqueline','francoise','françoise','brigitte','martine','nadine',
+  'wendy','vaïtea','vaitea','poeiti','hina','moana','tehani','miri','joana','rosa','maria','teresa','ana','rita'];
+// Détecte une civilité par défaut depuis un nom de contact ("Déborah CRITG").
+function _detectCivilite(contact){
+  var prenom=String(contact||'').trim().split(/\s+/)[0].toLowerCase();
+  if(!prenom) return 'M';
+  if(PRENOMS_F.indexOf(prenom)>=0) return 'Mme';
+  // heuristique douce (suggestion) : terminaisons féminines fréquentes
+  if(/(ette|ine|elle|ance|ence)$/.test(prenom)) return 'Mme';
+  return 'M';
+}
+function _civLabel(civ){ return civ==='Mme' ? 'Mme' : 'M.'; }
+// Résout la civilité à afficher : override explicite du doc > fiche client > détection auto.
+function _resolveCiv(clientNom, contact, explicitCiv){
+  if(explicitCiv==='M'||explicitCiv==='Mme') return explicitCiv;
+  var c=(DB.clients||[]).find(function(x){return (x.nom||'')===clientNom;});
+  if(c&&(c.civilite==='M'||c.civilite==='Mme')) return c.civilite;
+  return _detectCivilite(contact);
+}
+// "À Mme " / "À M. " prêt à insérer devant le contact.
+function _civPrefix(clientNom, contact, explicitCiv){
+  return 'À '+_civLabel(_resolveCiv(clientNom, contact, explicitCiv))+' ';
 }
 
 function fillCCFromSelect(pfx){
@@ -38891,7 +38930,7 @@ function ptMMBPrint(){
     '<div class="bd"><img src="{{LOGO}}" alt="CALINSTRUM"><div class="bn">CALINSTRUM</div></div></div></td></tr>';
   var body='<div class="doc">'+
     '<table><thead>'+mmbHd+'<tr><th>Prestataire</th><th>Demandeur</th><th>Désignation des travaux</th><th class="c">PO</th><th class="c">Début prestation</th><th class="c">Début travaux</th><th class="c">Fin travaux</th></tr></thead>'+
-    '<tbody><tr><td><b>CALINSTRUM</b></td><td>'+esc(demandeur)+'</td><td>'+esc(objet)+'</td><td class="c">'+esc(po||'—')+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.end)+'</td></tr></tbody></table>'+
+    '<tbody><tr><td><b>CALINSTRUM</b></td><td>'+(demandeur?esc(_civLabel(_detectCivilite(demandeur))+' '+demandeur):'')+'</td><td>'+esc(objet)+'</td><td class="c">'+esc(po||'—')+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.start)+'</td><td class="c">'+fD(bd.end)+'</td></tr></tbody></table>'+
     '<table><thead><tr><th>Description des tâches</th><th>Qualification</th><th class="c">Nb pers.</th><th>Nom</th><th>Prénom</th><th class="c">Durée</th><th class="n">Montant mensuel</th><th class="n">Mois précédent</th><th class="n">Total annuel</th></tr></thead>'+
     '<tbody>'+rows+
     '<tr class="tot"><td colspan="6">TOTAL</td><td class="n">'+fN(totalMensuel)+'</td><td class="n">'+fN(previous)+'</td><td class="n">'+fN(totalAnnuel)+'</td></tr></tbody></table>'+
@@ -38903,14 +38942,21 @@ function ptMMBPrint(){
 
 // ===== CLIENTS =====
 var eCLid=null;
+var _clCivManual=false;
+// Auto-détecte la civilité quand on tape le contact (tant que non forcée à la main).
+function _clCivauto(){ if(_clCivManual)return; gv('cl-civilite',_detectCivilite(gvg('cl-contact'))); }
 function openCL(id){
   eCLid=id||null;
   if(id){
     var c=DB.clients.find(function(x){return x.id===id;});
-    if(c){gv('cl-nom',c.nom);gv('cl-contact',c.contact||'');gv('cl-email',c.email||'');gv('cl-tel',c.tel||'');gv('cl-exo',c.exo||'non');gv('cl-addr',c.adresse||'');gv('cl-notes',c.notes||'');document.getElementById('cl-priority').checked=!!c.priority;sv('mCLtitle','Modifier '+c.nom);}
+    if(c){gv('cl-nom',c.nom);gv('cl-contact',c.contact||'');gv('cl-email',c.email||'');gv('cl-tel',c.tel||'');gv('cl-exo',c.exo||'non');gv('cl-addr',c.adresse||'');gv('cl-notes',c.notes||'');document.getElementById('cl-priority').checked=!!c.priority;
+      // Civilité : valeur enregistrée (=manuelle) sinon détection auto.
+      _clCivManual=(c.civilite==='M'||c.civilite==='Mme');
+      gv('cl-civilite', _clCivManual?c.civilite:_detectCivilite(c.contact));
+      sv('mCLtitle','Modifier '+c.nom);}
   } else {
     ['cl-nom','cl-contact','cl-email','cl-tel','cl-addr','cl-notes'].forEach(function(i){gv(i,'');});
-    gv('cl-exo','non');document.getElementById('cl-priority').checked=false;sv('mCLtitle','Nouveau client');
+    gv('cl-exo','non');gv('cl-civilite','M');_clCivManual=false;document.getElementById('cl-priority').checked=false;sv('mCLtitle','Nouveau client');
   }
   om('mCL');
 }
@@ -38923,6 +38969,7 @@ async function saveCL(){
   var priorityChk=document.getElementById('cl-priority').checked;
   var c={id:eCLid||Date.now(),nom:gvg('cl-nom'),contact:gvg('cl-contact'),email:gvg('cl-email'),
     tel:gvg('cl-tel'),tel2:'',exo:gvg('cl-exo'),adresse:gvg('cl-addr'),notes:gvg('cl-notes'),
+    civilite:gvg('cl-civilite')||'M',
     priority:priorityChk};
   if(!c.nom){alert('Nom obligatoire');return;}
   // Avertissement (non bloquant) si plus de 5 clients prioritaires : la barre d'import
@@ -40179,7 +40226,7 @@ function bDV(d){
     '</div>'+
     '<div class="doc-parties">'+
       '<div class="doc-party"><h4>CALINSTRUM SARL</h4><p>RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+' / '+CI.tel2+'<br>'+CI.email+'</p></div>'+
-      '<div class="doc-party"><h4>CLIENT</h4><p>À M. <strong>'+esc(d.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
+      '<div class="doc-party"><h4>CLIENT</h4><p>'+_civPrefix(d.client,d.contact,d.civilite)+'<strong>'+esc(d.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
     '</div>'+
     '<p style="font-size:13px;margin-bottom:8px"><strong>Objet :</strong> '+esc(d.objet||'')+'</p>'+
     '<table class="doc-tbl" style="page-break-inside:auto">'+
@@ -40442,7 +40489,7 @@ function bFA(f){
       '<div class="doc-party">'+
         '<h4>CLIENT</h4>'+
         '<p>'+
-          (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>À M. <strong>'+esc(displayContact)+'</strong><br>':'À M. <strong>'+esc(displayContact)+'</strong><br>')+
+          (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>'+_civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>':_civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>')+
           cliAddr+'<br>'+
           (cliTel?'Tél: '+esc(cliTel)+'<br>':'')+
           esc(cliEmail)+
@@ -40809,7 +40856,7 @@ function bBL(b){
         '</div></div>'+
       '<div class="doc-party"><h4>Destinataire</h4><p>'+
         '<strong>'+esc(destNom)+'</strong><br>'+
-        (destContact?'À l\'attention de : '+esc(destContact)+'<br>':'')+
+        (destContact?_civPrefix(b.client,destContact,b.civilite)+esc(destContact)+'<br>':'')+
         destAddr+'<br>'+
         (destTel?'Tél: '+esc(destTel)+'<br>':'')+
         (destEmail?esc(destEmail)+'<br>':'')+
@@ -41248,7 +41295,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:10px">'+
         '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CALINSTRUM SARL</h4><p style="font-size:13px;line-height:1.6;color:#333;margin:0">RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+' / '+CI.tel2+'<br>'+CI.email+'</p></div>'+
         '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CLIENT</h4>'+
-          '<p style="font-size:13px;line-height:1.6;color:#333;margin:0">À M. <strong>'+esc(d.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
+          '<p style="font-size:13px;line-height:1.6;color:#333;margin:0">'+_civPrefix(d.client,d.contact,d.civilite)+'<strong>'+esc(d.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
       '</div>'+
       '<p style="font-size:13px;margin-bottom:8px;margin-top:0"><strong>Objet :</strong> '+esc(d.objet||'')+'</p>';
   }
@@ -41651,7 +41698,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CALINSTRUM SARL</h4><p style="font-size:13px;line-height:1.6;color:#333;margin:0">RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+'<br>'+CI.email+'</p></div>'+
         '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CLIENT</h4>'+
           '<p style="font-size:13px;line-height:1.6;color:#333;margin:0">'+
-            (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>À M. <strong>'+esc(displayContact)+'</strong><br>':'À M. <strong>'+esc(displayContact)+'</strong><br>')+
+            (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>'+_civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>':_civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>')+
             cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+
           '</p></div>'+
       '</div>'+
