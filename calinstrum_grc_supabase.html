@@ -2833,11 +2833,85 @@ body.has-dashboard-bg #page-dashboard .metric{
     <table class="items-tbl"><thead><tr><th>Réf. produit</th><th style="min-width:170px">Description</th><th>Qtés</th><th>Unité(XPF)</th><th></th></tr></thead>
     <tbody id="blLN"></tbody></table>
     <div class="items-total"><div class="t-row t-total"><span>TOTAL (XPF)</span><span id="blTT">0</span></div></div>
+    <hr class="sep">
+    <!-- ===== LISTE DE COLISAGE (Packing List fournisseur) =====
+         Carte rendue par renderBLColisageCard() : état 1 = zone de dépôt,
+         état 2 = PDF attaché (chips données extraites + boutons).
+         Données stockées dans bl.colisage (sync via table bls). -->
+    <div id="bl-colisage-card"></div>
+    <input type="file" id="bl-colisage-file" accept=".pdf,application/pdf" style="display:none" onchange="handleBLColisageSelected(event)">
   </div>
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mBL')">Annuler</button>
     <button class="btn btn-ghost" onclick="previewBL()">👁 Aperçu</button>
     <button class="btn btn-teal" onclick="saveBL()">✓ Enregistrer</button>
+  </div>
+</div></div>
+
+<!-- ===== COLISAGE : vérification/édition des données extraites du PDF ===== -->
+<div class="modal-overlay" id="mCOLIS">
+<div class="modal modal-lg">
+  <div class="modal-header"><h3>📦 Données de la liste de colisage</h3><button class="modal-close" onclick="cm('mCOLIS')">✕</button></div>
+  <div class="modal-body">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Données extraites automatiquement du PDF — corrige ce qui doit l'être, tout est éditable. Elles alimentent le document « LISTE DE COLISAGE » au format CALINSTRUM.</div>
+    <div class="form-row3">
+      <div class="form-group"><label>Shipment N°</label><input class="form-input" id="cls-shipment"></div>
+      <div class="form-group"><label>Sales Order N°</label><input class="form-input" id="cls-so"></div>
+      <div class="form-group"><label>Date du document</label><input class="form-input" id="cls-docdate" placeholder="11-JUN-2026"></div>
+    </div>
+    <div class="form-row3">
+      <div class="form-group"><label>Ship Date</label><input class="form-input" id="cls-shipdate"></div>
+      <div class="form-group"><label>Delivery ID</label><input class="form-input" id="cls-delivid"></div>
+      <div class="form-group"><label>Customer PO</label><input class="form-input" id="cls-po"></div>
+    </div>
+    <div class="form-row3">
+      <div class="form-group"><label>Order Manager</label><input class="form-input" id="cls-om"></div>
+      <div class="form-group"><label>Rep Order N°</label><input class="form-input" id="cls-rep"></div>
+      <div class="form-group"><label>Project N°</label><input class="form-input" id="cls-proj"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Ship From (expéditeur)</label><textarea class="form-textarea" id="cls-shipfrom" rows="4"></textarea></div>
+      <div class="form-group"><label>Ship To</label><textarea class="form-textarea" id="cls-shipto" rows="4"></textarea></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Sold To</label><textarea class="form-textarea" id="cls-soldto" rows="4"></textarea></div>
+      <div class="form-group"><label>Deliver To</label><textarea class="form-textarea" id="cls-deliverto" rows="4"></textarea></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Total colis</label><input class="form-input" id="cls-tpkg"></div>
+      <div class="form-group"><label>Poids brut</label><input class="form-input" id="cls-tgross" placeholder="5.00 KG / 11.02 LB"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Poids net</label><input class="form-input" id="cls-tnet"></div>
+      <div class="form-group"><label>Volume</label><input class="form-input" id="cls-tvol" placeholder="0.07 M3 / 2.55 FT3"></div>
+    </div>
+    <div class="form-row3">
+      <div class="form-group"><label>Inland</label><input class="form-input" id="cls-inland"></div>
+      <div class="form-group"><label>Freight Terms</label><input class="form-input" id="cls-freight"></div>
+      <div class="form-group"><label>Tracking / BOL N°</label><input class="form-input" id="cls-tracking"></div>
+    </div>
+    <div class="form-row3">
+      <div class="form-group"><label>Forwarder</label><input class="form-input" id="cls-forwarder"></div>
+      <div class="form-group"><label>Main</label><input class="form-input" id="cls-main"></div>
+      <div class="form-group"><label>Handled by</label><input class="form-input" id="cls-handled"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Delivery Terms</label><input class="form-input" id="cls-terms" placeholder="Inco2020: FCA BAYSWATER"></div>
+      <div class="form-group"><label>Ultimate Destination</label><input class="form-input" id="cls-ultdest"></div>
+    </div>
+    <div class="form-group"><label>Notes d'en-tête de tableau <span style="color:var(--muted);font-weight:400;font-size:10px">— 1 par ligne (conditions, contact, références à rappeler)</span></label><textarea class="form-textarea" id="cls-notes" rows="4"></textarea></div>
+    <hr class="sep">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <strong style="font-size:12px">Colis &amp; articles</strong>
+      <button class="btn btn-ghost btn-sm" onclick="addClsItem('box')">+ Colis</button>
+      <button class="btn btn-ghost btn-sm" onclick="addClsItem('line')">+ Article</button>
+    </div>
+    <div style="overflow-x:auto"><table class="items-tbl"><thead><tr><th>Type</th><th>N°</th><th>PO Line</th><th style="min-width:140px">Modèle / Réf</th><th style="min-width:150px">Description</th><th>Réf client</th><th>HTS</th><th>Qté exp.</th><th>Qté cmd.</th><th style="min-width:170px">Séries <span style="font-weight:400;font-size:9px">(unit | tag | série | origine)</span></th><th></th></tr></thead>
+    <tbody id="clsITEMS"></tbody></table></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mCOLIS')">Annuler</button>
+    <button class="btn btn-teal" onclick="saveBLColisageEdit()">✓ Appliquer</button>
   </div>
 </div></div>
 
@@ -37612,6 +37686,8 @@ function openBL(id, opts){
   // opts (optionnel) : { fromDevisIds: [id1,id2,...], prefillLines: [{ref,desc,qte,pu}], poConsolide: 'PO1+PO2', dvliesNumStr: 'SLN-DV-XYZ, SLN-DV-ABC', client: '...', contact: '...', adrdest: '...' }
   // Utilisé par "Créer BL depuis devis" pour pré-remplir directement la modale.
   eBLid=id||null;blL=[];
+  // Liste de colisage : recharger depuis le BL édité, sinon repartir à vide.
+  blColis=null;_blColisPendingBytes=null;
   buildClientOptions('bl-client','');
   if(id){
     var b=DB.bls.find(function(x){return x.id===id;});
@@ -37621,6 +37697,7 @@ function openBL(id, opts){
       gv('bl-contact',b.contact||'');gv('bl-adrdest',b.adrdest||'');gv('bl-emaildest',b.emaildest||'');gv('bl-po',b.po||'');gv('bl-emis',b.emis||'');gv('bl-status',b.status||'En préparation');
       gv('bl-dvlie', b.dvlie || (b._sourceDevisNums||[]).join(', '));
       blL=JSON.parse(JSON.stringify(b.lines||[]));sv('mBLtitle','Modifier BL — '+b.num);
+      blColis=b.colisage?JSON.parse(JSON.stringify(b.colisage)):null;
     }
   } else if(opts && opts.fromDevisIds){
     // === Création depuis "Créer BL depuis devis" ===
@@ -37647,7 +37724,7 @@ function openBL(id, opts){
     gv('bl-num',nxt('bl'));gv('bl-date',td());gv('bl-lieu','NOUMEA');gv('bl-contact','');gv('bl-adrdest','');gv('bl-emaildest','');gv('bl-po','');gv('bl-emis','Fabrice RIZZO');gv('bl-status','En préparation');gv('bl-dvlie','');sv('mBLtitle','Nouveau Bon de Livraison');
     _blPendingSourceDevisIds = null;
   }
-  rBLlines();om('mBL');
+  rBLlines();renderBLColisageCard();om('mBL');
 }
 // État temporaire : IDs des devis source d'un BL en cours de création.
 // Lu par getBL() au moment du save pour les persister dans _sourceDevisIds.
@@ -37718,6 +37795,9 @@ function getBL(){
     status: gvg('bl-status'),
     dvlie: gvg('bl-dvlie'),
     _sourceDevisIds: sourceIds,
+    // Liste de colisage (Packing List fournisseur re-brandée CALINSTRUM).
+    // null si aucune — les BL existants restent inchangés.
+    colisage: blColis?JSON.parse(JSON.stringify(blColis)):null,
     lines: JSON.parse(JSON.stringify(blL)),
     total: tot
   };
@@ -37735,6 +37815,12 @@ async function saveBL(){
   // Les IDs sources sont maintenant persistés dans b._sourceDevisIds → on libère le buffer global
   _blPendingSourceDevisIds = null;
   saveDB();
+  // Archivage du PDF colisage original (IndexedDB + cloud, fire-and-forget) —
+  // fait APRÈS le save pour disposer de l'id définitif du BL.
+  if(_blColisPendingBytes && b.colisage){
+    _storeBLColisagePdf(b.id, b.colisage.filename||'colisage.pdf', _blColisPendingBytes, b.num);
+    _blColisPendingBytes=null;
+  }
   // ⚠ La modale RESTE ouverte (pattern unifié avec saveDV)
   if(wasNew) sv('mBLtitle','Modifier BL — '+b.num);
   renderBL();rDash();renderHist();
@@ -37784,7 +37870,9 @@ function renderBL(){
         });
       }
     }
-    var clientCell = '<td>'+esc(x.client||'')+(pdfBadgesHtml?' '+pdfBadgesHtml:'')+'</td>';
+    // Badge 📦 : une liste de colisage est rattachée à ce BL
+    var colisBadge = x.colisage ? ' <span title="Liste de colisage jointe" style="display:inline-block;background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.5);color:#60a5fa;border-radius:5px;padding:0 6px;font-size:9.5px;vertical-align:1px">📦</span>' : '';
+    var clientCell = '<td>'+esc(x.client||'')+colisBadge+(pdfBadgesHtml?' '+pdfBadgesHtml:'')+'</td>';
     return'<tr class="hgr-data-row" style="cursor:pointer" onclick="openBL('+x.id+')">'+
       '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td>'+
       clientCell+
@@ -37804,6 +37892,474 @@ function renderBL(){
     getValueXpf:function(x){return x.total||0;},
     renderDataRow:renderBLRow,
     emptyMsg:'Aucun bon de livraison'
+  });
+}
+
+// =============================================================================
+// ===== LISTE DE COLISAGE (Packing List fournisseur → format CALINSTRUM) =====
+// =============================================================================
+// PRNC exige la liste de colisage pour réceptionner. On attache le PDF Emerson
+// au BL, on en extrait les données (pdf.js, même pipeline que les PDF devis),
+// et on ré-imprime le document au format CALINSTRUM (bColisage, variante B
+// validée : en-tête CALINSTRUM, Emerson reste en Ship From).
+// - Données : bl.colisage (objet structuré, sync via la table bls)
+// - PDF original : IndexedDB calinstrum_attachments (devis_pdfs, clé
+//   'blcolis:<blId>' / kind 'colisage') + cloud bucket pdfs/bl_colisage/<num BL>/
+// - Tous les champs sont éditables (mCOLIS) : si un futur PDF n'est pas au
+//   format Emerson, l'utilisateur corrige à la main.
+
+// État temporaire du modal BL (même pattern que blL) :
+var blColis=null;            // objet colisage en cours d'édition (copie de bl.colisage)
+var _blColisPendingBytes=null; // bytes du PDF déposé, archivés au prochain saveBL
+
+// ---- Parseur : items pdf.js {str,x,y,page} → objet colisage structuré ----
+// Calibré sur la Packing Slip Emerson (ex : Shipment 416646478). Heuristiques
+// par clusters de lignes (Y ±3) et colonnes X (gauche <290 / milieu / droite).
+// Toute donnée non trouvée reste '' → corrigeable dans mCOLIS.
+function parseColisagePdfItems(items){
+  var res={
+    docDate:'', shipmentNo:'', salesOrderNo:'', shipDate:'', deliveryId:'',
+    repOrderNo:'', projectNo:'', customerPO:'', serviceReqNo:'', orderManager:'',
+    shipFrom:'', inquiriesTo:'', shipTo:'', deliverTo:'', soldTo:'',
+    totalPackages:'', totalGross:'', totalNet:'', totalVolume:'',
+    inland:'', freightTerms:'', forwarder:'', mainCarrier:'', trackingNo:'',
+    deliveryTerms:'', ultimateDest:'', notes:[], items:[], handledBy:''
+  };
+  if(!items||!items.length) return res;
+  // 1) Clusters de lignes par (page, Y) — même approche que parseBLPdfItems
+  var TOL_Y=3, groups=[];
+  items.forEach(function(it){
+    var pg=it.page||1, g=null;
+    for(var i=0;i<groups.length;i++){
+      if(groups[i].page===pg && Math.abs(groups[i].y-it.y)<=TOL_Y){g=groups[i];break;}
+    }
+    if(g){g.items.push(it);g.y=(g.y*(g.items.length-1)+it.y)/g.items.length;}
+    else groups.push({page:pg,y:it.y,items:[it]});
+  });
+  groups.sort(function(a,b){return a.page-b.page || b.y-a.y;});
+  var lines=groups.map(function(g){
+    g.items.sort(function(a,b){return a.x-b.x;});
+    return {page:g.page,y:g.y,items:g.items,
+      text:g.items.map(function(it){return it.str;}).join(' ').replace(/\s+/g,' ').trim()};
+  });
+  function colText(l,x0,x1){
+    return l.items.filter(function(it){return it.x>=x0&&it.x<x1;})
+      .map(function(it){return it.str;}).join(' ').replace(/\s+/g,' ').trim();
+  }
+  function findLine(re,from){for(var i=(from||0);i<lines.length;i++){if(re.test(lines[i].text))return i;}return -1;}
+  function after(text,label){var i=text.indexOf(label);return i<0?'':text.substring(i+label.length).trim();}
+  function between(text,l1,l2){
+    var i1=text.indexOf(l1);if(i1<0)return '';
+    var s=text.substring(i1+l1.length);
+    var i2=s.indexOf(l2);return (i2<0?s:s.substring(0,i2)).trim();
+  }
+  // Valeur SOUS un label (même colonne X, dans les 3 lignes suivantes, même page)
+  function valBelow(label,xTol){
+    xTol=xTol||110;
+    for(var i=0;i<lines.length;i++){
+      var l=lines[i],lx=-1;
+      for(var j=0;j<l.items.length;j++){
+        if(l.items[j].str.indexOf(label)>=0){lx=l.items[j].x;
+          var same=after(l.items[j].str,label);if(same)return same;
+          break;}
+      }
+      if(lx<0)continue;
+      for(var k=i+1;k<Math.min(i+4,lines.length);k++){
+        if(lines[k].page!==l.page)break;
+        var cand=lines[k].items.filter(function(it){return it.x>=lx-6&&it.x<=lx+xTol;});
+        if(cand.length){
+          var v=cand.map(function(it){return it.str;}).join(' ').trim();
+          if(v&&!/:\s*$/.test(v))return v;
+        }
+      }
+      return '';
+    }
+    return '';
+  }
+  // 2) Références (cartouche droit)
+  res.salesOrderNo=valBelow('Sales Order No:');
+  res.shipmentNo=valBelow('Shipment No:');
+  res.shipDate=valBelow('Ship Date:');
+  res.deliveryId=valBelow('Delivery ID:');
+  res.repOrderNo=valBelow('Rep Order No:');
+  res.projectNo=valBelow('Project No:');
+  res.customerPO=valBelow('Customer PO:');
+  res.serviceReqNo=valBelow('Service Request No:');
+  res.orderManager=valBelow('Order Manager:');
+  // Date du document : première ligne "11-JUN-2026" seule (en-tête)
+  for(var di=0;di<lines.length;di++){
+    if(/^\d{1,2}-[A-Za-z]{3,9}-\d{2,4}$/.test(lines[di].text)){res.docDate=lines[di].text;break;}
+  }
+  if(!res.docDate)res.docDate=res.shipDate;
+  // 3) Blocs adresses (colonne gauche <290 ; Deliver To en colonne milieu)
+  var iSF=findLine(/Ship From:/),iIQ=findLine(/Inquiries To:/),
+      iST=findLine(/Ship To:/),iSO=findLine(/Sold To:/),
+      iVIA=findLine(/Inland:|Shipped Via/);
+  function collectCol(a,b,x0,x1){
+    var out=[];
+    if(a<0)return '';
+    if(b<0||b>lines.length)b=lines.length;
+    for(var i=a+1;i<b;i++){var t=colText(lines[i],x0,x1);if(t)out.push(t);}
+    return out.join('\n');
+  }
+  res.shipFrom=collectCol(iSF,(iIQ>iSF?iIQ:iST),0,290);
+  res.inquiriesTo=(iIQ>=0&&iST>iIQ)?collectCol(iIQ,iST,0,290):'';
+  res.shipTo=collectCol(iST,iSO,0,290);
+  res.soldTo=collectCol(iSO,(iVIA>iSO?iVIA:-1),0,280);
+  res.deliverTo=collectCol(iST,iSO,300,460);
+  // 4) Totaux (colonne milieu/droite — la ligne physique peut contenir du texte
+  //    de la colonne gauche, ex "CALINSTRUM Total Packages: 1" → colText ≥280)
+  function midAfter(label){
+    var i=findLine(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+    return i<0?'':after(colText(lines[i],280,900),label);
+  }
+  res.totalPackages=midAfter('Total Packages:');
+  res.totalGross=midAfter('Total Gross Wt.:');
+  res.totalNet=midAfter('Total Net Wt.:');
+  res.totalVolume=midAfter('Total Volume:');
+  // 5) Expédition
+  var iInl=findLine(/Inland:/);
+  if(iInl>=0)res.inland=after(lines[iInl].text,'Inland:');
+  var iFr=findLine(/Freight Terms:/);
+  if(iFr>=0){
+    res.freightTerms=after(lines[iFr].text,'Freight Terms:');
+    if(lines[iFr].text.indexOf('Tracking/BOL No.:')>=0)
+      res.trackingNo=between(lines[iFr].text,'Tracking/BOL No.:','Freight Terms:');
+  }
+  var iFw=findLine(/Forwarder:/);
+  if(iFw>=0)res.forwarder=after(lines[iFw].text,'Forwarder:');
+  var iMn=findLine(/\bMain:/);
+  if(iMn>=0)res.mainCarrier=(function(){var t=after(lines[iMn].text,'Main:');return t.indexOf('Tracking')>=0?t.substring(0,t.indexOf('Tracking')).trim():t;})();
+  var iDT=findLine(/Delivery Terms:/);
+  if(iDT>=0){
+    var tDT=lines[iDT].text;
+    res.deliveryTerms=tDT.indexOf('Ultimate Destination:')>=0?between(tDT,'Delivery Terms:','Ultimate Destination:'):after(tDT,'Delivery Terms:');
+    res.ultimateDest=after(tDT,'Ultimate Destination:');
+  }
+  // 6) Tableau colis/articles : de l'en-tête ("... Description ... Shipped Ordered")
+  //    jusqu'à "Handled by". Les lignes AVANT le premier colis = notes d'en-tête.
+  var iHdr=findLine(/Description.*(Shipped|Qty)/i);
+  if(iHdr<0)iHdr=findLine(/Qty\s+Qty/i);
+  var iHand=findLine(/^Handled by/i,iHdr>=0?iHdr:0);
+  if(iHdr>=0){
+    var endIdx=iHand>=0?iHand:lines.length;
+    var cur=null,inSerials=false,sawFirstBox=false;
+    for(var li=iHdr+1;li<endIdx;li++){
+      var t=lines[li].text;
+      if(!t)continue;
+      if(/^\d+\s+of\s+\d+$/i.test(t))continue;              // pied de page "1 of 1"
+      if(/Description.*(Shipped|Qty)/i.test(t))continue;    // en-tête répété (pages 2+)
+      if(/^(Box|No No)\b/.test(t)&&/Line/.test(t))continue; // 2e ligne d'en-tête
+      var mBox=t.match(/^(\d{1,3})\s+((?:Ctn|Box|Crate|Plt|Pallet|Carton|Skid)\b.*)$/i);
+      var mItem=t.match(/^(\d+\.\d+)\s+(\d+)?\s*(\S+)\s+(\d+(?:\.\d+)?\s*[A-Z]{1,3})\s+(\d+(?:\.\d+)?\s*[A-Z]{1,3})$/);
+      if(mBox){res.items.push({type:'box',boxNo:mBox[1],desc:mBox[2]});cur=null;inSerials=false;sawFirstBox=true;continue;}
+      if(mItem){
+        cur={type:'line',lineNo:mItem[1],poLine:mItem[2]||'',model:mItem[3],desc:'',custRef:'',hts:'',
+             serials:[],qtyShipped:mItem[4],qtyOrdered:mItem[5]};
+        res.items.push(cur);inSerials=false;sawFirstBox=true;continue;
+      }
+      if(!sawFirstBox&&!cur){res.notes.push(t);continue;}
+      if(cur){
+        var mRef=t.match(/^Customer Reference:\s*(.*)$/i);if(mRef){cur.custRef=mRef[1];continue;}
+        var mHts=t.match(/^Export HTS\/?HS:\s*(.*)$/i);if(mHts){cur.hts=mHts[1];continue;}
+        if(/Unit#\s*Tag/i.test(t)){inSerials=true;continue;}
+        if(inSerials){
+          var mSer=t.match(/^(\d+)\s+(.*?)\s*([A-Z0-9]{7,})\s+([A-Z][A-Za-z ]+)$/);
+          if(mSer){cur.serials.push({unit:mSer[1],tag:(mSer[2]||'').trim(),serial:mSer[3],origin:mSer[4].trim()});continue;}
+          inSerials=false;
+        }
+        cur.desc=cur.desc?cur.desc+'\n'+t:t;
+      }
+    }
+  }
+  // 7) Handled by (valeur sur la ligne suivante dans le template Emerson)
+  if(iHand>=0){
+    var inline=after(lines[iHand].text,'Handled by');
+    if(inline)res.handledBy=inline;
+    else for(var hi=iHand+1;hi<Math.min(iHand+3,lines.length);hi++){
+      if(lines[hi].text&&!/^\d+\s+of\s+\d+$/i.test(lines[hi].text)){res.handledBy=lines[hi].text;break;}
+    }
+  }
+  return res;
+}
+
+// ---- Carte « Liste de colisage » dans le modal BL ----
+function renderBLColisageCard(){
+  var host=document.getElementById('bl-colisage-card');if(!host)return;
+  if(!blColis){
+    // État 1 : zone de dépôt
+    host.innerHTML=
+      '<div style="border:1px solid rgba(96,165,250,.35);background:rgba(96,165,250,.05);border-radius:10px;padding:12px 14px">'+
+        '<div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#60a5fa;margin-bottom:9px">📦 Liste de colisage (Packing List fournisseur)</div>'+
+        '<div id="bl-colisage-drop" style="border:1.5px dashed rgba(96,165,250,.45);border-radius:8px;padding:16px;text-align:center;color:var(--muted);cursor:pointer;transition:background .15s">'+
+          '<div style="font-size:18px;margin-bottom:4px">⬇️</div>'+
+          'Glissez ici le PDF de la Packing List (Emerson)<br>'+
+          '<span style="display:inline-block;margin-top:8px;background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.45);color:#60a5fa;padding:4px 13px;border-radius:6px;font-size:11.5px">📎 Choisir un fichier…</span>'+
+        '</div>'+
+      '</div>';
+  } else {
+    // État 2 : attachée — chips de données extraites + boutons
+    var chips=[];
+    function chip(lbl,v){if(v)chips.push('<span style="background:var(--bg2,#0d1117);border:1px solid var(--border,#30363d);border-radius:20px;padding:2px 10px;font-size:10.5px;color:var(--muted)">'+lbl+' <b style="color:var(--teal,#2dd4bf)">'+esc(v)+'</b></span>');}
+    chip('Shipment',blColis.shipmentNo);chip('SO',blColis.salesOrderNo);chip('PO client',blColis.customerPO);
+    chip('Colis',blColis.totalPackages);chip('Brut',blColis.totalGross);chip('Volume',blColis.totalVolume);
+    chip('Articles',String((blColis.items||[]).filter(function(it){return it.type==='line';}).length||''));
+    host.innerHTML=
+      '<div style="border:1px solid rgba(52,211,153,.4);background:rgba(52,211,153,.05);border-radius:10px;padding:12px 14px">'+
+        '<div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#34d399;margin-bottom:9px">📦 Liste de colisage — attachée ✓</div>'+
+        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">'+
+          '<span>📄</span><span style="font-weight:600;font-size:12px">'+esc(blColis.filename||'colisage.pdf')+'</span>'+
+          (blColis.savedAt?'<span style="color:var(--muted);font-size:10.5px">déposé le '+fD(String(blColis.savedAt).substring(0,10))+'</span>':'')+
+        '</div>'+
+        (chips.length?'<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px">'+chips.join('')+'</div>':'')+
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+          '<button class="btn btn-ghost btn-sm" onclick="prvBLColisage()">👁 Aperçu colisage CALINSTRUM</button>'+
+          '<button class="btn btn-ghost btn-sm" onclick="printBLColisage()">🖨 Imprimer / PDF</button>'+
+          '<button class="btn btn-ghost btn-sm" onclick="openBLColisageEdit()">✏️ Vérifier les données</button>'+
+          '<button class="btn btn-red btn-sm" onclick="removeBLColisage()">🗑 Retirer</button>'+
+        '</div>'+
+        '<div style="font-size:10px;color:var(--muted);margin-top:7px">⚠ Pense à <b>Enregistrer</b> le BL pour conserver la liste de colisage.</div>'+
+      '</div>';
+  }
+  // Zone de dépôt : clic → file picker ; drag&drop → même pipeline
+  var dz=document.getElementById('bl-colisage-drop');
+  if(dz){
+    dz.addEventListener('click',function(){var inp=document.getElementById('bl-colisage-file');if(inp){inp.value='';inp.click();}});
+    dz.addEventListener('dragover',function(e){e.preventDefault();e.stopPropagation();dz.style.background='rgba(96,165,250,.12)';});
+    dz.addEventListener('dragleave',function(e){e.preventDefault();dz.style.background='';});
+    dz.addEventListener('drop',function(e){
+      e.preventDefault();e.stopPropagation();dz.style.background='';
+      var f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];
+      if(f)_processBLColisagePdf(f);
+    });
+  }
+}
+function handleBLColisageSelected(ev){
+  var f=ev&&ev.target&&ev.target.files&&ev.target.files[0];
+  if(f)_processBLColisagePdf(f);
+}
+function _processBLColisagePdf(f){
+  if(!f)return;
+  if(f.type!=='application/pdf'&&!/\.pdf$/i.test(f.name)){alert('Seuls les fichiers PDF sont acceptés.');return;}
+  if(f.size>20*1024*1024){alert('Fichier trop volumineux (max 20 Mo).');return;}
+  if(typeof pdfjsLib==='undefined'){alert('❌ Erreur : pdf.js non chargé. Rechargez la page.');return;}
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var bytes=new Uint8Array(e.target.result);
+      pdfjsLib.getDocument({data:bytes.slice(0)}).promise.then(function(pdf){
+        var tasks=[];
+        var mkPage=function(pNum){
+          return pdf.getPage(pNum).then(function(page){
+            return page.getTextContent().then(function(tc){
+              return tc.items.filter(function(it){return it.str&&it.str.trim();}).map(function(it){
+                return {str:it.str,x:it.transform[4],y:it.transform[5],page:pNum};
+              });
+            });
+          });
+        };
+        for(var p=1;p<=pdf.numPages;p++)tasks.push(mkPage(p));
+        Promise.all(tasks).then(function(pages){
+          var all=[];pages.forEach(function(pp){pp.forEach(function(it){all.push(it);});});
+          var parsed=parseColisagePdfItems(all);
+          parsed.filename=f.name;
+          parsed.fileSize=f.size;
+          parsed.savedAt=new Date().toISOString();
+          blColis=parsed;
+          _blColisPendingBytes=bytes;
+          renderBLColisageCard();
+          if(typeof showBCSaveToast==='function')showBCSaveToast('📦 Liste de colisage analysée — vérifie les données puis Enregistre le BL');
+        });
+      }).catch(function(err){
+        alert('❌ Lecture PDF impossible : '+(err&&err.message?err.message:err));
+      });
+    }catch(err){alert('❌ Erreur : '+err.message);}
+  };
+  reader.readAsArrayBuffer(f);
+}
+function removeBLColisage(){
+  if(!blColis)return;
+  if(!confirm('Retirer la liste de colisage de ce BL ?'))return;
+  blColis=null;_blColisPendingBytes=null;
+  if(eBLid)_deleteBLColisagePdf(eBLid);
+  renderBLColisageCard();
+  if(typeof showBCSaveToast==='function')showBCSaveToast('🗑 Liste de colisage retirée — pense à Enregistrer le BL');
+}
+
+// ---- Modal mCOLIS : vérification/édition des données extraites ----
+var _clsItemsTemp=[];
+function openBLColisageEdit(){
+  if(!blColis){alert('Aucune liste de colisage attachée.');return;}
+  gv('cls-shipment',blColis.shipmentNo||'');gv('cls-so',blColis.salesOrderNo||'');gv('cls-docdate',blColis.docDate||'');
+  gv('cls-shipdate',blColis.shipDate||'');gv('cls-delivid',blColis.deliveryId||'');gv('cls-po',blColis.customerPO||'');
+  gv('cls-om',blColis.orderManager||'');gv('cls-rep',blColis.repOrderNo||'');gv('cls-proj',blColis.projectNo||'');
+  gv('cls-shipfrom',blColis.shipFrom||'');gv('cls-shipto',blColis.shipTo||'');
+  gv('cls-soldto',blColis.soldTo||'');gv('cls-deliverto',blColis.deliverTo||'');
+  gv('cls-tpkg',blColis.totalPackages||'');gv('cls-tgross',blColis.totalGross||'');
+  gv('cls-tnet',blColis.totalNet||'');gv('cls-tvol',blColis.totalVolume||'');
+  gv('cls-inland',blColis.inland||'');gv('cls-freight',blColis.freightTerms||'');gv('cls-tracking',blColis.trackingNo||'');
+  gv('cls-forwarder',blColis.forwarder||'');gv('cls-main',blColis.mainCarrier||'');gv('cls-handled',blColis.handledBy||'');
+  gv('cls-terms',blColis.deliveryTerms||'');gv('cls-ultdest',blColis.ultimateDest||'');
+  gv('cls-notes',(blColis.notes||[]).join('\n'));
+  _clsItemsTemp=JSON.parse(JSON.stringify(blColis.items||[]));
+  rClsItems();
+  om('mCOLIS');
+}
+function rClsItems(){
+  var tb=document.getElementById('clsITEMS');if(!tb)return;
+  tb.innerHTML=_clsItemsTemp.map(function(it,i){
+    var isBox=it.type==='box';
+    var serTxt=(it.serials||[]).map(function(s){return [s.unit||'',s.tag||'',s.serial||'',s.origin||''].join(' | ');}).join('\n');
+    return '<tr'+(isBox?' style="background:rgba(96,165,250,.06)"':'')+'>'+
+      '<td><select data-idx="'+i+'" data-field="type" style="width:74px"><option value="box"'+(isBox?' selected':'')+'>Colis</option><option value="line"'+(!isBox?' selected':'')+'>Article</option></select></td>'+
+      '<td><input style="width:46px" value="'+esc(isBox?(it.boxNo||''):(it.lineNo||''))+'" data-field="'+(isBox?'boxNo':'lineNo')+'" data-idx="'+i+'"></td>'+
+      '<td><input style="width:46px" value="'+esc(it.poLine||'')+'" data-field="poLine" data-idx="'+i+'"'+(isBox?' disabled':'')+'></td>'+
+      '<td><input style="width:140px" value="'+esc(it.model||'')+'" data-field="model" data-idx="'+i+'"'+(isBox?' disabled':'')+'></td>'+
+      '<td><textarea rows="2" style="width:100%;min-width:150px">'+esc(it.desc||'')+'</textarea></td>'+
+      '<td><input style="width:70px" value="'+esc(it.custRef||'')+'" data-field="custRef" data-idx="'+i+'"'+(isBox?' disabled':'')+'></td>'+
+      '<td><input style="width:70px" value="'+esc(it.hts||'')+'" data-field="hts" data-idx="'+i+'"'+(isBox?' disabled':'')+'></td>'+
+      '<td><input style="width:52px" value="'+esc(it.qtyShipped||'')+'" data-field="qtyShipped" data-idx="'+i+'"'+(isBox?' disabled':'')+'></td>'+
+      '<td><input style="width:52px" value="'+esc(it.qtyOrdered||'')+'" data-field="qtyOrdered" data-idx="'+i+'"'+(isBox?' disabled':'')+'></td>'+
+      '<td><textarea rows="2" style="width:100%;min-width:160px" data-field="serials" data-idx="'+i+'"'+(isBox?' disabled':'')+'>'+esc(serTxt)+'</textarea></td>'+
+      '<td><button class="cls-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
+    '</tr>';
+  }).join('');
+  // Description : textarea sans data-field (échappement des retours ligne) → binding dédié
+  tb.querySelectorAll('tr').forEach(function(tr,ri){
+    var descTa=tr.querySelector('td:nth-child(5) textarea');
+    if(descTa)descTa.addEventListener('input',function(){_clsItemsTemp[ri].desc=this.value;});
+  });
+  tb.querySelectorAll('input[data-field],select[data-field],textarea[data-field]').forEach(function(inp){
+    inp.addEventListener('input',function(){
+      var idx=parseInt(this.getAttribute('data-idx')),field=this.getAttribute('data-field');
+      if(isNaN(idx)||!_clsItemsTemp[idx])return;
+      if(field==='type'){_clsItemsTemp[idx].type=this.value;rClsItems();return;}
+      if(field==='serials'){
+        _clsItemsTemp[idx].serials=this.value.split('\n').filter(function(s){return s.trim();}).map(function(s){
+          var p=s.split('|').map(function(x){return x.trim();});
+          return {unit:p[0]||'',tag:p[1]||'',serial:p[2]||'',origin:p[3]||''};
+        });
+        return;
+      }
+      _clsItemsTemp[idx][field]=this.value;
+    });
+  });
+  tb.querySelectorAll('.cls-del-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      if(!isNaN(idx)){_clsItemsTemp.splice(idx,1);rClsItems();}
+    });
+  });
+}
+function addClsItem(type){
+  _clsItemsTemp.push(type==='box'
+    ?{type:'box',boxNo:'',desc:''}
+    :{type:'line',lineNo:'',poLine:'',model:'',desc:'',custRef:'',hts:'',serials:[],qtyShipped:'',qtyOrdered:''});
+  rClsItems();
+}
+function saveBLColisageEdit(){
+  if(!blColis)return;
+  blColis.shipmentNo=gvg('cls-shipment');blColis.salesOrderNo=gvg('cls-so');blColis.docDate=gvg('cls-docdate');
+  blColis.shipDate=gvg('cls-shipdate');blColis.deliveryId=gvg('cls-delivid');blColis.customerPO=gvg('cls-po');
+  blColis.orderManager=gvg('cls-om');blColis.repOrderNo=gvg('cls-rep');blColis.projectNo=gvg('cls-proj');
+  blColis.shipFrom=gvg('cls-shipfrom');blColis.shipTo=gvg('cls-shipto');
+  blColis.soldTo=gvg('cls-soldto');blColis.deliverTo=gvg('cls-deliverto');
+  blColis.totalPackages=gvg('cls-tpkg');blColis.totalGross=gvg('cls-tgross');
+  blColis.totalNet=gvg('cls-tnet');blColis.totalVolume=gvg('cls-tvol');
+  blColis.inland=gvg('cls-inland');blColis.freightTerms=gvg('cls-freight');blColis.trackingNo=gvg('cls-tracking');
+  blColis.forwarder=gvg('cls-forwarder');blColis.mainCarrier=gvg('cls-main');blColis.handledBy=gvg('cls-handled');
+  blColis.deliveryTerms=gvg('cls-terms');blColis.ultimateDest=gvg('cls-ultdest');
+  blColis.notes=gvg('cls-notes').split('\n').filter(function(s){return s.trim();});
+  blColis.items=JSON.parse(JSON.stringify(_clsItemsTemp));
+  cm('mCOLIS');
+  renderBLColisageCard();
+  if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Données colisage mises à jour — pense à Enregistrer le BL');
+}
+
+// ---- Aperçu / impression (titre modal = nom du fichier PDF proposé) ----
+// Convention validée : "LISTE COLISAGE CALINSTRUM_{Client} {DD-MM-YYYY}"
+function _colisDateFR(s){
+  if(!s)return '';
+  var iso=(typeof _isoFromEmersonDate==='function')?_isoFromEmersonDate(s):'';
+  if(!iso&&/^\d{4}-\d{2}-\d{2}/.test(String(s)))iso=String(s).substring(0,10);
+  if(iso){var m=iso.match(/^(\d{4})-(\d{2})-(\d{2})/);if(m)return m[3]+'-'+m[2]+'-'+m[1];}
+  return String(s).replace(/[\\\/:*?"<>|]/g,'-');
+}
+function buildColisageTitle(b){
+  var pfx=(typeof getClientPrefix==='function')?getClientPrefix(b.client||''):'';
+  var c=(b&&b.colisage)||{};
+  var d=_colisDateFR(c.shipDate||c.docDate||b.date);
+  var t='LISTE COLISAGE CALINSTRUM'+(pfx?'_'+pfx:'');
+  if(d)t+=' '+d;
+  return t.replace(/[\\\/:*?"<>|]/g,'-');
+}
+function prvBLColisage(){
+  var b=getBL();
+  if(!b.colisage){alert('Aucune liste de colisage attachée.');return;}
+  window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;
+  showPrv(buildColisageTitle(b),bColisage(b));
+}
+function printBLColisage(){
+  var b=getBL();
+  if(!b.colisage){alert('Aucune liste de colisage attachée.');return;}
+  prvBLColisage();
+  if(typeof printPreviewBC==='function')printPreviewBC();
+}
+
+// ---- Archivage du PDF original ----
+// IndexedDB : store devis_pdfs, clé composite ('blcolis:<blId>', 'colisage')
+// (le store accepte n'importe quel kind ; la whitelist de storeDevisPdf ne
+// s'applique qu'aux PDF devis, on écrit ici directement).
+function _storeBLColisagePdf(blId,filename,bytes,blNum){
+  if(!blId||!bytes)return;
+  openAttachDB().then(function(db){
+    var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
+    var store=tx.objectStore(DEVIS_PDF_STORE);
+    var idx=store.index('devisKind');
+    var key='blcolis:'+String(blId);
+    var getReq=idx.get([key,'colisage']);
+    getReq.onsuccess=function(){
+      var existing=getReq.result;
+      var blob=new Blob([bytes],{type:'application/pdf'});
+      var record={devisId:key,kind:'colisage',filename:filename||'colisage.pdf',
+        refValue:'',refDate:'',fileSize:bytes.byteLength||bytes.length||0,
+        blob:blob,savedAt:new Date().toISOString()};
+      if(existing&&existing.id)record.id=existing.id;
+      var putReq=store.put(record);
+      putReq.onsuccess=function(){
+        // Upload cloud fire-and-forget (échec = toast, le local reste l'autorité)
+        _uploadBLColisageToCloud(blNum,blob,record.filename).catch(function(err){
+          console.warn('[colisage] Upload cloud échoué :',err);
+          if(typeof showBCSaveToast==='function')showBCSaveToast('⚠ Colisage sauvegardé en local mais l\'envoi cloud a échoué');
+        });
+      };
+    };
+  }).catch(function(err){console.warn('[colisage] Archivage IndexedDB échoué :',err);});
+}
+function _deleteBLColisagePdf(blId){
+  openAttachDB().then(function(db){
+    var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
+    var store=tx.objectStore(DEVIS_PDF_STORE);
+    var idx=store.index('devisKind');
+    var getReq=idx.get(['blcolis:'+String(blId),'colisage']);
+    getReq.onsuccess=function(){
+      if(getReq.result&&getReq.result.id)store.delete(getReq.result.id);
+    };
+  }).catch(function(err){console.warn('[colisage] Suppression IndexedDB échouée :',err);});
+}
+function _uploadBLColisageToCloud(blNum,blob,filename){
+  return new Promise(function(resolve,reject){
+    if(!window._supaClient){reject(new Error('Supabase client absent'));return;}
+    var seg=(typeof _safeSeg==='function')?_safeSeg:function(s){return String(s||'').replace(/[^A-Za-z0-9 .\-_]/g,'_');};
+    var dest='bl_colisage/'+seg(blNum||'sans-num')+'/'+seg(filename||'colisage.pdf');
+    var p=window._supaClient.storage.from('pdfs').upload(dest,blob,{contentType:'application/pdf',upsert:true});
+    if(p&&typeof p.then==='function'){
+      p.then(function(res){
+        if(res&&res.error){reject(new Error(res.error.message||'upload error'));return;}
+        console.log('[colisage] PDF archivé cloud :',dest);
+        resolve(dest);
+      }).catch(reject);
+    } else resolve(dest);
   });
 }
 
@@ -40876,6 +41432,129 @@ function bBL(b){
       '<div style="text-align:right"><strong>Détails bancaires</strong><br>Banque: '+CI.bq+'<br>COMPTE: '+CI.cb+' '+CI.cg+' '+CI.nc+' '+CI.cle+'<br>IBAN: '+CI.iban+'<br>BIC: '+CI.bic+'</div>'+
     '</div>'+
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
+  '</div>';
+}
+
+// ---- LISTE DE COLISAGE au format CALINSTRUM (variante B validée 2026-07-09) ----
+// Même mise en page que la Packing Slip Emerson, en-tête CALINSTRUM (logo + titre),
+// palette #1e3a5f, mini-logo dans le bloc Ship To. Emerson reste identifié en
+// "Ship From" — aucune donnée du document d'origine n'est perdue.
+// Styles 100% inline pour être autonome dans l'iframe d'impression (printPreviewBC).
+function bColisage(b){
+  var c=(b&&b.colisage)||{};
+  function nl(s){return esc(String(s||'')).replace(/\n/g,'<br>');}
+  var LBL='font-size:8.5px;text-transform:uppercase;letter-spacing:.8px;color:#1e3a5f;font-weight:700;margin-bottom:2px;';
+  var CELL='padding:7px 10px;border-bottom:1px solid #e5e7eb;';
+  var PCA='-webkit-print-color-adjust:exact;print-color-adjust:exact;';
+  // --- Cartouche références (2 colonnes, pointillés) ---
+  function refCell(lbl,v){
+    return '<div style="padding:4px 0 3px;border-bottom:1px dotted #e5e7eb"><div style="'+LBL+'margin-bottom:0">'+lbl+'</div><div style="font-size:10.5px">'+(esc(v||'')||'—')+'</div></div>';
+  }
+  // --- Notes d'en-tête de tableau : les lignes de références (Customer PO /
+  //     Emerson SO / Buyer / Contact) sont regroupées dans un encart surligné ---
+  var refNotes=[],stdNotes=[];
+  (c.notes||[]).forEach(function(n){
+    if(/^(Customer PO|Emerson SO|Customer\/Buyers name|Customer Contact Number)/i.test(n))refNotes.push(n);
+    else stdNotes.push(n);
+  });
+  var notesHtml='';
+  if(stdNotes.length||refNotes.length){
+    notesHtml='<tr><td colspan="6" style="background:#f8fafc;color:#444;font-size:9.5px;line-height:1.55;padding:6px 8px;border-bottom:1px solid #e5e7eb;'+PCA+'">'+
+      stdNotes.map(function(n){return esc(n);}).join('<br>')+
+      (refNotes.length?'<div style="margin-top:5px;padding:5px 8px;background:#dbeafe;border-radius:3px;display:inline-block;color:#1e3a5f;font-weight:700;'+PCA+'">'+refNotes.map(function(n){return esc(n);}).join(' &nbsp;·&nbsp; ')+'</div>':'')+
+    '</td></tr>';
+  }
+  // --- Lignes du tableau colis/articles ---
+  var itemRows=(c.items||[]).map(function(it){
+    if(it.type==='box'){
+      return '<tr><td style="padding:4px 7px;background:#e8eff7;font-weight:700;color:#1e3a5f;border-bottom:1px solid #e5e7eb;'+PCA+'">'+esc(it.boxNo||'')+'</td>'+
+        '<td colspan="5" style="padding:4px 7px;background:#e8eff7;font-weight:700;color:#1e3a5f;border-bottom:1px solid #e5e7eb;'+PCA+'">'+esc(it.desc||'')+'</td></tr>';
+    }
+    var serialHtml='';
+    if((it.serials||[]).length){
+      serialHtml='<table style="border-collapse:collapse;margin-top:4px;font-size:9.5px">'+
+        '<tr>'+['Unit#','Tag(s)','Serial#(s)','Country of Origin'].map(function(h){return '<th style="background:#eef2f7;color:#1e3a5f;padding:2px 9px;border:1px solid #cbd5e1;font-size:8.5px;text-transform:uppercase;'+PCA+'">'+h+'</th>';}).join('')+'</tr>'+
+        it.serials.map(function(s){
+          return '<tr>'+[s.unit,s.tag,s.serial,s.origin].map(function(v){return '<td style="padding:2px 9px;border:1px solid #cbd5e1">'+esc(v||'')+'</td>';}).join('')+'</tr>';
+        }).join('')+
+      '</table>';
+    }
+    return '<tr>'+
+      '<td style="padding:4px 7px;border-bottom:1px solid #e5e7eb;vertical-align:top"></td>'+
+      '<td style="padding:4px 7px;border-bottom:1px solid #e5e7eb;vertical-align:top">'+esc(it.lineNo||'')+'</td>'+
+      '<td style="padding:4px 7px;border-bottom:1px solid #e5e7eb;vertical-align:top">'+esc(it.poLine||'')+'</td>'+
+      '<td style="padding:4px 7px;border-bottom:1px solid #e5e7eb;vertical-align:top">'+
+        (it.model?'<div style="font-weight:700;font-size:10.5px">'+esc(it.model)+'</div>':'')+
+        (it.desc?'<div style="color:#333">'+nl(it.desc)+'</div>':'')+
+        ((it.custRef||it.hts)?'<div style="color:#555;font-size:9.5px">'+(it.custRef?'Customer Reference: '+esc(it.custRef):'')+(it.custRef&&it.hts?' &nbsp;·&nbsp; ':'')+(it.hts?'Export HTS/HS: '+esc(it.hts):'')+'</div>':'')+
+        serialHtml+
+      '</td>'+
+      '<td style="padding:4px 7px;border-bottom:1px solid #e5e7eb;vertical-align:top;text-align:center;font-weight:700;white-space:nowrap">'+esc(it.qtyShipped||'')+'</td>'+
+      '<td style="padding:4px 7px;border-bottom:1px solid #e5e7eb;vertical-align:top;text-align:center;font-weight:700;white-space:nowrap">'+esc(it.qtyOrdered||'')+'</td>'+
+    '</tr>';
+  }).join('');
+  var thStyle='background:#1e3a5f;color:#fff;padding:5px 7px;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;'+PCA;
+  return '<div class="doc">'+
+    // En-tête CALINSTRUM (répété sur pages 2+ via la stratégie thead de printPreviewBC)
+    '<div class="doc-head" style="align-items:flex-end">'+
+      '<div style="text-align:center"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 3px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px">CALINSTRUM</div></div>'+
+      '<div style="text-align:right">'+
+        '<div style="font-size:17px;font-weight:800;color:#1e3a5f;letter-spacing:.5px">LISTE DE COLISAGE</div>'+
+        '<div style="font-size:10px;color:#555;margin-top:1px">Packing Slip'+(c.shipmentNo?' N° '+esc(c.shipmentNo):'')+(c.docDate?' · '+esc(c.docDate):'')+'</div>'+
+        (b.num?'<div style="font-size:10px;color:#555">BL '+esc(b.num)+(b.po?' · PO '+esc(b.po):'')+'</div>':'')+
+      '</div>'+
+    '</div>'+
+    // Blocs adresses + cartouche références
+    '<div style="display:grid;grid-template-columns:1.05fr 1fr;border:1px solid #cbd5e1;border-radius:3px;overflow:hidden;margin-bottom:8px">'+
+      '<div style="'+CELL+'border-right:1px solid #cbd5e1">'+
+        '<div style="'+LBL+'">Ship From</div>'+nl(c.shipFrom)+
+        (c.inquiriesTo?'<div style="'+LBL+'margin-top:6px">Inquiries To</div>'+nl(c.inquiriesTo):'')+
+      '</div>'+
+      '<div style="'+CELL+'">'+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;column-gap:10px">'+
+          refCell('Sales Order No',c.salesOrderNo)+refCell('Shipment No',c.shipmentNo)+
+          refCell('Ship Date',c.shipDate)+refCell('Delivery ID',c.deliveryId)+
+          refCell('Rep Order No',c.repOrderNo)+refCell('Project No',c.projectNo)+
+          refCell('Customer PO',c.customerPO)+refCell('Order Manager',c.orderManager)+
+        '</div>'+
+      '</div>'+
+      '<div style="'+CELL+'border-right:1px solid #cbd5e1">'+
+        '<div style="'+LBL+'">Ship To</div>'+
+        '<div style="display:flex;gap:10px;align-items:flex-start">'+
+          '<img src="'+LG_PLACEHOLDER+'" style="height:30px;width:auto;margin-top:2px" alt="CALINSTRUM">'+
+          '<div>'+nl(c.shipTo)+'</div>'+
+        '</div>'+
+      '</div>'+
+      '<div style="'+CELL+'"><div style="'+LBL+'">Deliver To</div>'+(nl(c.deliverTo)||'—')+'</div>'+
+      '<div style="padding:7px 10px;border-right:1px solid #cbd5e1"><div style="'+LBL+'">Sold To</div>'+nl(c.soldTo)+'</div>'+
+      '<div style="padding:7px 10px">'+
+        '<div style="padding:2.5px 0;font-size:10.5px"><b style="color:#1e3a5f">Total Packages:</b> '+esc(c.totalPackages||'—')+'</div>'+
+        '<div style="padding:2.5px 0;font-size:10.5px"><b style="color:#1e3a5f">Total Gross Wt.:</b> '+esc(c.totalGross||'—')+'</div>'+
+        '<div style="padding:2.5px 0;font-size:10.5px"><b style="color:#1e3a5f">Total Net Wt.:</b> '+esc(c.totalNet||'—')+'</div>'+
+        '<div style="padding:2.5px 0;font-size:10.5px"><b style="color:#1e3a5f">Total Volume:</b> '+esc(c.totalVolume||'—')+'</div>'+
+      '</div>'+
+    '</div>'+
+    // Bloc expédition
+    '<div style="background:#eef2f7;border:1px solid #cbd5e1;border-radius:3px;padding:6px 10px;margin-bottom:8px;font-size:10px;'+PCA+'">'+
+      '<div style="display:flex;gap:26px;flex-wrap:wrap;padding:1.5px 0"><span><b style="color:#1e3a5f">Shipped Via — Inland:</b> '+esc(c.inland||'—')+'</span><span><b style="color:#1e3a5f">Freight Terms:</b> '+esc(c.freightTerms||'—')+'</span></div>'+
+      '<div style="display:flex;gap:26px;flex-wrap:wrap;padding:1.5px 0"><span><b style="color:#1e3a5f">Forwarder:</b> '+esc(c.forwarder||'—')+'</span><span><b style="color:#1e3a5f">Main:</b> '+esc(c.mainCarrier||'—')+'</span><span><b style="color:#1e3a5f">Tracking/BOL No.:</b> '+esc(c.trackingNo||'—')+'</span></div>'+
+      '<div style="display:flex;gap:26px;flex-wrap:wrap;padding:1.5px 0"><span><b style="color:#1e3a5f">Delivery Terms:</b> '+esc(c.deliveryTerms||'—')+'</span><span><b style="color:#1e3a5f">Ultimate Destination:</b> '+esc(c.ultimateDest||'—')+'</span></div>'+
+    '</div>'+
+    // Tableau colis / articles
+    '<table class="doc-tbl" style="width:100%;border-collapse:collapse;margin-bottom:8px;font-size:10px">'+
+      '<thead><tr>'+
+        '<th style="'+thStyle+'width:36px">Box No</th>'+
+        '<th style="'+thStyle+'width:44px">Line No</th>'+
+        '<th style="'+thStyle+'width:52px">Cust. PO Line</th>'+
+        '<th style="'+thStyle+'">Description</th>'+
+        '<th style="'+thStyle+'width:62px">Qty Shipped</th>'+
+        '<th style="'+thStyle+'width:62px">Qty Ordered</th>'+
+      '</tr></thead>'+
+      '<tbody>'+notesHtml+itemRows+'</tbody>'+
+    '</table>'+
+    // Pied : Handled by + bandeau CALINSTRUM (extrait en footer fixe par printPreviewBC)
+    (c.handledBy?'<div style="display:flex;justify-content:space-between;border-top:2px solid #1e3a5f;margin-top:10px;padding-top:6px;font-size:9.5px;color:#555"><span>Handled by: '+esc(c.handledBy)+'</span></div>':'')+
+    '<div class="doc-footer-bar">'+CI.nom+' — RIDET '+CI.ridet+' — '+CI.adresse+' — '+CI.tel+' — '+CI.email+'</div>'+
   '</div>';
 }
 
