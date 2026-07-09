@@ -2878,6 +2878,10 @@ body.has-dashboard-bg #page-dashboard .metric{
       <div class="form-group"><label>Deliver To</label><textarea class="form-textarea" id="cls-deliverto" rows="4"></textarea></div>
     </div>
     <div class="form-row">
+      <div class="form-group"><label>Inquiries To <span style="color:var(--muted);font-weight:400;font-size:10px">— imprimé sous Ship From</span></label><textarea class="form-textarea" id="cls-inquiries" rows="2"></textarea></div>
+      <div class="form-group"><label>Service Request N°</label><input class="form-input" id="cls-srn"></div>
+    </div>
+    <div class="form-row">
       <div class="form-group"><label>Total colis</label><input class="form-input" id="cls-tpkg"></div>
       <div class="form-group"><label>Poids brut</label><input class="form-input" id="cls-tgross" placeholder="5.00 KG / 11.02 LB"></div>
     </div>
@@ -4957,7 +4961,8 @@ function sv(id,v){var e=document.getElementById(id);if(e)e.textContent=String(v=
 // mBCLINK, mSAVE_BL...) ne sont PAS protégées pour ne pas gêner.
 var _MODAL_EDIT_LOCK_WHITELIST={
   'mDV':1,'mFA':1,'mBC':1,'mBL':1,'mBCCALI':1,'mCLI':1,'mART':1,
-  'mNEWCLI':1,'mSUIVI':1,'mAcompte':1,'mAvisReg':1,'mImportFA':1
+  'mNEWCLI':1,'mSUIVI':1,'mAcompte':1,'mAvisReg':1,'mImportFA':1,
+  'mCOLIS':1 // édition des données de liste de colisage (~25 champs + articles)
 };
 
 function cm(id){
@@ -32230,8 +32235,19 @@ function exportAllDevisPdfs(){
           return;
         }
         // Composer nom de fichier : {numDevis}__{kind}__{filename_original}
+        // Cas particulier : les PDF colisage BL sont stockés sous devisId='blcolis:<blId>'
+        // → préfixer avec le N° du BL, et TOUJOURS assainir (':' interdit sous Windows).
         var dv = devisById[String(rec.devisId)];
-        var prefix = dv ? (String(dv.num||'devis')).replace(/[\\/:*?"<>|]/g,'_') : ('devisId_'+rec.devisId);
+        var prefix;
+        if(dv){
+          prefix = (String(dv.num||'devis')).replace(/[\\/:*?"<>|]/g,'_');
+        } else if(/^blcolis:/.test(String(rec.devisId))){
+          var _blColId = String(rec.devisId).substring(8);
+          var _blColRec = (DB.bls||[]).find(function(b){return String(b.id)===_blColId;});
+          prefix = ('BL_'+(_blColRec?(_blColRec.num||_blColId):_blColId)).replace(/[\\/:*?"<>|]/g,'_');
+        } else {
+          prefix = ('devisId_'+rec.devisId).replace(/[\\/:*?"<>|]/g,'_');
+        }
         var origName = (rec.filename||'document.pdf').replace(/[\\/:*?"<>|]/g,'_');
         // Si origName commence déjà par le N° devis, ne pas dupliquer
         var safeName;
@@ -37687,7 +37703,8 @@ function openBL(id, opts){
   // Utilisé par "Créer BL depuis devis" pour pré-remplir directement la modale.
   eBLid=id||null;blL=[];
   // Liste de colisage : recharger depuis le BL édité, sinon repartir à vide.
-  blColis=null;_blColisPendingBytes=null;
+  // L'incrément du jeton invalide tout parse pdf.js encore en vol (anti-course).
+  blColis=null;_blColisPendingBytes=null;_blColisGen++;_blColisPendingDeleteId=null;
   buildClientOptions('bl-client','');
   if(id){
     var b=DB.bls.find(function(x){return x.id===id;});
@@ -37816,10 +37833,18 @@ async function saveBL(){
   _blPendingSourceDevisIds = null;
   saveDB();
   // Archivage du PDF colisage original (IndexedDB + cloud, fire-and-forget) —
-  // fait APRÈS le save pour disposer de l'id définitif du BL.
+  // fait APRÈS le save pour disposer de l'id définitif du BL. Les bytes ne sont
+  // libérés qu'au succès de l'écriture LOCALE (sinon un re-save peut retenter).
   if(_blColisPendingBytes && b.colisage){
-    _storeBLColisagePdf(b.id, b.colisage.filename||'colisage.pdf', _blColisPendingBytes, b.num);
-    _blColisPendingBytes=null;
+    _storeBLColisagePdf(b.id, b.colisage.filename||'colisage.pdf', _blColisPendingBytes, b.num,
+      function(){_blColisPendingBytes=null;});
+  }
+  // Suppression différée de l'archive : exécutée SEULEMENT si le BL est
+  // enregistré sans colisage (un re-dépôt entre-temps annule la suppression,
+  // le put ci-dessus remplaçant le record existant).
+  if(_blColisPendingDeleteId && !b.colisage){
+    _deleteBLColisagePdf(_blColisPendingDeleteId);
+    _blColisPendingDeleteId=null;
   }
   // ⚠ La modale RESTE ouverte (pattern unifié avec saveDV)
   if(wasNew) sv('mBLtitle','Modifier BL — '+b.num);
@@ -37911,6 +37936,17 @@ function renderBL(){
 // État temporaire du modal BL (même pattern que blL) :
 var blColis=null;            // objet colisage en cours d'édition (copie de bl.colisage)
 var _blColisPendingBytes=null; // bytes du PDF déposé, archivés au prochain saveBL
+// Jeton de génération anti-course : le parse pdf.js est asynchrone (plusieurs
+// secondes sur un gros PDF). Sans jeton, un parse lancé sur le BL A pouvait se
+// terminer alors que le BL B est ouvert → colisage de A collé sur B. Chaque
+// openBL / Retirer / nouveau dépôt incrémente le jeton ; un parse dont le jeton
+// ne correspond plus est jeté à l'arrivée.
+var _blColisGen=0;
+// Suppression d'archive DIFFÉRÉE au save : « Retirer » ne détruit pas le PDF
+// archivé immédiatement (sinon Retirer + Annuler = perte irréversible alors que
+// bl.colisage reste en base). La suppression n'est exécutée dans saveBL que si
+// le BL est enregistré SANS colisage.
+var _blColisPendingDeleteId=null;
 
 // ---- Parseur : items pdf.js {str,x,y,page} → objet colisage structuré ----
 // Calibré sur la Packing Slip Emerson (ex : Shipment 416646478). Heuristiques
@@ -37998,7 +38034,9 @@ function parseColisagePdfItems(items){
   function collectCol(a,b,x0,x1){
     var out=[];
     if(a<0)return '';
-    if(b<0||b>lines.length)b=lines.length;
+    // Borne de sécurité : si le label de fin est introuvable (PDF hors format
+    // Emerson), limiter à ~6 lignes pour ne pas aspirer tout le document.
+    if(b<0||b>lines.length)b=Math.min(a+7,lines.length);
     for(var i=a+1;i<b;i++){var t=colText(lines[i],x0,x1);if(t)out.push(t);}
     return out.join('\n');
   }
@@ -38037,21 +38075,46 @@ function parseColisagePdfItems(items){
     res.ultimateDest=after(tDT,'Ultimate Destination:');
   }
   // 6) Tableau colis/articles : de l'en-tête ("... Description ... Shipped Ordered")
-  //    jusqu'à "Handled by". Les lignes AVANT le premier colis = notes d'en-tête.
-  var iHdr=findLine(/Description.*(Shipped|Qty)/i);
-  if(iHdr<0)iHdr=findLine(/Qty\s+Qty/i);
+  //    jusqu'au pied "Handled by". Les lignes AVANT le premier colis = notes d'en-tête.
+  //    MULTI-PAGES : le template Emerson (formulaire Oracle à cadre fixe) redessine
+  //    sur CHAQUE page le cartouche complet (en-tête Emerson, Ship From/To, refs,
+  //    en-tête de colonnes) et le pied (Handled by, "N of M"). On ignore donc,
+  //    sur les pages 2+, tout ce qui précède l'en-tête de colonnes répété de la
+  //    page, et sur chaque page tout ce qui suit son "Handled by".
+  var HDR_RE=/Description.*(Shipped|Qty)/i;
+  var iHdr=findLine(HDR_RE);
+  if(iHdr<0){HDR_RE=/Qty\s+Qty/i;iHdr=findLine(HDR_RE);}
   var iHand=findLine(/^Handled by/i,iHdr>=0?iHdr:0);
+  // Bornes par page : index de l'en-tête de colonnes et du "Handled by" de chaque page
+  var pageHdr={},pageHand={};
+  lines.forEach(function(l,idx){
+    if(HDR_RE.test(l.text)&&pageHdr[l.page]===undefined)pageHdr[l.page]=idx;
+    if(/^Handled by/i.test(l.text)&&pageHand[l.page]===undefined)pageHand[l.page]=idx;
+  });
+  // Libellés du cartouche (filet de sécurité si une page 2+ n'a pas d'en-tête de
+  // colonnes répété — on ne peut alors pas borner par position)
+  var CART_RE=/^(Packing Slip|Ship From:|Inquiries To:|Ship To:|Sold To:|Deliver To:|Sales Order No|Shipment No|Ship Date:|Delivery ID|Rep Order No|Project No|Customer PO:|Service Request No|Order Manager|Total Packages:|Total Gross|Total Net|Total Volume|Shipped Via|Inland:|Forwarder:|Main:|Tracking\/BOL|Delivery Terms:|Freight Terms:|Ultimate Destination|ABN:)/i;
   if(iHdr>=0){
-    var endIdx=iHand>=0?iHand:lines.length;
+    var firstHdrPage=lines[iHdr].page;
     var cur=null,inSerials=false,sawFirstBox=false;
-    for(var li=iHdr+1;li<endIdx;li++){
-      var t=lines[li].text;
+    for(var li=iHdr+1;li<lines.length;li++){
+      var L=lines[li],t=L.text;
       if(!t)continue;
-      if(/^\d+\s+of\s+\d+$/i.test(t))continue;              // pied de page "1 of 1"
-      if(/Description.*(Shipped|Qty)/i.test(t))continue;    // en-tête répété (pages 2+)
+      if(/^\d+\s+of\s+\d+$/i.test(t))continue;              // pied de page "1 of 2"
+      if(HDR_RE.test(t))continue;                            // en-tête répété (pages 2+)
       if(/^(Box|No No)\b/.test(t)&&/Line/.test(t))continue; // 2e ligne d'en-tête
+      if(/^\d{1,2}-[A-Za-z]{3,9}-\d{2,4}$/.test(t))continue; // date seule (cartouche répété)
+      if(L.page!==firstHdrPage){
+        // pages 2+ : ignorer le cartouche répété AVANT l'en-tête de colonnes de la page
+        if(pageHdr[L.page]!==undefined){if(li<pageHdr[L.page])continue;}
+        else if(CART_RE.test(t))continue;
+      }
+      // pied de page répété : ignorer "Handled by" et tout ce qui le suit sur la page
+      if(pageHand[L.page]!==undefined&&li>=pageHand[L.page])continue;
       var mBox=t.match(/^(\d{1,3})\s+((?:Ctn|Box|Crate|Plt|Pallet|Carton|Skid)\b.*)$/i);
-      var mItem=t.match(/^(\d+\.\d+)\s+(\d+)?\s*(\S+)\s+(\d+(?:\.\d+)?\s*[A-Z]{1,3})\s+(\d+(?:\.\d+)?\s*[A-Z]{1,3})$/);
+      // (?:(\d+)\s+)? : le PO Line optionnel DOIT être suivi d'un espace, sinon un
+      // modèle commençant par des chiffres (ex "3051TG2A21AB4" sans PO Line) serait amputé.
+      var mItem=t.match(/^(\d+\.\d+)\s+(?:(\d+)\s+)?(\S+)\s+(\d+(?:\.\d+)?\s*[A-Z]{1,3})\s+(\d+(?:\.\d+)?\s*[A-Z]{1,3})$/);
       if(mBox){res.items.push({type:'box',boxNo:mBox[1],desc:mBox[2]});cur=null;inSerials=false;sawFirstBox=true;continue;}
       if(mItem){
         cur={type:'line',lineNo:mItem[1],poLine:mItem[2]||'',model:mItem[3],desc:'',custRef:'',hts:'',
@@ -38143,10 +38206,17 @@ function _processBLColisagePdf(f){
   if(f.type!=='application/pdf'&&!/\.pdf$/i.test(f.name)){alert('Seuls les fichiers PDF sont acceptés.');return;}
   if(f.size>20*1024*1024){alert('Fichier trop volumineux (max 20 Mo).');return;}
   if(typeof pdfjsLib==='undefined'){alert('❌ Erreur : pdf.js non chargé. Rechargez la page.');return;}
+  // Anti-course : on incrémente le jeton (le DERNIER dépôt gagne, même si un
+  // parse plus lent était en cours) et on capture sa valeur pour ce parse.
+  _blColisGen++;
+  var gen=_blColisGen;
   var reader=new FileReader();
+  reader.onerror=function(){alert('❌ Lecture du fichier impossible.');};
   reader.onload=function(e){
     try{
       var bytes=new Uint8Array(e.target.result);
+      // bytes.slice(0) EXPRÈS : pdf.js transfère l'ArrayBuffer à son worker
+      // (buffer détaché) — on garde `bytes` intact pour l'archivage IndexedDB.
       pdfjsLib.getDocument({data:bytes.slice(0)}).promise.then(function(pdf){
         var tasks=[];
         var mkPage=function(pNum){
@@ -38159,7 +38229,9 @@ function _processBLColisagePdf(f){
           });
         };
         for(var p=1;p<=pdf.numPages;p++)tasks.push(mkPage(p));
-        Promise.all(tasks).then(function(pages){
+        // return : chaîne les rejets (page corrompue, parse qui lève) au .catch ci-dessous
+        return Promise.all(tasks).then(function(pages){
+          if(gen!==_blColisGen)return; // BL changé / Retirer / nouveau dépôt pendant le parse → jeter
           var all=[];pages.forEach(function(pp){pp.forEach(function(it){all.push(it);});});
           var parsed=parseColisagePdfItems(all);
           parsed.filename=f.name;
@@ -38181,7 +38253,11 @@ function removeBLColisage(){
   if(!blColis)return;
   if(!confirm('Retirer la liste de colisage de ce BL ?'))return;
   blColis=null;_blColisPendingBytes=null;
-  if(eBLid)_deleteBLColisagePdf(eBLid);
+  _blColisGen++; // invalide un éventuel parse encore en vol (sinon il « ressusciterait » le colisage)
+  // Suppression de l'archive DIFFÉRÉE au save : si l'utilisateur clique Annuler,
+  // bl.colisage reste en base et l'archive doit rester intacte.
+  // (La copie cloud pdfs/bl_colisage/ est conservée volontairement — archive historique.)
+  if(eBLid)_blColisPendingDeleteId=eBLid;
   renderBLColisageCard();
   if(typeof showBCSaveToast==='function')showBCSaveToast('🗑 Liste de colisage retirée — pense à Enregistrer le BL');
 }
@@ -38195,6 +38271,7 @@ function openBLColisageEdit(){
   gv('cls-om',blColis.orderManager||'');gv('cls-rep',blColis.repOrderNo||'');gv('cls-proj',blColis.projectNo||'');
   gv('cls-shipfrom',blColis.shipFrom||'');gv('cls-shipto',blColis.shipTo||'');
   gv('cls-soldto',blColis.soldTo||'');gv('cls-deliverto',blColis.deliverTo||'');
+  gv('cls-inquiries',blColis.inquiriesTo||'');gv('cls-srn',blColis.serviceReqNo||'');
   gv('cls-tpkg',blColis.totalPackages||'');gv('cls-tgross',blColis.totalGross||'');
   gv('cls-tnet',blColis.totalNet||'');gv('cls-tvol',blColis.totalVolume||'');
   gv('cls-inland',blColis.inland||'');gv('cls-freight',blColis.freightTerms||'');gv('cls-tracking',blColis.trackingNo||'');
@@ -38264,6 +38341,7 @@ function saveBLColisageEdit(){
   blColis.orderManager=gvg('cls-om');blColis.repOrderNo=gvg('cls-rep');blColis.projectNo=gvg('cls-proj');
   blColis.shipFrom=gvg('cls-shipfrom');blColis.shipTo=gvg('cls-shipto');
   blColis.soldTo=gvg('cls-soldto');blColis.deliverTo=gvg('cls-deliverto');
+  blColis.inquiriesTo=gvg('cls-inquiries');blColis.serviceReqNo=gvg('cls-srn');
   blColis.totalPackages=gvg('cls-tpkg');blColis.totalGross=gvg('cls-tgross');
   blColis.totalNet=gvg('cls-tnet');blColis.totalVolume=gvg('cls-tvol');
   blColis.inland=gvg('cls-inland');blColis.freightTerms=gvg('cls-freight');blColis.trackingNo=gvg('cls-tracking');
@@ -38310,7 +38388,7 @@ function printBLColisage(){
 // IndexedDB : store devis_pdfs, clé composite ('blcolis:<blId>', 'colisage')
 // (le store accepte n'importe quel kind ; la whitelist de storeDevisPdf ne
 // s'applique qu'aux PDF devis, on écrit ici directement).
-function _storeBLColisagePdf(blId,filename,bytes,blNum){
+function _storeBLColisagePdf(blId,filename,bytes,blNum,onLocalOk){
   if(!blId||!bytes)return;
   openAttachDB().then(function(db){
     var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
@@ -38318,6 +38396,11 @@ function _storeBLColisagePdf(blId,filename,bytes,blNum){
     var idx=store.index('devisKind');
     var key='blcolis:'+String(blId);
     var getReq=idx.get([key,'colisage']);
+    var _localFail=function(err){
+      console.warn('[colisage] Archivage IndexedDB échoué :',err);
+      if(typeof showBCSaveToast==='function')showBCSaveToast('⚠ Archivage local du PDF colisage échoué — ré-enregistre le BL pour réessayer');
+    };
+    getReq.onerror=function(e){_localFail(e.target.error);};
     getReq.onsuccess=function(){
       var existing=getReq.result;
       var blob=new Blob([bytes],{type:'application/pdf'});
@@ -38326,7 +38409,9 @@ function _storeBLColisagePdf(blId,filename,bytes,blNum){
         blob:blob,savedAt:new Date().toISOString()};
       if(existing&&existing.id)record.id=existing.id;
       var putReq=store.put(record);
+      putReq.onerror=function(e){_localFail(e.target.error);};
       putReq.onsuccess=function(){
+        if(typeof onLocalOk==='function')onLocalOk();
         // Upload cloud fire-and-forget (échec = toast, le local reste l'autorité)
         _uploadBLColisageToCloud(blNum,blob,record.filename).catch(function(err){
           console.warn('[colisage] Upload cloud échoué :',err);
