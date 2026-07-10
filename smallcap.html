@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="fr"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <!-- PWA -->
@@ -378,6 +378,7 @@ function setFilter(k){FILTER=k;const lbl=k==='all'?'Tous thèmes':THEMES.find(t=
 
 /* ---- ANALYSE CLAUDE (à la demande) ---- */
 const CLAUDE_WEBHOOK='https://jftrojani77.app.n8n.cloud/webhook/claude-approfondir';
+const MK_AUTH_HEADER='X-MacroDesk-Key', MK_AUTH_SECRET='545c01ffb4d7c6d1c6b19e1249f4b3415aedd4ce99cd87e28e23d96cce625951'; // clé partagée avec les webhooks n8n (Header Auth) — anti-abus
 function loadClaudeCache(k,s){try{const raw=localStorage.getItem('claude_'+k);if(raw){const o=JSON.parse(raw);s.claude=o.claude;s.plan=o.plan;}}catch(e){}}
 function renderClaude(s){
   const box=document.getElementById('dClaude');if(!box)return;
@@ -429,7 +430,7 @@ async function approfondir(k){
   const btn=document.getElementById('clBtn');
   if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> Analyse en cours…';}
   try{
-    const r=await fetch(CLAUDE_WEBHOOK,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ticker:k,stock:{ticker:k,name:s.name,theme:s.theme,score:s.score,status:s.status,cap:s.cap,float:s.float,runway:s.runway,mom:s.mom,valo:s.valo,cat:s.cat,ins:s.ins,base:s.base,proj:s.proj,feed:s.feed}})});
+    const r=await fetch(CLAUDE_WEBHOOK,{method:'POST',headers:{'content-type':'application/json',[MK_AUTH_HEADER]:MK_AUTH_SECRET},body:JSON.stringify({ticker:k,stock:{ticker:k,name:s.name,theme:s.theme,score:s.score,status:s.status,cap:s.cap,float:s.float,runway:s.runway,mom:s.mom,valo:s.valo,cat:s.cat,ins:s.ins,base:s.base,proj:s.proj,feed:s.feed}})});
     const o=await r.json();
     s.claude=o.claude;s.plan=o.plan;
     try{localStorage.setItem('claude_'+k,JSON.stringify({claude:o.claude,plan:o.plan}));}catch(e){}
@@ -769,7 +770,7 @@ function renderUniv(){
   document.getElementById('uv-count').textContent = '· '+ks.length+' titres';
 }
 async function removeOne(k){ var url=localStorage.getItem('mk_webhook')||''; if(!url){ univToast('Configure l\'URL webhook (Découvertes → ⚙ Webhook)',false); return false; }
-  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'remove',ticker:k})}); delete STOCKS[k]; if(WATCH)WATCH.delete(String(k).toUpperCase()); return true; }
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',[MK_AUTH_HEADER]:MK_AUTH_SECRET},body:JSON.stringify({action:'remove',ticker:k})}); delete STOCKS[k]; if(WATCH)WATCH.delete(String(k).toUpperCase()); return true; }
   catch(e){ univToast('Erreur : '+e.message+' (CORS ? URL prod ?)',false); return false; }
 }
 async function removeTicker(k){ if(await removeOne(k)){ renderUniv(); renderTable(); renderWait(); univToast(k+' retiré · disparaît du Radar au prochain run'); } }

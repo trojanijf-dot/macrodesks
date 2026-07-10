@@ -1,4 +1,4 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+﻿<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0e0e0c">
@@ -205,6 +205,7 @@ function addPos(force){
  document.getElementById('pe-tk').focus();
 }
 function delPos(i){POSED.splice(i,1);peSaveLocal(POSED);renderEditor();}
+const MK_AUTH_HEADER='X-MacroDesk-Key', MK_AUTH_SECRET='545c01ffb4d7c6d1c6b19e1249f4b3415aedd4ce99cd87e28e23d96cce625951'; // clé partagée avec les webhooks n8n (Header Auth) — anti-abus
 async function savePositions(){
  var url=(document.getElementById('pe-wh').value||'').trim();
  if(url)localStorage.setItem(PWH_KEY,url);
@@ -212,7 +213,7 @@ async function savePositions(){
  if(!POSED.length){peToast('Aucune position à envoyer',false);return;}
  var btn=document.getElementById('pe-savebtn'),old=btn.innerHTML;btn.disabled=true;btn.innerHTML='Envoi…';
  try{
-  var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({positions:POSED})});
+  var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',[MK_AUTH_HEADER]:MK_AUTH_SECRET},body:JSON.stringify({positions:POSED})});
   if(!r.ok)throw new Error('HTTP '+r.status);
   peToast(POSED.length+' position(s) envoyée(s) · visibles au Moniteur au prochain run',true);
  }catch(e){ peToast('Erreur : '+e.message+' — vérifie URL prod + CORS du webhook',false); }
