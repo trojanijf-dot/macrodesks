@@ -1,4 +1,4 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+﻿<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0e0e0c">
@@ -752,6 +752,7 @@ function renderEdgar(filings,tk){var c=$('edgar');if(!c)return;
  c.innerHTML=edgarSynth(rows)+rows.map(function(fi){return edgarRow(fi,tk);}).join('')+legend;}
 // ===== Analyse institutionnelle EDGAR (Opus, à la demande, via webhook n8n) =====
 const INST_WEBHOOK='https://jftrojani77.app.n8n.cloud/webhook/approfondir-edgar'; // URL Production webhook n8n « Approfondir EDGAR »
+const MK_AUTH_HEADER='X-MacroDesk-Key', MK_AUTH_SECRET='545c01ffb4d7c6d1c6b19e1249f4b3415aedd4ce99cd87e28e23d96cce625951'; // clé partagée avec les webhooks n8n (Header Auth) — anti-abus
 var IA_PILL={amber:'ia-p-amber',red:'ia-p-red',redout:'ia-p-redout',green:'ia-p-green',blue:'ia-p-blue'};
 var IA_STATE={red:'ia-st-red',muted:'ia-st-muted',amber:'ia-st-amber',green:'ia-st-green'};
 var IA_VAL={red:'ia-v-red',amber:'ia-v-amber',green:'ia-v-green',blue:'ia-v-blue'};
@@ -769,7 +770,7 @@ async function loadInstAnalysis(){
  if($('instTk'))$('instTk').textContent=tk;
  $('instAnalysis').innerHTML='<div class="ia-empty"><i class="ti ti-loader-2"></i> Opus lit les documents EDGAR de '+iaEsc(tk)+'… (15-40 s)</div>';
  try{
-  var r=await fetch(INST_WEBHOOK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:tk})});
+  var r=await fetch(INST_WEBHOOK,{method:'POST',headers:{'Content-Type':'application/json',[MK_AUTH_HEADER]:MK_AUTH_SECRET},body:JSON.stringify({ticker:tk})});
   var txt=await r.text(); // lecture tolérante : un corps vide ne casse plus avec un message cryptique
   var d=null; try{ d=txt?JSON.parse(txt):null; }catch(e){ d=null; }
   if(d&&d.analysis)d=d.analysis; // tolère {analysis:{…}} ou {…}

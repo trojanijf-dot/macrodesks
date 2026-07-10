@@ -1,4 +1,4 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+﻿<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0e0e0c">
@@ -325,12 +325,13 @@ function openWh(){document.getElementById('wh-url').value=localStorage.getItem('
 function closeWh(){document.getElementById('wh-overlay').style.display='none';}
 function saveWh(){const u=document.getElementById('wh-url').value.trim();if(u)localStorage.setItem('mk_webhook',u);else localStorage.removeItem('mk_webhook');closeWh();}
 function toast(msg,ok){const t=document.createElement('div');t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:'+(ok?'rgba(93,202,165,.15)':'rgba(240,149,149,.15)')+';color:'+(ok?'var(--green)':'var(--red)')+';border:.5px solid '+(ok?'rgba(93,202,165,.4)':'rgba(240,149,149,.4)')+';padding:9px 16px;border-radius:8px;font-family:var(--mono);font-size:12px;font-weight:600;z-index:80;box-shadow:0 6px 18px rgba(0,0,0,.5)';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3200);}
+const MK_AUTH_HEADER='X-MacroDesk-Key', MK_AUTH_SECRET='545c01ffb4d7c6d1c6b19e1249f4b3415aedd4ce99cd87e28e23d96cce625951'; // clé partagée avec les webhooks n8n (Header Auth) — anti-abus
 async function addToWatchlist(tk,theme,btn){
  const url=localStorage.getItem('mk_webhook')||'';
  if(!url){ toast('Configure d\'abord l\'URL webhook (bouton ⚙ Webhook en haut)',false); openWh(); return; }
  if(btn){btn.classList.add('loading');btn.innerHTML='<i class="ti ti-loader-2" style="animation:spin .8s linear infinite"></i> Envoi…';}
  try{
-  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:tk,theme:theme||'?'})});
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',[MK_AUTH_HEADER]:MK_AUTH_SECRET},body:JSON.stringify({ticker:tk,theme:theme||'?'})});
   if(!r.ok) throw new Error('HTTP '+r.status);
   const j=await r.json().catch(()=>({}));
   if(btn){btn.classList.remove('loading');btn.classList.add('added');btn.innerHTML='<i class="ti ti-check"></i> Ajouté';}
