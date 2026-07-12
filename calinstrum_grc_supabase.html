@@ -19041,13 +19041,15 @@ function isTaskMainLine(arr,idx){
 
 // Calcule le sous-total d'une tâche groupée à partir de ses sous-lignes (qte × pu × (1+tgc/100))
 function computeTaskTotal(taskMainLine){
+  // ⚠ SÉMANTIQUE (fix 13/07/2026) : tout « TOTAL HT » de ligne = qte × pu HORS TAXE.
+  // La TGC n'apparaît QUE dans la colonne TGC% et dans le récapitulatif bas de page
+  // (cDVtot/cFAtot, qui calculent HT et TGC séparément). Historiquement ces cellules
+  // multipliaient par (1+TGC/100) → pour les clients NON exonérés (AEI, ENERCAL),
+  // la colonne "TOTAL HT" affichait du TTC (cf facture AEI SNC-F040). Ne pas ré-ajouter.
   if(!taskMainLine || !Array.isArray(taskMainLine.subLines)) return 0;
   var total=0;
   taskMainLine.subLines.forEach(function(sub){
-    var qte=Number(sub.qte)||0;
-    var pu=Number(sub.pu)||0;
-    var tgc=Number(sub.tgc)||0;
-    total+=qte*pu*(1+tgc/100);
+    total+=(Number(sub.qte)||0)*(Number(sub.pu)||0);
   });
   return Math.round(total);
 }
@@ -19073,7 +19075,7 @@ function _updateDVLineTotal(tb, sec, idx, subIdx){
   // Cas SOUS-LIGNE TASK
   if(typeof subIdx==='number' && Array.isArray(l.subLines) && l.subLines[subIdx]){
     var sub=l.subLines[subIdx];
-    var subT=Math.round((Number(sub.qte)||0)*(Number(sub.pu)||0)*(1+(Number(sub.tgc)||0)/100));
+    var subT=Math.round((Number(sub.qte)||0)*(Number(sub.pu)||0));
     var subCell=tb.querySelector('[data-sub-total="'+sec+':'+idx+':'+subIdx+'"]');
     if(subCell){
       // Préserver le bouton ✕ éventuel (placé après le total) en ne modifiant que le texte initial.
@@ -19091,7 +19093,7 @@ function _updateDVLineTotal(tb, sec, idx, subIdx){
     if(motherEl) motherEl.textContent='Σ '+fN(totalTask);
     return;
   }
-  // Cas LIGNE NORMALE / KIT principale : recalcul qte*pu*(1+tgc/100)
+  // Cas LIGNE NORMALE / KIT principale : recalcul qte*pu (HT — cf note computeTaskTotal)
   if(!l || l.type==='header') return;
   // Si c'est une TASK mais qu'on a tapé sur la porteuse (ref/designation) — on update juste le Σ
   if(isTaskMainLine(arr,idx)){
@@ -19100,7 +19102,7 @@ function _updateDVLineTotal(tb, sec, idx, subIdx){
     if(motherElP) motherElP.textContent='Σ '+fN(totalTaskP);
     return;
   }
-  var tot=Math.round((Number(l.qte)||0)*(Number(l.pu)||0)*(1+(Number(l.tgc)||0)/100));
+  var tot=Math.round((Number(l.qte)||0)*(Number(l.pu)||0));
   var cell=tb.querySelector('[data-line-total="'+sec+':'+idx+'"]');
   if(cell) cell.textContent=fN(tot);
 }
@@ -19178,7 +19180,7 @@ function rDVlines(){
 
       var tgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(l.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
       var uteOpts=_uteOpts(l.unite, ['U','Lot','H sup','H tech','Forfait','M']);
-      var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100));
+      var tot=Math.round((l.qte||0)*(l.pu||0)); // HT pur — cf note computeTaskTotal
 
       // === Sous-row AUD calculator (fourniture uniquement, sauf TASK où ça n'a pas de sens) ===
       var audRow='';
@@ -19238,7 +19240,7 @@ function rDVlines(){
         // Le bouton ✕ pour supprimer une sous-ligne individuelle est intégré dans la cellule Total
         // (uniquement quand il y a 2+ sous-lignes — sinon le ✕ global de la TASK suffit).
         function buildTaskSubCells(sub,si,canDelSub){
-          var subT=Math.round((sub.qte||0)*(sub.pu||0)*(1+(Number(sub.tgc)||0)/100));
+          var subT=Math.round((sub.qte||0)*(sub.pu||0)); // HT pur — cf note computeTaskTotal
           return '<td><select data-sub-field="tgc" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10.5px">'+taskTgcOpts(sub.tgc)+'</select></td>'+
             '<td><select data-sub-field="unite" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10.5px">'+taskUteOpts(sub.unite||'H sup')+'</select></td>'+
             '<td><input type="number" style="width:50px;font-size:10.5px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
@@ -27097,7 +27099,7 @@ function _updateFALineTotal(tb, idx, subIdx){
   // Cas SOUS-LIGNE
   if(typeof subIdx==='number' && Array.isArray(l.subLines) && l.subLines[subIdx]){
     var sub=l.subLines[subIdx];
-    var subT=Math.round((Number(sub.qte)||0)*(Number(sub.pu)||0)*(1+(Number(sub.tgc)||0)/100));
+    var subT=Math.round((Number(sub.qte)||0)*(Number(sub.pu)||0));
     var subCell=tb.querySelector('[data-sub-total="'+idx+':'+subIdx+'"]');
     if(subCell) subCell.textContent=fN(subT);
     // Si la mère est une TASK, sa cellule total = somme des sub-lignes chiffrées
@@ -27106,7 +27108,7 @@ function _updateFALineTotal(tb, idx, subIdx){
       (hasSubs && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
        l.subLines.some(function(s){return (Number(s.pu)||0)>0;}));
     if(isTaskMain){
-      var motherTot=l.subLines.reduce(function(s,sb){return s+(Number(sb.qte)||0)*(Number(sb.pu)||0)*(1+(Number(sb.tgc)||0)/100);},0);
+      var motherTot=l.subLines.reduce(function(s,sb){return s+(Number(sb.qte)||0)*(Number(sb.pu)||0);},0);
       var motherCell=tb.querySelector('[data-line-total="'+idx+'"]');
       if(motherCell) motherCell.textContent=fN(Math.round(motherTot));
     }
@@ -27120,9 +27122,9 @@ function _updateFALineTotal(tb, idx, subIdx){
      l.subLines.some(function(s){return (Number(s.pu)||0)>0;}));
   var tot;
   if(isTaskMain2){
-    tot=l.subLines.reduce(function(s,sb){return s+(Number(sb.qte)||0)*(Number(sb.pu)||0)*(1+(Number(sb.tgc)||0)/100);},0);
+    tot=l.subLines.reduce(function(s,sb){return s+(Number(sb.qte)||0)*(Number(sb.pu)||0);},0);
   } else {
-    tot=(Number(l.qte)||0)*(Number(l.pu)||0)*(1+(Number(l.tgc)||0)/100);
+    tot=(Number(l.qte)||0)*(Number(l.pu)||0);
   }
   var cell=tb.querySelector('[data-line-total="'+idx+'"]');
   if(cell) cell.textContent=fN(Math.round(tot));
@@ -27162,9 +27164,9 @@ function rFAlines(){
     // Pour KIT et lignes normales : affichage classique avec inputs qte/pu.
     var motherTotal;
     if(isTaskMain){
-      motherTotal=l.subLines.reduce(function(s,sub){return s+(Number(sub.qte)||0)*(Number(sub.pu)||0)*(1+(Number(sub.tgc)||0)/100);},0);
+      motherTotal=l.subLines.reduce(function(s,sub){return s+(Number(sub.qte)||0)*(Number(sub.pu)||0);},0);
     } else {
-      motherTotal=(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);
+      motherTotal=(l.qte||0)*(l.pu||0);
     }
     var html='<tr style="'+rowBg+'">'+
       '<td style="text-align:center;font-weight:700;color:var(--muted);font-size:11px">'+_itemNo+'</td>'+
@@ -27188,7 +27190,7 @@ function rFAlines(){
         var arrowColor = isTaskMain ? '#a78bfa' : '#3b82f6';
         if(isTaskMain){
           // === SOUS-LIGNE TASK : qte/pu/tgc/unite éditables ===
-          var subTot=Math.round((sub.qte||0)*(sub.pu||0)*(1+(Number(sub.tgc)||0)/100));
+          var subTot=Math.round((sub.qte||0)*(sub.pu||0)); // HT pur — cf note computeTaskTotal
           html+='<tr style="background:'+subBgColor+';font-size:11px">'+
             '<td style="text-align:center;color:var(--muted);font-size:10px">·</td>'+
             '<td><input style="width:100%;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.1);padding:3px 5px;font-size:10px;font-family:monospace;color:var(--text)" value="'+esc(sub.ref||'')+'" data-sub-field="ref" data-idx="'+i+'" data-sub-idx="'+si+'" placeholder="Réf"></td>'+
@@ -40792,7 +40794,7 @@ function bDV(d){
         itemNum++;
         var firstSub=subsArr[0];
         var firstTgc=(firstSub.tgc||0)+'%';
-        var firstTot=Math.round((firstSub.qte||0)*(firstSub.pu||0)*(1+(isExo?0:Number(firstSub.tgc)||0)/100));
+        var firstTot=Math.round((firstSub.qte||0)*(firstSub.pu||0)); // HT pur — cf note computeTaskTotal
         rows+='<tr style="background:rgba(245,158,11,.03)">'+
           '<td rowspan="'+rowspan+'" style="vertical-align:middle;text-align:center">'+itemNum+'</td>'+
           '<td rowspan="'+rowspan+'" style="vertical-align:middle">'+escNL(l.ref||'')+'</td>'+
@@ -40807,7 +40809,7 @@ function bDV(d){
         for(var sIdx=1;sIdx<subsArr.length;sIdx++){
           var sub_=subsArr[sIdx];
           var subTgc_=(sub_.tgc||0)+'%';
-          var subTot_=Math.round((sub_.qte||0)*(sub_.pu||0)*(1+(isExo?0:Number(sub_.tgc)||0)/100));
+          var subTot_=Math.round((sub_.qte||0)*(sub_.pu||0));
           rows+='<tr style="background:rgba(245,158,11,.03)">'+
             '<td style="text-align:center">'+subTgc_+'</td>'+
             '<td style="text-align:center">'+(sub_.unite||'U')+'</td>'+
@@ -40823,7 +40825,7 @@ function bDV(d){
     // === Ligne normale ou ligne principale d'un KIT ===
     itemNum++;
     var tgcDisplay=(l.tgc||0)+'%';
-    var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    var tot=Math.round((l.qte||0)*(l.pu||0)); // HT pur — cf note computeTaskTotal
     var rowStyle=isKitMain?' style="background:rgba(124,58,237,.06)"':'';
     rows+='<tr'+rowStyle+'><td>'+itemNum+'</td><td>'+escNL(l.ref||'')+'</td><td>'+escNL(l.designation||'')+'</td>'+
       '<td style="text-align:center">'+tgcDisplay+'</td><td style="text-align:center">'+(l.unite||'U')+'</td>'+
@@ -40998,7 +41000,7 @@ function bFA(f){
         itemNum++;
         var firstSub=subsArr[0];
         var firstTgc=(firstSub.tgc||0)+'%';
-        var firstTot=Math.round((firstSub.qte||0)*(firstSub.pu||0)*(1+(isExo?0:Number(firstSub.tgc)||0)/100));
+        var firstTot=Math.round((firstSub.qte||0)*(firstSub.pu||0)); // HT pur — cf note computeTaskTotal
         rows+='<tr style="background:rgba(245,158,11,.03)">'+
           '<td rowspan="'+rowspan+'" style="vertical-align:middle;text-align:center">'+itemNum+'</td>'+
           '<td rowspan="'+rowspan+'" style="vertical-align:middle">'+escNL(l.ref||'')+'</td>'+
@@ -41012,7 +41014,7 @@ function bFA(f){
         for(var sIdx=1;sIdx<subsArr.length;sIdx++){
           var sub_=subsArr[sIdx];
           var subTgc_=(sub_.tgc||0)+'%';
-          var subTot_=Math.round((sub_.qte||0)*(sub_.pu||0)*(1+(isExo?0:Number(sub_.tgc)||0)/100));
+          var subTot_=Math.round((sub_.qte||0)*(sub_.pu||0));
           rows+='<tr style="background:rgba(245,158,11,.03)">'+
             '<td style="text-align:center">'+subTgc_+'</td>'+
             '<td style="text-align:center">'+(sub_.unite||'U')+'</td>'+
@@ -41028,7 +41030,7 @@ function bFA(f){
     // === 4. Ligne normale ou KIT-main (8 cellules) ===
     itemNum++;
     var tgcDisplay=(l.tgc||0)+'%';
-    var tot=Math.round((l.qte||0)*(l.pu||0)*(1+(isExo?0:Number(l.tgc)||0)/100));
+    var tot=Math.round((l.qte||0)*(l.pu||0)); // HT pur — cf note computeTaskTotal
     var rowStyle=isKitMain?' style="background:rgba(124,58,237,.06)"':'';
     rows+='<tr'+rowStyle+'><td>'+itemNum+'</td><td>'+escNL(l.ref||'')+'</td><td>'+escNL(l.designation||'')+'</td>'+
       '<td style="text-align:center">'+tgcDisplay+'</td><td style="text-align:center">'+(l.unite||'U')+'</td>'+
@@ -41737,7 +41739,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
           var subPu=Number(sub.pu)||0;
           var subQte=Number(sub.qte)||0;
           var subTgc=Number(sub.tgc)||0;
-          var subTot=Math.round(subQte*subPu*(1+(isExo?0:subTgc)/100));
+          var subTot=Math.round(subQte*subPu); // HT pur — cf note computeTaskTotal
           // 1ère sous-ligne : a un idx visible (numéro Item) ET porte les rowspan ; les autres non.
           var thisIdx;
           if(si===0){itemNum++;thisIdx=itemNum;}
@@ -41762,7 +41764,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       var ap=parseFloat(l.audPrice)||0,ar=parseFloat(l.audRate)||74.5,am=parseFloat(l.audMargin)||1.2;
       pu=Math.round(ap*ar*am);
     }
-    var tot=Math.round((l.qte||0)*pu*(1+(isExo?0:Number(l.tgc)||0)/100));
+    var tot=Math.round((l.qte||0)*pu); // HT pur — cf note computeTaskTotal
     itemNum++;
     lineData.push({isSec:false,idx:itemNum,l:Object.assign({},l,{pu:pu}),tot:tot,isKitMain:isKitMain});
     if(isKitMain && Array.isArray(l.subLines)){
@@ -42221,7 +42223,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
           var subPu=Number(sub.pu)||0;
           var subQte=Number(sub.qte)||0;
           var subTgc=Number(sub.tgc)||0;
-          var subTot=Math.round(subQte*subPu*(1+(isExo?0:subTgc)/100));
+          var subTot=Math.round(subQte*subPu); // HT pur — cf note computeTaskTotal
           var thisIdx;
           if(si===0){itemNum++;thisIdx=itemNum;}
           lineData.push({
@@ -42244,7 +42246,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       var ap=parseFloat(l.audPrice)||0,ar=parseFloat(l.audRate)||74.5,am=parseFloat(l.audMargin)||1.2;
       pu=Math.round(ap*ar*am);
     }
-    var tot=Math.round((l.qte||0)*pu*(1+(isExo?0:Number(l.tgc)||0)/100));
+    var tot=Math.round((l.qte||0)*pu); // HT pur — cf note computeTaskTotal
     itemNum++;
     lineData.push({isSec:false,idx:itemNum,l:Object.assign({},l,{pu:pu}),tot:tot,isKitMain:isKitMain});
     if(isKitMain && Array.isArray(l.subLines)){
