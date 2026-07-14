@@ -27513,6 +27513,12 @@ function getFA(){
       if(existing._importEtat)preservedFlags._importEtat=existing._importEtat;
       // bcClientSLN : préservé tel quel (champ historique, défini par BC ou devis lié)
       if(existing.bcClientSLN)preservedFlags.bcClientSLN=existing.bcClientSLN;
+      // devisLieId : posé UNE FOIS au 1er save (wasNew, cf plus bas dans saveFA())
+      // mais jamais réinclus dans l'objet de base ci-dessus → sans ceci, il
+      // disparaissait silencieusement dès le 2e save (régénération, correction
+      // d'un champ...). Utilisé par le circuit Semaine pour retrouver la bonne
+      // facture hebdo parmi plusieurs sur le même devis mensuel (cf ptFactGenerate).
+      if(existing.devisLieId)preservedFlags.devisLieId=existing.devisLieId;
       // Suivi BC hebdomadaire (consommation imputée) : préservé par défaut sur tout
       // save — sinon éditer un simple champ (ex: statut) effacerait le suivi.
       // saveFA() écrase ensuite avec _faPendingBcConsumption si une régénération
@@ -39560,12 +39566,23 @@ function _ptFactCompute(){
   var devs=(DB.devis||[]).filter(function(d){
     return getClientPrefix(d.client||'')===pfx && ['Accepté','Facturé','Envoyé'].indexOf(d.status)>=0;
   });
+  // Circuit Semaine : un devis mensuel peut porter PLUSIEURS factures
+  // hebdomadaires distinctes → pas de "→ FA-XXX 🔒" trompeur (ça ne représente
+  // que la DERNIÈRE facture liée, pas "la" facture unique de ce devis).
+  var isSemaineCircuit=(bd.circuit==='semaine');
   html+='<div style="margin-top:14px" class="no-print"><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Devis accepté → pré-facture à remplir</label>';
   if(devs.length){
     html+='<select class="filter-sel" id="ptFactDevis" onchange="_ptFactDevisInfo()" style="min-width:340px"><option value="">— Choisir le devis lié —</option>'+
       devs.map(function(d){
-        var fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
-        return '<option value="'+d.id+'">'+esc(d.num||'?')+' — '+esc((d.objet||'').substring(0,45))+(fa?' → '+esc(fa.num)+' 🔒':' (pas encore de facture)')+'</option>';
+        var suffix;
+        if(isSemaineCircuit){
+          var nbFa=(DB.factures||[]).filter(function(f){return f.devisLieId===d.id;}).length;
+          suffix=nbFa?(' ('+nbFa+' facture(s) hebdo déjà générée(s))'):' (aucune facture hebdo encore)';
+        } else {
+          var fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+          suffix=(fa?' → '+esc(fa.num)+' 🔒':' (pas encore de facture)');
+        }
+        return '<option value="'+d.id+'">'+esc(d.num||'?')+' — '+esc((d.objet||'').substring(0,45))+suffix+'</option>';
       }).join('')+'</select><div id="ptFactDevisInfo" style="font-size:11px;color:var(--muted);margin-top:6px"></div>';
   } else {
     html+='<div style="font-size:12px;color:var(--amber)">⚠ Aucun devis Accepté/Envoyé/Facturé pour '+esc(pfx)+'. Crée/accepte d\'abord le devis de prestation pour réserver le n° de facture.</div>';
@@ -39579,10 +39596,22 @@ function _ptFactDevisInfo(){
   if(!sel||!info)return;
   var d=DB.devis.find(function(x){return String(x.id)===sel.value;});
   if(!d){info.textContent='';return;}
-  var fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+  var bd=_ptFactBounds();
+  var fa;
+  if(bd.circuit==='semaine'){
+    // Même logique que ptFactGenerate() : un devis mensuel peut porter
+    // plusieurs factures hebdo — on cherche celle de CETTE semaine précise,
+    // pas juste la dernière liée au devis.
+    var periodStr='du '+fD(bd.start)+' au '+fD(bd.end);
+    fa=(DB.factures||[]).find(function(x){
+      return x.devisLieId===d.id && getClientPrefix(x.client||'')===ptFactState.pfx && (x.objet||'').indexOf(periodStr)>=0;
+    });
+  } else {
+    fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+  }
   info.innerHTML=fa
     ? 'La génération <b>remplira la pré-facture existante <span style="color:var(--amber)">'+esc(fa.num)+'</span></b> (n° verrouillé) avec les lignes ci-dessus.'
-    : 'Aucune facture liée à ce devis → la génération <b>créera la facture</b> (n° '+esc(getClientPrefix(d.client))+'-Fxxx) et la liera au devis.';
+    : 'Aucune facture pour '+(bd.circuit==='semaine'?'cette semaine':'ce devis')+' → la génération <b>créera une '+(bd.circuit==='semaine'?'nouvelle ':'')+'facture</b> (n° '+esc(getClientPrefix(d.client))+'-Fxxx)'+(bd.circuit==='semaine'?' liée au même devis':' et la liera au devis')+'.';
 }
 // Convertit les lignes agrégées (ptFactBuildLines) en lignes de facture (format faL) :
 // un bandeau de section MAIN D'OEUVRE + une ligne par (type × taux). TGC selon exo client.
@@ -39617,13 +39646,30 @@ function ptFactGenerate(){
   var faLines=_ptFactToFALines(res,d.client);
   var objet=_ptFactObjet(d,bd);
   var periodStr='du '+fD(bd.start)+' au '+fD(bd.end);
-  // CAS A : la pré-facture existe déjà (n° verrouillé) → déterminé ICI (avant le calcul
-  // BC) pour pouvoir exclure sa propre consommation déjà enregistrée du solde du BC
+  // CAS A : la pré-facture existe déjà → déterminé ICI (avant le calcul BC) pour
+  // pouvoir exclure sa propre consommation déjà enregistrée du solde du BC
   // (sinon une régénération se soustrairait deux fois son propre historique).
-  var existingFa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+  //
+  // ⚠ Circuit SEMAINE : un devis MENSUEL peut être facturé par PLUSIEURS
+  // factures HEBDOMADAIRES distinctes (une par BC/semaine) — le verrou
+  // classique "1 devis → d.linkFactureId → 1 seule facture" (MMB/mois civil/
+  // shutdown, où toute la période du devis tient dans UNE facture régénérée)
+  // ne s'applique PAS ici. On cherche donc la facture existante pour CETTE
+  // semaine précise (même devis lié + même période dans l'objet — même
+  // technique que la garde anti-doublon ci-dessous), pas juste "la dernière
+  // facture liée au devis". Si aucune ne correspond à CETTE semaine → on en
+  // crée une NOUVELLE (CAS B), même si le devis a déjà d'autres factures.
+  var existingFa;
+  if(bd.circuit==='semaine'){
+    existingFa=(DB.factures||[]).find(function(f){
+      return f.devisLieId===d.id && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
+    });
+  } else {
+    existingFa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+  }
   // Garde anti-doublon souple : une AUTRE facture couvre déjà cette période pour ce client ?
   var dup=(DB.factures||[]).find(function(f){
-    return f.id!==d.linkFactureId && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
+    return f.id!==(existingFa&&existingFa.id) && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
   });
   if(dup){
     if(!confirm('⚠ La facture '+dup.num+' semble déjà couvrir la période '+periodStr+' pour '+ptFactState.pfx+'.\n\nContinuer quand même ?'))return;
