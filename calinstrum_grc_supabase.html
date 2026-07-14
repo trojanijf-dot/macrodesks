@@ -1601,11 +1601,14 @@ body.has-dashboard-bg #page-dashboard .metric{
 
   <!-- Onglet FACTURATION (Phase 3) -->
   <div class="tab-pane" id="ptTab-fact">
+    <!-- ⭐ Suivi des Bons de Commande hebdomadaires (import PDF + cartes de consommation) -->
+    <div id="ptBcHebdoBox" class="no-print" style="margin-bottom:14px"></div>
     <div class="no-print" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">
       <div><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Client (entité)</label>
         <select class="filter-sel" id="ptFactClient" onchange="renderPtFact()" style="min-width:160px"></select></div>
       <div id="ptFactCircuitBox"></div>
       <div id="ptFactPeriodBox"></div>
+      <div id="ptFactBcBox"></div>
       <div style="margin-left:auto"><button class="btn btn-teal" id="ptFactGenBtn" onclick="ptFactGenerate()" style="display:none">🧾 Générer / remplir la facture</button></div>
     </div>
     <div id="ptFactBody"></div>
@@ -2919,6 +2922,35 @@ body.has-dashboard-bg #page-dashboard .metric{
   </div>
 </div></div>
 
+<!-- ===== BON DE COMMANDE HEBDOMADAIRE : vérification/édition des données extraites ===== -->
+<div class="modal-overlay" id="mBCHEBDO">
+<div class="modal modal-lg">
+  <div class="modal-header"><h3>📋 Données du Bon de Commande</h3><button class="modal-close" onclick="cm('mBCHEBDO')">✕</button></div>
+  <div class="modal-body">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Données extraites automatiquement du PDF — corrige ce qui doit l'être, tout est éditable.</div>
+    <div class="form-row3">
+      <div class="form-group"><label>N° BC</label><input class="form-input" id="bch-num"></div>
+      <div class="form-group"><label>Envoyé le</label><input class="form-input" id="bch-date" placeholder="AAAA-MM-JJ"></div>
+      <div class="form-group"><label>Référence client</label><input class="form-input" id="bch-ref"></div>
+    </div>
+    <hr class="sep">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <strong style="font-size:12px">Lignes du BC</strong>
+      <button class="btn btn-ghost btn-sm" onclick="addBchLigne()">+ Ligne</button>
+    </div>
+    <div style="overflow-x:auto"><table class="items-tbl"><thead><tr><th>Poste</th><th>Imputation</th><th style="min-width:170px">Description</th><th>Qté (h)</th><th>PU Devise</th><th>PU Remisé</th><th>Montant</th><th>Livraison</th><th></th></tr></thead>
+    <tbody id="bchLIGNES"></tbody></table></div>
+    <div style="text-align:right;font-weight:700;margin-top:6px" id="bchTOTAL">Total HT : 0 XPF</div>
+    <hr class="sep">
+    <div style="font-weight:700;font-size:12px;margin-bottom:6px">Ajustement initial — heures déjà consommées AVANT ce suivi <span style="color:var(--muted);font-weight:400;font-size:10px">(0 par défaut ; à remplir si des factures antérieures ont déjà tapé dans ce BC)</span></div>
+    <div id="bchADJUST" style="display:flex;gap:14px;flex-wrap:wrap"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mBCHEBDO')">Annuler</button>
+    <button class="btn btn-teal" onclick="saveBcHebdoEdit()">✓ Appliquer</button>
+  </div>
+</div></div>
+
 <!-- CLIENT FULL -->
 <div class="modal-overlay" id="mEMP">
 <div class="modal">
@@ -3477,6 +3509,10 @@ function defDB(){
     tarifsPointage:{},// grille de vente PAR PRÉFIXE ENTITÉ {PRNC:{empId:base},...}
     pointageCircuits:{},// circuit de facturation PAR PRÉFIXE ENTITÉ {PRNC:'mmb',AEI SNC:'shutdown',...}
     mmbMeta:{},       // infos éditables du MMB PAR PRÉFIXE {PRNC:{demandeur,travaux,po}}
+    bcHebdo:{},       // Bons de commande hebdomadaires PAR PRÉFIXE ENTITÉ
+                      // {AEI SNC:[{id,num,dateEnvoi,heureEnvoi,refClient,lignes:[{poste,imputation,
+                      //   description,qte,puDevise,puRemise,montant,dateLivraison}],totalHT,
+                      //   ajustementInitial:{'5600':0,...},filename,savedAt}]}
     articles:[],nid:{dv:160,fa:94,bc:90,bl:40},
     invoices:DEFAULT_INVOICES.map(function(x){return Object.assign({},x);}),iid:DEFAULT_INVOICES.length,
     // Emails de comptabilité utilisés pour le destinataire des factures.
@@ -20111,6 +20147,11 @@ function _buildFALinesFromDevis(d){
 // Posé par generateFactureFromDV, consommé une seule fois par openFA, puis par saveFA
 // (lien devis↔facture établi à l'enregistrement explicite, pas au clic "Générer").
 var _faDraftObj=null, _faDraftSourceDevisId=null, _faDraftBCSLN='', _faDraftBCDate='';
+// Consommation BC hebdomadaire calculée par ptFactGenerate() — armée juste APRÈS
+// l'appel à openFA (comme _faDraftSourceDevisId), consommée une seule fois par
+// saveFA() puis remise à null. Évite qu'elle "fuite" vers une facture sans rapport
+// si l'utilisateur ouvre/enregistre autre chose entre-temps (reset dans openFA()).
+var _faPendingBcConsumption=null;
 
 // Affiche/masque le bandeau "Brouillon" de la modale facture + adapte le titre.
 function _setFADraftBanner(on, dvNum){
@@ -26583,7 +26624,7 @@ function openFA(id,fromDV,preSelectedClient){
   }
   // Reset de l'état brouillon/lien pour toute ouverture normale ; generateFactureFromDV
   // le ré-arme APRÈS son appel à openFA (cf _faDraftSourceDevisId / bandeau).
-  _faDraftSourceDevisId=null;_faDraftBCSLN='';_faDraftBCDate='';
+  _faDraftSourceDevisId=null;_faDraftBCSLN='';_faDraftBCDate='';_faPendingBcConsumption=null;
   _setFADraftBanner(false);
   eFAid=id||null;faL=[];faVersements=[];rebuildAllParamSelects();
   buildClientOptions('fa-client',preSelectedClient||'');
@@ -27471,6 +27512,11 @@ function getFA(){
       if(existing._importEtat)preservedFlags._importEtat=existing._importEtat;
       // bcClientSLN : préservé tel quel (champ historique, défini par BC ou devis lié)
       if(existing.bcClientSLN)preservedFlags.bcClientSLN=existing.bcClientSLN;
+      // Suivi BC hebdomadaire (consommation imputée) : préservé par défaut sur tout
+      // save — sinon éditer un simple champ (ex: statut) effacerait le suivi.
+      // saveFA() écrase ensuite avec _faPendingBcConsumption si une régénération
+      // via ptFactGenerate vient d'avoir lieu (cf ce mécanisme, pattern _faDraftSourceDevisId).
+      if(Array.isArray(existing._bcConsumption))preservedFlags._bcConsumption=existing._bcConsumption;
       // Cohérence : si la facture est passée à Payée pour la 1ère fois, on enregistre
       // discrètement la date du changement de statut pour que l'utilisateur puisse
       // si besoin retrouver "quand c'est passé en payée" dans l'historique
@@ -28315,6 +28361,11 @@ async function saveFA(){
     f.objet=_buildFAFournitureObjet(f);
   }
   if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
+  // Suivi BC hebdomadaire : une allocation fraîche calculée par ptFactGenerate()
+  // prime sur celle préservée par getFA() (régénération explicite de la facture).
+  // Consommé ICI (après la validation) pour ne PAS être perdu si le save échoue
+  // et que l'utilisateur corrige puis ré-enregistre.
+  if(_faPendingBcConsumption){ f._bcConsumption=_faPendingBcConsumption; _faPendingBcConsumption=null; }
   // Snapshot pour undo : si on modifie une facture existante, on garde son ancien état
   var prevSnapshot=null;
   var wasNew=!eFAid;
@@ -38471,6 +38522,7 @@ function _ensurePointageShape(){
   if(!DB.tarifsPointage||typeof DB.tarifsPointage!=='object')DB.tarifsPointage={};
   if(!DB.pointageCircuits||typeof DB.pointageCircuits!=='object')DB.pointageCircuits={};
   if(!DB.mmbMeta||typeof DB.mmbMeta!=='object')DB.mmbMeta={};
+  if(!DB.bcHebdo||typeof DB.bcHebdo!=='object')DB.bcHebdo={};
 }
 // Infos MMB éditables pour une entité (pré-remplies depuis le devis lié si vide).
 function _ptMmbMeta(pfx){
@@ -39228,8 +39280,10 @@ function renderPtFact(){
     sel.value=chosen;
     ptFactState.pfx=chosen;
   }
+  renderPtBcHebdo();
   _ptFactRenderCircuitBox();
   _ptFactRenderPeriodBox();
+  _ptFactRenderBcBox();
   _ptFactCompute();
 }
 // Sélecteur de circuit de facturation pour l'entité choisie (réglé ici, par préfixe).
@@ -39543,6 +39597,10 @@ function ptFactGenerate(){
   var faLines=_ptFactToFALines(res,d.client);
   var objet=_ptFactObjet(d,bd);
   var periodStr='du '+fD(bd.start)+' au '+fD(bd.end);
+  // CAS A : la pré-facture existe déjà (n° verrouillé) → déterminé ICI (avant le calcul
+  // BC) pour pouvoir exclure sa propre consommation déjà enregistrée du solde du BC
+  // (sinon une régénération se soustrairait deux fois son propre historique).
+  var existingFa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
   // Garde anti-doublon souple : une AUTRE facture couvre déjà cette période pour ce client ?
   var dup=(DB.factures||[]).find(function(f){
     return f.id!==d.linkFactureId && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
@@ -39550,8 +39608,21 @@ function ptFactGenerate(){
   if(dup){
     if(!confirm('⚠ La facture '+dup.num+' semble déjà couvrir la période '+periodStr+' pour '+ptFactState.pfx+'.\n\nContinuer quand même ?'))return;
   }
-  // CAS A : la pré-facture existe déjà (n° verrouillé) → on la remplit.
-  var existingFa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
+  // ⭐ Imputation sur le Bon de Commande de rattachement (si choisi) : bascule
+  // automatique vers le(s) BC suivant(s) chronologique(s) si le solde du BC de
+  // départ ne suffit pas (cf _bcAllocate). Avertissement — PAS de blocage — si
+  // aucun BC suivant n'a de solde pour couvrir le reste.
+  var bcConsumption=null;
+  if(ptFactState.bcId){
+    var rateQtyMap=_bcRateQtyFromAgg(ptFactState.pfx,res.agg);
+    var allocRes=_bcAllocate(ptFactState.pfx,ptFactState.bcId,rateQtyMap,existingFa?existingFa.id:null);
+    var unallocKeys=Object.keys(allocRes.unallocated||{});
+    if(unallocKeys.length){
+      var unallocTxt=unallocKeys.map(function(r){return fH(allocRes.unallocated[r])+' h à '+fN(r)+' XPF/h';}).join(', ');
+      if(!confirm('⚠ Le(s) bon(s) de commande sélectionné(s) ne couvrent pas la totalité de cette facture : '+unallocTxt+' resteraient hors suivi (aucun BC suivant n\'a de solde disponible).\n\nContinuer quand même ?'))return;
+    }
+    bcConsumption=allocRes.alloc;
+  }
   if(existingFa){
     var hadLines=Array.isArray(existingFa.lines)&&existingFa.lines.filter(function(l){return l&&l.type!=='section_banner';}).length>0;
     if(hadLines && !confirm('La pré-facture '+existingFa.num+' contient déjà des lignes.\n\nLes REMPLACER par les heures pointées ('+periodStr+') ?\n\nLe n° de facture ('+existingFa.num+') est conservé.'))return;
@@ -39559,6 +39630,7 @@ function ptFactGenerate(){
     // openFA a chargé la facture ; on remplace les lignes + l'objet par le pointage.
     faL=JSON.parse(JSON.stringify(faLines));
     gv('fa-objet',objet);
+    _faPendingBcConsumption=bcConsumption; // armé APRÈS openFA (qui vient de le reset)
     if(typeof rFAlines==='function')rFAlines();
     if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Pré-facture '+existingFa.num+' remplie — vérifie puis Enregistre');
     return;
@@ -39581,6 +39653,7 @@ function ptFactGenerate(){
     _faDraftObj=faDraft;
     openFA(null);
     _faDraftSourceDevisId=d.id;
+    _faPendingBcConsumption=bcConsumption; // armé APRÈS openFA (qui vient de le reset)
     if(typeof _setFADraftBanner==='function')_setFADraftBanner(true,d.num);
     if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Brouillon facture '+faDraft.num+' — vérifie puis Enregistre pour créer');
   },80);
@@ -39723,6 +39796,523 @@ function ptMMBPrint(){
     '<div class="note">Montant mensuel : majorations incluses (voir facture pour détails).</div>'+
     '</div>';
   _ptOpenPrintDoc('MMB CALINSTRUM_'+pfx+' '+_ptFn(bd.start)+' au '+_ptFn(bd.end),body);
+}
+
+// =============================================================================
+// ===== SUIVI DES BONS DE COMMANDE HEBDOMADAIRES (AEI, etc.) =================
+// =============================================================================
+// Chaque BC autorise un volume d'heures PAR TARIF (pas par libellé de poste —
+// Expert/Confirmé partagent souvent le même tarif, seul le taux horaire compte
+// pour la facturation). À la génération d'une facture, on impute la consommation
+// sur le BC choisi ; si son solde ne suffit pas, le surplus BASCULE automatiquement
+// sur le(s) BC suivant(s) (ordre chronologique dateEnvoi) — cf _bcAllocate.
+// Stockage : DB.bcHebdo[préfixe entité] = [bcObj,...], sync via le canal params.
+// Mockup validé le 2026-07-14 (points 1-5).
+
+// ---- Parseur : items pdf.js {str,x,y} → objet BC structuré ----
+// Calibré sur les BC AEI (formulaire type "BON DE COMMANDE N° BC_xxxxx").
+// Pattern de table : chaque ligne porte son N° de poste sur une ligne "ancre"
+// (Poste/Imputation/Qté/Prix/Montant/Date livraison), la Description s'étend
+// sur les lignes voisines (avant/après) dans sa seule colonne — cf commentaire
+// détaillé dans REVIEW/mémoire du chantier.
+function parseBCHebdoPdfItems(items){
+  var result={num:'',dateEnvoi:'',heureEnvoi:'',refClient:'',lignes:[],totalHT:0,_parseErrors:[],
+    _rawText:items.map(function(it){return it.str;}).join(' ')};
+  if(!items||!items.length)return result;
+  var TOL_Y=2.5,groups=[];
+  items.forEach(function(it){
+    var g=null;
+    for(var i=0;i<groups.length;i++){
+      if(Math.abs(groups[i].y-it.y)<=TOL_Y){g=groups[i];break;}
+    }
+    if(g){g.items.push(it);g.y=(g.y*(g.items.length-1)+it.y)/g.items.length;}
+    else groups.push({y:it.y,items:[it]});
+  });
+  // Tri DESCENDANT : coordonnée pdf.js (transform[4/5]) = repère PDF, Y croît vers
+  // le HAUT de la page → un Y plus grand = plus haut sur la page = lu en premier.
+  groups.sort(function(a,b){return b.y-a.y;});
+  var lines=groups.map(function(g){
+    g.items.sort(function(a,b){return a.x-b.x;});
+    return {y:g.y,items:g.items,text:g.items.map(function(it){return it.str;}).join(' ').replace(/\s+/g,' ').trim()};
+  });
+  function colText(l,x0,x1){
+    return l.items.filter(function(it){return it.x>=x0&&it.x<x1;}).map(function(it){return it.str;}).join(' ').replace(/\s+/g,' ').trim();
+  }
+  function findLine(re){for(var i=0;i<lines.length;i++){if(re.test(lines[i].text))return i;}return -1;}
+  // 1) N° BC / date+heure d'envoi / référence client
+  for(var i=0;i<lines.length;i++){
+    var m=lines[i].text.match(/N°\s*(\S+)\s*-\s*page/i);
+    if(m){result.num=m[1];break;}
+  }
+  for(var i2=0;i2<lines.length;i2++){
+    var m2=lines[i2].text.match(/^Le\s+(\d{2})-(\d{2})-(\d{4})\s*à\s*(\d{2}:\d{2})/i);
+    if(m2){result.dateEnvoi=m2[3]+'-'+m2[2]+'-'+m2[1];result.heureEnvoi=m2[4];break;}
+  }
+  var iRef=findLine(/Votre\s+référence\s*:/i);
+  if(iRef>=0){
+    var mRef=lines[iRef].text.match(/Votre\s+référence\s*:\s*(\S+)/i);
+    if(mRef)result.refClient=mRef[1];
+  }
+  // 2) Tableau : ancres = lignes avec un entier en tout début (colonne Poste, x<35)
+  //    ET un code Imputation à côté (x 40-125) — évite de confondre avec d'autres
+  //    nombres isolés du document.
+  var iHdr=findLine(/^Poste\b/);
+  var iTot=findLine(/Total\s+HT/i);
+  var anchors=[];
+  for(var li=(iHdr>=0?iHdr+1:0);li<(iTot>=0?iTot:lines.length);li++){
+    var l=lines[li];
+    var posteTok=l.items.find(function(it){return it.x<35;});
+    if(!posteTok||!/^\d+$/.test(posteTok.str))continue;
+    var impTok=l.items.find(function(it){return it.x>=40&&it.x<125;});
+    if(!impTok)continue;
+    anchors.push({idx:li,y:l.y,poste:posteTok.str,l:l});
+  }
+  anchors.forEach(function(a,ai){
+    var l=a.l;
+    var qte=parseFloat(colText(l,125,160).replace(',','.'))||0;
+    var puDevise=parseInt(colText(l,320,362).replace(/[^\d]/g,''),10)||0;
+    var puRemise=parseInt(colText(l,362,445).replace(/[^\d]/g,''),10)||0;
+    var montant=parseInt(colText(l,445,520).replace(/[^\d]/g,''),10)||0;
+    var dateLivTxt=colText(l,520,600);
+    var mD=dateLivTxt.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    var dateLivIso=mD?(mD[3]+'-'+mD[2]+'-'+mD[1]):'';
+    // Bornes Y de la description : entre l'ancre précédente (ou l'en-tête) et
+    // l'ancre suivante (ou "Total HT"). Repère PDF (Y croît vers le haut) → on
+    // calcule min/max explicitement plutôt que de supposer un sens.
+    var boundAbove=(ai>0)?(anchors[ai-1].y+a.y)/2:(iHdr>=0?lines[iHdr].y:1e9);
+    var boundBelow=(ai<anchors.length-1)?(anchors[ai+1].y+a.y)/2:(iTot>=0?lines[iTot].y:-1e9);
+    var loY=Math.min(boundAbove,boundBelow),hiY=Math.max(boundAbove,boundBelow);
+    var descParts=[];
+    lines.forEach(function(ln){
+      if(ln.y<=loY||ln.y>=hiY)return;
+      var t=colText(ln,155,320);
+      if(t)descParts.push(t);
+    });
+    result.lignes.push({
+      poste:a.poste,imputation:colText(l,40,125),description:descParts.join(' ').replace(/\s+/g,' ').trim(),
+      qte:qte,puDevise:puDevise,puRemise:puRemise||puDevise,montant:montant,dateLivraison:dateLivIso
+    });
+  });
+  if(iTot>=0){
+    result.totalHT=parseInt(colText(lines[iTot],440,600).replace(/[^\d]/g,''),10)||0;
+  }
+  if(!result.lignes.length)result._parseErrors.push('Aucune ligne détectée dans le tableau du BC.');
+  return result;
+}
+
+// ---- Import PDF (drag&drop ou fichier) ----
+function triggerBcHebdoUpload(){
+  var inp=document.getElementById('bch-file-input');
+  if(inp){inp.value='';inp.click();}
+}
+function handleBcHebdoSelected(ev){
+  var f=ev&&ev.target&&ev.target.files&&ev.target.files[0];
+  if(f)_processBcHebdoPdf(f);
+}
+function _processBcHebdoPdf(f){
+  var pfx=ptFactState.pfx;
+  if(!pfx){alert('Choisis d\'abord un client.');return;}
+  if(!f)return;
+  if(f.type!=='application/pdf'&&!/\.pdf$/i.test(f.name)){alert('Seuls les fichiers PDF sont acceptés.');return;}
+  if(f.size>20*1024*1024){alert('Fichier trop volumineux (max 20 Mo).');return;}
+  if(typeof pdfjsLib==='undefined'){alert('❌ Erreur : pdf.js non chargé. Rechargez la page.');return;}
+  var reader=new FileReader();
+  reader.onerror=function(){alert('❌ Lecture du fichier impossible.');};
+  reader.onload=function(e){
+    try{
+      var bytes=new Uint8Array(e.target.result);
+      // bytes.slice(0) EXPRÈS : pdf.js transfère l'ArrayBuffer à son worker (buffer
+      // détaché) — on garde `bytes` intact pour l'archivage IndexedDB.
+      pdfjsLib.getDocument({data:bytes.slice(0)}).promise.then(function(pdf){
+        var tasks=[];
+        var mkPage=function(pNum){
+          return pdf.getPage(pNum).then(function(page){
+            return page.getTextContent().then(function(tc){
+              return tc.items.filter(function(it){return it.str&&it.str.trim();}).map(function(it){
+                return {str:it.str,x:it.transform[4],y:it.transform[5],page:pNum};
+              });
+            });
+          });
+        };
+        for(var p=1;p<=pdf.numPages;p++)tasks.push(mkPage(p));
+        return Promise.all(tasks).then(function(pages){
+          var all=[];pages.forEach(function(pp){pp.forEach(function(it){all.push(it);});});
+          var parsed=parseBCHebdoPdfItems(all);
+          if(!parsed.num){alert('⚠ N° de BC introuvable dans ce PDF — vérifie qu\'il s\'agit bien d\'un Bon de Commande AEI.');return;}
+          _ensurePointageShape();
+          if(!Array.isArray(DB.bcHebdo[pfx]))DB.bcHebdo[pfx]=[];
+          var existing=DB.bcHebdo[pfx].find(function(b){return b.num===parsed.num;});
+          var bcId;
+          if(existing){
+            if(!confirm('Un BC "'+parsed.num+'" existe déjà pour '+pfx+'. Le remplacer par les données de ce PDF ?'))return;
+            existing.dateEnvoi=parsed.dateEnvoi;existing.heureEnvoi=parsed.heureEnvoi;existing.refClient=parsed.refClient;
+            existing.lignes=parsed.lignes;existing.totalHT=parsed.totalHT;
+            existing.filename=f.name;existing.savedAt=new Date().toISOString();
+            bcId=existing.id;
+          } else {
+            var bcObj={id:Date.now(),num:parsed.num,dateEnvoi:parsed.dateEnvoi,heureEnvoi:parsed.heureEnvoi,
+              refClient:parsed.refClient,lignes:parsed.lignes,totalHT:parsed.totalHT,
+              ajustementInitial:{},filename:f.name,savedAt:new Date().toISOString()};
+            DB.bcHebdo[pfx].push(bcObj);
+            bcId=bcObj.id;
+          }
+          saveDB();
+          _storeBcHebdoPdf(bcId,f.name,bytes);
+          renderPtBcHebdo();_ptFactRenderBcBox();
+          if(typeof showBCSaveToast==='function')showBCSaveToast('📋 BC '+parsed.num+' importé — vérifie les données puis rattache-le à une facture');
+        });
+      }).catch(function(err){alert('❌ Lecture PDF impossible : '+(err&&err.message?err.message:err));});
+    }catch(err){alert('❌ Erreur : '+err.message);}
+  };
+  reader.readAsArrayBuffer(f);
+}
+
+// ---- Helpers tarif / consommation ----
+// Un BC autorise des heures PAR TARIF (puRemise, fallback puDevise) — le libellé
+// de poste (Expert/Confirmé/Junior) n'est qu'informatif, la facturation se fait
+// par taux horaire (cf point 2 validé : Expert et Confirmé partagent souvent 5600).
+function _bcAuthorizedQte(bc,rate){
+  var r=Number(rate);
+  return (bc.lignes||[]).filter(function(l){return Number(l.puRemise||l.puDevise)===r;})
+    .reduce(function(s,l){return s+(Number(l.qte)||0);},0);
+}
+function _bcRatesList(bc){
+  var set={};
+  (bc.lignes||[]).forEach(function(l){var r=Number(l.puRemise||l.puDevise)||0;if(r>0)set[r]=true;});
+  return Object.keys(set).map(Number).sort(function(a,b){return b-a;});
+}
+// Heures déjà consommées sur ce BC à ce tarif = ajustement initial (manuel, pour
+// rattraper l'historique antérieur au suivi) + somme des _bcConsumption de TOUTES
+// les factures existantes de ce client qui référencent ce BC/tarif.
+// excludeFactureId : exclut une facture précise (utile en régénération, pour ne
+// pas soustraire deux fois sa propre allocation antérieure).
+function _bcConsumedSoFar(pfx,bcId,rate,excludeFactureId){
+  var r=Number(rate);
+  var bc=(DB.bcHebdo[pfx]||[]).find(function(b){return b.id===bcId;});
+  var base=(bc&&bc.ajustementInitial&&Number(bc.ajustementInitial[r]))||0;
+  var fromFactures=(DB.factures||[]).reduce(function(s,f){
+    if(excludeFactureId&&f.id===excludeFactureId)return s;
+    if(getClientPrefix(f.client||'')!==pfx)return s;
+    if(!Array.isArray(f._bcConsumption))return s;
+    f._bcConsumption.forEach(function(c){if(c.bcId===bcId&&Number(c.rate)===r)s+=Number(c.qte)||0;});
+    return s;
+  },0);
+  return base+fromFactures;
+}
+function _bcRemaining(pfx,bc,rate,excludeFactureId){
+  return Math.max(0,_bcAuthorizedQte(bc,rate)-_bcConsumedSoFar(pfx,bc.id,rate,excludeFactureId));
+}
+// Heures de la période, groupées par tarif de BASE (indépendant du type d'heure
+// normal/HS25/HS50/dim/férié/nuit) — c'est cette unité que le BC autorise.
+function _bcRateQtyFromAgg(pfx,agg){
+  var byRate={};
+  (agg.emps||[]).forEach(function(e){
+    var base=_ptTarifFor(pfx,e.id);if(base==null)return;
+    var eh=agg.byEmp[e.id]||{};
+    var totH=(eh.hnj||0)+(eh.hs25||0)+(eh.hs50||0)+(eh.dim||0)+(eh.fer||0)+(eh.nuit||0);
+    if(totH<=0)return;
+    byRate[base]=(byRate[base]||0)+totH;
+  });
+  return byRate;
+}
+// Alloue les heures (par tarif) au BC de départ ; bascule automatiquement sur le(s)
+// BC suivant(s) — ordre chronologique dateEnvoi — si le solde du BC de départ ne
+// suffit pas. Retourne {alloc:[{bcId,bcNum,rate,qte,montant,epuiseApres}],
+// unallocated:{rate:heures non couvertes par aucun BC}}.
+function _bcAllocate(pfx,startBcId,rateQtyMap,excludeFactureId){
+  var bcs=(DB.bcHebdo[pfx]||[]).slice().sort(function(a,b){
+    return (a.dateEnvoi||'')<(b.dateEnvoi||'')?-1:((a.dateEnvoi||'')>(b.dateEnvoi||'')?1:0);
+  });
+  var startIdx=bcs.findIndex(function(b){return b.id===startBcId;});
+  if(startIdx<0)return {alloc:[],unallocated:Object.assign({},rateQtyMap)};
+  var alloc=[],unallocated={};
+  Object.keys(rateQtyMap).forEach(function(rateKey){
+    var need=Number(rateQtyMap[rateKey])||0;
+    if(need<=0.001)return;
+    for(var i=startIdx;i<bcs.length&&need>0.001;i++){
+      var bc=bcs[i];
+      if(_bcAuthorizedQte(bc,rateKey)<=0)continue; // ce BC n'a pas de ligne à ce tarif
+      var remaining=_bcRemaining(pfx,bc,rateKey,excludeFactureId);
+      if(remaining<=0.001)continue; // déjà épuisé à ce tarif → BC suivant
+      var take=Math.min(remaining,need);
+      alloc.push({bcId:bc.id,bcNum:bc.num,rate:Number(rateKey),qte:take,montant:Math.round(take*Number(rateKey)),
+        epuiseApres:(take>=remaining-0.001)});
+      need-=take;
+    }
+    if(need>0.001)unallocated[rateKey]=need;
+  });
+  return {alloc:alloc,unallocated:unallocated};
+}
+
+// ---- UI : cartes de suivi + import (onglet Facturation) ----
+function renderPtBcHebdo(){
+  var host=document.getElementById('ptBcHebdoBox');if(!host)return;
+  var pfx=ptFactState.pfx;
+  if(!pfx){host.innerHTML='';return;}
+  _ensurePointageShape();
+  var bcs=(DB.bcHebdo[pfx]||[]).slice().sort(function(a,b){return (a.dateEnvoi||'')<(b.dateEnvoi||'')?-1:1;});
+  var dzId='bch-drop-'+pfx.replace(/[^a-zA-Z0-9]/g,'_');
+  var html='<div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--teal);margin-bottom:8px">📋 Bons de commande — '+esc(pfx)+'</div>'+
+    '<div id="'+dzId+'" style="border:1.5px dashed rgba(96,165,250,.45);border-radius:8px;padding:10px 14px;margin-bottom:10px;color:var(--muted);cursor:pointer;font-size:11.5px;text-align:center;background:rgba(96,165,250,.04)">⬇️ Glisser un PDF de BC ou <span style="color:#60a5fa;text-decoration:underline">choisir un fichier</span></div>'+
+    '<input type="file" id="bch-file-input" accept=".pdf,application/pdf" style="display:none" onchange="handleBcHebdoSelected(event)">';
+  if(!bcs.length){
+    html+='<div style="color:var(--muted);font-size:11px">Aucun BC importé pour ce client.</div>';
+  } else {
+    bcs.forEach(function(bc){
+      var rates=_bcRatesList(bc);
+      var anyRemaining=false,anyAuthorized=false;
+      rates.forEach(function(r){if(_bcAuthorizedQte(bc,r)>0){anyAuthorized=true;if(_bcRemaining(pfx,bc,r,null)>0.001)anyRemaining=true;}});
+      var statutBadge=anyAuthorized&&!anyRemaining
+        ?'<span style="background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.4);color:#34d399;padding:1px 8px;border-radius:5px;font-size:9.5px;font-weight:700">✓ Soldé</span>':'';
+      html+='<div style="background:rgba(255,255,255,.02);border:1px solid var(--border,#30363d);border-radius:8px;padding:10px 14px;margin-bottom:8px">'+
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px;margin-bottom:8px">'+
+          '<div><span style="color:var(--teal);font-weight:700">'+esc(bc.num)+'</span> '+statutBadge+
+            '<div style="color:var(--muted-soft);font-size:10px;margin-top:2px">Envoyé le '+fD(bc.dateEnvoi)+(bc.refClient?' · Réf. client '+esc(bc.refClient):'')+' · Total autorisé '+fN(bc.totalHT)+' XPF HT</div></div>'+
+          '<div style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm" onclick="openBcHebdoEdit('+bc.id+')">✏️ Vérifier</button><button class="btn btn-red btn-sm" onclick="removeBcHebdo(\''+esc(pfx).replace(/'/g,"\\'")+'\','+bc.id+')">🗑 Retirer</button></div>'+
+        '</div>';
+      rates.forEach(function(r){
+        var auth=_bcAuthorizedQte(bc,r),cons=_bcConsumedSoFar(pfx,bc.id,r,null),rem=Math.max(0,auth-cons);
+        var pct=auth>0?Math.min(100,Math.round(cons/auth*100)):0;
+        var barColor=pct>=100?'#34d399':(pct>=85?'#f59e0b':'#2dd4bf');
+        html+='<div style="margin-bottom:7px">'+
+          '<div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted)"><span>Tarif '+fN(r)+' XPF/h</span><span><b style="color:var(--text)">'+fH(cons)+'</b> / '+fH(auth)+' h consommées</span></div>'+
+          '<div style="height:8px;background:var(--panel2,#161b24);border-radius:4px;overflow:hidden;border:1px solid var(--border,#30363d)"><div style="height:100%;width:'+pct+'%;background:'+barColor+'"></div></div>'+
+          '<div style="font-size:9.5px;color:var(--muted-soft);text-align:right;margin-top:1px">'+pct+'% — reste '+fH(rem)+' h ('+fN(Math.round(rem*r))+' XPF)</div>'+
+        '</div>';
+      });
+      html+='</div>';
+    });
+  }
+  host.innerHTML=html;
+  var dz=document.getElementById(dzId);
+  if(dz){
+    dz.addEventListener('click',function(){var inp=document.getElementById('bch-file-input');if(inp){inp.value='';inp.click();}});
+    dz.addEventListener('dragover',function(e){e.preventDefault();e.stopPropagation();dz.style.background='rgba(96,165,250,.12)';});
+    dz.addEventListener('dragleave',function(e){e.preventDefault();dz.style.background='';});
+    dz.addEventListener('drop',function(e){
+      e.preventDefault();e.stopPropagation();dz.style.background='';
+      var f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];
+      if(f)_processBcHebdoPdf(f);
+    });
+  }
+}
+function removeBcHebdo(pfx,bcId){
+  if(!confirm('Retirer ce Bon de Commande ? (les factures déjà générées gardent leur historique de consommation)'))return;
+  DB.bcHebdo[pfx]=(DB.bcHebdo[pfx]||[]).filter(function(b){return b.id!==bcId;});
+  saveDB();
+  _deleteBcHebdoPdf(bcId);
+  renderPtBcHebdo();_ptFactRenderBcBox();
+  if(typeof showBCSaveToast==='function')showBCSaveToast('🗑 BC retiré');
+}
+
+// ---- Sélecteur "Bon de commande de rattachement" (onglet Facturation) ----
+function _ptFactRenderBcBox(){
+  var box=document.getElementById('ptFactBcBox');if(!box)return;
+  var pfx=ptFactState.pfx;
+  if(!pfx){box.innerHTML='';ptFactState.bcId=null;return;}
+  _ensurePointageShape();
+  var bcs=(DB.bcHebdo[pfx]||[]).slice().sort(function(a,b){return (a.dateEnvoi||'')<(b.dateEnvoi||'')?-1:1;});
+  if(!bcs.length){box.innerHTML='';ptFactState.bcId=null;return;}
+  var cur=ptFactState.bcId;
+  if(cur&&!bcs.some(function(b){return String(b.id)===String(cur);}))cur=null;
+  var opts='<option value="">— Aucun (facture sans suivi BC) —</option>'+bcs.map(function(b){
+    var rates=_bcRatesList(b);
+    var parts=rates.map(function(r){
+      var rem=_bcRemaining(pfx,b,r,null),auth=_bcAuthorizedQte(b,r);
+      return fH(rem)+'h@'+fN(r)+(rem<=0.001?' ⛔':(auth>0&&rem<auth*0.15?' ⚠':''));
+    });
+    var soldeTxt=rates.length?('reste '+parts.join(' · ')):'—';
+    return '<option value="'+b.id+'"'+(String(b.id)===String(cur)?' selected':'')+'>'+esc(b.num)+' — '+soldeTxt+'</option>';
+  }).join('');
+  box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Bon de commande de rattachement</label>'+
+    '<select class="filter-sel" id="ptFactBc" onchange="ptFactSetBc()" style="min-width:260px">'+opts+'</select>';
+  ptFactState.bcId=cur?Number(cur):null;
+}
+function ptFactSetBc(){
+  var el=document.getElementById('ptFactBc');
+  ptFactState.bcId=(el&&el.value)?Number(el.value):null;
+}
+
+// ---- Modal de vérification/édition (mBCHEBDO) ----
+var _bchLignesTemp=[],_bchEditingId=null;
+function openBcHebdoEdit(bcId){
+  var pfx=ptFactState.pfx;
+  var bc=(DB.bcHebdo[pfx]||[]).find(function(b){return b.id===bcId;});
+  if(!bc)return;
+  _bchEditingId=bcId;
+  gv('bch-num',bc.num||'');gv('bch-date',bc.dateEnvoi||'');gv('bch-ref',bc.refClient||'');
+  _bchLignesTemp=JSON.parse(JSON.stringify(bc.lignes||[]));
+  rBchLignes();renderBchTotal();renderBchAdjust(bc);
+  om('mBCHEBDO');
+}
+function rBchLignes(){
+  var tb=document.getElementById('bchLIGNES');if(!tb)return;
+  tb.innerHTML=_bchLignesTemp.map(function(l,i){
+    return '<tr>'+
+      '<td><input style="width:44px" value="'+esc(l.poste||'')+'" data-field="poste" data-idx="'+i+'"></td>'+
+      '<td><input style="width:90px" value="'+esc(l.imputation||'')+'" data-field="imputation" data-idx="'+i+'"></td>'+
+      '<td><input style="width:100%;min-width:150px" value="'+esc(l.description||'')+'" data-field="description" data-idx="'+i+'"></td>'+
+      '<td><input type="number" style="width:60px" value="'+(l.qte||0)+'" data-field="qte" data-idx="'+i+'"></td>'+
+      '<td><input type="number" style="width:70px" value="'+(l.puDevise||0)+'" data-field="puDevise" data-idx="'+i+'"></td>'+
+      '<td><input type="number" style="width:70px" value="'+(l.puRemise||0)+'" data-field="puRemise" data-idx="'+i+'"></td>'+
+      '<td><input type="number" style="width:80px" value="'+(l.montant||0)+'" data-field="montant" data-idx="'+i+'"></td>'+
+      '<td><input style="width:90px" value="'+esc(l.dateLivraison||'')+'" data-field="dateLivraison" data-idx="'+i+'" placeholder="AAAA-MM-JJ"></td>'+
+      '<td><button class="bch-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
+    '</tr>';
+  }).join('');
+  tb.querySelectorAll('input[data-field]').forEach(function(inp){
+    inp.addEventListener('input',function(){
+      var idx=parseInt(this.getAttribute('data-idx')),field=this.getAttribute('data-field');
+      if(isNaN(idx)||!_bchLignesTemp[idx])return;
+      var numFields=['qte','puDevise','puRemise','montant'];
+      _bchLignesTemp[idx][field]=numFields.indexOf(field)>=0?(+this.value||0):this.value;
+      renderBchTotal();
+    });
+  });
+  tb.querySelectorAll('.bch-del-btn').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var idx=parseInt(this.getAttribute('data-idx'));
+      if(!isNaN(idx)){_bchLignesTemp.splice(idx,1);rBchLignes();renderBchTotal();}
+    });
+  });
+}
+function addBchLigne(){
+  _bchLignesTemp.push({poste:String(_bchLignesTemp.length+1),imputation:'',description:'',qte:0,puDevise:0,puRemise:0,montant:0,dateLivraison:''});
+  rBchLignes();renderBchTotal();
+}
+function renderBchTotal(){
+  var tot=_bchLignesTemp.reduce(function(s,l){return s+(Number(l.montant)||0);},0);
+  var el=document.getElementById('bchTOTAL');if(el)el.textContent='Total HT : '+fN(tot)+' XPF';
+}
+function renderBchAdjust(bc){
+  var host=document.getElementById('bchADJUST');if(!host)return;
+  var rates=_bcRatesList(bc);
+  if(!rates.length){host.innerHTML='<span style="color:var(--muted);font-size:11px">Aucun tarif détecté dans les lignes.</span>';return;}
+  host.innerHTML=rates.map(function(r){
+    var v=(bc.ajustementInitial&&bc.ajustementInitial[r])||0;
+    return '<div class="form-group" style="min-width:150px"><label>Tarif '+fN(r)+' XPF/h</label><input type="number" class="form-input" data-adjust-rate="'+r+'" value="'+v+'" style="width:120px"></div>';
+  }).join('');
+}
+function saveBcHebdoEdit(){
+  var pfx=ptFactState.pfx;
+  var bc=(DB.bcHebdo[pfx]||[]).find(function(b){return b.id===_bchEditingId;});
+  if(!bc)return;
+  bc.num=gvg('bch-num');bc.dateEnvoi=gvg('bch-date');bc.refClient=gvg('bch-ref');
+  bc.lignes=JSON.parse(JSON.stringify(_bchLignesTemp));
+  bc.totalHT=bc.lignes.reduce(function(s,l){return s+(Number(l.montant)||0);},0);
+  bc.ajustementInitial=bc.ajustementInitial||{};
+  document.querySelectorAll('#bchADJUST [data-adjust-rate]').forEach(function(inp){
+    bc.ajustementInitial[inp.getAttribute('data-adjust-rate')]=Number(inp.value)||0;
+  });
+  saveDB();
+  cm('mBCHEBDO');
+  renderPtBcHebdo();_ptFactRenderBcBox();
+  if(typeof showBCSaveToast==='function')showBCSaveToast('✓ BC '+bc.num+' mis à jour');
+}
+
+// ---- Archivage local du PDF original (IndexedDB — pas de copie cloud, admin léger) ----
+function _storeBcHebdoPdf(bcId,filename,bytes){
+  if(!bcId||!bytes)return;
+  openAttachDB().then(function(db){
+    var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
+    var store=tx.objectStore(DEVIS_PDF_STORE);
+    var idx=store.index('devisKind');
+    var key='bchebdo:'+String(bcId);
+    var getReq=idx.get([key,'bchebdo']);
+    getReq.onsuccess=function(){
+      var existing=getReq.result;
+      var blob=new Blob([bytes],{type:'application/pdf'});
+      var record={devisId:key,kind:'bchebdo',filename:filename||'bc.pdf',
+        refValue:'',refDate:'',fileSize:bytes.byteLength||bytes.length||0,
+        blob:blob,savedAt:new Date().toISOString()};
+      if(existing&&existing.id)record.id=existing.id;
+      var putReq=store.put(record);
+      putReq.onsuccess=function(){};
+    };
+  }).catch(function(err){console.warn('[BC hebdo] Archivage IndexedDB échoué :',err);});
+}
+function _deleteBcHebdoPdf(bcId){
+  openAttachDB().then(function(db){
+    var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
+    var store=tx.objectStore(DEVIS_PDF_STORE);
+    var idx=store.index('devisKind');
+    var getReq=idx.get(['bchebdo:'+String(bcId),'bchebdo']);
+    getReq.onsuccess=function(){if(getReq.result&&getReq.result.id)store.delete(getReq.result.id);};
+  }).catch(function(err){console.warn('[BC hebdo] Suppression IndexedDB échouée :',err);});
+}
+
+// ---- Bloc "Suivi du Bon de Commande" sur la facture (aperçu + impression) ----
+// f._bcConsumption = [{bcId,bcNum,rate,qte,montant,epuiseApres}] posé par
+// ptFactGenerate(). Peut référencer PLUSIEURS BC si une bascule a eu lieu cette
+// facture (solde du 1er épuisé en cours de semaine) — un bloc par BC concerné,
+// avec la mention explicite de bascule (point 4 validé).
+function _buildBcTrackHtml(pfx,f){
+  if(!f||!Array.isArray(f._bcConsumption)||!f._bcConsumption.length)return '';
+  var byBc={};
+  f._bcConsumption.forEach(function(c){
+    if(!byBc[c.bcId])byBc[c.bcId]={bcNum:c.bcNum,rows:[]};
+    byBc[c.bcId].rows.push(c);
+  });
+  // ⚠ L'ordre d'affichage/bascule DOIT suivre la chronologie réelle des BC
+  // (dateEnvoi), PAS l'ordre d'apparition dans _bcConsumption — celui-ci dépend
+  // de l'ordre d'itération des tarifs (les clés numériques d'un objet JS sont
+  // toujours triées en ordre croissant, ex "5200" avant "5600", indépendamment
+  // de l'ordre réel d'allocation) et mélangerait le message de bascule.
+  var order=Object.keys(byBc).map(Number).sort(function(a,b){
+    var bcA=(DB.bcHebdo[pfx]||[]).find(function(x){return x.id===a;});
+    var bcB=(DB.bcHebdo[pfx]||[]).find(function(x){return x.id===b;});
+    var da=(bcA&&bcA.dateEnvoi)||'',db=(bcB&&bcB.dateEnvoi)||'';
+    return da<db?-1:(da>db?1:0);
+  });
+  var PCA='-webkit-print-color-adjust:exact;print-color-adjust:exact;';
+  var html='';
+  order.forEach(function(bcId,oi){
+    var grp=byBc[bcId];
+    var bc=(DB.bcHebdo[pfx]||[]).find(function(b){return b.id===bcId;});
+    var totalAutorise=bc?bc.totalHT:0;
+    var rowsHtml=grp.rows.map(function(c){
+      var authorized=bc?_bcAuthorizedQte(bc,c.rate):0;
+      var before=bc?_bcConsumedSoFar(pfx,bcId,c.rate,f.id):0;
+      var cumul=before+c.qte;
+      var reste=Math.max(0,authorized-cumul);
+      var pct=authorized>0?Math.min(100,Math.round(cumul/authorized*100)):0;
+      var barColor=pct>=100?'#34d399':(pct>=85?'#f59e0b':'#2dd4bf');
+      return '<tr>'+
+        '<td>'+fN(c.rate)+' XPF/h</td><td>'+fH(authorized)+'</td><td>'+fH(before)+'</td>'+
+        '<td>'+fH(c.qte)+'</td><td>'+fH(cumul)+'</td><td>'+fH(reste)+'</td>'+
+        '<td style="width:110px"><div style="height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;'+PCA+'"><div style="height:100%;width:'+pct+'%;background:'+barColor+';'+PCA+'"></div></div></td>'+
+      '</tr>';
+    }).join('');
+    var epuise=grp.rows.some(function(c){return c.epuiseApres;});
+    var nextBcNum=order[oi+1]?byBc[order[oi+1]].bcNum:null;
+    var alertHtml='';
+    if(epuise){
+      alertHtml='<div style="margin-top:7px;font-size:9.8px;color:#92400e;background:#fef3c7;border-radius:3px;padding:5px 8px;'+PCA+'">⚠ '+
+        (nextBcNum
+          ? 'Bon de commande '+esc(grp.bcNum)+' entièrement consommé — le surplus de cette facture bascule sur '+esc(nextBcNum)+'.'
+          : 'Bon de commande '+esc(grp.bcNum)+' entièrement consommé — pense à demander un nouveau bon de commande pour la suite des travaux.')+
+      '</div>';
+    }
+    html+='<div style="border:1.5px solid #1e3a5f;border-radius:5px;padding:10px 12px;margin-bottom:12px;'+PCA+'">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+        '<span style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:#1e3a5f">📋 Suivi du Bon de Commande N° '+esc(grp.bcNum)+'</span>'+
+        '<span style="font-size:10px;color:#555">Autorisé '+fN(totalAutorise)+' XPF HT</span>'+
+      '</div>'+
+      '<table style="width:100%;border-collapse:collapse;font-size:9.8px">'+
+        '<thead><tr>'+
+          '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Tarif</th>'+
+          '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Autorisé (h)</th>'+
+          '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Avant cette facture (h)</th>'+
+          '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Cette facture (h)</th>'+
+          '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Cumul (h)</th>'+
+          '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Reste (h)</th>'+
+          '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Consommation</th>'+
+        '</tr></thead>'+
+        '<tbody>'+rowsHtml+'</tbody>'+
+      '</table>'+alertHtml+
+    '</div>';
+  });
+  return html;
 }
 
 // ===== CLIENTS =====
@@ -41289,6 +41879,7 @@ function bFA(f){
     '</thead>'+
     tbodiesHtml+
     '</table>'+
+    _buildBcTrackHtml(getClientPrefix(f.client||''),f)+
     // Bloc final groupé avec page-break-inside:avoid pour qu'il reste cohérent en bas de la dernière page
     '<div class="doc-final-block">'+
     buildFATotsHtml(f,isExo)+
@@ -42640,6 +43231,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       // === Bloc final FACTURE : différent du devis (pas Validité/Paiement, juste Délai) ===
       pageHTML+=
         '<div class="doc-page-final-block" style="margin-top:8px">'+
+        _buildBcTrackHtml(getClientPrefix(f.client||''),f)+
         buildFATotsHtml(f,isExo)+
         '<div class="doc-notes"><strong>Montant en lettres :</strong> '+toLtr(ttcDisp)+'<br>'+
           '<strong>Délai :</strong> '+esc(f.delai||'Paiement sous 30 jours à réception de la facture')+
