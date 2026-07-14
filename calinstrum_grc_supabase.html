@@ -40207,12 +40207,21 @@ function _ptFactRenderBcBox(){
   if(cur&&!bcs.some(function(b){return String(b.id)===String(cur);}))cur=null;
   var opts='<option value="">— Aucun (facture sans suivi BC) —</option>'+bcs.map(function(b){
     var rates=_bcRatesList(b);
+    // ⚠ JAMAIS de ⛔ par tarif individuel : un BC a souvent plusieurs tarifs
+    // (ex 5600 + 5200) et un seul peut être épuisé pendant que l'autre a
+    // encore du solde — marquer ⛔ sur CE tarif seul donnait l'impression que
+    // le BC ENTIER était fermé, poussant à sauter au BC suivant en laissant
+    // le solde de l'autre tarif orphelin (cas réel constaté 14/07/2026).
+    // Le ⛔ n'apparaît qu'en préfixe, et SEULEMENT si TOUS les tarifs du BC
+    // sont à 0 (BC réellement clos).
+    var allExhausted=rates.length>0&&rates.every(function(r){return _bcRemaining(pfx,b,r,null)<=0.001;});
     var parts=rates.map(function(r){
       var rem=_bcRemaining(pfx,b,r,null),auth=_bcAuthorizedQte(b,r);
-      return fH(rem)+'h@'+fN(r)+(rem<=0.001?' ⛔':(auth>0&&rem<auth*0.15?' ⚠':''));
+      return fH(rem)+'h@'+fN(r)+((rem>0.001&&auth>0&&rem<auth*0.15)?' ⚠':'');
     });
     var soldeTxt=rates.length?('reste '+parts.join(' · ')):'—';
-    return '<option value="'+b.id+'"'+(String(b.id)===String(cur)?' selected':'')+'>'+esc(b.num)+' — '+soldeTxt+'</option>';
+    var prefix=allExhausted?'⛔ ÉPUISÉ — ':'';
+    return '<option value="'+b.id+'"'+(String(b.id)===String(cur)?' selected':'')+'>'+prefix+esc(b.num)+' — '+soldeTxt+'</option>';
   }).join('');
   box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Bon de commande de rattachement</label>'+
     '<select class="filter-sel" id="ptFactBc" onchange="ptFactSetBc()" style="min-width:260px">'+opts+'</select>';
@@ -40427,16 +40436,12 @@ function _buildBcTrackHtml(pfx,f){
         '<td style="width:110px"><div style="height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;'+PCA+'"><div style="height:100%;width:'+pct+'%;background:'+barColor+';'+PCA+'"></div></div></td>'+
       '</tr>';
     }).join('');
-    var epuise=grp.rows.some(function(c){return c.epuiseApres;});
-    var nextBcNum=order[oi+1]?byBc[order[oi+1]].bcNum:null;
-    var alertHtml='';
-    if(epuise){
-      alertHtml='<div style="margin-top:7px;font-size:9.8px;color:#92400e;background:#fef3c7;border-radius:3px;padding:5px 8px;'+PCA+'">⚠ '+
-        (nextBcNum
-          ? 'Bon de commande '+esc(grp.bcNum)+' entièrement consommé — le surplus de cette facture bascule sur '+esc(nextBcNum)+'.'
-          : 'Bon de commande '+esc(grp.bcNum)+' entièrement consommé — pense à demander un nouveau bon de commande pour la suite des travaux.')+
-      '</div>';
-    }
+    // ⛔ AUCUN texte d'avertissement/conseil interne (ex. "pense à demander un
+    // nouveau BC") ne doit apparaître ici : ce document part chez le CLIENT.
+    // L'épuisement d'un BC est déjà visible par la donnée elle-même (colonne
+    // "Reste (h)" à 0 + barre à 100%) — l'information reste factuelle, jamais
+    // une note adressée à l'utilisateur CALINSTRUM. Le rappel "BC à renouveler"
+    // reste uniquement dans l'app (cartes de suivi, badge "✓ Soldé").
     html+='<div style="border:1.5px solid #1e3a5f;border-radius:5px;padding:10px 12px;margin-bottom:12px;'+PCA+'">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
         '<span style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:#1e3a5f">📋 Suivi du Bon de Commande N° '+esc(grp.bcNum)+'</span>'+
@@ -40453,7 +40458,7 @@ function _buildBcTrackHtml(pfx,f){
           '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Consommation</th>'+
         '</tr></thead>'+
         '<tbody>'+rowsHtml+'</tbody>'+
-      '</table>'+alertHtml+
+      '</table>'+
     '</div>';
   });
   return html;
