@@ -28365,7 +28365,14 @@ async function saveFA(){
   // prime sur celle préservée par getFA() (régénération explicite de la facture).
   // Consommé ICI (après la validation) pour ne PAS être perdu si le save échoue
   // et que l'utilisateur corrige puis ré-enregistre.
-  if(_faPendingBcConsumption){ f._bcConsumption=_faPendingBcConsumption; _faPendingBcConsumption=null; }
+  if(_faPendingBcConsumption&&_faPendingBcConsumption.applied){
+    // Régénération explicite via ptFactGenerate : .alloc peut être null/vide
+    // (aucun BC sélectionné cette fois) → on DOIT alors effacer un éventuel
+    // suivi BC antérieur (sinon la facture garderait un bloc périmé).
+    if(_faPendingBcConsumption.alloc&&_faPendingBcConsumption.alloc.length) f._bcConsumption=_faPendingBcConsumption.alloc;
+    else delete f._bcConsumption;
+    _faPendingBcConsumption=null;
+  }
   // Snapshot pour undo : si on modifie une facture existante, on garde son ancien état
   var prevSnapshot=null;
   var wasNew=!eFAid;
@@ -39618,8 +39625,16 @@ function ptFactGenerate(){
     var allocRes=_bcAllocate(ptFactState.pfx,ptFactState.bcId,rateQtyMap,existingFa?existingFa.id:null);
     var unallocKeys=Object.keys(allocRes.unallocated||{});
     if(unallocKeys.length){
-      var unallocTxt=unallocKeys.map(function(r){return fH(allocRes.unallocated[r])+' h à '+fN(r)+' XPF/h';}).join(', ');
-      if(!confirm('⚠ Le(s) bon(s) de commande sélectionné(s) ne couvrent pas la totalité de cette facture : '+unallocTxt+' resteraient hors suivi (aucun BC suivant n\'a de solde disponible).\n\nContinuer quand même ?'))return;
+      // Message distinct selon la cause : un tarif qui n'existe TOTALEMENT dans
+      // aucun BC (même ancien) suggère d'importer un nouveau BC avec ce tarif ;
+      // un tarif présent mais épuisé partout suggère juste d'attendre/relancer AEI.
+      var allBcs=(DB.bcHebdo[ptFactState.pfx]||[]);
+      var unallocTxt=unallocKeys.map(function(r){
+        var hasRateAnywhere=allBcs.some(function(b){return _bcAuthorizedQte(b,r)>0;});
+        var cause=hasRateAnywhere?'BC suivants tous épuisés à ce tarif':'AUCUN BC importé ne porte ce tarif — importe un nouveau BC';
+        return fH(allocRes.unallocated[r])+' h à '+fN(r)+' XPF/h ('+cause+')';
+      }).join(' ; ');
+      if(!confirm('⚠ Le(s) bon(s) de commande sélectionné(s) ne couvrent pas la totalité de cette facture : '+unallocTxt+'.\n\nCes heures resteraient hors suivi BC.\n\nContinuer quand même ?'))return;
     }
     bcConsumption=allocRes.alloc;
   }
@@ -39630,7 +39645,10 @@ function ptFactGenerate(){
     // openFA a chargé la facture ; on remplace les lignes + l'objet par le pointage.
     faL=JSON.parse(JSON.stringify(faLines));
     gv('fa-objet',objet);
-    _faPendingBcConsumption=bcConsumption; // armé APRÈS openFA (qui vient de le reset)
+    // armé APRÈS openFA (qui vient de le reset) — enveloppe {applied:true} pour
+    // distinguer "régénération sans BC sélectionné" (doit VIDER f._bcConsumption)
+    // de "pas de régénération du tout" (ne pas toucher, cf saveFA()).
+    _faPendingBcConsumption={applied:true,alloc:bcConsumption};
     if(typeof rFAlines==='function')rFAlines();
     if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Pré-facture '+existingFa.num+' remplie — vérifie puis Enregistre');
     return;
@@ -39653,7 +39671,7 @@ function ptFactGenerate(){
     _faDraftObj=faDraft;
     openFA(null);
     _faDraftSourceDevisId=d.id;
-    _faPendingBcConsumption=bcConsumption; // armé APRÈS openFA (qui vient de le reset)
+    _faPendingBcConsumption={applied:true,alloc:bcConsumption}; // cf CAS A, même enveloppe
     if(typeof _setFADraftBanner==='function')_setFADraftBanner(true,d.num);
     if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Brouillon facture '+faDraft.num+' — vérifie puis Enregistre pour créer');
   },80);
@@ -40031,12 +40049,17 @@ function _bcAllocate(pfx,startBcId,rateQtyMap,excludeFactureId){
     if(need<=0.001)return;
     for(var i=startIdx;i<bcs.length&&need>0.001;i++){
       var bc=bcs[i];
-      if(_bcAuthorizedQte(bc,rateKey)<=0)continue; // ce BC n'a pas de ligne à ce tarif
-      var remaining=_bcRemaining(pfx,bc,rateKey,excludeFactureId);
+      var authorized=_bcAuthorizedQte(bc,rateKey);
+      if(authorized<=0)continue; // ce BC n'a pas de ligne à ce tarif
+      var consumedBefore=_bcConsumedSoFar(pfx,bc.id,rateKey,excludeFactureId);
+      var remaining=Math.max(0,authorized-consumedBefore);
       if(remaining<=0.001)continue; // déjà épuisé à ce tarif → BC suivant
       var take=Math.min(remaining,need);
+      // ⭐ authorized/before FIGÉS au moment de la génération (pas recalculés à
+      // l'affichage) : une facture déjà émise ne doit plus changer de chiffres
+      // rétroactivement si l'état d'autres factures évolue ensuite.
       alloc.push({bcId:bc.id,bcNum:bc.num,rate:Number(rateKey),qte:take,montant:Math.round(take*Number(rateKey)),
-        epuiseApres:(take>=remaining-0.001)});
+        authorized:authorized,before:consumedBefore,epuiseApres:(take>=remaining-0.001)});
       need-=take;
     }
     if(need>0.001)unallocated[rateKey]=need;
@@ -40271,8 +40294,13 @@ function _buildBcTrackHtml(pfx,f){
     var bc=(DB.bcHebdo[pfx]||[]).find(function(b){return b.id===bcId;});
     var totalAutorise=bc?bc.totalHT:0;
     var rowsHtml=grp.rows.map(function(c){
-      var authorized=bc?_bcAuthorizedQte(bc,c.rate):0;
-      var before=bc?_bcConsumedSoFar(pfx,bcId,c.rate,f.id):0;
+      // ⭐ Valeurs FIGÉES au moment de la génération (c.authorized/c.before) —
+      // préférées à un recalcul live : une facture déjà émise ne doit pas
+      // changer de chiffres si l'état d'autres factures évolue ensuite.
+      // Fallback recalcul live uniquement pour compat des factures générées
+      // avant ce correctif (qui n'ont pas encore ces 2 champs).
+      var authorized=(typeof c.authorized==='number')?c.authorized:(bc?_bcAuthorizedQte(bc,c.rate):0);
+      var before=(typeof c.before==='number')?c.before:(bc?_bcConsumedSoFar(pfx,bcId,c.rate,f.id):0);
       var cumul=before+c.qte;
       var reste=Math.max(0,authorized-cumul);
       var pct=authorized>0?Math.min(100,Math.round(cumul/authorized*100)):0;
@@ -40714,10 +40742,18 @@ function delDoc(col,id){
   var doc=DB[col]?DB[col].find(function(x){return x.id===id;}):null;
   var docLabel=doc?(doc.num||doc.intitule||doc.objet||('#'+id)):'';
   var typeLabel={devis:'Devis',factures:'Facture',bcs:'Bon de commande',bls:'Bon de livraison',invoices:'Facture Suivi'}[col]||'document';
+  var extraWarn='';
+  // ⚠ Suivi BC hebdomadaire : la consommation de CETTE facture est recalculée à
+  // la volée depuis DB.factures (pas de journal indépendant) — la supprimer
+  // libère silencieusement le solde du/des BC concerné(s). On le dit explicitement.
+  if(col==='factures'&&doc&&Array.isArray(doc._bcConsumption)&&doc._bcConsumption.length){
+    var bcNums=doc._bcConsumption.map(function(c){return c.bcNum;}).filter(function(v,i,a){return a.indexOf(v)===i;});
+    extraWarn='\n\n⚠ Cette facture a consommé du solde sur '+(bcNums.length>1?'les BC ':'le BC ')+bcNums.join(', ')+' — les supprimer libérera ce solde (le suivi BC ne conserve pas d\'historique indépendant des factures).';
+  }
   // Confirmation critique 2 étapes (au lieu d'un simple confirm)
   confirmCritical(
     'SUPPRESSION '+typeLabel.toUpperCase(),
-    'Vous allez supprimer ce '+typeLabel.toLowerCase()+' :\n\n'+docLabel+'\n\nL\'opération est annulable via "↶ Annuler" mais peut casser des liaisons (BC/Facture, Suivi).',
+    'Vous allez supprimer ce '+typeLabel.toLowerCase()+' :\n\n'+docLabel+'\n\nL\'opération est annulable via "↶ Annuler" mais peut casser des liaisons (BC/Facture, Suivi).'+extraWarn,
     function(){_doDelDoc(col,id);}
   );
 }
