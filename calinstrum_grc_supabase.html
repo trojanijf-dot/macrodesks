@@ -38624,6 +38624,45 @@ var PT_STATUTS={'':{lbl:'Travail',sym:'',bg:''},
   'C':{lbl:'Congés',sym:'C',bg:'rgba(56,189,248,.16)'},
   'CH':{lbl:'Chômé',sym:'CH',bg:'rgba(148,163,184,.16)'},
   'F':{lbl:'Férié',sym:'F',bg:'rgba(245,158,11,.16)'}};
+// Footer de la grille "Saisie semaine" : sous-total par tarif horaire distinct
+// (uniquement les salariés AYANT des heures cette semaine, groupés par tarif de
+// vente du site actif) + un total général qui cumule tout le monde, peu importe
+// le tarif — vérif rapide de la semaine. Mockup validé le 14/07/2026.
+function _ptBuildTotalsFooter(byRate,grand){
+  function spe(dim,fer){var sp=[];if(dim>0)sp.push('D:'+fH(dim));if(fer>0)sp.push('F:'+fH(fer));return sp.length?sp.join(' '):'—';}
+  function dayCells(days,weight){
+    var h='';
+    for(var i=0;i<7;i++)h+='<td style="text-align:right;font-weight:'+weight+';font-family:var(--mono)">'+fH(days[i])+'</td>';
+    return h;
+  }
+  var out='';
+  var keys=Object.keys(byRate).sort(function(a,b){
+    if(a==='__notarif__')return 1;if(b==='__notarif__')return -1;
+    return Number(b)-Number(a);
+  });
+  keys.forEach(function(rk){
+    var g=byRate[rk],isNoTarif=(rk==='__notarif__');
+    var lbl=isNoTarif?'Sans tarif configuré ⚠':('Sous-total <span data-money>'+fN(g.rate)+'</span>/h');
+    out+='<tr style="background:'+(isNoTarif?'rgba(245,158,11,.05)':'rgba(255,255,255,.03)')+';border-top:1px solid var(--border)">'+
+      '<td colspan="2"><div style="font-weight:700'+(isNoTarif?';color:#f59e0b':'')+'">'+lbl+'</div>'+
+      '<div style="font-weight:400;color:var(--muted-soft);font-size:9.5px;margin-top:1px">'+g.members.join(' · ')+'</div></td>'+
+      dayCells(g.days,700)+
+      '<td style="text-align:right;font-weight:700;font-family:var(--mono)">'+fH(g.totalJour+g.totalNuit)+'</td>'+
+      '<td style="text-align:right;font-weight:700;font-family:var(--mono);color:var(--teal)">'+fH(g.hnj)+'</td>'+
+      '<td style="text-align:right;font-weight:700;font-family:var(--mono);color:#fbbf24">'+fH(g.hs25)+'</td>'+
+      '<td style="text-align:right;font-weight:700;font-family:var(--mono);color:#f87171">'+fH(g.hs50)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted)">'+spe(g.dim,g.fer)+'</td></tr>';
+  });
+  out+='<tr style="background:rgba(45,212,191,.08);border-top:2px solid var(--teal)">'+
+    '<td colspan="2" style="font-weight:900;text-transform:uppercase;letter-spacing:.04em;color:var(--teal);font-size:11px">Σ Total semaine</td>'+
+    dayCells(grand.days,900)+
+    '<td style="text-align:right;font-weight:900;font-family:var(--mono)">'+fH(grand.totalJour+grand.totalNuit)+'</td>'+
+    '<td style="text-align:right;font-weight:900;font-family:var(--mono);color:var(--teal)">'+fH(grand.hnj)+'</td>'+
+    '<td style="text-align:right;font-weight:900;font-family:var(--mono);color:#fbbf24">'+fH(grand.hs25)+'</td>'+
+    '<td style="text-align:right;font-weight:900;font-family:var(--mono);color:#f87171">'+fH(grand.hs50)+'</td>'+
+    '<td style="text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted)">'+spe(grand.dim,grand.fer)+'</td></tr>';
+  return out;
+}
 function renderPtSaisie(){
   _ensurePointageShape();
   if(!ptMonday)ptMonday=_ptMondayOf(td());
@@ -38648,9 +38687,35 @@ function renderPtSaisie(){
   // Corps : 2 lignes (Jour/Nuit) par salarié actif
   var emps=DB.employes.filter(function(e){return e.actif!==false;});
   var html='';
+  // ⭐ Agrégation FOOTER : sous-total par tarif horaire distinct + total général.
+  // _byRate groupe les salariés AYANT des heures cette semaine, par tarif de vente
+  // (site de la semaine = un seul par record _ptGetWeek, donc contexte tarif unique).
+  // _grand cumule TOUT LE MONDE, indépendamment du tarif (vérif rapide de la semaine).
+  var _byRate={},_grand={days:[0,0,0,0,0,0,0],hnj:0,hs25:0,hs50:0,dim:0,fer:0,totalJour:0,totalNuit:0};
   emps.forEach(function(emp){
     var entry=(rec.entries&&rec.entries[emp.id])||{jour:[],nuit:[],statut:[]};
     var calc=ptComputeWeek(entry);
+    var siteForAgg=(rec.site||'');
+    var tfAgg=(siteForAgg&&siteForAgg.indexOf('Atelier')<0)?_ptTarifFor(siteForAgg,emp.id):null;
+    var hasHours=(calc.tot.totalJour>0||calc.tot.totalNuit>0);
+    for(var _di=0;_di<7;_di++){
+      _grand.days[_di]+=(Number(entry.jour&&entry.jour[_di])||0)+(Number(entry.nuit&&entry.nuit[_di])||0);
+    }
+    _grand.hnj+=calc.tot.hnj;_grand.hs25+=calc.tot.hs25;_grand.hs50+=calc.tot.hs50;
+    _grand.dim+=calc.tot.dim;_grand.fer+=calc.tot.fer;
+    _grand.totalJour+=calc.tot.totalJour;_grand.totalNuit+=calc.tot.totalNuit;
+    if(siteForAgg&&siteForAgg.indexOf('Atelier')<0&&hasHours){
+      var rateKey=(tfAgg==null)?'__notarif__':String(tfAgg);
+      if(!_byRate[rateKey])_byRate[rateKey]={rate:tfAgg,members:[],days:[0,0,0,0,0,0,0],hnj:0,hs25:0,hs50:0,dim:0,fer:0,totalJour:0,totalNuit:0};
+      var _grp=_byRate[rateKey];
+      _grp.members.push(esc(emp.nom)+' '+esc((emp.prenom||'').charAt(0))+'.');
+      for(var _dj=0;_dj<7;_dj++){
+        _grp.days[_dj]+=(Number(entry.jour&&entry.jour[_dj])||0)+(Number(entry.nuit&&entry.nuit[_dj])||0);
+      }
+      _grp.hnj+=calc.tot.hnj;_grp.hs25+=calc.tot.hs25;_grp.hs50+=calc.tot.hs50;
+      _grp.dim+=calc.tot.dim;_grp.fer+=calc.tot.fer;
+      _grp.totalJour+=calc.tot.totalJour;_grp.totalNuit+=calc.tot.totalNuit;
+    }
     var regBadge=emp.regime==='Quart 4x4'?' <span style="background:rgba(245,158,11,.14);color:#f59e0b;font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:8px">4x4</span>':'';
     // Pastille tarif : le Site/Client de la semaine applique la grille configurée
     // dans l'onglet Salariés (tarif de base × majorations auto).
@@ -38698,6 +38763,7 @@ function renderPtSaisie(){
       '<td colspan="4" class="no-pm-blur" style="font-size:9.5px;color:var(--muted-soft);text-align:center">heures de nuit majorées +100%</td></tr>';
   });
   if(!emps.length)html='<tr><td colspan="14" style="text-align:center;color:var(--muted);padding:20px">Aucun salarié actif — ajoute-les dans l\'onglet 👷 Salariés</td></tr>';
+  else html+=_ptBuildTotalsFooter(_byRate,_grand);
   var tb=document.getElementById('ptGrid');
   if(tb){
     tb.innerHTML=html;
@@ -39118,7 +39184,7 @@ function _ptSetCircuit(pfx,val){
   _ensurePointageShape();
   DB.pointageCircuits[pfx]=val||'libre';
   saveDB();
-  ptFactState.start='';ptFactState.end=''; // reset dates shutdown si on change de circuit
+  ptFactState.start='';ptFactState.end='';ptFactState.weekMonday=null; // reset période si on change de circuit
   _ptFactRenderPeriodBox();_ptFactCompute();
 }
 function _pad2(n){return String(n).padStart(2,'0');}
@@ -39126,6 +39192,20 @@ function _ptMMBBounds(y,m){
   var start=y+'-'+_pad2(m)+'-21';
   var em=m+1,ey=y;if(em>12){em=1;ey++;}
   return {start:start,end:ey+'-'+_pad2(em)+'-20'};
+}
+// Liste des lundis (= semaines) dont la date de début tombe dans le mois/année
+// donnés — pour peupler le sélecteur "Semaine (concernée)" du circuit Semaine.
+function _ptWeeksInMonth(y,m){
+  var lastDay=new Date(y,m,0).getDate();
+  var weeks=[],seen={};
+  for(var d=1;d<=lastDay;d++){
+    var iso=y+'-'+_pad2(m)+'-'+_pad2(d);
+    var mon=_ptMondayOf(iso);
+    var mm=+mon.split('-')[1],yy=+mon.split('-')[0];
+    if(mm===m&&yy===y&&!seen[mon]){seen[mon]=true;weeks.push(mon);}
+  }
+  weeks.sort();
+  return weeks;
 }
 // Préfixes clients qui ont des heures pointées OU une grille tarifaire
 function _ptFactClients(){
@@ -39158,7 +39238,7 @@ function _ptFactRenderCircuitBox(){
   var pfx=ptFactState.pfx;
   if(!pfx){box.innerHTML='';return;}
   var cur=_ptClientCircuit(pfx);
-  var opts=[['libre','Mois civil'],['mmb','MMB 21→20'],['shutdown','Shutdown (dates)']]
+  var opts=[['libre','Mois civil'],['mmb','MMB 21→20'],['shutdown','Shutdown (dates)'],['semaine','Semaine']]
     .map(function(o){return '<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>';}).join('');
   box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Circuit de <b>'+esc(pfx)+'</b></label>'+
     '<select class="filter-sel" onchange="_ptSetCircuit(\''+esc(pfx).replace(/'/g,"\\'")+'\',this.value)" style="min-width:150px">'+opts+'</select>';
@@ -39173,6 +39253,24 @@ function _ptFactRenderPeriodBox(){
     box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Période shutdown <span style="color:#a78bfa">(dates)</span></label>'+
       '<div style="display:flex;gap:6px;align-items:center"><input type="date" id="ptFactStart" value="'+(ptFactState.start||'')+'" onchange="ptFactSetDates()" style="padding:6px 8px">'+
       '<span style="color:var(--muted)">→</span><input type="date" id="ptFactEnd" value="'+(ptFactState.end||'')+'" onchange="ptFactSetDates()" style="padding:6px 8px"></div>';
+  } else if(circuit==='semaine'){
+    // Circuit Semaine : Année + Mois civil (concerné) restreignent la liste, puis
+    // Semaine (concernée) choisit le lundi exact — même principe que Mois/MMB
+    // (choix explicite de la période, pas de navigation ◀▶ façon Saisie semaine).
+    var weeksList=_ptWeeksInMonth(ptFactState.y,ptFactState.m);
+    if(!ptFactState.weekMonday||weeksList.indexOf(ptFactState.weekMonday)<0){
+      var curMonday=_ptMondayOf(td());
+      ptFactState.weekMonday=(weeksList.indexOf(curMonday)>=0)?curMonday:(weeksList[0]||curMonday);
+    }
+    var moptsS='';for(var mm2=1;mm2<=12;mm2++)moptsS+='<option value="'+mm2+'"'+(mm2===ptFactState.m?' selected':'')+'>'+_PT_MOIS[mm2-1]+'</option>';
+    var woptsS=weeksList.length
+      ? weeksList.map(function(mon){return '<option value="'+mon+'"'+(mon===ptFactState.weekMonday?' selected':'')+'>Semaine '+_ptWeekNum(mon)+' · '+fD(mon)+' → '+fD(_ptAddDays(mon,6))+'</option>';}).join('')
+      : '<option value="">— Aucune semaine ce mois —</option>';
+    box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Mois civil (concerné)</label>'+
+      '<div style="display:flex;gap:6px"><select id="ptFactMonth" onchange="ptFactSemaineSetMonth()" style="padding:6px 8px">'+moptsS+'</select>'+
+      '<input type="number" id="ptFactYear" value="'+ptFactState.y+'" onchange="ptFactSemaineSetMonth()" style="width:74px;padding:6px 8px"></div>'+
+      '<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:8px 0 4px">Semaine (concernée)</label>'+
+      '<select id="ptFactWeek" onchange="ptFactSemaineSetWeek()" style="padding:6px 8px;min-width:230px">'+woptsS+'</select>';
   } else {
     // mmb ou libre : sélecteur mois
     var lbl=circuit==='mmb'?'Mois MMB <span style="color:#f472b6">(21→20)</span>':'Mois civil';
@@ -39193,11 +39291,48 @@ function ptFactSetDates(){
   ptFactState.end=document.getElementById('ptFactEnd').value;
   _ptFactCompute();
 }
+// Circuit Semaine : changer Mois/Année régénère la liste des semaines du mois et
+// choisit une semaine par défaut (re-render complet du bloc période nécessaire
+// pour reconstruire le <select id="ptFactWeek">).
+function ptFactSemaineSetMonth(){
+  ptFactState.m=+document.getElementById('ptFactMonth').value;
+  ptFactState.y=+document.getElementById('ptFactYear').value;
+  ptFactState.weekMonday=null;
+  _ptFactRenderPeriodBox();
+  _ptFactCompute();
+}
+function ptFactSemaineSetWeek(){
+  ptFactState.weekMonday=document.getElementById('ptFactWeek').value;
+  _ptFactCompute();
+}
 // Saut direct vers une période (année/mois) — utilisé par les puces "heures trouvées".
 function ptFactJumpTo(y,m){ptFactState.y=y;ptFactState.m=m;_ptFactRenderPeriodBox();_ptFactCompute();}
+// Idem pour le circuit Semaine : saut direct vers le lundi d'une semaine trouvée.
+function ptFactJumpToWeek(monday){
+  ptFactState.weekMonday=monday;
+  var p=monday.split('-');ptFactState.y=+p[0];ptFactState.m=+p[1];
+  _ptFactRenderPeriodBox();_ptFactCompute();
+}
 // Périodes (selon circuit) qui contiennent des heures pour ce client — pour guider
 // l'utilisateur quand la période affichée est vide (piège du décalage MMB 21→20).
 function _ptPeriodsWithHours(pfx,circuit){
+  if(circuit==='semaine'){
+    // Groupage NATIF par semaine (chaque enregistrement DB.pointages EST déjà
+    // une semaine lundi→dimanche) — pas besoin de découpage jour par jour.
+    var map3={};
+    (DB.pointages||[]).forEach(function(w){
+      if(!w||!w.monday||(w.site||'')!==pfx)return;
+      var entries=w.entries||{},h=0;
+      Object.keys(entries).forEach(function(id){
+        var e=entries[id];
+        for(var i=0;i<7;i++)h+=(Number(e.jour&&e.jour[i])||0)+(Number(e.nuit&&e.nuit[i])||0);
+      });
+      if(h>0)map3[w.monday]=(map3[w.monday]||0)+h;
+    });
+    return Object.keys(map3).sort().map(function(mon){
+      return {monday:mon,hours:map3[mon],start:mon,end:_ptAddDays(mon,6)};
+    });
+  }
   var map={};
   (DB.pointages||[]).forEach(function(w){
     if(!w||!w.monday||(w.site||'')!==pfx)return;
@@ -39234,6 +39369,10 @@ function _ptFactBounds(){
   var pfx=ptFactState.pfx,circuit=_ptClientCircuit(pfx);
   if(circuit==='shutdown')return {start:ptFactState.start,end:ptFactState.end,circuit:circuit};
   if(circuit==='mmb'){var b=_ptMMBBounds(ptFactState.y,ptFactState.m);return {start:b.start,end:b.end,circuit:circuit};}
+  if(circuit==='semaine'){
+    var wm=ptFactState.weekMonday||_ptMondayOf(td());
+    return {start:wm,end:_ptAddDays(wm,6),circuit:circuit};
+  }
   var b2=_ptMonthBounds(ptFactState.y,ptFactState.m);return {start:b2.start,end:b2.end,circuit:circuit};
 }
 // Construit les lignes de facture agrégées par (type × taux de base).
@@ -39279,7 +39418,7 @@ function _ptFactCompute(){
   var res=ptFactBuildLines();
   if(!res){body.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted)">Renseigne la période.</div>';return;}
   var bd=res.bounds;
-  var circuitLbl={mmb:'MMB',shutdown:'Shutdown',libre:'Mois civil'}[bd.circuit];
+  var circuitLbl={mmb:'MMB',shutdown:'Shutdown',libre:'Mois civil',semaine:'Semaine'}[bd.circuit];
   // MMB hint
   var mh=document.getElementById('ptFactMmbHint');if(mh)mh.textContent='→ '+fD(bd.start)+' au '+fD(bd.end);
   var periodTxt=fD(bd.start)+' → '+fD(bd.end);
@@ -39288,7 +39427,10 @@ function _ptFactCompute(){
     var extra='';
     if(found.length){
       extra='<div style="margin-top:10px;font-size:12px">👉 Heures trouvées pour <b>'+esc(pfx)+'</b> sur :<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">'+
-        found.map(function(p){return '<button class="btn btn-ghost btn-sm no-print" onclick="ptFactJumpTo('+p.y+','+p.m+')" title="Aller à cette période">'+fD(p.start)+' → '+fD(p.end)+' · <b>'+fH(p.hours)+' h</b></button>';}).join('')+'</div></div>';
+        found.map(function(p){
+          var oc=(bd.circuit==='semaine')?('ptFactJumpToWeek(\''+p.monday+'\')'):('ptFactJumpTo('+p.y+','+p.m+')');
+          return '<button class="btn btn-ghost btn-sm no-print" onclick="'+oc+'" title="Aller à cette période">'+fD(p.start)+' → '+fD(p.end)+' · <b>'+fH(p.hours)+' h</b></button>';
+        }).join('')+'</div></div>';
     }
     var mmbWarn=(bd.circuit==='mmb')?' <span style="color:var(--amber)">⚠ Le MMB va du 21 au 20 : des heures de début de mois appartiennent au MMB précédent.</span>':'';
     body.innerHTML='<div class="note" style="border-left-color:var(--amber)">Aucune heure pour <b>'+esc(pfx)+'</b> sur la période <b>'+periodTxt+'</b> ('+circuitLbl+').'+mmbWarn+extra+
