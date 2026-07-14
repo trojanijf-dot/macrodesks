@@ -1609,6 +1609,7 @@ body.has-dashboard-bg #page-dashboard .metric{
       <div id="ptFactCircuitBox"></div>
       <div id="ptFactPeriodBox"></div>
       <div id="ptFactBcBox"></div>
+      <div id="ptFactBcMajBox"></div>
       <div style="margin-left:auto"><button class="btn btn-teal" id="ptFactGenBtn" onclick="ptFactGenerate()" style="display:none">🧾 Générer / remplir la facture</button></div>
     </div>
     <div id="ptFactBody"></div>
@@ -27517,6 +27518,7 @@ function getFA(){
       // saveFA() écrase ensuite avec _faPendingBcConsumption si une régénération
       // via ptFactGenerate vient d'avoir lieu (cf ce mécanisme, pattern _faDraftSourceDevisId).
       if(Array.isArray(existing._bcConsumption))preservedFlags._bcConsumption=existing._bcConsumption;
+      if(typeof existing._bcConsumptionIncludesMajorees==='boolean')preservedFlags._bcConsumptionIncludesMajorees=existing._bcConsumptionIncludesMajorees;
       // Cohérence : si la facture est passée à Payée pour la 1ère fois, on enregistre
       // discrètement la date du changement de statut pour que l'utilisateur puisse
       // si besoin retrouver "quand c'est passé en payée" dans l'historique
@@ -28369,8 +28371,15 @@ async function saveFA(){
     // Régénération explicite via ptFactGenerate : .alloc peut être null/vide
     // (aucun BC sélectionné cette fois) → on DOIT alors effacer un éventuel
     // suivi BC antérieur (sinon la facture garderait un bloc périmé).
-    if(_faPendingBcConsumption.alloc&&_faPendingBcConsumption.alloc.length) f._bcConsumption=_faPendingBcConsumption.alloc;
-    else delete f._bcConsumption;
+    if(_faPendingBcConsumption.alloc&&_faPendingBcConsumption.alloc.length){
+      f._bcConsumption=_faPendingBcConsumption.alloc;
+      // Mémorise le choix du bouton "Heures majorées" fait à la génération,
+      // pour qu'une réimpression reste cohérente (mockup validé 14/07/2026).
+      f._bcConsumptionIncludesMajorees=(_faPendingBcConsumption.includeMajorees!==false);
+    } else {
+      delete f._bcConsumption;
+      delete f._bcConsumptionIncludesMajorees;
+    }
     _faPendingBcConsumption=null;
   }
   // Snapshot pour undo : si on modifie une facture existante, on garde son ancien état
@@ -39291,6 +39300,7 @@ function renderPtFact(){
   _ptFactRenderCircuitBox();
   _ptFactRenderPeriodBox();
   _ptFactRenderBcBox();
+  _ptFactRenderBcMajBox();
   _ptFactCompute();
 }
 // Sélecteur de circuit de facturation pour l'entité choisie (réglé ici, par préfixe).
@@ -39620,8 +39630,9 @@ function ptFactGenerate(){
   // départ ne suffit pas (cf _bcAllocate). Avertissement — PAS de blocage — si
   // aucun BC suivant n'a de solde pour couvrir le reste.
   var bcConsumption=null;
+  var bcIncludeMajorees=(ptFactState.bcIncludeMajorees!==false); // bouton "Heures majorées" — activé par défaut
   if(ptFactState.bcId){
-    var rateQtyMap=_bcRateQtyFromAgg(ptFactState.pfx,res.agg);
+    var rateQtyMap=_bcRateQtyFromAgg(ptFactState.pfx,res.agg,bcIncludeMajorees);
     var allocRes=_bcAllocate(ptFactState.pfx,ptFactState.bcId,rateQtyMap,existingFa?existingFa.id:null);
     var unallocKeys=Object.keys(allocRes.unallocated||{});
     if(unallocKeys.length){
@@ -39647,8 +39658,9 @@ function ptFactGenerate(){
     gv('fa-objet',objet);
     // armé APRÈS openFA (qui vient de le reset) — enveloppe {applied:true} pour
     // distinguer "régénération sans BC sélectionné" (doit VIDER f._bcConsumption)
-    // de "pas de régénération du tout" (ne pas toucher, cf saveFA()).
-    _faPendingBcConsumption={applied:true,alloc:bcConsumption};
+    // de "pas de régénération du tout" (ne pas toucher, cf saveFA()). includeMajorees
+    // mémorisé pour que la facture reste cohérente si réimprimée plus tard.
+    _faPendingBcConsumption={applied:true,alloc:bcConsumption,includeMajorees:bcIncludeMajorees};
     if(typeof rFAlines==='function')rFAlines();
     if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Pré-facture '+existingFa.num+' remplie — vérifie puis Enregistre');
     return;
@@ -39671,7 +39683,7 @@ function ptFactGenerate(){
     _faDraftObj=faDraft;
     openFA(null);
     _faDraftSourceDevisId=d.id;
-    _faPendingBcConsumption={applied:true,alloc:bcConsumption}; // cf CAS A, même enveloppe
+    _faPendingBcConsumption={applied:true,alloc:bcConsumption,includeMajorees:bcIncludeMajorees}; // cf CAS A, même enveloppe
     if(typeof _setFADraftBanner==='function')_setFADraftBanner(true,d.num);
     if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Brouillon facture '+faDraft.num+' — vérifie puis Enregistre pour créer');
   },80);
@@ -39976,7 +39988,7 @@ function _processBcHebdoPdf(f){
           }
           saveDB();
           _storeBcHebdoPdf(bcId,f.name,bytes);
-          renderPtBcHebdo();_ptFactRenderBcBox();
+          renderPtBcHebdo();_ptFactRenderBcBox();_ptFactRenderBcMajBox();
           if(typeof showBCSaveToast==='function')showBCSaveToast('📋 BC '+parsed.num+' importé — vérifie les données puis rattache-le à une facture');
         });
       }).catch(function(err){alert('❌ Lecture PDF impossible : '+(err&&err.message?err.message:err));});
@@ -40022,12 +40034,16 @@ function _bcRemaining(pfx,bc,rate,excludeFactureId){
 }
 // Heures de la période, groupées par tarif de BASE (indépendant du type d'heure
 // normal/HS25/HS50/dim/férié/nuit) — c'est cette unité que le BC autorise.
-function _bcRateQtyFromAgg(pfx,agg){
+// includeMajorees (true par défaut, choix fait à chaque génération via le
+// bouton de l'onglet Facturation — mockup validé 14/07/2026) : si false, seules
+// les heures normales (hnj) consomment le BC ; les majorations restent
+// facturées à part (lignes dédiées) sans réduire le solde.
+function _bcRateQtyFromAgg(pfx,agg,includeMajorees){
   var byRate={};
   (agg.emps||[]).forEach(function(e){
     var base=_ptTarifFor(pfx,e.id);if(base==null)return;
     var eh=agg.byEmp[e.id]||{};
-    var totH=(eh.hnj||0)+(eh.hs25||0)+(eh.hs50||0)+(eh.dim||0)+(eh.fer||0)+(eh.nuit||0);
+    var totH=(eh.hnj||0)+(includeMajorees!==false?((eh.hs25||0)+(eh.hs50||0)+(eh.dim||0)+(eh.fer||0)+(eh.nuit||0)):0);
     if(totH<=0)return;
     byRate[base]=(byRate[base]||0)+totH;
   });
@@ -40124,7 +40140,7 @@ function removeBcHebdo(pfx,bcId){
   DB.bcHebdo[pfx]=(DB.bcHebdo[pfx]||[]).filter(function(b){return b.id!==bcId;});
   saveDB();
   _deleteBcHebdoPdf(bcId);
-  renderPtBcHebdo();_ptFactRenderBcBox();
+  renderPtBcHebdo();_ptFactRenderBcBox();_ptFactRenderBcMajBox();
   if(typeof showBCSaveToast==='function')showBCSaveToast('🗑 BC retiré');
 }
 
@@ -40154,6 +40170,32 @@ function _ptFactRenderBcBox(){
 function ptFactSetBc(){
   var el=document.getElementById('ptFactBc');
   ptFactState.bcId=(el&&el.value)?Number(el.value):null;
+  _ptFactRenderBcMajBox();
+}
+
+// ---- Bouton "Heures majorées → consomment le BC" (mockup validé 14/07/2026) ----
+// Choix fait À CHAQUE génération (pas un réglage global figé) : activé par
+// défaut (toutes les heures, normal + majoré, consomment le solde du BC) ;
+// désactivé = seules les heures normales (hnj) le consomment, les majorations
+// restent facturées à part comme aujourd'hui. Visible seulement si un BC est
+// sélectionné (sinon rien à basculer). Mémorisé sur la facture générée pour
+// qu'une réimpression reste cohérente avec le choix fait à l'origine.
+function _ptFactRenderBcMajBox(){
+  var box=document.getElementById('ptFactBcMajBox');if(!box)return;
+  if(!ptFactState.bcId){box.innerHTML='';return;}
+  if(typeof ptFactState.bcIncludeMajorees!=='boolean')ptFactState.bcIncludeMajorees=true;
+  var on=ptFactState.bcIncludeMajorees;
+  box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Heures majorées</label>'+
+    '<div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="ptFactToggleBcMajorees()" title="Activé : toutes les heures (normal + majoré : +25%/+50%/dimanche/férié/nuit) consomment le solde du BC. Désactivé : seules les heures normales, les majorations sont facturées à part sans réduire le solde.">'+
+      '<div style="position:relative;width:38px;height:21px;border-radius:12px;border:1px solid var(--border);background:'+(on?'rgba(45,212,191,.25)':'var(--bg2)')+(on?';border-color:rgba(45,212,191,.6)':'')+'">'+
+        '<div style="position:absolute;top:2px;left:'+(on?'18px':'2px')+';width:15px;height:15px;border-radius:50%;background:'+(on?'var(--teal)':'var(--muted-soft)')+';transition:left .15s"></div>'+
+      '</div>'+
+      '<span style="font-size:11px">'+(on?'Comptent dans le BC':'Ne comptent pas')+'</span>'+
+    '</div>';
+}
+function ptFactToggleBcMajorees(){
+  ptFactState.bcIncludeMajorees=!ptFactState.bcIncludeMajorees;
+  _ptFactRenderBcMajBox();
 }
 
 // ---- Modal de vérification/édition (mBCHEBDO) ----
@@ -40229,7 +40271,7 @@ function saveBcHebdoEdit(){
   });
   saveDB();
   cm('mBCHEBDO');
-  renderPtBcHebdo();_ptFactRenderBcBox();
+  renderPtBcHebdo();_ptFactRenderBcBox();_ptFactRenderBcMajBox();
   if(typeof showBCSaveToast==='function')showBCSaveToast('✓ BC '+bc.num+' mis à jour');
 }
 
@@ -40288,7 +40330,12 @@ function _buildBcTrackHtml(pfx,f){
     return da<db?-1:(da>db?1:0);
   });
   var PCA='-webkit-print-color-adjust:exact;print-color-adjust:exact;';
-  var html='';
+  // Rappel du choix fait au bouton "Heures majorées" (par défaut true pour les
+  // factures générées avant ce réglage — cf getFA()/saveFA()).
+  var includeMaj=(f._bcConsumptionIncludesMajorees!==false);
+  var html='<div style="font-size:9px;color:#666;margin-bottom:5px;text-align:right">'+
+    (includeMaj?'Heures majorées incluses dans la consommation BC':'Heures normales uniquement — majorations facturées à part, hors solde BC')+
+  '</div>';
   order.forEach(function(bcId,oi){
     var grp=byBc[bcId];
     var bc=(DB.bcHebdo[pfx]||[]).find(function(b){return b.id===bcId;});
