@@ -40074,11 +40074,13 @@ function _bcAllocate(pfx,startBcId,rateQtyMap,excludeFactureId){
       var remaining=Math.max(0,authorized-consumedBefore);
       if(remaining<=0.001)continue; // déjà épuisé à ce tarif → BC suivant
       var take=Math.min(remaining,need);
-      // ⭐ authorized/before FIGÉS au moment de la génération (pas recalculés à
-      // l'affichage) : une facture déjà émise ne doit plus changer de chiffres
-      // rétroactivement si l'état d'autres factures évolue ensuite.
+      // ⭐ authorized/before/bcTotalHT FIGÉS au moment de la génération (pas
+      // recalculés à l'affichage) : une facture déjà émise ne doit plus changer
+      // de chiffres rétroactivement — et l'en-tête "Autorisé X XPF HT" ne doit
+      // pas dépendre d'un lookup live de DB.bcHebdo qui peut échouer à l'affichage.
       alloc.push({bcId:bc.id,bcNum:bc.num,rate:Number(rateKey),qte:take,montant:Math.round(take*Number(rateKey)),
-        authorized:authorized,before:consumedBefore,epuiseApres:(take>=remaining-0.001)});
+        authorized:authorized,before:consumedBefore,bcTotalHT:bc.totalHT,bcDateEnvoi:bc.dateEnvoi,
+        epuiseApres:(take>=remaining-0.001)});
       need-=take;
     }
     if(need>0.001)unallocated[rateKey]=need;
@@ -40334,10 +40336,17 @@ function _buildBcTrackHtml(pfx,f){
   // de l'ordre d'itération des tarifs (les clés numériques d'un objet JS sont
   // toujours triées en ordre croissant, ex "5200" avant "5600", indépendamment
   // de l'ordre réel d'allocation) et mélangerait le message de bascule.
+  // dateEnvoi snapshotée en priorité (cf _bcAllocate) ; fallback lookup live
+  // pour compat des factures générées avant ce correctif.
+  function _bcSnapDate(bcId){
+    var rows=byBc[bcId]&&byBc[bcId].rows||[];
+    var snap=rows.find(function(c){return typeof c.bcDateEnvoi==='string'&&c.bcDateEnvoi;});
+    if(snap)return snap.bcDateEnvoi;
+    var bc=(DB.bcHebdo[pfx]||[]).find(function(x){return x.id===bcId;});
+    return (bc&&bc.dateEnvoi)||'';
+  }
   var order=Object.keys(byBc).map(Number).sort(function(a,b){
-    var bcA=(DB.bcHebdo[pfx]||[]).find(function(x){return x.id===a;});
-    var bcB=(DB.bcHebdo[pfx]||[]).find(function(x){return x.id===b;});
-    var da=(bcA&&bcA.dateEnvoi)||'',db=(bcB&&bcB.dateEnvoi)||'';
+    var da=_bcSnapDate(a),db=_bcSnapDate(b);
     return da<db?-1:(da>db?1:0);
   });
   var PCA='-webkit-print-color-adjust:exact;print-color-adjust:exact;';
@@ -40350,7 +40359,10 @@ function _buildBcTrackHtml(pfx,f){
   order.forEach(function(bcId,oi){
     var grp=byBc[bcId];
     var bc=(DB.bcHebdo[pfx]||[]).find(function(b){return b.id===bcId;});
-    var totalAutorise=bc?bc.totalHT:0;
+    // Snapshot figé prioritaire (cf _bcAllocate) ; fallback lookup live pour
+    // compat des factures générées avant ce correctif.
+    var snapRow=grp.rows.find(function(c){return typeof c.bcTotalHT==='number';});
+    var totalAutorise=snapRow?snapRow.bcTotalHT:(bc?bc.totalHT:0);
     var rowsHtml=grp.rows.map(function(c){
       // ⭐ Valeurs FIGÉES au moment de la génération (c.authorized/c.before) —
       // préférées à un recalcul live : une facture déjà émise ne doit pas
