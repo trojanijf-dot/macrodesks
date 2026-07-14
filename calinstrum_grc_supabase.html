@@ -27553,6 +27553,22 @@ function getFA(){
     lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc,suiviId:existingSuiviId};
   // Fusionner les flags préservés (écrasement IMPOSSIBLE car on assigne après le fa de base)
   Object.keys(preservedFlags).forEach(function(k){fa[k]=preservedFlags[k];});
+  // Suivi BC hebdomadaire : appliqué ICI (dans getFA(), pas seulement dans
+  // saveFA()) pour que l'APERÇU (previewFA → getFA) reflète aussi une
+  // régénération fraîche via ptFactGenerate — sinon "👁 Aperçu" avant
+  // "✓ Enregistrer" affichait une facture SANS le bloc de suivi.
+  // On ne nullifie PAS ici (saveFA() le fait, uniquement après validation
+  // réussie) : getFA() peut être appelé plusieurs fois (aperçu puis save)
+  // avant le save définitif, il doit rester cohérent à chaque appel.
+  if(_faPendingBcConsumption&&_faPendingBcConsumption.applied){
+    if(_faPendingBcConsumption.alloc&&_faPendingBcConsumption.alloc.length){
+      fa._bcConsumption=_faPendingBcConsumption.alloc;
+      fa._bcConsumptionIncludesMajorees=(_faPendingBcConsumption.includeMajorees!==false);
+    } else {
+      delete fa._bcConsumption;
+      delete fa._bcConsumptionIncludesMajorees;
+    }
+  }
   return fa;
 }
 
@@ -28363,25 +28379,12 @@ async function saveFA(){
     f.objet=_buildFAFournitureObjet(f);
   }
   if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
-  // Suivi BC hebdomadaire : une allocation fraîche calculée par ptFactGenerate()
-  // prime sur celle préservée par getFA() (régénération explicite de la facture).
-  // Consommé ICI (après la validation) pour ne PAS être perdu si le save échoue
-  // et que l'utilisateur corrige puis ré-enregistre.
-  if(_faPendingBcConsumption&&_faPendingBcConsumption.applied){
-    // Régénération explicite via ptFactGenerate : .alloc peut être null/vide
-    // (aucun BC sélectionné cette fois) → on DOIT alors effacer un éventuel
-    // suivi BC antérieur (sinon la facture garderait un bloc périmé).
-    if(_faPendingBcConsumption.alloc&&_faPendingBcConsumption.alloc.length){
-      f._bcConsumption=_faPendingBcConsumption.alloc;
-      // Mémorise le choix du bouton "Heures majorées" fait à la génération,
-      // pour qu'une réimpression reste cohérente (mockup validé 14/07/2026).
-      f._bcConsumptionIncludesMajorees=(_faPendingBcConsumption.includeMajorees!==false);
-    } else {
-      delete f._bcConsumption;
-      delete f._bcConsumptionIncludesMajorees;
-    }
-    _faPendingBcConsumption=null;
-  }
+  // Suivi BC hebdomadaire : getFA() a DÉJÀ appliqué _faPendingBcConsumption sur
+  // `f` (nécessaire pour que l'APERÇU en bénéficie aussi, cf getFA()). Ici on
+  // se contente de nullifier l'état — APRÈS la validation, pour ne pas le
+  // perdre si le save échoue et que l'utilisateur corrige puis ré-enregistre
+  // (getFA() le réappliquera identiquement au prochain appel/retry).
+  if(_faPendingBcConsumption&&_faPendingBcConsumption.applied) _faPendingBcConsumption=null;
   // Snapshot pour undo : si on modifie une facture existante, on garde son ancien état
   var prevSnapshot=null;
   var wasNew=!eFAid;
@@ -40306,6 +40309,14 @@ function _deleteBcHebdoPdf(bcId){
   }).catch(function(err){console.warn('[BC hebdo] Suppression IndexedDB échouée :',err);});
 }
 
+// Libellé du/des BC hebdomadaire(s) rattaché(s) — AFFICHAGE SEUL, ne stocke rien
+// et ne touche jamais bcClientSLN (champ historique déjà utilisé pour le
+// matching devis/facture ailleurs — pas question de le conflater ici).
+// Utilisé comme DERNIER fallback pour la case "BC Client" de l'en-tête.
+function _bcHebdoNumsLabel(f){
+  if(!f||!Array.isArray(f._bcConsumption)||!f._bcConsumption.length)return '';
+  return f._bcConsumption.map(function(c){return c.bcNum;}).filter(function(v,i,a){return v&&a.indexOf(v)===i;}).join('+');
+}
 // ---- Bloc "Suivi du Bon de Commande" sur la facture (aperçu + impression) ----
 // f._bcConsumption = [{bcId,bcNum,rate,qte,montant,epuiseApres}] posé par
 // ptFactGenerate(). Peut référencer PLUSIEURS BC si une bascule a eu lieu cette
@@ -41932,7 +41943,10 @@ function bFA(f){
       // [21/05/2026] BC Client : fallback sur _importPONum (= N° PO Client éditable) puis po.
       //   Le BC était saisi dans le champ "N° PO Client" (stocké _importPONum) mais le PDF
       //   ne lisait que bcClientSLN → case vide à l'impression. On lit les deux.
-      '<div><span class="dlbl">BC Client</span>'+esc(f.bcClientSLN||f._importPONum||f.po||'—')+'</div>'+
+      // [14/07/2026] Dernier fallback (affichage seul, ne touche PAS bcClientSLN — champ
+      //   déjà utilisé par le matching devis/facture ailleurs) : N°(s) du BC hebdomadaire
+      //   rattaché via le suivi Pointage, si aucun des champs historiques n'est renseigné.
+      '<div><span class="dlbl">BC Client</span>'+esc(f.bcClientSLN||f._importPONum||f.po||_bcHebdoNumsLabel(f)||'—')+'</div>'+
       '<div><span class="dlbl">Devis N°</span>'+esc(devisNumLink||'—')+'</div>'+
     '</div>'+
     '<div class="doc-parties">'+
@@ -43272,7 +43286,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;background:#eef2f7;padding:7px 9px;border-radius:3px;margin-bottom:10px;font-size:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Facture N\u00b0</span><strong>'+esc(f.num||'')+'</strong></div>'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Type</span>'+esc(f.type||'')+'</div>'+
-        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">BC Client</span>'+esc(f.bcClientSLN||f._importPONum||f.po||'\u2014')+'</div>'+
+        '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">BC Client</span>'+esc(f.bcClientSLN||f._importPONum||f.po||_bcHebdoNumsLabel(f)||'\u2014')+'</div>'+
         '<div><span style="font-weight:700;text-transform:uppercase;color:#64748b;font-size:10.5px;display:block">Devis N\u00b0</span>'+esc(devisNumLink||'\u2014')+'</div>'+
       '</div>'+
       _acBanner+
