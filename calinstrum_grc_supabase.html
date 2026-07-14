@@ -28449,6 +28449,12 @@ async function saveFA(){
   renderFA();rDash();renderHist();
   if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){console.warn('renderSuivi skipped:',e.message);}}
   if(typeof renderDV==='function'){try{renderDV();}catch(e){console.warn('renderDV skipped:',e.message);}}
+  // ⭐ Suivi BC hebdomadaire : l'onglet Facturation reste visible DERRIÈRE la
+  // modale facture pendant l'édition — sans ce refresh, la consommation qui
+  // vient d'être enregistrée n'apparaît sur les cartes/le sélecteur qu'après
+  // avoir quitté puis rouvert l'onglet (constaté 14/07/2026).
+  if(typeof renderPtBcHebdo==='function'){try{renderPtBcHebdo();}catch(e){console.warn('renderPtBcHebdo skipped:',e.message);}}
+  if(typeof _ptFactRenderBcBox==='function'){try{_ptFactRenderBcBox();}catch(e){console.warn('_ptFactRenderBcBox skipped:',e.message);}}
   // Push undo si on modifiait une facture existante (pas si nouvelle création)
   if(prevSnapshot){
     var lbl='Modif. facture « '+(f.num||'')+' »';
@@ -40152,8 +40158,10 @@ function renderPtBcHebdo(){
       var rates=_bcRatesList(bc);
       var anyRemaining=false,anyAuthorized=false;
       rates.forEach(function(r){if(_bcAuthorizedQte(bc,r)>0){anyAuthorized=true;if(_bcRemaining(pfx,bc,r,null)>0.001)anyRemaining=true;}});
+      // Rouge (pas vert) : cohérent avec la barre juste en dessous — un BC
+      // "Soldé" (0 reste) appelle une action (nouveau BC), pas "tout va bien".
       var statutBadge=anyAuthorized&&!anyRemaining
-        ?'<span style="background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.4);color:#34d399;padding:1px 8px;border-radius:5px;font-size:9.5px;font-weight:700">✓ Soldé</span>':'';
+        ?'<span style="background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.4);color:#f87171;padding:1px 8px;border-radius:5px;font-size:9.5px;font-weight:700">⛔ Soldé</span>':'';
       html+='<div style="background:rgba(255,255,255,.02);border:1px solid var(--border,#30363d);border-radius:8px;padding:10px 14px;margin-bottom:8px">'+
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px;margin-bottom:8px">'+
           '<div><span style="color:var(--teal);font-weight:700">'+esc(bc.num)+'</span> '+statutBadge+
@@ -40163,7 +40171,10 @@ function renderPtBcHebdo(){
       rates.forEach(function(r){
         var auth=_bcAuthorizedQte(bc,r),cons=_bcConsumedSoFar(pfx,bc.id,r,null),rem=Math.max(0,auth-cons);
         var pct=auth>0?Math.min(100,Math.round(cons/auth*100)):0;
-        var barColor=pct>=100?'#34d399':(pct>=85?'#f59e0b':'#2dd4bf');
+        // 100% = ROUGE (plus rien, attention requise) — PAS vert (le vert
+        // suggérerait "tout va bien" alors qu'un BC vide bloque la suite des
+        // travaux). Vert en dessous de 85%, amber au-delà (proximité).
+        var barColor=pct>=100?'#f87171':(pct>=85?'#f59e0b':'#2dd4bf');
         html+='<div style="margin-bottom:7px">'+
           '<div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted)"><span>Tarif '+fN(r)+' XPF/h</span><span><b style="color:var(--text)">'+fH(cons)+'</b> / '+fH(auth)+' h consommées</span></div>'+
           '<div style="height:8px;background:var(--panel2,#161b24);border-radius:4px;overflow:hidden;border:1px solid var(--border,#30363d)"><div style="height:100%;width:'+pct+'%;background:'+barColor+'"></div></div>'+
@@ -40429,19 +40440,25 @@ function _buildBcTrackHtml(pfx,f){
       var cumul=before+c.qte;
       var reste=Math.max(0,authorized-cumul);
       var pct=authorized>0?Math.min(100,Math.round(cumul/authorized*100)):0;
-      var barColor=pct>=100?'#34d399':(pct>=85?'#f59e0b':'#2dd4bf');
+      // 100% = ROUGE (plus rien, attention requise) — cf renderPtBcHebdo, même logique.
+      var barColor=pct>=100?'#f87171':(pct>=85?'#f59e0b':'#2dd4bf');
       return '<tr>'+
         '<td>'+fN(c.rate)+' XPF/h</td><td>'+fH(authorized)+'</td><td>'+fH(before)+'</td>'+
         '<td>'+fH(c.qte)+'</td><td>'+fH(cumul)+'</td><td>'+fH(reste)+'</td>'+
         '<td style="width:110px"><div style="height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;'+PCA+'"><div style="height:100%;width:'+pct+'%;background:'+barColor+';'+PCA+'"></div></div></td>'+
       '</tr>';
     }).join('');
-    // ⛔ AUCUN texte d'avertissement/conseil interne (ex. "pense à demander un
-    // nouveau BC") ne doit apparaître ici : ce document part chez le CLIENT.
-    // L'épuisement d'un BC est déjà visible par la donnée elle-même (colonne
-    // "Reste (h)" à 0 + barre à 100%) — l'information reste factuelle, jamais
-    // une note adressée à l'utilisateur CALINSTRUM. Le rappel "BC à renouveler"
-    // reste uniquement dans l'app (cartes de suivi, badge "✓ Soldé").
+    // Panneau factuel UNIQUEMENT : constate l'épuisement (et la bascule si
+    // applicable), jamais de conseil/action adressé à l'utilisateur CALINSTRUM
+    // (ex. "pense à demander un nouveau BC") — ce document part chez le CLIENT.
+    var epuise=grp.rows.some(function(c){return c.epuiseApres;});
+    var nextBcNum=order[oi+1]?byBc[order[oi+1]].bcNum:null;
+    var alertHtml='';
+    if(epuise){
+      alertHtml='<div style="margin-top:7px;font-size:9.8px;color:#92400e;background:#fef3c7;border-radius:3px;padding:5px 8px;'+PCA+'">⚠ Bon de commande '+esc(grp.bcNum)+' entièrement consommé'+
+        (nextBcNum?' — le surplus de cette facture bascule sur '+esc(nextBcNum)+'.':'.')+
+      '</div>';
+    }
     html+='<div style="border:1.5px solid #1e3a5f;border-radius:5px;padding:10px 12px;margin-bottom:12px;'+PCA+'">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
         '<span style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:#1e3a5f">📋 Suivi du Bon de Commande N° '+esc(grp.bcNum)+'</span>'+
@@ -40458,7 +40475,7 @@ function _buildBcTrackHtml(pfx,f){
           '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Consommation</th>'+
         '</tr></thead>'+
         '<tbody>'+rowsHtml+'</tbody>'+
-      '</table>'+
+      '</table>'+alertHtml+
     '</div>';
   });
   return html;
