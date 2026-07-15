@@ -43344,20 +43344,25 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   }
   pages=pages.filter(function(p){return p.length>0;});
 
-  // GARDE ABSOLUE 1-PAGE (20/05/2026) — cf historique dans buildPaginatedDV
-  if(pages.length>1){
-    var totalRowsH=rowItems.reduce(function(s,r){return s+r.height;},0);
-    if(totalRowsH+LAST_EXTRA_TOTAL<=PAGE1_BUDGET){
-      pages=[rowItems.slice()];
-    }
-  }
-
-  // Réserver LAST_EXTRA_TOTAL pour la dernière page (bloc BC + totals+notes+bank+signatures)
-  if(pages.length>=1){
+  // GARDE ABSOLUE 1-PAGE (20/05/2026) — cf historique dans buildPaginatedDV.
+  // [15/07/2026] Étendue au bloc BC : si TOUT (lignes+BC+totaux/notes/banque/
+  // signature) tient sur une seule page, on le garde en 1 page (cas courts,
+  // ex. AEI SNC-F040 avec 1 seul BC). Sinon (cas AEI SNC-F041/F042), le bloc
+  // BC n'est JAMAIS mélangé aux lignes ni recasé en orphelin : la facture
+  // "normale" (lignes+totaux+notes+banque+signature) reste groupée comme une
+  // facture classique, et le suivi BC prend sa PROPRE page à la fin — demande
+  // explicite : "plus PRO" d'avoir la facture complète page 1 et le suivi BC
+  // seul page 2 plutôt qu'une ligne isolée avant le bloc BC.
+  var totalRowsH=rowItems.reduce(function(s,r){return s+r.height;},0);
+  var singlePageFits=(totalRowsH+LAST_EXTRA_TOTAL<=PAGE1_BUDGET);
+  if(singlePageFits){
+    pages=[rowItems.slice()];
+  } else if(pages.length>=1){
+    // Réserver LAST_EXTRA (SANS le bloc BC, qui aura sa page à lui seul ci-dessous)
     var lastPage=pages[pages.length-1];
     var lastHeight=lastPage.reduce(function(s,r){return s+r.height;},0);
     var lastBudget=pages.length===1?PAGE1_BUDGET:PAGE_N_BUDGET;
-    while(lastHeight+LAST_EXTRA_TOTAL>lastBudget && lastPage.length>1){
+    while(lastHeight+LAST_EXTRA>lastBudget && lastPage.length>1){
       var moved=[lastPage.pop()];
       while(lastPage.length && lastPage[lastPage.length-1].isSec){
         moved.unshift(lastPage.pop());
@@ -43368,6 +43373,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       lastBudget=PAGE_N_BUDGET;
     }
   }
+  var needsBcOwnPage=!!bcTrackHtml && !singlePageFits;
 
   var isMultiPage=pages.length>1;
   var tblCols='<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>';
@@ -43430,7 +43436,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       // === Bloc final FACTURE : différent du devis (pas Validité/Paiement, juste Délai) ===
       pageHTML+=
         '<div class="doc-page-final-block" style="margin-top:8px">'+
-        bcTrackHtml+
+        (needsBcOwnPage?'':bcTrackHtml)+
         buildFATotsHtml(f,isExo)+
         '<div class="doc-notes"><strong>Montant en lettres :</strong> '+toLtr(ttcDisp)+'<br>'+
           '<strong>Délai :</strong> '+esc(f.delai||'Paiement sous 30 jours à réception de la facture')+
@@ -43447,6 +43453,21 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
     pageHTML+='</div>';
     pagesHTML+=pageHTML;
   });
+  // [15/07/2026] Page dédiée UNIQUEMENT au suivi des BC (jamais mélangée aux
+  // lignes ni aux totaux/signature, qui restent groupés sur la page
+  // précédente) — cf note sur needsBcOwnPage ci-dessus.
+  if(needsBcOwnPage){
+    var bcPageFooterHTML=
+      '<div class="doc-page-footer">'+
+        '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
+        '<p class="doc-legal">'+mention+'</p>'+
+      '</div>';
+    pagesHTML+='<div class="doc-page">'+
+      buildPageHeader(pages.length+1,pages.length+1)+
+      '<div class="doc-page-final-block" style="margin-top:8px">'+bcTrackHtml+'</div>'+
+      bcPageFooterHTML+
+    '</div>';
+  }
   return pagesHTML;
 }
 
