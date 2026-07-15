@@ -43264,6 +43264,27 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   });
   document.body.removeChild(measureDiv);
 
+  // === Mesure du bloc "Suivi du Bon de Commande" (07/2026) ===
+  // Ce bloc est apparu APRÈS que LAST_EXTRA=360 (budget réservé pour
+  // totaux+notes+banque+signatures sur la dernière page) ait été calibré — sa
+  // hauteur n'était donc jamais budgétée. Avec 1-2 BC rattachés, le contenu réel
+  // dépassait .doc-page (height fixe 271mm + overflow:hidden) et le bandeau bleu
+  // de pied de page se faisait couper silencieusement (constaté AEI SNC-F041/F042).
+  // Fix : mesurer sa vraie hauteur (comme les lignes) et l'ajouter à LAST_EXTRA,
+  // pour que la pagination bascule le trop-plein sur une page suivante plutôt
+  // que de le faire déborder de la page fixe.
+  var bcTrackHtml=_buildBcTrackHtml(getClientPrefix(f.client||''),f);
+  var bcTrackH=0;
+  if(bcTrackHtml){
+    var bcMeasureDiv=document.createElement('div');
+    bcMeasureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:14px;visibility:hidden';
+    bcMeasureDiv.innerHTML=bcTrackHtml;
+    document.body.appendChild(bcMeasureDiv);
+    bcTrackH=bcMeasureDiv.getBoundingClientRect().height;
+    document.body.removeChild(bcMeasureDiv);
+  }
+  var LAST_EXTRA_TOTAL=LAST_EXTRA+bcTrackH;
+
   // === Distribution dans les pages (identique au devis) ===
   var pages=[],currentPage=[],usedHeight=0,budget=PAGE1_BUDGET,SUBTOTAL_H=30;
   function nextNonSecHeight(fromIdx){
@@ -43325,17 +43346,17 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   // GARDE ABSOLUE 1-PAGE (20/05/2026) — cf historique dans buildPaginatedDV
   if(pages.length>1){
     var totalRowsH=rowItems.reduce(function(s,r){return s+r.height;},0);
-    if(totalRowsH+LAST_EXTRA<=PAGE1_BUDGET){
+    if(totalRowsH+LAST_EXTRA_TOTAL<=PAGE1_BUDGET){
       pages=[rowItems.slice()];
     }
   }
 
-  // Réserver LAST_EXTRA pour la dernière page (totals+notes+bank+signatures)
+  // Réserver LAST_EXTRA_TOTAL pour la dernière page (bloc BC + totals+notes+bank+signatures)
   if(pages.length>=1){
     var lastPage=pages[pages.length-1];
     var lastHeight=lastPage.reduce(function(s,r){return s+r.height;},0);
     var lastBudget=pages.length===1?PAGE1_BUDGET:PAGE_N_BUDGET;
-    while(lastHeight+LAST_EXTRA>lastBudget && lastPage.length>1){
+    while(lastHeight+LAST_EXTRA_TOTAL>lastBudget && lastPage.length>1){
       var moved=[lastPage.pop()];
       while(lastPage.length && lastPage[lastPage.length-1].isSec){
         moved.unshift(lastPage.pop());
@@ -43408,7 +43429,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       // === Bloc final FACTURE : différent du devis (pas Validité/Paiement, juste Délai) ===
       pageHTML+=
         '<div class="doc-page-final-block" style="margin-top:8px">'+
-        _buildBcTrackHtml(getClientPrefix(f.client||''),f)+
+        bcTrackHtml+
         buildFATotsHtml(f,isExo)+
         '<div class="doc-notes"><strong>Montant en lettres :</strong> '+toLtr(ttcDisp)+'<br>'+
           '<strong>Délai :</strong> '+esc(f.delai||'Paiement sous 30 jours à réception de la facture')+
