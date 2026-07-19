@@ -1372,12 +1372,13 @@ function applyDraft(d){
       return;
     }
     var states=out.episodes;
-    var seen={}, eps=[];
+    var seen=Object.create(null), eps=[];
     for(var i=0;i<log.entries.length;i++){
       var e=log.entries[i]; if(!e||!e.id||!e.ticker||e.ticker==='TEST') continue;
       var en=Number(e.entry), sl=Number(e.sl), t1=Number(e.t1);
       if(!(isFinite(en)&&en>0&&isFinite(sl)&&sl<en&&isFinite(t1)&&t1>en)) continue;
       if(isNaN(Date.parse(e.generatedAt||''))) continue; // même définition d'épisode que l'écrivain n8n
+      var vd0=(e.verdict&&e.verdict.date)||String(e.id).split('@')[1]||null; if(!vd0) continue; // idem écrivain
       if(seen[e.id]) continue; seen[e.id]=1;
       var st=states[e.id]||null;
       var rv=(st&&typeof st.r==='number'&&isFinite(st.r))?st.r:null;
