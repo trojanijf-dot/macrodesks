@@ -1366,24 +1366,33 @@ function applyDraft(d){
       box.innerHTML='<div class="sh-empty">⚠️ <b>tickets_log.json illisible</b> — horloge indisponible (on n\'affiche jamais un 0/30 rassurant sur données absentes).</div>';
       return;
     }
-    var states=(out&&out.episodes&&typeof out.episodes==='object')?out.episodes:{};
+    // asymétrie : outcomes ILLISIBLE ≠ fichier d'états vide légitime (l'init existe toujours sur le repo)
+    if(!out || !out.episodes || typeof out.episodes!=='object' || Array.isArray(out.episodes)){
+      box.innerHTML='<div class="sh-empty">⚠️ <b>shadow_outcomes.json illisible</b> — états des épisodes inconnus, aucun n/expectancy affichable (jamais de chiffre rassurant sur données absentes).</div>';
+      return;
+    }
+    var states=out.episodes;
     var seen={}, eps=[];
     for(var i=0;i<log.entries.length;i++){
       var e=log.entries[i]; if(!e||!e.id||!e.ticker||e.ticker==='TEST') continue;
       var en=Number(e.entry), sl=Number(e.sl), t1=Number(e.t1);
       if(!(isFinite(en)&&en>0&&isFinite(sl)&&sl<en&&isFinite(t1)&&t1>en)) continue;
+      if(isNaN(Date.parse(e.generatedAt||''))) continue; // même définition d'épisode que l'écrivain n8n
       if(seen[e.id]) continue; seen[e.id]=1;
       var st=states[e.id]||null;
+      var rv=(st&&typeof st.r==='number'&&isFinite(st.r))?st.r:null;
+      // règle conservatrice : STOP sans r lisible = -1 (perte jamais effacée) ; TARGET sans r lisible = exclu de n (jamais de gain sans preuve)
+      if(st&&st.state==='stop'&&rv===null) rv=-1;
       eps.push({id:e.id, ticker:e.ticker, vd:(e.verdict&&e.verdict.date)||String(e.id).split('@')[1]||'', entry:en, sl:sl, t1:t1,
         rr:(st&&isFinite(Number(st.rr))&&Number(st.rr)>0)?Number(st.rr):((isFinite(Number(e.rr))&&Number(e.rr)>0)?Number(e.rr):Math.round((t1-en)/(en-sl)*100)/100),
-        riskUSD:isFinite(Number(e.riskUSD))?Number(e.riskUSD):1,
-        state:st?st.state:null, r:(st&&st.r!=null&&isFinite(Number(st.r)))?Number(st.r):null, closedOn:st?st.closedOn:null});
+        riskUSD:(e.riskUSD!=null&&isFinite(Number(e.riskUSD)))?Number(e.riskUSD):1,
+        state:st?st.state:null, r:rv, closedOn:st?st.closedOn:null});
     }
     eps.sort(function(a,b){ return String(b.vd).localeCompare(String(a.vd)); });
-    var closed=eps.filter(function(x){return x.state==='target'||x.state==='stop';});
+    var closed=eps.filter(function(x){return (x.state==='target'||x.state==='stop')&&x.r!==null;});
     var n=closed.length, wins=closed.filter(function(x){return x.state==='target';}).length;
     var sumR=0, equity=100;
-    for(var k=0;k<closed.length;k++){ sumR+=closed[k].r||0; equity+=(closed[k].r||0)*(closed[k].riskUSD||1); }
+    for(var k=0;k<closed.length;k++){ sumR+=closed[k].r; equity+=closed[k].r*(closed[k].riskUSD||1); }
     var exp=n?(sumR/n):null;
     var open=eps.filter(function(x){return x.state==='open';}).length;
     var pend=eps.filter(function(x){return x.state==='pending'||x.state===null;}).length;
@@ -1401,7 +1410,7 @@ function applyDraft(d){
     var pct=Math.min(100, n/30*100);
     var expTxt = (exp==null) ? '—' : ((exp>=0?'+':'')+exp.toFixed(2)+' R');
     var expCls = (exp==null) ? 'sh-neu' : (exp>0?'sh-pos':'sh-neg');
-    var eqCls = equity>=100?'sh-pos':'sh-neg';
+    var eqCls = n ? (equity>=100?'sh-pos':'sh-neg') : 'sh-neu'; // neutre tant qu'aucun trade clos (jamais vert sans preuve)
     var avgW = wins? (closed.filter(function(x){return x.state==='target';}).reduce(function(s,x){return s+(x.r||0);},0)/wins) : null;
 
     var html=
@@ -1419,8 +1428,8 @@ function applyDraft(d){
     var rows=''; var shown=eps.slice(0,12);
     for(var j=0;j<shown.length;j++){
       var x=shown[j], sb, rc, rtxt;
-      if(x.state==='target'){sb='<span class="sh-st sh-st-t">🎯 TARGET</span>';rc='sh-pos';rtxt='+'+(x.r||0).toFixed(1);}
-      else if(x.state==='stop'){sb='<span class="sh-st sh-st-s">🛑 STOP</span>';rc='sh-neg';rtxt=(x.r||0).toFixed(1);}
+      if(x.state==='target'){sb='<span class="sh-st sh-st-t">🎯 TARGET</span>';rc=(x.r!==null)?'sh-pos':'';rtxt=(x.r!==null)?('+'+x.r.toFixed(1)):'? (hors n)';}
+      else if(x.state==='stop'){sb='<span class="sh-st sh-st-s">🛑 STOP</span>';rc='sh-neg';rtxt=(x.r!==null?x.r:-1).toFixed(1);}
       else if(x.state==='open'){sb='<span class="sh-st sh-st-o">⏳ EN COURS</span>';rc='';rtxt='—';}
       else if(x.state==='expired'){sb='<span class="sh-st sh-st-n">💤 EXPIRÉ</span>';rc='';rtxt='0';}
       else {sb='<span class="sh-st sh-st-n">⌛ SUIVI À VENIR</span>';rc='';rtxt='—';}
