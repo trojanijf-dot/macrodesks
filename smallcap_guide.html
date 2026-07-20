@@ -282,7 +282,7 @@ Score = 0.25·<b>Sous-éval</b> + 0.20·<b>Catalyseur</b> + 0.15·<b>Float/Squee
 
 <h2 id="pipeline"><i class="ti ti-git-merge"></i>8. Le pipeline data (n8n)</h2>
 <div class="formula">
-Schedule (1×/jour)<br>
+Schedule (2×/jour · 06:00 &amp; 18:00 Nouméa)<br>
 &nbsp;→ <b>SmallCap A</b>  univers/fondamentaux (FMP /stable + watchlist + Finnhub IPO)<br>
 &nbsp;→ <b>SmallCap C</b>  chaleur thématique (Yahoo ETF + GDELT)<br>
 &nbsp;→ <b>SmallCap B</b>  catalyseurs EDGAR (8-K / 424B5 / S-1)  ◀ l'edge<br>
@@ -294,7 +294,7 @@ Schedule (1×/jour)<br>
 <p class="muted">100 % gratuit : FMP <code>/stable</code> · Finnhub · Yahoo · SEC EDGAR · GDELT. Aucune dépendance payante (pas de Finviz Elite).</p>
 
 <h2 id="fonctionnement"><i class="ti ti-clock-bolt"></i>Interactions, mise en route &amp; timings</h2>
-<p><b>Le principe en une phrase :</b> n8n calcule <b>1×/jour</b> → écrit des fichiers JSON → les pages <b>affichent</b> ces JSON. Tout ce que tu vois est une <b>photo du dernier run</b> (badge <code>generatedAt</code> « LIVE JSON · date » en haut de page). Les pages ne calculent rien : tout le cerveau est dans n8n.</p>
+<p><b>Le principe en une phrase :</b> n8n calcule <b>2×/jour (06:00 &amp; 18:00)</b> → écrit des fichiers JSON → les pages <b>affichent</b> ces JSON. Tout ce que tu vois est une <b>photo du dernier run</b> (badge <code>generatedAt</code> « LIVE JSON · date » en haut de page). Les pages ne calculent rien : tout le cerveau est dans n8n. <b>Cette section décrit le pipeline DATA ; la chaîne d'automatisation complète</b> (analyses Opus, tickets, horloge de validation) est documentée à la <a href="#autopilot">section 13 — L'Autopilot</a>.</p>
 
 <h3>Quel onglet lit quel fichier</h3>
 <div class="card"><table>
@@ -303,13 +303,14 @@ Schedule (1×/jour)<br>
 <tr><td><b>Découvertes</b></td><td class="mono">Discovery → discoveries.json</td><td>Candidats sourcés EDGAR + fiches</td></tr>
 <tr><td><b>Moniteur</b></td><td class="mono">Positions Monitor → positions.json</td><td>Verdicts de sortie de tes positions</td></tr>
 <tr><td><b>➕ Watchlist</b></td><td class="mono">webhook → watchlist.json → node A</td><td>Seul flux qui va <b>vers</b> n8n</td></tr>
-<tr><td><b>Validateur</b></td><td class="mono">autonome (Finnhub à la demande)</td><td>Note fondamentale 5D, hors batch</td></tr>
+<tr><td><b>Validateur</b></td><td class="mono">autonome (Finnhub à la demande) + Gate/Outcomes → horloge 🕰️</td><td>Note fondamentale 5D + horloge SHADOW n≥30</td></tr>
+<tr><td><b>Portfolio</b></td><td class="mono">Gate → tickets_log.json · Outcomes → shadow_outcomes.json</td><td>Suivi de desk : équité, heat, jambes, 2 horloges (voir §13)</td></tr>
 </table></div>
 
 <h3>Mise en route — la 1ère étape</h3>
 <div class="card">
 <div class="step"><div class="n">1</div><div>Workflow <code>MacroDesk_SmallCap</code> <b>ACTIVÉ</b>. <span class="muted">Sinon aucun JSON n'est régénéré → pages figées au dernier run.</span></div></div>
-<div class="step"><div class="n">2</div><div><b>Schedule</b> réglé (1×/jour). <span class="muted">Le battement de cœur. « Execute workflow » force un run immédiat.</span></div></div>
+<div class="step"><div class="n">2</div><div><b>Schedule</b> réglé (2×/jour, 06:00 &amp; 18:00). <span class="muted">Le battement de cœur. « Execute workflow » force un run immédiat.</span></div></div>
 <div class="step"><div class="n">3</div><div>Webhook <code>SmallCap Watchlist Add</code> <b>ACTIVE</b>. <span class="muted">Sinon le bouton ➕ ne fait rien.</span></div></div>
 <div class="step"><div class="n">4</div><div><b>Univers de départ</b> = la watchlist (30 tickers). <span class="muted">La 1ère étape « métier » : qui suivre ?</span></div></div>
 <div class="step"><div class="n">5</div><div><b>Tes positions</b> dans le node Positions Monitor. <span class="muted">Vide = aucune alerte (normal).</span></div></div>
