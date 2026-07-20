@@ -1387,14 +1387,14 @@ function applyDraft(d){
       eps.push({id:e.id, ticker:e.ticker, vd:(e.verdict&&e.verdict.date)||String(e.id).split('@')[1]||'', entry:en, sl:sl, t1:t1,
         rr:(st&&isFinite(Number(st.rr))&&Number(st.rr)>0)?Number(st.rr):((isFinite(Number(e.rr))&&Number(e.rr)>0)?Number(e.rr):Math.round((t1-en)/(en-sl)*100)/100),
         riskUSD:(e.riskUSD!=null&&isFinite(Number(e.riskUSD)))?Number(e.riskUSD):1,
-        state:st?st.state:null, r:rv, closedOn:st?st.closedOn:null});
+        state:st?st.state:null, r:rv, rNet:(st&&typeof st.rNet==='number'&&isFinite(st.rNet))?st.rNet:null, closedOn:st?st.closedOn:null});
     }
     eps.sort(function(a,b){ return String(b.vd).localeCompare(String(a.vd)); });
     var closed=eps.filter(function(x){return (x.state==='target'||x.state==='stop')&&x.r!==null;});
     var n=closed.length, wins=closed.filter(function(x){return x.state==='target';}).length;
-    var sumR=0, equity=100;
-    for(var k=0;k<closed.length;k++){ sumR+=closed[k].r; equity+=closed[k].r*(closed[k].riskUSD||1); }
-    var exp=n?(sumR/n):null;
+    var sumR=0, sumNet=0, equity=100;
+    for(var k=0;k<closed.length;k++){ sumR+=closed[k].r; sumNet+=(closed[k].rNet!==null?closed[k].rNet:closed[k].r-0.10); equity+=closed[k].r*(closed[k].riskUSD||1); }
+    var exp=n?(sumR/n):null, expNet=n?(sumNet/n):null; // la DÉCISION se lit sur le NET (coûts small caps inclus)
     var open=eps.filter(function(x){return x.state==='open';}).length;
     var pend=eps.filter(function(x){return x.state==='pending'||x.state===null;}).length;
     var expd=eps.filter(function(x){return x.state==='expired';}).length;
@@ -1409,28 +1409,32 @@ function applyDraft(d){
     }
 
     var pct=Math.min(100, n/30*100);
-    var expTxt = (exp==null) ? '—' : ((exp>=0?'+':'')+exp.toFixed(2)+' R');
-    var expCls = (exp==null) ? 'sh-neu' : (exp>0?'sh-pos':'sh-neg');
-    var eqCls = n ? (equity>=100?'sh-pos':'sh-neg') : 'sh-neu'; // neutre tant qu'aucun trade clos (jamais vert sans preuve)
+    var expTxt = (expNet==null) ? '—' : ((expNet>=0?'+':'')+expNet.toFixed(2)+' R');
+    var expCls = (expNet==null) ? 'sh-neu' : (expNet>0?'sh-pos':'sh-neg');
+    var expBrutTxt = (exp==null) ? '—' : ((exp>=0?'+':'')+exp.toFixed(2)+'R');
+    // vert SEULEMENT au-dessus de 100 (une série de BE à 100.00 pile n'est pas un gain)
+    var eqCls = n ? (equity>100?'sh-pos':(equity<100?'sh-neg':'sh-neu')) : 'sh-neu';
     var avgW = wins? (closed.filter(function(x){return x.state==='target';}).reduce(function(s,x){return s+(x.r||0);},0)/wins) : null;
+    var losses = closed.filter(function(x){return x.state==='stop';});
+    var avgL = losses.length? (losses.reduce(function(s,x){return s+x.r;},0)/losses.length) : null; // perte moyenne RÉELLE (BE et pertes partielles v2 comprises)
 
     var html=
       '<div class="sh-head"><span class="t">🕰️ '+n+' / 30 épisodes clos</span><span class="mode">SHADOW — taille réelle : 0 $</span><span class="rule">passage réel : n ≥ 30 ET expectancy &gt; 0 · décision humaine</span></div>'
       +'<div class="sh-bar"><div class="f" style="width:'+pct+'%"></div><div class="j"></div></div>'
       +'<div class="sh-bl"><span>0</span><span class="jj">▲ n=10 · première lecture</span><span>30</span></div>'
       +'<div class="sh-tiles">'
-      +'<div class="sh-tile"><div class="k">Expectancy</div><div class="v '+expCls+'">'+expTxt+'</div><div class="d">par trade clos ('+n+')</div></div>'
+      +'<div class="sh-tile"><div class="k">Expectancy NETTE</div><div class="v '+expCls+'">'+expTxt+'</div><div class="d">brute '+expBrutTxt+' − coûts · par trade clos ('+n+')</div></div>'
       +'<div class="sh-tile"><div class="k">Win rate</div><div class="v sh-neu">'+(n?Math.round(wins/n*100)+' %':'—')+'</div><div class="d">'+wins+' 🎯 · '+(n-wins)+' 🛑</div></div>'
-      +'<div class="sh-tile"><div class="k">Gain / perte moy.</div><div class="v"><span class="sh-pos">'+(avgW!=null?'+'+avgW.toFixed(1)+'R':'—')+'</span> <span style="font-size:10px;color:var(--muted-soft)">/</span> <span class="sh-neg">−1.0R</span></div><div class="d">risque 1 $/trade</div></div>'
-      +'<div class="sh-tile"><div class="k">Équité papier</div><div class="v '+eqCls+'">'+equity.toFixed(2)+' $</div><div class="d">départ 100 $ · '+((equity-100)>=0?'+':'')+(equity-100).toFixed(1)+' %</div></div>'
+      +'<div class="sh-tile"><div class="k">Gain / perte moy.</div><div class="v"><span class="sh-pos">'+(avgW!=null?'+'+avgW.toFixed(2)+'R':'—')+'</span> <span style="font-size:10px;color:var(--muted-soft)">/</span> <span class="sh-neg">'+(avgL!=null?avgL.toFixed(2)+'R':'—')+'</span></div><div class="d">risque 1 $/trade</div></div>'
+      +'<div class="sh-tile"><div class="k">Équité papier (hors coûts)</div><div class="v '+eqCls+'">'+equity.toFixed(2)+' $</div><div class="d">départ 100 $ · '+((equity-100)>=0?'+':'')+(equity-100).toFixed(1)+' % · brut, la décision se lit sur la nette</div></div>'
       +'<div class="sh-tile"><div class="k">En cours</div><div class="v sh-neu">'+open+'</div><div class="d">'+pend+' en attente · '+expd+' 💤 expirés</div></div>'
       +'</div>';
 
     var rows=''; var shown=eps.slice(0,12);
     for(var j=0;j<shown.length;j++){
       var x=shown[j], sb, rc, rtxt;
-      if(x.state==='target'){sb='<span class="sh-st sh-st-t">🎯 TARGET</span>';rc=(x.r!==null)?'sh-pos':'';rtxt=(x.r!==null)?('+'+x.r.toFixed(1)):'? (hors n)';}
-      else if(x.state==='stop'){sb='<span class="sh-st sh-st-s">🛑 STOP</span>';rc='sh-neg';rtxt=(x.r!==null?x.r:-1).toFixed(1);}
+      if(x.state==='target'){sb='<span class="sh-st sh-st-t">🎯 TARGET</span>';rc=(x.r!==null)?'sh-pos':'';rtxt=(x.r!==null)?('+'+x.r.toFixed(2)):'? (hors n)';}
+      else if(x.state==='stop'){sb='<span class="sh-st sh-st-s">🛑 STOP</span>';rc=(x.r===0)?'sh-neu':'sh-neg';rtxt=(x.r!==null?x.r:-1).toFixed(2);}
       else if(x.state==='open'){sb='<span class="sh-st sh-st-o">⏳ EN COURS</span>';rc='';rtxt='—';}
       else if(x.state==='expired'){sb='<span class="sh-st sh-st-n">💤 EXPIRÉ</span>';rc='';rtxt='0';}
       else {sb='<span class="sh-st sh-st-n">⌛ SUIVI À VENIR</span>';rc='';rtxt='—';}
@@ -1442,8 +1446,8 @@ function applyDraft(d){
     if(eps.length>12) html+='<div style="font-family:var(--mono);font-size:9px;color:var(--muted-soft);margin-top:6px">+ '+(eps.length-12)+' épisode(s) plus ancien(s)</div>';
 
     var read;
-    if(n>=30) read = exp>0 ? 'Horloge ATTEINTE et expectancy positive — relire l\'ensemble, la <b>décision de passage reste humaine</b>.' : 'Horloge atteinte mais <b>expectancy ≤ 0</b> — le process ne valide pas en l\'état.';
-    else if(n>=10) read = 'Première lecture (n≥10) : tendance '+(exp>0?'positive':'négative')+', <b>n encore trop faible pour conclure</b> ('+n+'/30).';
+    if(n>=30) read = expNet>0 ? 'Horloge ATTEINTE et expectancy NETTE positive — relire l\'ensemble, la <b>décision de passage reste humaine</b>.' : 'Horloge atteinte mais <b>expectancy nette ≤ 0</b> (coûts inclus) — le process ne valide pas en l\'état.';
+    else if(n>=10) read = 'Première lecture (n≥10) : tendance nette '+(expNet>0?'positive':'négative')+', <b>n encore trop faible pour conclure</b> ('+n+'/30).';
     else read = 'n = '+n+'/30 — <b>trop tôt pour conclure quoi que ce soit</b>. L\'horloge tourne ; aucune décision avant n≥30.';
     html+='<div class="sh-read">📋 <b>Lecture :</b> '+read+'</div>';
     box.innerHTML=html;
