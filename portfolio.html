@@ -120,6 +120,7 @@ a.plainlink{color:var(--blue);text-decoration:none}
     if(!log || !Array.isArray(log.entries)){
       $id('pfWarn').innerHTML='<div class="warnbox">⚠️ <b>tickets_log.json illisible</b> — portfolio indisponible. On n\'affiche jamais des chiffres rassurants sur données absentes.</div>';
       $id('pfTiles').innerHTML='';$id('pfOpen').innerHTML='';$id('pfHist').innerHTML='';$id('pfTheme').innerHTML='';$id('pfClock').innerHTML='';$id('pfReal').innerHTML='';$id('pfSeg').innerHTML='';
+      $id('pfRegime').textContent='';$id('pfFoot').textContent='';
       return;
     }
     var outOk = !!(out && out.episodes && typeof out.episodes==='object' && !Array.isArray(out.episodes));
@@ -144,15 +145,15 @@ a.plainlink{color:var(--blue);text-decoration:none}
       var p=(e.plan&&typeof e.plan==='object')?e.plan:null;
       var qty=Number(e.qty);
       eps.push({id:e.id, ticker:e.ticker, theme:e.theme||'?', vd:String(vd0).slice(0,10),
-        entry:en, sl:sl, t1:t1, qty:isFinite(qty)?qty:null,
-        rr:r2((t1-en)/(en-sl)),
-        riskUSD:(e.riskUSD!=null&&isFinite(Number(e.riskUSD)))?Number(e.riskUSD):1,
+        entry:en, sl:sl, t1:t1, qty:(isFinite(qty)&&qty>0)?qty:null,
+        rr:(st&&isFinite(Number(st.rr))&&Number(st.rr)>0)?Number(st.rr):r2((t1-en)/(en-sl)),
+        riskUSD:(e.riskUSD!=null&&isFinite(Number(e.riskUSD))&&Number(e.riskUSD)>0)?Number(e.riskUSD):1,
         riskAtSL:(e.riskAtSL!=null&&isFinite(Number(e.riskAtSL)))?Number(e.riskAtSL):null,
         profile:(p&&p.profile)||e.profile||'DOUX',
         t1Pct:(p&&isFinite(Number(p.t1Pct))&&Number(p.t1Pct)>0&&Number(p.t1Pct)<=1)?Number(p.t1Pct):1,
         addTrigger:(p&&isFinite(Number(p.addTrigger))&&Number(p.addTrigger)>en)?Number(p.addTrigger):null,
         addQty:(p&&isFinite(Number(p.addQty))&&Number(p.addQty)>0)?Number(p.addQty):null,
-        score:(typeof e.score==='number')?e.score:null,
+        score:(typeof e.score==='number'&&isFinite(e.score))?e.score:null,
         state:st?st.state:null, r:rv,
         rNet:(st&&typeof st.rNet==='number'&&isFinite(st.rNet))?st.rNet:null,
         stopLevel:(st&&isFinite(Number(st.stopLevel)))?Number(st.stopLevel):null,
@@ -173,7 +174,8 @@ a.plainlink{color:var(--blue);text-decoration:none}
     function riskNow(x){
       if(x.state!=='open') return null;
       if(x.stopLevel===null||x.qty===null) return x.riskAtSL; // inconnu => conservateur : plein risque initial
-      var r=Math.max(0,(x.entry-x.stopLevel))*x.qty;
+      var q=x.qty*(x.t1Done?(1-x.t1Pct):1); // la part soldée à T1 ne risque plus rien
+      var r=Math.max(0,(x.entry-x.stopLevel))*q;
       if(x.added&&x.addTrigger!==null&&x.addQty!==null) r+=Math.max(0,(x.addTrigger-x.stopLevel))*x.addQty;
       return r2(r);
     }
@@ -193,14 +195,23 @@ a.plainlink{color:var(--blue);text-decoration:none}
     // courbe équité (brute, « hors coûts ») + max drawdown
     var eq=100, peak=100, mdd=0, pts=[100];
     closed.forEach(function(x){ eq+=x.r*x.riskUSD; pts.push(r2(eq)); if(eq>peak)peak=eq; var dd=(peak-eq)/peak*100; if(dd>mdd)mdd=dd; });
+    var KNOWN=['open','pending','target','stop','expired'];
     var open=eps.filter(function(x){return x.state==='open';});
     var pend=eps.filter(function(x){return x.state==='pending';});
     var unknown=eps.filter(function(x){return x.state===null;});
+    // anomalies : état non reconnu OU target sans r lisible — JAMAIS invisibles (un épisode qui
+    // disparaît des stats ET du heat serait un faux-vert ; le Validateur les liste, nous aussi)
+    var anom=eps.filter(function(x){return (x.state!==null&&KNOWN.indexOf(x.state)<0)||(x.state==='target'&&x.r===null);});
+    var anomIds={}; anom.forEach(function(x){anomIds[x.id]=1;});
     var expd=eps.filter(function(x){return x.state==='expired';}).length;
     var heat=0, heatUnknown=false;
     open.forEach(function(x){ var r=riskNow(x); if(r===null){heatUnknown=true;} else heat+=r; });
-    var armed=0; pend.forEach(function(x){ if(x.riskAtSL!==null) armed+=x.riskAtSL; });
+    if(anom.length) heatUnknown=true; // état illisible = exposition inconnue => jamais un heat rassurant
+    var armed=0, armedUnknown=false;
+    pend.forEach(function(x){ if(x.riskAtSL===null){armedUnknown=true;} else armed+=x.riskAtSL; });
     if(unknown.length&&outOk) warn.push(unknown.length+' épisode(s) sans état (suivi pas encore passé) — exclus des stats.');
+    if(anom.length) warn.push('<b>'+anom.length+' épisode(s) à état ILLISIBLE</b> — exclus des stats, exposition réelle INCONNUE.');
+    if(closed.some(function(x){return !x.closedOn;})) warn.push('max drawdown APPROXIMATIF (date de clôture manquante sur un trade clos).');
     $id('pfWarn').innerHTML = warn.length?('<div class="warnbox">⚠️ '+warn.join('<br>⚠️ ')+'</div>'):'';
 
     // ---- tuiles ----
@@ -208,15 +219,15 @@ a.plainlink{color:var(--blue);text-decoration:none}
       var pl=pts.map(function(v,ii){return (ii/(pts.length-1)*W).toFixed(1)+','+(Hh-3-((v-mn)/sp)*(Hh-6)).toFixed(1);}).join(' ');
       curve='<svg viewBox="0 0 '+W+' '+Hh+'" width="100%" height="'+Hh+'"><polyline points="'+pl+'" fill="none" stroke="'+(eq>=100?'#5dcaa5':'#f09595')+'" stroke-width="1.6"/></svg>'; }
     var t='';
-    t+='<div class="tile"><div class="k">Équité papier (hors coûts)</div><div class="v '+(outOk&&n?(eq>100?'pos':(eq<100?'neg':'mut')):'mut')+'">'+(outOk?eq.toFixed(2)+' $':'—')+'</div>'+curve+'<div class="d">départ 100 $ · max drawdown '+(outOk&&n?('<span class="neg">−'+mdd.toFixed(1)+' %</span>'):'—')+'</div></div>';
+    t+='<div class="tile"><div class="k">Équité papier (hors coûts)</div><div class="v '+(outOk&&n?(eq>100?'pos':(eq<100?'neg':'mut')):'mut')+'">'+(outOk?eq.toFixed(2)+' $':'—')+'</div>'+curve+'<div class="d">départ 100 $ · max drawdown '+(outOk&&n?('<span class="'+(mdd>0?'neg':'mut')+'">'+(mdd>0?'−'+mdd.toFixed(1):'0.0')+' %</span>'):'—')+'</div></div>';
     t+='<div class="tile"><div class="k">Expectancy NETTE</div><div class="v '+(expNet==null?'mut':(expNet>0?'pos':'neg'))+'">'+(expNet==null?'—':(expNet>=0?'+':'')+expNet.toFixed(2)+' R')+'</div><div class="d">brute '+(exp==null?'—':(exp>=0?'+':'')+exp.toFixed(2)+'R')+' − coûts · '+n+' trade(s) clos · la décision se lit ICI</div></div>';
     t+='<div class="tile"><div class="k">Profit factor · win rate</div><div class="v '+(pf==null?'mut':(pf>1?'pos':'neg'))+'">'+(pf==null?(n&&gains>0?'∞':'—'):pf.toFixed(2))+'</div><div class="d">win '+(n?Math.round(wins/n*100)+' %':'—')+' · moy <span class="pos">'+(avgW!=null?'+'+avgW.toFixed(2)+'R':'—')+'</span>/<span class="neg">'+(avgL!=null?avgL.toFixed(2)+'R':'—')+'</span> · pire série '+(n?streak+' 🛑':'—')+'</div></div>';
     var heatPct=Math.min(100, heat/5*100);
-    t+='<div class="tile"><div class="k">HEAT — risque ouvert</div><div class="v '+(heatUnknown||heat>=4?'neg':'')+'">'+(outOk?(heatUnknown?'≥ ':'')+heat.toFixed(2)+'R <span style="font-size:11px;color:var(--muted-soft)">/ 5R</span>':'—')+'</div><div class="heatbar"><i style="width:'+(outOk?heatPct:0)+'%"></i></div><div class="d">'+open.length+' ouverte(s) · '+pend.length+' armée(s) ('+armed.toFixed(2)+'R) · '+expd+' 💤'+(heatUnknown?' · <span class="neg">stop inconnu ⇒ plein risque compté</span>':'')+'</div></div>';
+    t+='<div class="tile"><div class="k">HEAT — risque ouvert</div><div class="v '+(heatUnknown||heat>=4?'neg':'')+'">'+(outOk?(heatUnknown?'≥ ':'')+heat.toFixed(2)+'R <span style="font-size:11px;color:var(--muted-soft)">/ 5R</span>':'—')+'</div><div class="heatbar"><i style="width:'+(outOk?heatPct:0)+'%"></i></div><div class="d">'+(outOk?(open.length+' ouverte(s) · '+pend.length+' armée(s) ('+(armedUnknown?'≥ ':'')+armed.toFixed(2)+'R) · '+expd+' 💤'+(anom.length?' · <span class="neg">'+anom.length+' état(s) illisible(s)</span>':(heatUnknown?' · <span class="neg">stop inconnu ⇒ plein risque compté</span>':''))):'états inconnus — voir avertissement')+'</div></div>';
     $id('pfTiles').innerHTML=t;
 
     // ---- positions ouvertes / en cours ----
-    var live=eps.filter(function(x){return x.state==='open'||x.state==='pending'||x.state===null;});
+    var live=eps.filter(function(x){return x.state==='open'||x.state==='pending'||x.state===null||anomIds[x.id];});
     live.sort(function(a,b){return String(b.vd).localeCompare(String(a.vd));});
     if(!live.length){
       $id('pfOpen').innerHTML='<div class="empty"><b>Aucune position en cours.</b> Chaque ticket CONVICTION du Gate devient un épisode suivi ici automatiquement (plan complet : T1 partiel, add-in, trailing). Premier épisode à la prochaine CONVICTION.</div>';
@@ -224,7 +235,8 @@ a.plainlink{color:var(--blue);text-decoration:none}
       var rows='';
       live.forEach(function(x){
         var badges='', wr=worstR(x), rn=riskNow(x);
-        if(x.state===null){ badges='<span class="leg leg-wait">⌛ suivi à venir</span>'; }
+        if(anomIds[x.id]){ badges='<span class="leg leg-wait">⚠️ état illisible ('+esc(String(x.state))+')</span>'; }
+        else if(x.state===null){ badges='<span class="leg leg-wait">⌛ suivi à venir</span>'; }
         else if(x.state==='pending'){ badges='<span class="leg leg-wait">💤 armé — entry '+x.entry+' pas touché</span>'; }
         else {
           badges='<span class="leg leg-done">entrée '+x.entry+' ✓'+(x.triggeredOn?' '+esc(fdate(x.triggeredOn)):'')+'</span>';
@@ -233,7 +245,8 @@ a.plainlink{color:var(--blue);text-decoration:none}
           badges+='<span class="leg leg-run">stop @'+(x.stopLevel!==null?x.stopLevel:'?')+'</span>';
         }
         var lastCell;
-        if(x.state==='open'){ lastCell='<span class="'+(wr!==null&&wr>0?'pos':(wr!==null&&wr<0?'neg':'mut'))+'">'+(wr!==null?((wr>=0?'+':'')+wr.toFixed(2)+'R garanti'):'?')+'</span><div class="th2">'+(rn!==null?rn.toFixed(2)+'R en jeu':'risque ?')+'</div>'; }
+        if(anomIds[x.id]){ lastCell='<span class="neg">exposition ?</span>'; }
+        else if(x.state==='open'){ lastCell='<span class="'+(wr!==null&&wr>0?'pos':(wr!==null&&wr<0?'neg':'mut'))+'">'+(wr!==null?((wr>=0?'+':'')+wr.toFixed(2)+'R garanti'):'?')+'</span><div class="th2">'+(rn!==null?rn.toFixed(2)+'R en jeu':'risque ?')+'</div>'; }
         else if(x.state==='pending'){ lastCell='<span class="mut">'+(x.riskAtSL!==null?x.riskAtSL.toFixed(2):'?')+'R armé</span>'; }
         else { lastCell='<span class="mut">—</span>'; }
         rows+='<tr><td><span class="tk">'+esc(x.ticker)+'</span><div class="th2">'+esc(x.theme)+' · '+(x.profile==='AGRESSIF'?'🔥':'🛡️')+' · verdict '+esc(fdate(x.vd))+'</div></td>'
@@ -280,8 +293,9 @@ a.plainlink{color:var(--blue);text-decoration:none}
       +'<div style="font-size:10.5px;color:var(--muted-soft)">expectancy nette '+(expNet==null?'—':('<b class="'+(expNet>0?'pos':'neg')+'">'+(expNet>=0?'+':'')+expNet.toFixed(2)+'R</b>'))+' · jalon n=10 · règle : n≥30 ET nette&gt;0 · <a class="plainlink" href="validateur.html">détail sur le Validateur</a></div>';
     var realHtml='<h3><i class="ti ti-lock"></i>RÉEL — verrouillé</h3>';
     if(pos===null){ realHtml+='<div style="font-size:11px;color:var(--red)">⚠️ positions.json illisible — état du canal réel INCONNU.</div>'; }
+    else if(!Array.isArray(pos.positions)){ realHtml+='<div style="font-size:11px;color:var(--red)">⚠️ positions.json de forme inattendue — état du canal réel INCONNU.</div>'; }
     else{
-      var np=(pos&&Array.isArray(pos.positions))?pos.positions.length:0;
+      var np=pos.positions.length;
       realHtml+='<div style="font-size:11.5px;color:var(--muted-soft);line-height:1.6">'+np+' position réelle suivie (canal moniteur). S\'ouvre après <b style="color:var(--text)">n≥30 ET expectancy nette&gt;0</b> — <b style="color:var(--text)">ta décision, jamais automatique</b>. Les fills réels auront leur propre journal, jamais mélangé au SHADOW.</div>';
     }
     $id('pfReal').innerHTML=realHtml;
@@ -308,4 +322,27 @@ a.plainlink{color:var(--blue);text-decoration:none}
 
 <!-- PWA service worker -->
 <script>if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(e){console.warn('SW register failed',e);});});}</script>
+
+<!-- macrodesk-tab-shortcuts : Ctrl+Tab/Ctrl+Shift+Tab + Ctrl+1..6 + bouton Double vue -->
+<script>
+(function(){
+  var PAGES=['smallcap.html','decouvertes.html','moniteur.html','validateur.html','portfolio.html','smallcap_guide.html'];
+  function cur(){var p=(location.pathname.split('/').pop()||'smallcap.html');var i=PAGES.indexOf(p);return i<0?0:i;}
+  function go(i){location.href=PAGES[(i+PAGES.length)%PAGES.length];}
+  function openSplit(){location.href='split.html?left='+PAGES[cur()]+'&right=moniteur.html';}
+  document.addEventListener('keydown',function(e){
+    if(e.ctrlKey&&!e.altKey&&(e.key==='Tab'||e.code==='Tab')){e.preventDefault();go(cur()+(e.shiftKey?-1:1));}
+    else if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&e.key>='1'&&e.key<='6'){e.preventDefault();go(+e.key-1);}
+    else if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&e.code==='KeyB'){e.preventDefault();openSplit();}
+  });
+  var nav=document.querySelector('nav.topnav');
+  if(nav&&!nav.querySelector('.splitlink')){
+    var a=document.createElement('a');
+    a.className='splitlink';a.href='split.html?left='+PAGES[cur()]+'&right=moniteur.html';
+    a.style.marginLeft='auto';a.title='Deux onglets cote a cote (Ctrl + B)';
+    a.innerHTML='<i class="ti ti-layout-columns"></i>Double vue';
+    nav.appendChild(a);
+  }
+})();
+</script>
 </body></html>
