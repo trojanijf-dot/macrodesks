@@ -75,6 +75,7 @@ hr{border:none;border-top:.5px solid var(--border);margin:18px 0}
 <a href="#sortie">10. Gestion de sortie</a>
 <a href="#glossaire">11. Glossaire</a>
 <a href="#decryptage">12. Décryptage institutionnel (prise en main)</a>
+<a href="#autopilot">13. L'Autopilot — l'automatisation de bout en bout</a>
 </div>
 
 <h2 id="doctrine"><i class="ti ti-target-arrow"></i>1. La doctrine</h2>
@@ -613,6 +614,61 @@ const WATCHLIST = {<br>
 <tr><td><b>Sponsoring / réglementaire / financement / escrow</b></td><td><span class="tag t-amber">FAIBLE</span></td></tr>
 </table></div>
 <div class="note good"><b>La règle d'or :</b> un filing n'est jamais « bon » ou « mauvais » en soi — c'est <b>l'item + la nature + dette/equity + fraîcheur</b> qui comptent. Lis toujours le <b>corps du texte</b>, pas juste le titre.</div>
+
+<h2 id="autopilot"><i class="ti ti-robot"></i>13. L'Autopilot — l'automatisation de bout en bout</h2>
+<p>Depuis juillet 2026, la chaîne complète tourne <b>sans intervention humaine</b> : détection → analyse fondamentale (Opus) → ticket d'ordre avec plan de gestion → suivi des sorties → tableau de bord. Ton seul travail : <b>lire le digest du lundi</b> et regarder l'horloge de validation avancer. Tout est <b>SHADOW</b> (papier, équité 100&nbsp;$, 1R = 1&nbsp;$) jusqu'à TA décision à n≥30.</p>
+
+<h4 style="color:#fff;font-size:13px;margin:12px 0 6px">A.1 · La semaine type (heure Nouméa)</h4>
+<div class="card"><table>
+<tr><th>Quand</th><th>Quoi</th><th>Workflow n8n</th></tr>
+<tr><td><b>2×/jour</b> 06:00 · 18:00</td><td>Pipeline data (45 titres, scores, EDGAR) + <b>Gate</b> : 9 checks/titre → tickets</td><td>MacroDesk_SmallCap</td></tr>
+<tr><td><b>Lundi 06:45</b></td><td>Shortlist (brut ≥65, liq ≥1M$/j, max 2/thème) → réservation budget (<b>verrou CAS</b>) → <b>≤5 analyses Opus</b>/sem, 25/mois</td><td>🔬 Analyses hebdo</td></tr>
+<tr><td><b>Lundi 08:00</b></td><td><b>Digest Telegram</b> : shortlist + verdicts + santé système + ligne 🕰️ SHADOW</td><td>📬 Digest hebdo</td></tr>
+<tr><td><b>Mar–sam 10:15</b></td><td>Marquage des épisodes sur bougies daily (🎯 target / 🛑 stop / 💤 expiré) + <b>sentinelle</b> « digest muet &gt;8 j »</td><td>🕰️ SHADOW Outcomes</td></tr>
+<tr><td>Heures marché, /12 min</td><td>Watcher : prix, alertes, fraîcheur</td><td>SmallCap_Claude_Telegram</td></tr>
+</table></div>
+
+<h4 style="color:#fff;font-size:13px;margin:12px 0 6px">A.2 · Les garde-fous (pourquoi tu peux dormir)</h4>
+<div class="card"><table>
+<tr><th>Verrou</th><th>Ce qu'il empêche</th></tr>
+<tr><td><b>Fail-closed partout</b></td><td>donnée absente/périmée/illisible = <b>0 dépense, 0 ticket</b>, jamais un chiffre vert par défaut</td></tr>
+<tr><td><b>Budget CAS</b> (commit GitHub avec SHA)</td><td>deux runs simultanés ne peuvent PAS doubler la dépense Opus — le 2ᵉ est rejeté atomiquement (409 → alerte)</td></tr>
+<tr><td><b>Réservation AVANT dépense</b></td><td>un crash après réservation = crédit compté, jamais l'inverse (pas de dépense fantôme)</td></tr>
+<tr><td><b>Sentinelles</b></td><td>digest muet &gt;8 j → alerte 🛎️ quotidienne ; Gate périmé → ⚠️ dans le digest</td></tr>
+<tr><td><b>Comptage conservateur</b></td><td>SL et T1 touchés le même jour = STOP ; état illisible = visible en ⚠️, jamais masqué ; coût −0.10R/trade déduit (expectancy <b>NETTE</b>)</td></tr>
+</table></div>
+
+<h4 style="color:#fff;font-size:13px;margin:12px 0 6px">A.3 · Le ticket v2 — plan de gestion figé à l'émission</h4>
+<p>Chaque CONVICTION qui passe les 9 checks du Gate devient un <b>ticket complet</b> : le régime choisit mécaniquement le profil, et le plan est <b>écrit d'avance</b> — zéro discrétion en cours de trade.</p>
+<div class="card"><table>
+<tr><th></th><th>🔥 AGRESSIF <span class="muted">(IWM bull + risk on)</span></th><th>🛡️ DOUX <span class="muted">(tout le reste)</span></th></tr>
+<tr><td>Entrée</td><td colspan="2"><b>BUY stop-market</b> à la cassure (on n'achète que si le marché confirme) · SL = 1.5×ATR · T1 = +2R · qty = 1&nbsp;$ de risque</td></tr>
+<tr><td>Add-in</td><td>+1R, taille 0.5×, stop global → BE (<b>risque jamais &gt;1R</b>), max 1</td><td>aucun</td></tr>
+<tr><td>Sortie T1 (+2R)</td><td>solde <b>50 %</b>, stop du reste → BE</td><td>solde <b>75 %</b>, stop → BE</td></tr>
+<tr><td>Runner</td><td>trailing <b>3×ATR</b> (chandelier clôtures)</td><td>trailing <b>2×ATR</b></td></tr>
+</table></div>
+
+<h4 style="color:#fff;font-size:13px;margin:12px 0 6px">A.4 · Les types d'ordres — et pourquoi le système est LONG-only</h4>
+<div class="card"><table>
+<tr><th>Type d'ordre</th><th>Utilisé ?</th><th>Rôle dans le système</th></tr>
+<tr><td><b>Buy stop</b> (acheter AU-DESSUS du marché)</td><td><span class="tag t-green">OUI</span></td><td>l'entrée : cassure confirmée — on paie pour la preuve, pas pour l'espoir</td></tr>
+<tr><td><b>Buy limit</b> (acheter EN-DESSOUS, sur repli)</td><td><span class="tag t-amber">PAS ENCORE</span></td><td>tactique « pullback » possible en v3 — non activée : la spec est figée jusqu'à n≥30</td></tr>
+<tr><td><b>Sell stop</b> (vendre si ça casse en dessous)</td><td><span class="tag t-green">OUI</span></td><td>le SL initial ET le trailing du runner — tes « sells » existent : ce sont les sorties</td></tr>
+<tr><td><b>Sell limit</b> (vendre à un prix cible au-dessus)</td><td><span class="tag t-green">OUI</span></td><td>le T1 partiel (50/75 % soldés à +2R)</td></tr>
+<tr><td><b>Short</b> (sell stop/limit en ENTRÉE, parier la baisse)</td><td><span class="tag t-red">NON — par design</span></td><td>voir l'encadré</td></tr>
+</table></div>
+<div class="note"><b>Pourquoi pas de short sur small caps ?</b> Décision de desk, pas une limite technique : ① le <b>borrow</b> est rare et cher sur ces titres (hard-to-borrow, frais qui mangent l'edge) ; ② perte théoriquement <b>illimitée</b> + risque de squeeze (c'est exactement CE marché-là) ; ③ le pipeline (score momentum + CONVICTION fondamentale) est construit pour trouver des dossiers à acheter — un verdict ÉVITER veut dire « n'achète pas », pas « vends à découvert » ; ④ mélanger long+short doublerait le n nécessaire à la validation (2 stratégies = 2 horloges). <b>La baisse est gérée autrement</b> : régime bear/risk-off → le Gate se tait (zéro nouvelle exposition), profil 🛡️ → sorties resserrées, stops/trailing → dérisquage mécanique. Le short directionnel aura sa place sur le futur desk forex/crypto (marchés symétriques), pas ici.</div>
+
+<h4 style="color:#fff;font-size:13px;margin:12px 0 6px">A.5 · L'horloge de validation — et l'étape ④ « canal réel »</h4>
+<p>Chaque ticket CONVICTION devient un <b>épisode</b> compté par l'horloge (pages <a href="validateur.html">Validateur</a> et <a href="portfolio.html">Portfolio</a>). Règle figée : <b>n ≥ 30 épisodes clos ET expectancy NETTE &gt; 0</b> → alors seulement, décision HUMAINE de passer en réel. Jalon n=10 = première lecture, jamais une conclusion.</p>
+<div class="card"><table>
+<tr><th>Étape du chantier</th><th>État</th><th>C'est quoi</th></tr>
+<tr><td>① Hygiène</td><td><span class="tag t-green">EN PROD</span></td><td>archives forex séparées, ledger purgé</td></tr>
+<tr><td>② Gate v2 + tracker à jambes</td><td><span class="tag t-green">EN PROD</span></td><td>profils, plan de gestion, coûts, curseur d'idempotence</td></tr>
+<tr><td>③ Page Portfolio</td><td><span class="tag t-green">EN PROD</span></td><td>lecteur pur du ledger : équité, drawdown, heat, segmentation</td></tr>
+<tr><td><b>④ Canal réel</b></td><td><span class="tag t-amber">EN DORMANCE</span></td><td>voir ci-dessous — se réveille à ta décision de passage</td></tr>
+</table></div>
+<div class="note good"><b>④ Le canal réel, expliqué :</b> le jour où l'horloge valide et où TU décides de passer en argent réel, il faudra une chose que le SHADOW n'a pas : <b>tes exécutions réelles</b> (prix de fill exact, sorties partielles réellement passées chez le broker, frais). L'étape ④ construit ce canal : ⑴ <b>rotation du secret</b> du webhook (l'actuel est exposé dans le code public — on le change AVANT d'ouvrir le canal) ; ⑵ un petit formulaire (via le Moniteur) où tu saisis chaque fill <b>une seule fois</b> ; ⑶ un workflow n8n qui commite ces fills dans un journal <code>portfolio_journal.json</code> append-only ; ⑷ le Portfolio affiche alors DEUX horloges à jamais séparées — SHADOW (la simulation continue de tourner) et RÉEL (tes vrais trades) — plus un <b>discipline score</b> : l'écart entre ton exécution réelle et le plan du ticket (fill vs entry, SL respecté, sorties au plan). C'est le miroir qui dit si le problème vient du système… ou de la main qui clique. On ne le construit PAS avant : un canal réel ouvert trop tôt, c'est une tentation de trader avant la preuve.</div>
 
 <hr>
 <div class="muted" style="font-size:11px;text-align:center">MacroDesk V16 · Small Cap Intelligence · guide analyste/trader institutionnel · données 100 % gratuites (FMP/Finnhub/Yahoo/EDGAR/GDELT)</div>
