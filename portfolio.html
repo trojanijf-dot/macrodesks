@@ -74,8 +74,8 @@ a.plainlink{color:var(--blue);text-decoration:none}
 <div class="sub">Tout est calculé depuis <b style="color:var(--text)">data/tickets_log.json + shadow_outcomes.json</b> (committés par n8n). Aucune saisie manuelle en SHADOW. Archive forex : <a class="plainlink" href="portfolio_forex.html">portfolio_forex.html</a>.</div>
 
 <div class="rules">
-  <span>équité papier <b>100 $</b> · <b>1R = 1 $</b>/trade</span>
-  <span>plafond heat <b>5R (5 %)</b></span>
+  <span>équité papier <b>100 $</b> · <b>1R = risque propre au trade</b> (≤ 1 $)</span>
+  <span>plafond heat <b>5 $ (5 %)</b></span>
   <span>concentration <b>max 2 épisodes/thème</b></span>
   <span>coût <b>−0.10R</b>/trade clos</span>
   <span>décision : <b>expectancy NETTE</b> · n≥30</span>
@@ -223,7 +223,7 @@ a.plainlink{color:var(--blue);text-decoration:none}
     t+='<div class="tile"><div class="k">Expectancy NETTE</div><div class="v '+(expNet==null?'mut':(expNet>0?'pos':'neg'))+'">'+(expNet==null?'—':(expNet>=0?'+':'')+expNet.toFixed(2)+' R')+'</div><div class="d">brute '+(exp==null?'—':(exp>=0?'+':'')+exp.toFixed(2)+'R')+' − coûts · '+n+' trade(s) clos · la décision se lit ICI</div></div>';
     t+='<div class="tile"><div class="k">Profit factor · win rate</div><div class="v '+(pf==null?'mut':(pf>1?'pos':'neg'))+'">'+(pf==null?(n&&gains>0?'∞':'—'):pf.toFixed(2))+'</div><div class="d">win '+(n?Math.round(wins/n*100)+' %':'—')+' · moy <span class="pos">'+(avgW!=null?'+'+avgW.toFixed(2)+'R':'—')+'</span>/<span class="neg">'+(avgL!=null?avgL.toFixed(2)+'R':'—')+'</span> · pire série '+(n?streak+' 🛑':'—')+'</div></div>';
     var heatPct=Math.min(100, heat/5*100);
-    t+='<div class="tile"><div class="k">HEAT — risque ouvert</div><div class="v '+(heatUnknown||heat>=4?'neg':'')+'">'+(outOk?(heatUnknown?'≥ ':'')+heat.toFixed(2)+'R <span style="font-size:11px;color:var(--muted-soft)">/ 5R</span>':'—')+'</div><div class="heatbar"><i style="width:'+(outOk?heatPct:0)+'%"></i></div><div class="d">'+(outOk?(open.length+' ouverte(s) · '+pend.length+' armée(s) ('+(armedUnknown?'≥ ':'')+armed.toFixed(2)+'R) · '+expd+' 💤'+(anom.length?' · <span class="neg">'+anom.length+' état(s) illisible(s)</span>':(heatUnknown?' · <span class="neg">stop inconnu ⇒ plein risque compté</span>':''))):'états inconnus — voir avertissement')+'</div></div>';
+    t+='<div class="tile"><div class="k">HEAT — risque ouvert</div><div class="v '+(heatUnknown||heat>=4?'neg':'')+'">'+(outOk?(heatUnknown?'≥ ':'')+heat.toFixed(2)+' $ <span style="font-size:11px;color:var(--muted-soft)">/ 5 $</span>':'—')+'</div><div class="heatbar"><i style="width:'+(outOk?heatPct:0)+'%"></i></div><div class="d">'+(outOk?(open.length+' ouverte(s) · '+pend.length+' armée(s) ('+(armedUnknown?'≥ ':'')+armed.toFixed(2)+' $) · '+expd+' 💤'+(anom.length?' · <span class="neg">'+anom.length+' état(s) illisible(s)</span>':(heatUnknown?' · <span class="neg">stop inconnu ⇒ plein risque compté</span>':''))):'états inconnus — voir avertissement')+'</div></div>';
     $id('pfTiles').innerHTML=t;
 
     // ---- positions ouvertes / en cours ----
@@ -247,7 +247,7 @@ a.plainlink{color:var(--blue);text-decoration:none}
         var lastCell;
         if(anomIds[x.id]){ lastCell='<span class="neg">exposition ?</span>'; }
         else if(x.state==='open'){ lastCell='<span class="'+(wr!==null&&wr>0?'pos':(wr!==null&&wr<0?'neg':'mut'))+'">'+(wr!==null?((wr>=0?'+':'')+wr.toFixed(2)+'R garanti'):'?')+'</span><div class="th2">'+(rn!==null?rn.toFixed(2)+'R en jeu':'risque ?')+'</div>'; }
-        else if(x.state==='pending'){ lastCell='<span class="mut">'+(x.riskAtSL!==null?x.riskAtSL.toFixed(2):'?')+'R armé</span>'; }
+        else if(x.state==='pending'){ lastCell='<span class="mut">'+(x.riskAtSL!==null?x.riskAtSL.toFixed(2):'?')+' $ armé · −1R si SL</span>'; }
         else { lastCell='<span class="mut">—</span>'; }
         rows+='<tr><td><span class="tk">'+esc(x.ticker)+'</span><div class="th2">'+esc(x.theme)+' · '+(x.profile==='AGRESSIF'?'🔥':'🛡️')+' · verdict '+esc(fdate(x.vd))+'</div></td>'
           +'<td>'+x.entry+' / <span class="neg">'+x.sl+'</span> / <span class="pos">'+x.t1+'</span></td>'
@@ -281,7 +281,7 @@ a.plainlink{color:var(--blue);text-decoration:none}
     else{
       var hb='';
       tkeys.forEach(function(kk){ var v=themes[kk], pct=Math.min(100,v.risk/2*100);
-        hb+='<div class="brow"><span class="lb">'+esc(kk)+'</span><div class="bar"><i style="width:'+pct+'%;background:'+(v.nb>2?'var(--red)':'var(--green)')+'"></i></div><span class="amt">'+v.risk.toFixed(2)+'R · '+v.nb+' ép.'+(v.nb>2?' ⚠️':'')+'</span></div>'; });
+        hb+='<div class="brow"><span class="lb">'+esc(kk)+'</span><div class="bar"><i style="width:'+pct+'%;background:'+(v.nb>2?'var(--red)':'var(--green)')+'"></i></div><span class="amt">'+v.risk.toFixed(2)+' $ · '+v.nb+' ép.'+(v.nb>2?' ⚠️':'')+'</span></div>'; });
       $id('pfTheme').innerHTML=hb;
     }
 
