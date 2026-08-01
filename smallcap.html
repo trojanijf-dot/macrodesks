@@ -428,7 +428,21 @@ function mdKeyBadge(){
 if(document.readyState==='loading'){ document.addEventListener('DOMContentLoaded',mdKeyBadge); } else { mdKeyBadge(); }
 /* ===== fin cle desk ===== */
 
-function loadClaudeCache(k,s){try{const raw=localStorage.getItem('claude_'+k);if(raw){const o=JSON.parse(raw);s.claude=o.claude;s.plan=o.plan;}}catch(e){}}
+function loadClaudeCache(k,s){
+  /* deux sources : le depot (permanent, partage) et le localStorage (cache local).
+     On garde la PLUS RECENTE sur claude.at ; une source sans date ne gagne jamais
+     contre une source datee (asymetrie de preuve). */
+  var dep=null, loc=null;
+  try{ dep=ANALYSES[String(k).toUpperCase()]||null; }catch(e){}
+  try{ var raw=localStorage.getItem('claude_'+k); if(raw) loc=JSON.parse(raw); }catch(e){}
+  var tD=Date.parse((dep&&dep.claude&&dep.claude.at)||'')||0;
+  var tL=Date.parse((loc&&loc.claude&&loc.claude.at)||'')||0;
+  var win=(tD>=tL?dep:loc)||dep||loc;
+  if(!win)return;
+  s.claude=win.claude; s.plan=win.plan;
+  /* le depot est plus frais que le cache local -> on rafraichit le cache */
+  if(win===dep&&tD>tL){ try{ localStorage.setItem('claude_'+k,JSON.stringify({claude:dep.claude,plan:dep.plan})); }catch(e){} }
+}
 function renderClaude(s){
   const box=document.getElementById('dClaude');if(!box)return;
   if(!s||(!s.claude&&!s.plan)){box.innerHTML='';return;}
@@ -491,7 +505,12 @@ async function approfondir(k){
 
 /* ---- ANALYSE VALIDATEUR (institutionnelle) → colonnes "Claude analyste" + "Vétos vivants" ---- */
 var CLAUDE_ANALYSIS={};   // {TK:{date,verdict,pivots,...}} — GitHub claude_analysis.json + overlay localStorage
-var VALIDATOR_FEED={};    // validator.json → réconciliation live des pivots (R5/R6/filings)
+var VALIDATOR_FEED={}
+/* analyses Claude permanentes (ecrivain unique : SmallCap_Claude_Telegram) */
+var ANALYSES={};
+async function loadAnalyses(){
+  try{ const r=await fetch('data/analyses.json',{cache:'no-store'}); if(r.ok){ const j=await r.json(); ANALYSES=(j&&j.analyses&&typeof j.analyses==='object')?j.analyses:{}; } }catch(e){}
+};    // validator.json → réconciliation live des pivots (R5/R6/filings)
 function esc0(t){return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 async function loadClaudeAnalysis(){
   try{ const r=await fetch('data/claude_analysis.json',{cache:'no-store'}); if(r.ok){ const j=await r.json(); CLAUDE_ANALYSIS=(j&&typeof j==='object')?j:{}; } }catch(e){}
@@ -859,6 +878,7 @@ function handleDeepLink(){try{
 }catch(e){}}
 loadReal().then(handleDeepLink);
 loadWatchlist();
+loadAnalyses();
 loadClaudeAnalysis();
 loadValidatorFeed();
 </script>
