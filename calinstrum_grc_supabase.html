@@ -3509,6 +3509,8 @@ function defDB(){
     pointages:[],     // 1 enregistrement par semaine {id,monday,site,entries:{empId:{jour[7],nuit[7],statut[7]}}}
     tarifsPointage:{},// grille de vente PAR PRÉFIXE ENTITÉ {PRNC:{empId:base},...}
     pointageCircuits:{},// circuit de facturation PAR PRÉFIXE ENTITÉ {PRNC:'mmb',AEI SNC:'shutdown',...}
+    pointageMajRate:{},// % du tarif soumis à majoration sur les heures sup, PAR PRÉFIXE ENTITÉ
+                      // (convention client, ex. AEI/PRNC : 60%) — absent ou 100 = majoration standard
     mmbMeta:{},       // infos éditables du MMB PAR PRÉFIXE {PRNC:{demandeur,travaux,po}}
     bcHebdo:{},       // Bons de commande hebdomadaires PAR PRÉFIXE ENTITÉ
                       // {AEI SNC:[{id,num,dateEnvoi,heureEnvoi,refClient,lignes:[{poste,imputation,
@@ -38552,6 +38554,7 @@ function _ensurePointageShape(){
   if(!Array.isArray(DB.pointages))DB.pointages=[];
   if(!DB.tarifsPointage||typeof DB.tarifsPointage!=='object')DB.tarifsPointage={};
   if(!DB.pointageCircuits||typeof DB.pointageCircuits!=='object')DB.pointageCircuits={};
+  if(!DB.pointageMajRate||typeof DB.pointageMajRate!=='object')DB.pointageMajRate={};
   if(!DB.mmbMeta||typeof DB.mmbMeta!=='object')DB.mmbMeta={};
   if(!DB.bcHebdo||typeof DB.bcHebdo!=='object')DB.bcHebdo={};
 }
@@ -39011,10 +39014,12 @@ function renderPtTarifs(){
   var emps=(DB.employes||[]).filter(function(e){return e.actif!==false;});
   wrap.innerHTML=clients.map(function(cl){
     var g=DB.tarifsPointage[cl]||{};
+    var mr=_ptMajRateFor(cl); // fraction du tarif soumise à majoration (1 = standard)
+    var mrOn=mr<1;
     var rows=emps.map(function(e){
       var base=Number(g[e.id])||'';
       var b=Number(base)||0;
-      function m(x){return b>0?fN(Math.round(b*x)):'—';}
+      function m(x){return b>0?fN(Math.round(b*(1+mr*(x-1)))):'—';}
       return '<tr><td><b>'+esc(e.nom)+'</b> '+esc(e.prenom||'')+' <span style="color:var(--muted-soft);font-size:10px">'+esc(e.qualification||e.poste||'')+'</span></td>'+
         '<td style="text-align:right"><input type="number" min="0" step="50" value="'+base+'" placeholder="—" '+
           'onchange="ptSetTarif(\''+esc(cl)+'\','+e.id+',this.value)" '+
@@ -39024,14 +39029,50 @@ function renderPtTarifs(){
         '<td style="text-align:right;font-family:var(--mono);color:#f59e0b">'+m(1.75)+'</td>'+
         '<td style="text-align:right;font-family:var(--mono);color:#a78bfa">'+m(2)+'</td></tr>';
     }).join('');
+    // Majoration réduite (convention client, ex. AEI/PRNC : 60%) — seule une part
+    // du tarif est soumise aux majorations d'heures sup, le reste ("frais de
+    // structure") reste figé. Coefficient effectif = 1 + %majorable×(coef-1).
+    var majCtrl='<label class="no-print" style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);white-space:nowrap" title="Convention client : seule une part du tarif est majorée sur les heures sup (ex. AEI/PRNC : 60%). Le reste (frais de structure) n\'est jamais majoré.">'+
+        '<input type="checkbox" '+(mrOn?'checked':'')+' onchange="ptToggleMajRate(\''+esc(cl)+'\',this.checked)" style="cursor:pointer">'+
+        'Majoration réduite'+
+      '</label>'+
+      '<input type="number" min="1" max="100" step="1" value="'+(mrOn?Math.round(mr*100):(DB.pointageMajRate[cl]||60))+'" '+(mrOn?'':'disabled')+
+        ' onchange="ptSetMajRate(\''+esc(cl)+'\',this.value)" class="no-print" '+
+        'style="width:48px;text-align:right;padding:3px 5px;font-family:var(--mono)" title="% du tarif soumis à majoration">'+
+      '<span class="no-print" style="font-size:10.5px;color:var(--muted-soft)">% majorable</span>';
     return '<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px">'+
-      '<div class="flex-between" style="margin-bottom:8px">'+
-        '<div style="font-weight:700;font-size:12.5px;color:var(--teal)">'+esc(cl)+'</div>'+
-        '<button class="btn btn-ghost btn-sm no-print" onclick="ptDelTarifClient(\''+esc(cl)+'\')" title="Supprimer cette grille tarifaire">🗑</button>'+
+      '<div class="flex-between" style="margin-bottom:8px;flex-wrap:wrap;gap:8px">'+
+        '<div style="font-weight:700;font-size:12.5px;color:var(--teal)">'+esc(cl)+(mrOn?' <span style="font-size:9.5px;color:var(--amber);font-weight:600">('+Math.round(mr*100)+'% majorable)</span>':'')+'</div>'+
+        '<div style="display:flex;align-items:center;gap:8px">'+majCtrl+
+          '<button class="btn btn-ghost btn-sm no-print" onclick="ptDelTarifClient(\''+esc(cl)+'\')" title="Supprimer cette grille tarifaire">🗑</button>'+
+        '</div>'+
       '</div>'+
       '<table style="width:100%"><thead class="no-pm-blur"><tr><th>Salarié</th><th style="text-align:right">Tarif base HNJ (XPF/h)</th><th style="text-align:right">+25%</th><th style="text-align:right">+50%</th><th style="text-align:right">Dim +75%</th><th style="text-align:right">Nuit +100%</th></tr></thead>'+
       '<tbody>'+rows+'</tbody></table></div>';
   }).join('');
+}
+function ptToggleMajRate(cl,checked){
+  _ensurePointageShape();
+  if(checked){
+    var cur=Number(DB.pointageMajRate[cl]);
+    DB.pointageMajRate[cl]=(cur>0&&cur<100)?cur:60; // 60% = seul cas connu à ce jour (convention AEI/PRNC)
+  } else {
+    delete DB.pointageMajRate[cl];
+  }
+  saveDB();renderPtTarifs();
+}
+function ptSetMajRate(cl,val){
+  _ensurePointageShape();
+  var v=Number(val);
+  if(v>0&&v<=100)DB.pointageMajRate[cl]=v;
+  saveDB();renderPtTarifs();
+}
+// % du tarif soumis à majoration pour ce préfixe client, en fraction (1 = standard,
+// aucune réduction). Utilisé par _ptFactTypes() pour le coefficient de facturation.
+function _ptMajRateFor(pfx){
+  _ensurePointageShape();
+  var v=Number(DB.pointageMajRate&&DB.pointageMajRate[pfx]);
+  return (v>0&&v<=100)?v/100:1;
 }
 function ptAddTarifClient(){
   var sel=document.getElementById('ptTarifNewClient');
@@ -39439,15 +39480,24 @@ function _ptPeriodsWithHours(pfx,circuit){
     return {y:o.y,m:o.m,hours:o.hours,start:b.start,end:b.end};
   }).sort(function(a,b){return a.start<b.start?-1:1;});
 }
-// Types de ligne facturables + coefficient de majoration
-function _ptFactTypes(){
+// Types de ligne facturables + coefficient de majoration.
+// [15/07/2026] pfx optionnel : si le client a une "majoration réduite" réglée
+// (cf _ptMajRateFor/ptToggleMajRate, ex. convention AEI/PRNC à 60%), seule
+// cette part du tarif est soumise à la majoration — le reste ("frais de
+// structure") reste figé. Coefficient effectif = 1 + %majorable×(coef-1) ;
+// vérifié sur l'exemple fourni : base 5200, +25% normal → coef 1,25 (6500) ;
+// à 60% majorable → coef 1+0,6×0,25=1,15 (5980). Les heures normales (hnj,
+// coef 1) ne sont jamais affectées (1+mr×(1-1)=1 quel que soit mr).
+function _ptFactTypes(pfx){
+  var mr=(typeof _ptMajRateFor==='function')?_ptMajRateFor(pfx):1;
+  function eff(coefNormal){return 1+mr*(coefNormal-1);}
   return [
     {key:'hnj',lbl:'Heures normales',coef:1},
-    {key:'hs25',lbl:'Heures majorées +25%',coef:1.25},
-    {key:'hs50',lbl:'Heures majorées +50%',coef:1.5},
-    {key:'dim',lbl:'Heures dimanche +75%',coef:1.75},
-    {key:'fer',lbl:'Heures fériées',coef:1+_ptFerieMaj()/100},
-    {key:'nuit',lbl:'Heures de nuit +100%',coef:2}
+    {key:'hs25',lbl:'Heures majorées +25%',coef:eff(1.25)},
+    {key:'hs50',lbl:'Heures majorées +50%',coef:eff(1.5)},
+    {key:'dim',lbl:'Heures dimanche +75%',coef:eff(1.75)},
+    {key:'fer',lbl:'Heures fériées',coef:eff(1+_ptFerieMaj()/100)},
+    {key:'nuit',lbl:'Heures de nuit +100%',coef:eff(2)}
   ];
 }
 // Calcule les bornes courantes selon circuit
@@ -39475,7 +39525,7 @@ function ptFactBuildLines(){
   agg.emps.forEach(function(e){var b=_ptTarifFor(pfx,e.id);if(b!=null)distinctBases[b]=true;});
   var multiBase=Object.keys(distinctBases).length>1;
   var lines=[],totalHT=0;
-  _ptFactTypes().forEach(function(t){
+  _ptFactTypes(pfx).forEach(function(t){
     // Regrouper les heures de ce type par taux de base
     var byRate={};
     agg.emps.forEach(function(e){
