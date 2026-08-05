@@ -28541,9 +28541,23 @@ function renderAvoirsListForFA(factureId){
     list.map(function(a){
       return '<tr><td>'+esc(a.num)+'</td><td style="color:var(--muted)">'+fD(a.date)+'</td>'+
         '<td style="text-align:right;color:#f87171;font-weight:700">'+fN(a.ttc)+' XPF</td>'+
-        '<td class="no-print"><button class="btn btn-ghost btn-sm" onclick="previewAvoir('+a.id+')" title="Aperçu">👁</button></td></tr>';
+        '<td class="no-print" style="white-space:nowrap">'+
+          '<button class="btn btn-ghost btn-sm" onclick="previewAvoir('+a.id+')" title="Aperçu">👁</button>'+
+          '<button class="btn btn-ghost btn-sm" onclick="deleteAvoir('+a.id+')" title="Supprimer cet avoir">🗑</button>'+
+        '</td></tr>';
     }).join('')+
   '</tbody></table>';
+}
+
+// Supprime un avoir — ne touche JAMAIS la facture source (f.lines/f._bcConsumption
+// intacts), c'est un document totalement indépendant.
+function deleteAvoir(id){
+  var a=(DB.avoirs||[]).find(function(x){return x.id===id;});
+  if(!a)return;
+  if(!confirm('Supprimer l\'avoir '+a.num+' ('+fN(a.ttc)+' XPF) ?\n\nLa facture '+(a.avoirOfNum||'')+' n\'est pas affectée — seul le document avoir disparaît.'))return;
+  DB.avoirs=(DB.avoirs||[]).filter(function(x){return x.id!==id;});
+  saveDB();
+  renderAvoirsListForFA(a.avoirOf);
 }
 
 // Aperçu / impression de l'avoir — réutilise le circuit d'impression générique
@@ -28589,7 +28603,8 @@ function bAvoir(av){
       (isExo?'':'<tr><td>TGC</td><td>'+fN(av.tgc)+'</td></tr>')+
       '<tr class="dtf"><td>Total à créditer (TTC)</td><td>'+fN(av.ttc)+'</td></tr></table>'+
     '</div>'+
-    '<div class="doc-notes">Ce montant vient en déduction du solde dû sur la facture '+esc(av.avoirOfNum||'')+'. Aucune action requise si déjà réglée intégralement — compensation ou remboursement à convenir.</div>'+
+    '<div class="doc-notes"><strong>Montant en lettres (à créditer) :</strong> '+toLtr(Math.abs(av.ttc))+'<br>'+
+      'Ce montant vient en déduction du solde dû sur la facture '+esc(av.avoirOfNum||'')+'. Aucune action requise si déjà réglée intégralement — compensation ou remboursement à convenir.</div>'+
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
     '<p class="doc-legal">'+getMention(isExo?av.tgcM:'tgc')+'</p>'+
   '</div>';
