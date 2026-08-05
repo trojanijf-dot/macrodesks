@@ -39662,6 +39662,17 @@ function _ptFactDevisInfo(){
     fa=(DB.factures||[]).find(function(x){
       return x.devisLieId===d.id && getClientPrefix(x.client||'')===ptFactState.pfx && (x.objet||'').indexOf(periodStr)>=0;
     });
+    // Repli : factures générées avant que devisLieId soit systématiquement
+    // préservé (cf chantier BC hebdo, 14/07/2026) — devisLieId peut être vide
+    // alors que la facture correspond bien à cette semaine (même période exacte
+    // + même client). Sans ce repli, l'écran affiche "aucune facture" et la
+    // génération créerait un DOUBLON (double consommation BC) au lieu de
+    // remplacer la bonne facture — cf _ptFactTypes/ptFactGenerate ci-dessous.
+    if(!fa){
+      fa=(DB.factures||[]).find(function(x){
+        return x.devisLieId!==d.id && getClientPrefix(x.client||'')===ptFactState.pfx && (x.objet||'').indexOf(periodStr)>=0;
+      });
+    }
   } else {
     fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
   }
@@ -39720,6 +39731,19 @@ function ptFactGenerate(){
     existingFa=(DB.factures||[]).find(function(f){
       return f.devisLieId===d.id && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
     });
+    // Repli : factures générées avant que devisLieId soit systématiquement
+    // préservé (cf chantier BC hebdo, 14/07/2026) — devisLieId peut être vide
+    // alors que la facture correspond bien à cette semaine (même période exacte
+    // + même client). Sans ce repli, la génération créerait un DOUBLON (donc
+    // une double consommation BC) au lieu de remplacer la bonne facture.
+    // Backfill devisLieId au passage pour que la recherche rapide fonctionne
+    // directement la prochaine fois.
+    if(!existingFa){
+      existingFa=(DB.factures||[]).find(function(f){
+        return f.devisLieId!==d.id && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
+      });
+      if(existingFa) existingFa.devisLieId=d.id;
+    }
   } else {
     existingFa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
   }
