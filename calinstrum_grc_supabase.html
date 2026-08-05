@@ -2295,6 +2295,15 @@ body.has-dashboard-bg #page-dashboard .metric{
         <div id="faAcomptesList" style="font-size:11px"></div>
         <div id="faAcomptesHint" style="margin-top:6px;font-size:10.5px;color:var(--text-dim);font-style:italic"></div>
       </div>
+      <!-- BLOC AVOIRS — facture déjà émise/envoyée : on ne la modifie jamais en
+           place, un document séparé (lié via avoirOf) crédite l'écart. -->
+      <div style="margin-top:10px;padding:10px;background:rgba(248,113,113,.05);border:1px solid rgba(248,113,113,.25);border-radius:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+          <strong style="color:#f87171">💳 Avoirs</strong>
+          <button type="button" class="btn btn-sm" onclick="openAvoirModal()" style="padding:4px 10px;background:#f87171;color:#1a1a1a;border:none;border-radius:4px;font-weight:700">+ Émettre un avoir</button>
+        </div>
+        <div id="faAvoirsList" style="font-size:11px"></div>
+      </div>
       <div class="form-group" style="margin-top:10px"><label>Notes</label><textarea class="form-textarea" id="fa-notes" rows="2"></textarea></div>
       <div style="background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.2);border-radius:6px;padding:10px;font-size:10.5px;line-height:1.8;color:var(--teal);margin-top:10px">
         <strong style="display:block;margin-bottom:4px">🏦 Coordonnées bancaires CALINSTRUM</strong>
@@ -2398,6 +2407,41 @@ body.has-dashboard-bg #page-dashboard .metric{
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mAcompte')">Annuler</button>
     <button class="btn btn-teal" onclick="generateAcompteInvoice()">✓ Générer la facture partielle</button>
+  </div>
+</div></div>
+
+<!-- MODAL ÉMISSION D'UN AVOIR -->
+<div class="modal-overlay" id="mAvoir">
+<div class="modal" style="max-width:720px">
+  <div class="modal-header"><h3>💳 Émettre un avoir</h3><button class="modal-close" onclick="cm('mAvoir')">✕</button></div>
+  <div class="modal-body">
+    <div id="avoirInfo" style="padding:10px;background:rgba(248,113,113,.08);border-radius:6px;font-size:11.5px;color:#cbd5e1;margin-bottom:12px"></div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="avoirCompareCurrentTariffs()" title="Recalcule les lignes 'Heures majorées/dimanche/nuit' avec les tarifs actuels (utile après un changement de réglage type majoration réduite AEI/PRNC) et coche automatiquement celles qui ont changé">🔄 Comparer avec les tarifs actuels</button>
+    </div>
+    <div style="border:0.5px solid var(--border);border-radius:7px;padding:10px;background:rgba(255,255,255,0.02);max-height:320px;overflow-y:auto">
+      <table style="width:100%;font-size:11.5px">
+        <thead><tr>
+          <th style="text-align:center;width:30px">✓</th><th style="text-align:left">Ligne</th>
+          <th style="text-align:right">Qté</th><th style="text-align:right">PU facturé</th>
+          <th style="text-align:right" title="Le nouveau prix correct pour cette ligne — mets 0 pour annuler la ligne en totalité">Nouveau PU</th><th style="text-align:right">Montant crédité</th>
+        </tr></thead>
+        <tbody id="avoir-lines-list"></tbody>
+      </table>
+    </div>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:6px">Coche les lignes à créditer — édite librement le PU pour un avoir manuel sur n'importe quel motif (pas seulement un écart de tarif).</div>
+    <div class="form-group" style="margin-top:12px">
+      <label>Motif (imprimé sur l'avoir)</label>
+      <textarea class="form-textarea" id="avoir-reason" rows="2" placeholder="Ex : correction du taux de majoration heures sup — convention AEI/PRNC"></textarea>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:10px 14px;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.3);border-radius:6px">
+      <span style="font-size:11px;color:var(--muted)">Total à créditer (HT)</span>
+      <span id="avoir-total-val" style="font-size:16px;font-weight:800;color:#f87171">0 XPF</span>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mAvoir')">Annuler</button>
+    <button class="btn btn-teal" onclick="createAvoirFromFA()" style="background:#f87171;border-color:#f87171">✓ Émettre l'avoir</button>
   </div>
 </div></div>
 
@@ -3500,6 +3544,10 @@ function dedupeDB(db){
 }
 function defDB(){
   return{devis:[],factures:[],bcs:[],bls:[],
+    avoirs:[],        // notes de crédit liées à une facture (avoirOf=id facture source) —
+                      // PAS une table Supabase dédiée, syncée via le canal params comme bcHebdo
+                      // (cf commentaire MODULE POINTAGE ci-dessous) : {id,num,date,client,
+                      // avoirOf,avoirOfNum,avoirReason,lines[{...,pu:NÉGATIF}],ht,tgc,ttc (négatifs)}
     clients:JSON.parse(JSON.stringify(DEFAULT_CLIENTS)),
     // ===== MODULE POINTAGE / HEURES =====
     // Ces clés ne sont PAS des tables Supabase dédiées : elles syncent via le
@@ -4767,6 +4815,18 @@ function nxt(t, prefix){
     DB.nid.bl=Math.max(DB.nid.bl||0, n);
     saveDB();
     return 'BL'+dd+mm+yy+'/'+pad(n);
+  }
+
+  if(t==='av'){
+    // Format avoir : PRÉFIXE-AVNNN — compteur dédié (tableau DB.avoirs séparé
+    // de DB.factures, cf note architecture chantier avoir 2026-07-16).
+    var escPfxA=pfx.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    var reA=new RegExp('^'+escPfxA+'-AV(\\d+)','i');
+    var n=scanMax(DB.avoirs||[], reA)+1;
+    DB.nid['av_'+pfx]=n;
+    DB.nid.av=Math.max(DB.nid.av||0, n);
+    saveDB();
+    return pfx+'-AV'+pad(n);
   }
 
   return 0;
@@ -26753,6 +26813,7 @@ function openFA(id,fromDV,preSelectedClient){
   populateFacImportMenus();
   // Afficher la liste des acomptes liés à cette facture (si c'est une facture existante)
   if(typeof renderAcomptesList==='function') renderAcomptesList();
+  if(typeof renderAvoirsListForFA==='function') renderAvoirsListForFA(eFAid);
   // Rendu initial du bloc historique délai
   setTimeout(function(){if(typeof renderFADelaiHistory==='function')renderFADelaiHistory();},50);
   om('mFA');
@@ -28296,6 +28357,226 @@ function deleteAcompte(id){
   saveDB();
   renderAcomptesList();renderFA();rDash();
   if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+}
+
+// =============================================================================
+// AVOIRS (notes de crédit) — chantier 16/07/2026
+// =============================================================================
+// Une facture déjà émise/envoyée au client ne doit JAMAIS être modifiée en place
+// (mismatch avec le PDF que le client a déjà reçu, TGC déjà déclarée sur l'ancien
+// montant...). L'avoir est un document SÉPARÉ, lié à la facture source (avoirOf),
+// qui crédite tout ou partie de son montant sans jamais y toucher.
+//
+// Stockage : DB.avoirs[] — tableau DÉDIÉ (pas mélangé à DB.factures) pour ne
+// prendre AUCUN risque avec les KPI/dashboards/pipeline Suivi qui itèrent déjà
+// DB.factures un peu partout dans l'app. PAS une table Supabase dédiée : syncé
+// via le canal params comme bcHebdo/tarifsPointage (cf defDB()).
+// Lignes stockées avec pu NÉGATIF (le delta), qte POSITIVE (les heures réelles) —
+// ht/tgc/ttc du document sont donc négatifs, cohérent avec la sémantique "avoir".
+function _ensureAvoirShape(){
+  if(!Array.isArray(DB.avoirs))DB.avoirs=[];
+}
+function getAvoirsForFA(factureId){
+  _ensureAvoirShape();
+  return DB.avoirs.filter(function(a){return a.avoirOf===factureId;});
+}
+
+var eAvoirFAId=null;   // id de la facture source en cours de traitement dans mAvoir
+var _avoirLines=[];    // lignes de travail {ref,designation,tgc,unite,qte,puOld,puNew,checked}
+
+// Ouvre la modal de création d'avoir pour la facture actuellement ouverte (eFAid).
+function openAvoirModal(){
+  if(!eFAid){alert('Ouvre (et si besoin enregistre) la facture avant d\'émettre un avoir.');return;}
+  var f=(DB.factures||[]).find(function(x){return x.id===eFAid;});
+  if(!f){alert('Facture introuvable — enregistre-la d\'abord.');return;}
+  eAvoirFAId=f.id;
+  _avoirLines=(f.lines||[]).filter(function(l){return l&&l.type!=='section_banner'&&l.type!=='header';}).map(function(l){
+    return {ref:l.ref||'',designation:l.designation||'',tgc:l.tgc||0,unite:l.unite||'U',qte:Number(l.qte)||0,puOld:Number(l.pu)||0,puNew:null,checked:false};
+  });
+  var info=document.getElementById('avoirInfo');
+  if(info)info.innerHTML='Avoir sur la facture <b>'+esc(f.num||'')+'</b> ('+fN(f.ttc||0)+' XPF TTC) — '+esc(f.client||'');
+  var reasonEl=document.getElementById('avoir-reason'); if(reasonEl)reasonEl.value='';
+  renderAvoirLinesList();
+  om('mAvoir');
+}
+
+// Compare les lignes de la facture source avec les tarifs/coefficients ACTUELS
+// (via _ptFactTypes, qui applique la majoration réduite si réglée pour ce client
+// — cf chantier majoration réduite AEI/PRNC, 15/07/2026) et pré-remplit l'écart.
+// Ne fonctionne que pour les factures issues du module Pointage (devisLieId +
+// lignes "Heures ..."). Le tarif horaire d'origine est reconstruit à partir du
+// PU déjà facturé ET du coefficient STANDARD (jamais réduit) du même palier —
+// valide tant que la facture source a été générée SANS réduction déjà active
+// (cas de F040/041/042). "Heures fériées"/"Heures normales" volontairement
+// exclues (base non ambiguë pour hnj, taux férié potentiellement changé depuis).
+function avoirCompareCurrentTariffs(){
+  if(!eAvoirFAId)return;
+  var f=(DB.factures||[]).find(function(x){return x.id===eAvoirFAId;});
+  if(!f)return;
+  if(!f.devisLieId){alert('Cette facture n\'est pas liée à un devis Pointage — comparaison automatique non disponible. Édite les montants manuellement ci-dessous.');return;}
+  var pfx=getClientPrefix(f.client||'');
+  var curTypes=_ptFactTypes(pfx);   // coefficients ACTUELS (majoration réduite si active)
+  var stdTypes=_ptFactTypes(null);  // coefficients STANDARD (référence, jamais réduits)
+  var curByLbl={},stdByLbl={};
+  curTypes.forEach(function(t){curByLbl[t.lbl]=t.coef;});
+  stdTypes.forEach(function(t){stdByLbl[t.lbl]=t.coef;});
+  var skip={'Heures fériées':true,'Heures normales':true};
+  var anyDelta=false;
+  _avoirLines.forEach(function(l){
+    var baseLbl=l.designation.replace(/\s*\(base\s*[\d\s]+\)\s*$/i,'').trim();
+    if(skip[baseLbl] || !(baseLbl in curByLbl) || !l.qte){l.puNew=null;return;}
+    var stdCoef=stdByLbl[baseLbl];
+    if(!stdCoef){l.puNew=null;return;}
+    var base=l.puOld/stdCoef; // reconstruit le tarif horaire depuis le PU d'origine
+    l.puNew=Math.round(base*curByLbl[baseLbl]);
+    if(l.puNew!==l.puOld){l.checked=true;anyDelta=true;}
+  });
+  if(!anyDelta) alert('Aucun écart détecté entre les tarifs facturés et les tarifs actuels sur les lignes de cette facture.');
+  renderAvoirLinesList();
+}
+
+function renderAvoirLinesList(){
+  var wrap=document.getElementById('avoir-lines-list');
+  if(!wrap)return;
+  wrap.innerHTML=_avoirLines.map(function(l,i){
+    var delta=(l.puNew!=null)?(l.puNew-l.puOld):null;
+    var creditTotal=delta!=null?Math.round(delta*l.qte):0;
+    var puCell=(l.puNew!=null)
+      ? fN(l.puNew)
+      : '<input type="number" style="width:80px;text-align:right;padding:3px 5px" placeholder="'+l.puOld+'" onchange="_avoirEditPuNew('+i+',this.value)">';
+    return '<tr>'+
+      '<td style="text-align:center"><input type="checkbox" '+(l.checked?'checked':'')+' onchange="_avoirToggleLine('+i+',this.checked)"></td>'+
+      '<td>'+esc(l.designation)+'</td>'+
+      '<td style="text-align:right">'+fH(l.qte)+'</td>'+
+      '<td style="text-align:right">'+fN(l.puOld)+'</td>'+
+      '<td style="text-align:right">'+puCell+'</td>'+
+      '<td style="text-align:right;font-weight:700;color:'+(creditTotal<0?'#f87171':(creditTotal>0?'#34d399':'inherit'))+'">'+(l.puNew!=null?fN(creditTotal):'—')+'</td>'+
+    '</tr>';
+  }).join('');
+  _avoirRecalcTotal();
+}
+function _avoirToggleLine(i,checked){
+  if(!_avoirLines[i])return;
+  _avoirLines[i].checked=checked;
+  if(checked && _avoirLines[i].puNew==null) _avoirLines[i].puNew=_avoirLines[i].puOld;
+  renderAvoirLinesList();
+}
+function _avoirEditPuNew(i,val){
+  if(!_avoirLines[i])return;
+  _avoirLines[i].puNew=Number(val)||0;
+  _avoirRecalcTotal();
+}
+function _avoirRecalcTotal(){
+  var total=0;
+  _avoirLines.forEach(function(l){ if(l.checked && l.puNew!=null){ total+=Math.round((l.puNew-l.puOld)*l.qte); } });
+  var el=document.getElementById('avoir-total-val');
+  if(el) el.textContent=fN(total)+' XPF';
+}
+
+// Crée l'avoir (lignes cochées uniquement) et le rattache à la facture source.
+// N'affecte JAMAIS f.lines / f._bcConsumption de la facture source (immuable) —
+// et n'affecte pas non plus le suivi des BC : seul le PRIX change, pas les heures
+// déjà consommées.
+function createAvoirFromFA(){
+  if(!eAvoirFAId){alert('Aucune facture source.');return;}
+  var f=(DB.factures||[]).find(function(x){return x.id===eAvoirFAId;});
+  if(!f){alert('Facture introuvable.');return;}
+  var checked=_avoirLines.filter(function(l){return l.checked && l.puNew!=null;});
+  if(!checked.length){alert('Coche au moins une ligne à créditer.');return;}
+  var reasonEl=document.getElementById('avoir-reason');
+  var reason=reasonEl?String(reasonEl.value||'').trim():'';
+  if(!reason && !confirm('Aucun motif renseigné — continuer quand même ?'))return;
+  _ensureAvoirShape();
+  var isExo=isClientExo(f.client);
+  var avLines=checked.map(function(l){
+    return {ref:l.ref,designation:l.designation,tgc:l.tgc,unite:l.unite,qte:l.qte,pu:(l.puNew-l.puOld),_sec:'service'};
+  });
+  var ht=avLines.reduce(function(s,l){return s+Math.round(l.qte*l.pu);},0);
+  var tgc=isExo?0:Math.round(avLines.reduce(function(s,l){return s+Math.round(l.qte*l.pu)*(l.tgc||0)/100;},0));
+  var ttc=ht+tgc;
+  var av={
+    id:Date.now(),
+    num:nxt('av',getClientPrefix(f.client||'')),
+    date:td(),
+    client:f.client,contact:f.contact||'',email:f.email||'',adresse:f.adresse||'',civilite:f.civilite||'',
+    type:f.type||'Prestation de service',
+    avoirOf:f.id,avoirOfNum:f.num||'',
+    avoirReason:reason,
+    lines:avLines,
+    ht:ht,tgc:tgc,ttc:ttc,tgcM:f.tgcM||'tgc'
+  };
+  DB.avoirs.push(av);
+  saveDB();
+  cm('mAvoir');
+  renderAvoirsListForFA(f.id);
+  if(typeof showBCSaveToast==='function') showBCSaveToast('✓ Avoir '+av.num+' créé ('+fN(ttc)+' XPF TTC)');
+  else alert('Avoir '+av.num+' créé ('+fN(ttc)+' XPF TTC).');
+}
+
+// Liste des avoirs déjà émis sur une facture — affichée dans SA propre modal
+// (comme faAcomptesList pour les acomptes).
+function renderAvoirsListForFA(factureId){
+  var wrap=document.getElementById('faAvoirsList');
+  if(!wrap)return;
+  if(!factureId){wrap.innerHTML='<span style="color:var(--muted)">Enregistre la facture pour pouvoir émettre un avoir.</span>';return;}
+  var list=getAvoirsForFA(factureId);
+  if(!list.length){wrap.innerHTML='<span style="color:var(--muted)">Aucun avoir émis sur cette facture.</span>';return;}
+  wrap.innerHTML='<table style="width:100%"><thead><tr><th style="text-align:left">N°</th><th style="text-align:left">Date</th><th style="text-align:right">Montant TTC</th><th class="no-print"></th></tr></thead><tbody>'+
+    list.map(function(a){
+      return '<tr><td>'+esc(a.num)+'</td><td style="color:var(--muted)">'+fD(a.date)+'</td>'+
+        '<td style="text-align:right;color:#f87171;font-weight:700">'+fN(a.ttc)+' XPF</td>'+
+        '<td class="no-print"><button class="btn btn-ghost btn-sm" onclick="previewAvoir('+a.id+')" title="Aperçu">👁</button></td></tr>';
+    }).join('')+
+  '</tbody></table>';
+}
+
+// Aperçu / impression de l'avoir — réutilise le circuit d'impression générique
+// (titre "Avoir …" ne matche ni Devis/Facture/BC dans doPrint() → fallback non
+// paginé standard, footer bleu + mention légale via .doc-fixed-footer, comme BL).
+function previewAvoir(id){
+  var av=(DB.avoirs||[]).find(function(x){return x.id===id;});
+  if(!av){alert('Avoir introuvable.');return;}
+  showPrv('Avoir — '+av.num, bAvoir(av));
+}
+function bAvoir(av){
+  var isExo=isClientExo(av.client);
+  var clientDetail=getClientDetail(av.client);
+  var ci_adr=CI.adresse.replace(/\n/g,'<br>');
+  var adr=(av.adresse||'').replace(/\n/g,'<br>');
+  var cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
+  var cliTel=clientDetail.tel||'';
+  var cliEmail=(av.email&&av.email.trim())?av.email:(clientDetail.email||'');
+  var rows=(av.lines||[]).map(function(l,i){
+    var tot=Math.round((l.qte||0)*(l.pu||0));
+    return '<tr><td style="text-align:center">'+(i+1)+'</td><td style="text-align:center">'+esc(l.ref||'')+'</td>'+
+      '<td>'+esc(l.designation||'')+'</td><td style="text-align:center">'+(l.tgc||0)+'%</td>'+
+      '<td style="text-align:center">'+(l.unite||'U')+'</td><td style="text-align:center">'+(l.qte||0)+'</td>'+
+      '<td style="text-align:right">'+fN(l.pu||0)+'</td><td style="text-align:right;font-weight:700">'+fN(tot)+'</td></tr>';
+  }).join('');
+  return '<div class="doc">'+
+    '<div class="doc-head" style="border-bottom-color:#b91c1c">'+
+      '<div><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
+      '<div style="width:50%;text-align:right"><div class="doc-title" style="color:#b91c1c">AVOIR N° '+esc(av.num||'')+'</div><div class="doc-meta">Le : '+fD(av.date)+'</div></div>'+
+    '</div>'+
+    '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:8px 11px;font-size:11.5px;color:#7f1d1d;margin-bottom:10px"><strong style="color:#991b1b">En référence à la facture N° '+esc(av.avoirOfNum||'')+'</strong>'+(av.avoirReason?'<br>'+esc(av.avoirReason):'')+'</div>'+
+    '<div class="doc-parties">'+
+      '<div class="doc-party"><h4>CALINSTRUM SARL</h4><p>RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+'<br>'+CI.email+'</p></div>'+
+      '<div class="doc-party"><h4>CLIENT</h4><p>'+_civPrefix(av.client,av.contact,av.civilite)+'<strong>'+esc(av.contact||'')+'</strong><br>'+cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+'</p></div>'+
+    '</div>'+
+    '<table class="doc-tbl">'+
+      '<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>'+
+      '<thead><tr><th>Item</th><th>Réf.</th><th>Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th style="text-align:right">PU</th><th style="text-align:right">TOTAL HT</th></tr></thead>'+
+      '<tbody>'+rows+'</tbody>'+
+    '</table>'+
+    '<div class="doc-totals-wrap" style="margin-top:8px">'+
+      '<table class="doc-totals"><tr><td>Total HT (XPF)</td><td>'+fN(av.ht)+'</td></tr>'+
+      (isExo?'':'<tr><td>TGC</td><td>'+fN(av.tgc)+'</td></tr>')+
+      '<tr class="dtf"><td>Total à créditer (TTC)</td><td>'+fN(av.ttc)+'</td></tr></table>'+
+    '</div>'+
+    '<div class="doc-notes">Ce montant vient en déduction du solde dû sur la facture '+esc(av.avoirOfNum||'')+'. Aucune action requise si déjà réglée intégralement — compensation ou remboursement à convenir.</div>'+
+    '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
+    '<p class="doc-legal">'+getMention(isExo?av.tgcM:'tgc')+'</p>'+
+  '</div>';
 }
 
 // =============================================================================
