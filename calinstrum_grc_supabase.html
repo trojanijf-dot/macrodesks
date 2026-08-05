@@ -28413,7 +28413,11 @@ function avoirCompareCurrentTariffs(){
   if(!eAvoirFAId)return;
   var f=(DB.factures||[]).find(function(x){return x.id===eAvoirFAId;});
   if(!f)return;
-  if(!f.devisLieId){alert('Cette facture n\'est pas liée à un devis Pointage — comparaison automatique non disponible. Édite les montants manuellement ci-dessous.');return;}
+  // [16/07/2026] PAS de garde sur f.devisLieId : certaines factures Pointage
+  // générées AVANT le fix du 14/07 (cf chantier BC hebdo) n'ont jamais eu ce
+  // champ correctement rempli (cas réel constaté : F040) alors qu'elles sont
+  // bien des factures pointage. Le vrai filtre, suffisant et plus robuste, est
+  // la correspondance des LIBELLÉS de ligne contre _ptFactTypes ci-dessous.
   var pfx=getClientPrefix(f.client||'');
   var curTypes=_ptFactTypes(pfx);   // coefficients ACTUELS (majoration réduite si active)
   var stdTypes=_ptFactTypes(null);  // coefficients STANDARD (référence, jamais réduits)
@@ -28421,17 +28425,20 @@ function avoirCompareCurrentTariffs(){
   curTypes.forEach(function(t){curByLbl[t.lbl]=t.coef;});
   stdTypes.forEach(function(t){stdByLbl[t.lbl]=t.coef;});
   var skip={'Heures fériées':true,'Heures normales':true};
-  var anyDelta=false;
+  var anyComparable=false,anyDelta=false;
   _avoirLines.forEach(function(l){
     var baseLbl=l.designation.replace(/\s*\(base\s*[\d\s]+\)\s*$/i,'').trim();
     if(skip[baseLbl] || !(baseLbl in curByLbl) || !l.qte){l.puNew=null;return;}
     var stdCoef=stdByLbl[baseLbl];
     if(!stdCoef){l.puNew=null;return;}
+    anyComparable=true;
     var base=l.puOld/stdCoef; // reconstruit le tarif horaire depuis le PU d'origine
     l.puNew=Math.round(base*curByLbl[baseLbl]);
     if(l.puNew!==l.puOld){l.checked=true;anyDelta=true;}
   });
-  if(!anyDelta){
+  if(!anyComparable){
+    alert('Aucune ligne de type "Heures majorées/dimanche/nuit" reconnue sur cette facture — comparaison automatique non disponible. Édite les montants manuellement ci-dessous.');
+  } else if(!anyDelta){
     alert('Aucun écart détecté entre les tarifs facturés et les tarifs actuels sur les lignes de cette facture.\n\nVérifie que le réglage "Majoration réduite" est bien activé pour ce client dans Salariés → Tarifs.');
   } else {
     // Pré-remplit le motif avec un VRAI texte (pas un placeholder) pour éviter la
