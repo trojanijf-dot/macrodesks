@@ -28431,7 +28431,16 @@ function avoirCompareCurrentTariffs(){
     l.puNew=Math.round(base*curByLbl[baseLbl]);
     if(l.puNew!==l.puOld){l.checked=true;anyDelta=true;}
   });
-  if(!anyDelta) alert('Aucun écart détecté entre les tarifs facturés et les tarifs actuels sur les lignes de cette facture.');
+  if(!anyDelta){
+    alert('Aucun écart détecté entre les tarifs facturés et les tarifs actuels sur les lignes de cette facture.\n\nVérifie que le réglage "Majoration réduite" est bien activé pour ce client dans Salariés → Tarifs.');
+  } else {
+    // Pré-remplit le motif avec un VRAI texte (pas un placeholder) pour éviter la
+    // confusion "j'ai l'impression que c'est déjà rempli" — reste éditable.
+    var reasonEl=document.getElementById('avoir-reason');
+    if(reasonEl && !reasonEl.value.trim()){
+      reasonEl.value='Correction du taux de majoration heures sup — convention AEI/PRNC ('+Math.round(_ptMajRateFor(pfx)*100)+'% du tarif majorable), appliquée rétroactivement.';
+    }
+  }
   renderAvoirLinesList();
 }
 
