@@ -117,16 +117,18 @@
   .lgd{display:flex;gap:15px;flex-wrap:wrap;font-size:11px;color:var(--faint);margin-top:6px}
   .lgd i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:5px}
   /* COT en barres divergentes */
-  .cot{display:grid;grid-template-columns:44px 1fr 64px 140px 52px 116px;gap:6px 11px;align-items:center;font-size:12.5px}
+  .cot{display:grid;grid-template-columns:44px 1fr 64px 150px 44px 44px 48px 116px;gap:6px 11px;align-items:center;font-size:12.5px}
   .cot .hd{font-size:9.5px;letter-spacing:1px;color:var(--faint);text-transform:uppercase}
   .cot .cur{font-weight:700;font-size:13.5px}
   .dv{position:relative;height:17px;background:#0d1424;border-radius:3px;overflow:hidden}
   .dv .zero{position:absolute;top:0;bottom:0;width:1px;background:var(--line2)}
   .dv i{position:absolute;top:2px;bottom:2px;border-radius:2px}
   .nm{font-family:var(--mono);text-align:right}
-  .ir{position:relative;height:17px;background:#0d1424;border-radius:3px}
-  .ir .tick{position:absolute;top:1px;bottom:1px;width:2px;border-radius:1px}
-  .ir .lnk{position:absolute;top:8px;height:1px;background:var(--faint)}
+  .ir{position:relative;height:18px;background:#0d1424;border-radius:3px;overflow:hidden}
+  .ir .tick{position:absolute;top:2px;bottom:2px;width:2.5px;border-radius:1px}
+  .ir .lnk{position:absolute;top:8px;height:3px;border-radius:2px}
+  .ir .g50{position:absolute;top:0;bottom:0;width:1px;background:#3d5178}
+  .ir .gate{position:absolute;top:0;bottom:0;width:1px;background:repeating-linear-gradient(to bottom,#2c3a57 0 2px,transparent 2px 4px)}
   /* CSI en mini-barres */
   .csi{display:grid;grid-template-columns:44px repeat(4,1fr) 58px;gap:5px 9px;align-items:center;font-size:12.5px}
   .csi .hd{font-size:9.5px;letter-spacing:1px;color:var(--faint);text-transform:uppercase;text-align:center}
@@ -139,7 +141,7 @@
   .clk .sub{color:var(--faint);font-family:var(--mono);font-size:10px}
   @media(max-width:760px){
     .cot{grid-template-columns:40px 1fr 60px}
-    .cot .h4,.cot .h5,.cot .h6,.cot .c4,.cot .c5,.cot .c6{display:none}
+    .cot .h4,.cot .h5,.cot .h6,.cot .h7,.cot .c4,.cot .c5,.cot .c6,.cot .c7{display:none}
     .csi{grid-template-columns:40px repeat(4,1fr)}
     .csi .hdj,.csi .cdj{display:none}
   }
@@ -436,9 +438,25 @@ function secCotYsa(reg){
       return { k: k, o: o, pct: pct };
     }).sort(function(a,b){ return (b.pct == null ? -Infinity : b.pct) - (a.pct == null ? -Infinity : a.pct); });
 
+    /* Seuil d'entrée du DMX (niveau MODÉRÉ) : camps opposés ET particuliers ≥ 60 %.
+       Mesuré le 07/08 sur 2300 rapports CFTC (8 devises, jusqu'à 7,6 ans) : c'est le
+       SEUL niveau qui se déclenche jamais. N3 (75), N4 (85) et N5 (95) n'ont jamais
+       été atteints — l'extrémité retail maximale de l'historique est 83,2 %, et les
+       35 fois où elle dépasse 75 % les deux camps sont du même côté (1 exception).
+       Les repères 40/60 dessinés sur l'axe sont donc la seule frontière qui décide. */
+    var DMX_SEUIL = 60;
+    function etatDmx(il, rl){
+      if(!isFinite(il) || !isFinite(rl)) return 'inconnu';
+      if((il >= 50) === (rl >= 50)) return 'consensus';          // même camp : personne en face
+      return Math.max(rl, 100 - rl) >= DMX_SEUIL ? 'signal' : 'faible';
+    }
+    var COUL = { signal:'var(--green)', faible:'rgba(251,191,36,.55)', consensus:'#3d5178', inconnu:'var(--faint)' };
+
     var h = '<div class="hd">Devise</div><div class="hd">Net institutionnel · % de l\'open interest</div>'
           + '<div class="hd nm">net</div><div class="hd h4">Institutionnels vs particuliers (% longs)</div>'
-          + '<div class="hd nm h5">écart</div><div class="hd h6">Lecture du desk</div>';
+          + '<div class="hd nm h5" style="color:var(--blue)">inst</div>'
+          + '<div class="hd nm h6" style="color:var(--amber)">part.</div>'
+          + '<div class="hd nm h7">écart</div><div class="hd h7">Lecture du desk</div>';
     lignes.forEach(function(r){
       var o = r.o;
       h += '<div class="cur">' + esc(r.k) + '</div>';
@@ -453,19 +471,29 @@ function secCotYsa(reg){
       }
       var il = +o.instLongPct, rl = +o.retailLongPct;
       if(isFinite(il) && isFinite(rl)){
-        h += '<div class="ir c4"><span class="lnk" style="left:' + Math.min(il,rl) + '%;width:' + Math.abs(il-rl) + '%"></span>'
+        var et = etatDmx(il, rl);
+        h += '<div class="ir c4">'
+           + '<span class="g50" style="left:50%"></span>'                                   /* la frontière qui décide */
+           + '<span class="gate" style="left:' + DMX_SEUIL + '%"></span>'
+           + '<span class="gate" style="left:' + (100 - DMX_SEUIL) + '%"></span>'
+           + '<span class="lnk" style="left:' + Math.min(il,rl) + '%;width:' + Math.abs(il-rl) + '%;background:' + COUL[et] + '"></span>'
            + '<span class="tick" style="left:' + il + '%;background:var(--blue)" title="institutionnels"></span>'
            + '<span class="tick" style="left:' + rl + '%;background:var(--amber)" title="particuliers"></span></div>'
-           + '<div class="nm c5" style="color:var(--dim)">' + num(il-rl,1) + '</div>';
+           + '<div class="nm c5" style="color:var(--blue)">' + num(il,1) + '</div>'
+           + '<div class="nm c6" style="color:var(--amber)">' + num(rl,1) + '</div>'
+           + '<div class="nm c7" style="color:var(--dim)">' + num(il-rl,1) + '</div>';
       } else {
-        h += '<div class="ir c4"></div><div class="nm c5 faint">—</div>';
+        h += '<div class="ir c4"></div><div class="nm c5 faint">—</div><div class="nm c6 faint">—</div><div class="nm c7 faint">—</div>';
       }
       var bcls = (o.direction && o.direction !== 'AUCUN') ? 'b-amber' : 'b-dim';
-      h += '<div class="c6"><span class="badge ' + bcls + '">' + esc(o.label || '—') + ' · ' + esc(o.conviction) + '</span></div>';
+      h += '<div class="c7"><span class="badge ' + bcls + '">' + esc(o.label || '—') + ' · ' + esc(o.conviction) + '</span></div>';
     });
     var gcot = el('div','cot'); gcot.innerHTML = h; c1.appendChild(gcot);
     c1.appendChild(el('div','note','Bleu = institutionnels, orange = particuliers. Le net est rapporté à l\'open interest de chaque devise, sinon la barre la plus longue serait simplement celle du contrat le plus gros.<br>'
-      + '<b>L\'étiquette se lit à côté de la barre, pas dedans</b> : « CONSENSUS » signifie que tout le monde est du même côté — position extrême, mais plus rien à y gagner.'));
+      + '<b>Sur l\'axe de droite, ce qui décide est la ligne pleine des 50 %</b> : le DMX n\'a de signal que si les deux camps l\'encadrent. Les pointillés à '
+      + (100 - DMX_SEUIL) + ' / ' + DMX_SEUIL + ' % sont le seuil d\'entrée. Trait <b style="color:var(--green)">vert</b> = camps opposés et seuil franchi · '
+      + '<b style="color:var(--amber)">ambre</b> = opposés mais trop faible · <b style="color:#6f88b8">gris</b> = même camp.<br>'
+      + '<b>« CONSENSUS » n\'est pas une lacune</b> : mesuré sur 2 300 rapports CFTC, les épisodes « même camp + institutionnels extrêmes » sont suivis d\'une continuation 52 % du temps à 4 semaines — du pile ou face. Ne rien dire est la bonne réponse.'));
     var pairs = reg.cot.pairs || {};
     var actifs = Object.keys(pairs).filter(function(k){ return pairs[k].direction && pairs[k].direction !== 'AUCUN'; });
     c1.appendChild(el('div','kv','<span class="k">Paires orientées</span><span class="v">' + (actifs.length ? actifs.map(function(k){ return esc(k) + ' <span class="' + (pairs[k].direction === 'LONG' ? 'ok' : 'bad') + '">' + esc(pairs[k].direction) + ' ' + esc(pairs[k].conviction) + '</span>'; }).join(' · ') : '<span class="faint">aucune</span>') + '</span>'));
