@@ -477,22 +477,36 @@ function atrSeries(bars, n){
   }
   return out;
 }
-/* Couverture MESURÉE : sur chaque fenêtre glissante, le prix à l'horizon est-il
-   resté dans ±1 ATR×√h ? Un cône honnête doit tourner autour de 68 %.
-   On rend AUSSI `kFit` = le 68e centile des écarts normalisés, c'est-à-dire le
-   multiplicateur qui donnerait exactement 68 %. Le cône garde la largeur validée
-   (±1 ATR) ; kFit dit de combien elle est à côté, sans la changer en douce. */
-function coverage(bars, hor){
-  var atr = atrSeries(bars, 14), norm = [];
-  for(var i = 0; i + hor < bars.length; i++){
+/* CALIBRAGE + VÉRIFICATION, séparés — c'est tout l'enjeu de cette fonction.
+   Le cône ne fait plus ±1 ATR mais ±k ATR, k étant le 68e centile des écarts
+   observés. Mais si k était ajusté puis vérifié sur les MÊMES barres, la
+   couverture retomberait sur 68 % par construction : un chiffre fabriqué, qui
+   ne pourrait plus rien démentir.
+   Donc : k est calibré sur les 60 % LES PLUS ANCIENS, la couverture est mesurée
+   sur les 40 % LES PLUS RÉCENTS, et les fenêtres à cheval sur la coupure sont
+   jetées (une fenêtre qui déborde renseignerait le futur). Le chiffre affiché
+   reste donc réfutable : il peut sortir à 45 % et le dire. */
+function calibrate(bars, hor){
+  var atr = atrSeries(bars, 14), cut = Math.floor(bars.length * 0.6);
+  var cal = [], val = [], i, j;
+  for(i = 0; i + hor < bars.length; i++){
     var a = atr[i]; if(a == null || !(a > 0)) continue;
-    norm.push(Math.abs(bars[i + hor].c - bars[i].c) / (a * Math.sqrt(hor)));
+    var z = Math.abs(bars[i + hor].c - bars[i].c) / (a * Math.sqrt(hor));
+    if(i + hor < cut) cal.push(z);
+    else if(i >= cut) val.push(z);
+    /* sinon : fenêtre à cheval sur la coupure — écartée, pas de fuite */
   }
-  if(!norm.length) return null;
-  var ok = 0; for(var j = 0; j < norm.length; j++) if(norm[j] <= 1) ok++;
-  var s = norm.slice().sort(function(x, y){ return x - y; });
-  return { pct: Math.round(ok / norm.length * 100), n: norm.length,
-           kFit: s[Math.min(s.length - 1, Math.floor(0.68 * s.length))] };
+  if(!cal.length && !val.length) return null;
+  var MINW = 15, horsEch = (cal.length >= MINW && val.length >= MINW);
+  var base = horsEch ? cal : cal.concat(val);   // trop peu de recul → calibrage plein, ET on l'affiche
+  var s = base.slice().sort(function(x, y){ return x - y; });
+  var k = s[Math.min(s.length - 1, Math.floor(0.68 * s.length))];
+  var repli = !(k >= 0.25 && k <= 2.5);         // k aberrant → on revient au ±1 ATR d'origine
+  if(repli) k = 1;
+  var test = horsEch ? val : base, ok = 0;
+  for(j = 0; j < test.length; j++) if(test[j] <= k) ok++;
+  return { k: k, kN: base.length, n: test.length, horsEch: horsEch, repli: repli,
+           pct: test.length ? Math.round(ok / test.length * 100) : null };
 }
 /* Biais macro : actif SEULEMENT si l'historique des 3 horloges est assez long. */
 function macroTilt(reg){
@@ -508,7 +522,7 @@ function macroTilt(reg){
            phase: (mc.courant.phase || '') };
 }
 
-function chartSvg(bars, tf, lvl, tilt, inst){
+function chartSvg(bars, tf, lvl, tilt, inst, k){
   var W = 900, H = 240, PADL = 46, X0 = 585, XR = 884, TOP = 18, BOT = 202;
   var past = bars.slice(-tf.past);
   if(past.length < 5) return null;
@@ -524,7 +538,7 @@ function chartSvg(bars, tf, lvl, tilt, inst){
   /* échelle : bornes réelles + cône + niveaux du ticket */
   var lo = Infinity, hi = -Infinity, i, j;
   for(i = 0; i < past.length; i++){ if(past[i].l < lo) lo = past[i].l; if(past[i].h > hi) hi = past[i].h; }
-  var wEnd = a * Math.sqrt(tf.hor);
+  var wEnd = k * a * Math.sqrt(tf.hor);
   lo = Math.min(lo, c0 + slope - wEnd); hi = Math.max(hi, c0 + slope + wEnd);
   ['entry','sl','t1'].forEach(function(k){ if(lvl && typeof lvl[k] === 'number'){ lo = Math.min(lo, lvl[k]); hi = Math.max(hi, lvl[k]); } });
   var pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
@@ -535,7 +549,7 @@ function chartSvg(bars, tf, lvl, tilt, inst){
   /* enveloppes du cône */
   var up = [], dn = [], med = [];
   for(j = 0; j <= tf.hor; j++){
-    var w = a * Math.sqrt(j), m = c0 + slope * (j / tf.hor);
+    var w = k * a * Math.sqrt(j), m = c0 + slope * (j / tf.hor);
     up.push(xf(j).toFixed(1) + ',' + y(m + w).toFixed(1));
     dn.push(xf(j).toFixed(1) + ',' + y(m - w).toFixed(1));
     med.push(xf(j).toFixed(1) + ',' + y(m).toFixed(1));
@@ -621,25 +635,27 @@ function secGraphs(reg, tk, cd){
           + (Array.isArray(bars) ? bars.length + ' barre(s) — insuffisant' : 'non publié') + '</span>'));
         return;
       }
-      var r = chartSvg(bars, tf, lvl, tilt, cur);
+      var cal = calibrate(bars, tf.hor);
+      var r = chartSvg(bars, tf, lvl, tilt, cur, cal ? cal.k : 1);
       if(!r){ head.appendChild(el('div','kv','<span class="k">' + esc(tf.lab) + '</span><span class="v faint">ATR non calculable</span>')); return; }
       drew++;
-      var cov = coverage(bars, tf.hor);
       var box = el('div','chart');
       box.appendChild(el('div','hd', '<span class="ti">' + esc(cur) + ' · ' + tf.lab + '</span><span class="tf">projection ' + tf.horTxt + ' · ' + esc(tf.role) + '</span>'));
       box.appendChild(el('div', null, r.svg));
-      var covCls = !cov ? 'faint' : (cov.pct >= 60 && cov.pct <= 80 ? 'ok' : 'warn');
+      var covCls = (!cal || cal.pct == null) ? 'faint' : (cal.pct >= 60 && cal.pct <= 80 ? 'ok' : 'warn');
       box.appendChild(el('div','cov',
-        '<span>couverture ' + tf.lab + ' : <b class="' + covCls + '">' + (cov ? cov.pct + ' %' : '—') + '</b>'
-        + (cov ? ' <span class="faint">sur ' + cov.n + ' fenêtres glissantes</span>' : '') + '</span>'
-        + (cov ? '<span class="faint">68 % serait atteint à <b class="' + covCls + '">±' + num(cov.kFit) + ' ATR</b></span>' : '')
+        '<span>cône <b>±' + (cal ? num(cal.k) : '1.00') + ' ATR</b> <span class="faint">calibré sur '
+          + (cal ? cal.kN + ' fenêtres' + (cal.horsEch ? ' anciennes' : '') : '—') + (cal && cal.repli ? ' · <span class="warn">k aberrant, repli sur ±1 ATR</span>' : '') + '</span></span>'
+        + '<span>couverture ' + tf.lab + ' : <b class="' + covCls + '">' + (cal && cal.pct != null ? cal.pct + ' %' : '—') + '</b>'
+        + (cal && cal.pct != null ? ' <span class="faint">sur ' + cal.n + ' fenêtres '
+            + (cal.horsEch ? 'RÉCENTES, hors échantillon de calibrage' : '— recul insuffisant, mesure dans l\'échantillon') + '</span>' : '') + '</span>'
         + '<span>ATR14 <b>' + num(r.atr, 5) + '</b></span>'
         + '<span>dernière barre <b>' + ncStr(new Date(r.lastT).toISOString(), true) + '</b> NC</span>'
         + (r.slope ? '<span>inclinaison <b>' + (r.slope > 0 ? '+' : '') + num(r.slope, 5) + '</b> <span class="faint">(plafond ' + num(0.5 * r.atr, 5) + ')</span></span>' : '')));
       box.appendChild(el('div','lgd',
         '<span><i style="background:var(--txt)"></i>prix réalisé</span>'
         + '<span><i style="background:' + (r.slope ? (r.slope > 0 ? 'var(--green)' : 'var(--red)') : 'var(--dim)') + '"></i>médiane du cône</span>'
-        + '<span>dispersion ±1 ATR × √n</span>'
+        + '<span>dispersion ±' + (cal ? num(cal.k) : '1.00') + ' ATR × √n</span>'
         + '<span><i style="background:var(--blue)"></i>entrée</span><span><i style="background:var(--red)"></i>SL</span><span><i style="background:var(--green)"></i>T1</span>'));
       head.appendChild(box);
     });
@@ -650,11 +666,11 @@ function secGraphs(reg, tk, cd){
       + 'et reste plafonnée à <b>±0,5 ATR</b> sur l\'horizon. '
       + (tilt.on ? 'Convention appliquée : écart d\'horloges positif = cycle US qui s\'améliore = risk-on, et ces paires montent en risk-on — biais COMMUN, il n\'arbitre pas entre instruments. Écart ' + num(tilt.ec) + ' · pente ' + num(tilt.pe, 3) + ' · ' + esc(tilt.phase) + '.'
                  : 'Aujourd\'hui le cône est symétrique : ' + esc(tilt.why) + '.')
-      + '<br>La <b>couverture</b> rejoue le cône sur tout l\'historique publié : un cône à ±1 ATR devrait contenir le prix ≈ 68 % du temps. '
-      + 'En dehors de 60-80 % le chiffre passe en orange — trop étroit il ment par excès de confiance, trop large il ne dit plus rien. '
-      + 'La largeur dessinée reste celle qui a été validée (±1 ATR) : le <b>±k ATR</b> affiché à côté est la largeur que les données réclament, '
-      + 'pas une correction appliquée en douce. Écart attendu : l\'ATR mesure l\'amplitude <i>intra-barre</i> alors que le cône compare des '
-      + '<i>clôtures</i> — un cône à ±1 ATR est donc structurellement large.'));
+      + '<br><b>Calibrage et vérification sont séparés, volontairement.</b> Le facteur <b>k</b> est le 68<sup>e</sup> centile des écarts observés '
+      + 'sur les <b>60 % de barres les plus anciennes</b> ; la <b>couverture</b> est ensuite mesurée sur les <b>40 % les plus récentes</b>, '
+      + 'et les fenêtres à cheval sur la coupure sont jetées. Calibrer puis vérifier sur les mêmes barres redonnerait 68 % par construction — '
+      + 'un chiffre qui ne pourrait plus rien démentir. Ici il le peut : hors de 60-80 % il passe en orange. '
+      + 'k tourne autour de 0,6 parce que l\'ATR mesure l\'amplitude <i>intra-barre</i> alors que le cône compare des <i>clôtures</i>.'));
 
     if(!drew) head.appendChild(el('div','note','Aucun TF n\'a assez de barres publiées pour cet instrument.'));
     host.appendChild(head);
