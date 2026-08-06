@@ -116,6 +116,33 @@
   .cov b{color:var(--txt)}
   .lgd{display:flex;gap:15px;flex-wrap:wrap;font-size:11px;color:var(--faint);margin-top:6px}
   .lgd i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:5px}
+  /* COT en barres divergentes */
+  .cot{display:grid;grid-template-columns:44px 1fr 64px 140px 52px 116px;gap:6px 11px;align-items:center;font-size:12.5px}
+  .cot .hd{font-size:9.5px;letter-spacing:1px;color:var(--faint);text-transform:uppercase}
+  .cot .cur{font-weight:700;font-size:13.5px}
+  .dv{position:relative;height:17px;background:#0d1424;border-radius:3px;overflow:hidden}
+  .dv .zero{position:absolute;top:0;bottom:0;width:1px;background:var(--line2)}
+  .dv i{position:absolute;top:2px;bottom:2px;border-radius:2px}
+  .nm{font-family:var(--mono);text-align:right}
+  .ir{position:relative;height:17px;background:#0d1424;border-radius:3px}
+  .ir .tick{position:absolute;top:1px;bottom:1px;width:2px;border-radius:1px}
+  .ir .lnk{position:absolute;top:8px;height:1px;background:var(--faint)}
+  /* CSI en mini-barres */
+  .csi{display:grid;grid-template-columns:44px repeat(4,1fr) 58px;gap:5px 9px;align-items:center;font-size:12.5px}
+  .csi .hd{font-size:9.5px;letter-spacing:1px;color:var(--faint);text-transform:uppercase;text-align:center}
+  .tfb{position:relative;height:20px;background:#0d1424;border-radius:3px;overflow:hidden}
+  .tfb .mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line2)}
+  .tfb i{position:absolute;top:3px;bottom:3px;border-radius:2px}
+  .tfb span{position:absolute;right:4px;top:2px;font-family:var(--mono);font-size:10px;color:var(--dim)}
+  /* horloges macro */
+  .clk{display:grid;grid-template-columns:112px 1fr 58px;gap:7px 12px;align-items:center;font-size:12.5px}
+  .clk .sub{color:var(--faint);font-family:var(--mono);font-size:10px}
+  @media(max-width:760px){
+    .cot{grid-template-columns:40px 1fr 60px}
+    .cot .h4,.cot .h5,.cot .h6,.cot .c4,.cot .c5,.cot .c6{display:none}
+    .csi{grid-template-columns:40px repeat(4,1fr)}
+    .csi .hdj,.csi .cdj{display:none}
+  }
   .empty{background:var(--card);border:1px dashed var(--line2);border-radius:10px;padding:22px;text-align:center;color:var(--faint);font-size:13px}
   .empty b{color:var(--dim)}
   .err{background:#2a0a12;border:1px solid #58122a;border-radius:10px;padding:14px 16px;color:#f0b2c0;font-size:13px;margin-bottom:12px}
@@ -312,6 +339,41 @@ function secRegime(reg){
   if(p.fomc) conv.push('FOMC <b class="warn">Hawkish ' + esc(p.fomc.score) + '</b>' + (p.fomc.detail ? ' <span class="faint">(' + esc(p.fomc.detail) + ')</span>' : ''));
   if(conv.length) band.appendChild(el('div','conv', conv.join(' · ')));
   f.appendChild(band);
+
+  /* ---- les 3 horloges macro, en barres ----
+     Un Macro Pulse unique additionnait trois horloges de nature différente. Les
+     séparer répond à « le futur s'annonce-t-il meilleur que le passé ». Trois
+     quantités à comparer = trois barres, pas trois nombres à soustraire de tête. */
+  var mc = reg.macroClocks;
+  if(mc && mc.courant){
+    var k = mc.courant, cc = el('div','card');
+    cc.appendChild(el('h3', null, 'Les trois horloges macro <span class="badge ' + (mc.prets ? 'b-green' : 'b-dim') + '">historique '
+      + (mc.points || 0) + '/' + (mc.pointsRequis || 6) + (typeof mc.ecartPente10 === 'number' ? ' · pente ' + num(mc.ecartPente10,3) : ' · pente indisponible') + '</span>'
+      + '<span class="src">macroClocks</span>'));
+    var LG = [['Avancées', k.avance, 'hyOas · stlfsi · t10y2y — 65 % du poids'],
+              ['Coïncidentes', k.coincident, 'cfnai'],
+              ['Retardées', k.retarde, 'stickyCpi']];
+    var vals = LG.map(function(r){ return r[1]; }).filter(function(v){ return typeof v === 'number' && isFinite(v); });
+    if(vals.length){
+      var lo = Math.min.apply(null, vals.concat([0])) - 0.3, hi = Math.max.apply(null, vals.concat([0])) + 0.3;
+      var span = (hi - lo) || 1, zero = (0 - lo) / span * 100, hh = '';
+      LG.forEach(function(r){
+        var v = r[1];
+        if(typeof v !== 'number' || !isFinite(v)){ hh += '<div>' + r[0] + '</div><div class="dv"></div><div class="nm faint">ABSENT</div>'; return; }
+        var x = (v - lo) / span * 100, col = v >= 0 ? 'var(--green)' : (v < -1.5 ? 'var(--red)' : 'var(--amber)');
+        hh += '<div><div>' + r[0] + '</div><div class="sub">' + r[2] + '</div></div>'
+            + '<div class="dv" style="height:20px"><span class="zero" style="left:' + zero + '%"></span><i style="'
+            + (v >= 0 ? 'left:' + zero + '%;width:' + (x - zero) + '%' : 'right:' + (100 - zero) + '%;width:' + (zero - x) + '%')
+            + ';background:' + col + '"></i></div>'
+            + '<div class="nm" style="color:' + col + '">' + num(v) + '</div>';
+      });
+      var gc = el('div','clk'); gc.innerHTML = hh; cc.appendChild(gc);
+      cc.appendChild(el('div','note','Écart <b>' + num(k.ecart) + '</b> · ' + esc(k.phase || '')
+        + '. L\'écart dit si le futur s\'annonce meilleur que le passé ; sa <b>pente</b> dirait si le régime est en train de changer ou vient de changer — elle demande '
+        + (mc.pointsRequis || 6) + ' points d\'historique, il y en a ' + (mc.points || 0) + '.'));
+      f.appendChild(cc);
+    }
+  }
   return f;
 }
 
@@ -327,15 +389,25 @@ function secCSI(reg){
     var o = csi.currencies[k], d = (csi.deltas && csi.deltas[k]) || {};
     return { cur: k, v: o, dj: d.daily_vs_hier };
   }).sort(function(a,b){ return (b.v.Daily||0) - (a.v.Daily||0); });
-  var html = '<table><tr><th>Devise</th>' + TFs.map(function(t){ return '<th>' + t + '</th>'; }).join('') + '<th>Δ jour</th></tr>';
+  /* écart à 50, plafonné à ±25 : la règle du desk est la CONVERGENCE entre TF,
+     et quatre nombres à comparer de tête sur huit lignes ne la donnent pas. */
+  var html = '<div class="hd"></div>' + TFs.map(function(t){ return '<div class="hd">' + t + '</div>'; }).join('') + '<div class="hd hdj">Δ jour</div>';
   rows.forEach(function(r){
-    html += '<tr><td>' + esc(r.cur) + '</td>'
-      + TFs.map(function(t){ var v = r.v[t]; return '<td class="' + csiCls(v) + '">' + num(v,1) + '</td>'; }).join('')
-      + '<td class="' + (r.dj > 0 ? 's-strong' : (r.dj < 0 ? 's-weak' : 's-mid')) + '">' + (typeof r.dj === 'number' ? (r.dj > 0 ? '+' : '') + num(r.dj,1) : '—') + '</td></tr>';
+    html += '<div class="cur">' + esc(r.cur) + '</div>';
+    TFs.forEach(function(t){
+      var v = r.v[t];
+      if(typeof v !== 'number' || !isFinite(v)){ html += '<div class="tfb"><span class="faint">—</span></div>'; return; }
+      var d = v - 50, w = Math.min(Math.abs(d), 25) / 25 * 50;
+      var col = v >= 55 ? 'var(--green)' : (v <= 45 ? 'var(--red)' : 'var(--faint)');
+      html += '<div class="tfb"><span class="mid"></span><i style="'
+            + (d >= 0 ? 'left:50%;width:' + w + '%' : 'right:50%;width:' + w + '%')
+            + ';background:' + col + '"></i><span>' + num(v,1) + '</span></div>';
+    });
+    html += '<div class="nm cdj" style="color:' + (r.dj > 0 ? 'var(--green)' : (r.dj < 0 ? 'var(--red)' : 'var(--dim)')) + '">'
+          + (typeof r.dj === 'number' ? (r.dj > 0 ? '+' : '') + num(r.dj,1) : '—') + '</div>';
   });
-  html += '</table>';
-  c.innerHTML = html;
-  c.appendChild(el('div','note','Vert ≥ 55 · rouge ≤ 45. Un instrument RETENU exige la convergence de plusieurs TF sans contre-signal.'));
+  var grid = el('div','csi'); grid.innerHTML = html; c.appendChild(grid);
+  c.appendChild(el('div','note','Écart à 50, plafonné à ±25 · vert ≥ 55 · rouge ≤ 45. Un instrument RETENU exige la convergence de plusieurs TF sans contre-signal — c\'est le PROFIL de la ligne qui le dit, pas le Daily seul.'));
   f.appendChild(c);
   return f;
 }
@@ -347,13 +419,53 @@ function secCotYsa(reg){
   f.appendChild(el('h2', null, 'Positionnement &amp; ancres macro'));
   var g = el('div','grid');
   if(reg.cot && reg.cot.currencies){
-    var c1 = el('div','card');
+    var c1 = el('div','card'); c1.style.gridColumn = '1/-1';
     c1.appendChild(el('h3', null, 'COT institutionnel <span class="badge b-dim">' + esc(reg.cot.reportDate || '') + '</span><span class="src">' + esc(reg.cot.live) + '/' + esc(reg.cot.total) + ' devises</span>'));
     var cur = reg.cot.currencies;
-    Object.keys(cur).filter(function(k){ return cur[k].direction && cur[k].direction !== 'AUCUN'; }).slice(0,5).forEach(function(k){
+    /* Net NORMALISÉ par l'open interest : en contrats bruts, la barre la plus longue
+       serait celle du contrat le plus gros (CAD −176 310 vs AUD −39 964 ⇒ en % de l'OI,
+       −47 % vs −17 %). Et l'étiquette du desk est affichée À CÔTÉ du niveau, jamais
+       déduite de lui : le CAD est le plus vendu ET « CONSENSUS conviction 0 » (tout le
+       monde du même côté = plus rien à y gagner). Un graphe qui lirait le signal dans la
+       longueur de la barre dirait l'inverse de ce que pense le moteur. */
+    var MAXPCT = 50;
+    var lignes = Object.keys(cur).map(function(k){
       var o = cur[k];
-      c1.appendChild(el('div','kv','<span class="k">' + esc(k) + '</span><span class="v ' + (o.direction === 'LONG' ? 'ok' : 'bad') + '">' + esc(o.direction) + ' · N' + esc(o.level) + ' · conviction ' + esc(o.conviction) + '</span>'));
+      var oi = +o.openInterest, net = +o.instNet;
+      var pct = (isFinite(oi) && oi > 0 && isFinite(net)) ? net / oi * 100 : null;
+      return { k: k, o: o, pct: pct };
+    }).sort(function(a,b){ return (b.pct == null ? -Infinity : b.pct) - (a.pct == null ? -Infinity : a.pct); });
+
+    var h = '<div class="hd">Devise</div><div class="hd">Net institutionnel · % de l\'open interest</div>'
+          + '<div class="hd nm">net</div><div class="hd h4">Institutionnels vs particuliers (% longs)</div>'
+          + '<div class="hd nm h5">écart</div><div class="hd h6">Lecture du desk</div>';
+    lignes.forEach(function(r){
+      var o = r.o;
+      h += '<div class="cur">' + esc(r.k) + '</div>';
+      if(r.pct == null){
+        h += '<div class="dv"></div><div class="nm faint">ABSENT</div>';
+      } else {
+        var w = Math.min(Math.abs(r.pct), MAXPCT) / MAXPCT * 50, col = r.pct >= 0 ? 'var(--green)' : 'var(--red)';
+        h += '<div class="dv"><span class="zero" style="left:50%"></span><i style="'
+           + (r.pct >= 0 ? 'left:50%;width:' + w + '%' : 'right:50%;width:' + w + '%')
+           + ';background:' + col + '"></i></div>'
+           + '<div class="nm" style="color:' + col + '">' + (r.pct >= 0 ? '+' : '') + num(r.pct,1) + ' %</div>';
+      }
+      var il = +o.instLongPct, rl = +o.retailLongPct;
+      if(isFinite(il) && isFinite(rl)){
+        h += '<div class="ir c4"><span class="lnk" style="left:' + Math.min(il,rl) + '%;width:' + Math.abs(il-rl) + '%"></span>'
+           + '<span class="tick" style="left:' + il + '%;background:var(--blue)" title="institutionnels"></span>'
+           + '<span class="tick" style="left:' + rl + '%;background:var(--amber)" title="particuliers"></span></div>'
+           + '<div class="nm c5" style="color:var(--dim)">' + num(il-rl,1) + '</div>';
+      } else {
+        h += '<div class="ir c4"></div><div class="nm c5 faint">—</div>';
+      }
+      var bcls = (o.direction && o.direction !== 'AUCUN') ? 'b-amber' : 'b-dim';
+      h += '<div class="c6"><span class="badge ' + bcls + '">' + esc(o.label || '—') + ' · ' + esc(o.conviction) + '</span></div>';
     });
+    var gcot = el('div','cot'); gcot.innerHTML = h; c1.appendChild(gcot);
+    c1.appendChild(el('div','note','Bleu = institutionnels, orange = particuliers. Le net est rapporté à l\'open interest de chaque devise, sinon la barre la plus longue serait simplement celle du contrat le plus gros.<br>'
+      + '<b>L\'étiquette se lit à côté de la barre, pas dedans</b> : « CONSENSUS » signifie que tout le monde est du même côté — position extrême, mais plus rien à y gagner.'));
     var pairs = reg.cot.pairs || {};
     var actifs = Object.keys(pairs).filter(function(k){ return pairs[k].direction && pairs[k].direction !== 'AUCUN'; });
     c1.appendChild(el('div','kv','<span class="k">Paires orientées</span><span class="v">' + (actifs.length ? actifs.map(function(k){ return esc(k) + ' <span class="' + (pairs[k].direction === 'LONG' ? 'ok' : 'bad') + '">' + esc(pairs[k].direction) + ' ' + esc(pairs[k].conviction) + '</span>'; }).join(' · ') : '<span class="faint">aucune</span>') + '</span>'));
@@ -596,14 +708,39 @@ function chartSvg(bars, tf, lvl, tilt, inst, k){
   /* cône */
   s += '<polygon points="' + up.join(' ') + ' ' + dn.slice().reverse().join(' ') + '" fill="url(#' + gid + ')"/>';
   s += '<polyline fill="none" stroke="' + col + '" stroke-width="1.5" stroke-dasharray="5 4" points="' + med.join(' ') + '"/>';
-  /* niveaux du ticket — des FAITS, pas des prévisions */
-  [['t1','var(--green)','T1'],['entry','var(--blue)','entrée'],['sl','var(--red)','SL']].forEach(function(L){
-    if(!lvl || typeof lvl[L[0]] !== 'number') return;
-    var yy = y(lvl[L[0]]);
-    if(yy < TOP || yy > BOT) return;
-    s += '<line x1="' + PADL + '" y1="' + yy.toFixed(1) + '" x2="' + XR + '" y2="' + yy.toFixed(1) + '" stroke="' + L[1] + '" stroke-width="1" stroke-dasharray="4 4" opacity=".75"/>'
-       + '<text x="' + (PADL + 5) + '" y="' + (yy - 4).toFixed(1) + '" fill="' + L[1] + '" font-size="10" font-family="Consolas,monospace">' + L[2] + ' ' + num(lvl[L[0]], 5) + '</text>';
-  });
+  /* niveaux du ticket — des FAITS, pas des prévisions.
+     Sur un TF large, les trois niveaux tiennent dans quelques pixels (un stop de
+     12 pips dans une fenêtre daily qui en couvre 500) : trois traits pointillés
+     deviennent une bouillie illisible. Au-dessous de 8 % de la hauteur visible on
+     bascule sur une ZONE unique + annotation à droite, avec l'écart réel. */
+  var NIV = [['t1','var(--green)','T1'],['entry','var(--blue)','entrée'],['sl','var(--red)','SL']];
+  var dispo = NIV.filter(function(L){ return lvl && typeof lvl[L[0]] === 'number'; });
+  var vs = dispo.map(function(L){ return lvl[L[0]]; });
+  var etroit = vs.length >= 2 && (Math.max.apply(null, vs) - Math.min.apply(null, vs)) / (hi - lo) < 0.08;
+  if(etroit){
+    var yHaut = y(Math.max.apply(null, vs)), yBas = y(Math.min.apply(null, vs)), XT = 700;
+    s += '<rect x="' + PADL + '" y="' + yHaut.toFixed(1) + '" width="' + (XT - PADL) + '" height="' + Math.max(1.5, yBas - yHaut).toFixed(1) + '" fill="var(--blue)" opacity=".22"/>';
+    if(lvl && typeof lvl.entry === 'number') s += '<line x1="' + PADL + '" y1="' + y(lvl.entry).toFixed(1) + '" x2="' + XT + '" y2="' + y(lvl.entry).toFixed(1) + '" stroke="var(--blue)" stroke-width="1"/>';
+    s += '<line x1="' + (XT + 6) + '" y1="' + (yHaut - 1).toFixed(1) + '" x2="' + (XT + 6) + '" y2="' + (yBas + 1).toFixed(1) + '" stroke="var(--dim)"/>'
+       + '<line x1="' + (XT + 3) + '" y1="' + (yHaut - 1).toFixed(1) + '" x2="' + (XT + 10) + '" y2="' + (yHaut - 1).toFixed(1) + '" stroke="var(--dim)"/>'
+       + '<line x1="' + (XT + 3) + '" y1="' + (yBas + 1).toFixed(1) + '" x2="' + (XT + 10) + '" y2="' + (yBas + 1).toFixed(1) + '" stroke="var(--dim)"/>';
+    var yMid = (yHaut + yBas) / 2;
+    dispo.forEach(function(L, i){
+      s += '<text x="' + (XT + 16) + '" y="' + (yMid - 12 + i * 12).toFixed(1) + '" fill="' + L[1] + '" font-size="10" font-family="Consolas,monospace">' + L[2] + ' ' + num(lvl[L[0]], 5) + '</text>';
+    });
+    if(lvl && typeof lvl.entry === 'number' && typeof lvl.sl === 'number'){
+      var risque = Math.abs(lvl.entry - lvl.sl);
+      s += '<text x="' + (XT + 16) + '" y="' + (yMid + 26).toFixed(1) + '" fill="var(--faint)" font-size="9.5" font-family="Consolas,monospace">risque '
+         + num(risque, 5) + ' · ' + num(risque / lvl.entry * 100, 2) + ' %</text>';
+    }
+  } else {
+    dispo.forEach(function(L){
+      var yy = y(lvl[L[0]]);
+      if(yy < TOP || yy > BOT) return;
+      s += '<line x1="' + PADL + '" y1="' + yy.toFixed(1) + '" x2="' + XR + '" y2="' + yy.toFixed(1) + '" stroke="' + L[1] + '" stroke-width="1" stroke-dasharray="4 4" opacity=".75"/>'
+         + '<text x="' + (PADL + 5) + '" y="' + (yy - 4).toFixed(1) + '" fill="' + L[1] + '" font-size="10" font-family="Consolas,monospace">' + L[2] + ' ' + num(lvl[L[0]], 5) + '</text>';
+    });
+  }
   /* prix réalisé */
   var pts = [];
   for(i = 0; i < past.length; i++) pts.push(xp(i).toFixed(1) + ',' + y(past[i].c).toFixed(1));
