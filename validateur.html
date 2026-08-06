@@ -493,6 +493,35 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 </div>
 
 <script>
+/* ================= source de vérité des données (07/08/2026) =================
+   Mesuré ce jour : GitHub Pages servait data/fxdesk_regime.json avec 12 H DE RETARD
+   alors que le commit était sur main depuis 2 h 30. L'en-tête « Age: 12 » prouve que
+   ce n'était pas un cache CDN périmé — l'origine Pages elle-même n'avait pas la
+   nouvelle version. Une page qui affiche la publication précédente SANS LE DIRE est
+   pire qu'une page vide : elle a l'air fraîche.
+   On lit donc raw.githubusercontent (CORS vérifié depuis la prod), avec repli sur le
+   chemin relatif. Le repli est journalisé en console, jamais silencieux.
+   Seuls les GET de data/*.json sont détournés ; tout le reste passe inchangé. */
+var MD_RAW = 'https://raw.githubusercontent.com/trojanijf-dot/macrodesks/main/';
+var MD_SRC = { raw: 0, pages: 0 };
+(function(){
+  var natif = window.fetch.bind(window);
+  window.fetch = function(input, init){
+    var u = (typeof input === 'string') ? input : ((input && input.url) || '');
+    var m = /^(?:\.\/)?(data\/[A-Za-z0-9_.-]+\.json)(?:\?.*)?$/.exec(u);
+    if(!m || (init && init.method && String(init.method).toUpperCase() !== 'GET')) return natif(input, init);
+    var f = m[1], t = '?t=' + Date.now();
+    return natif(MD_RAW + f + t, { cache: 'no-store' }).then(function(r){
+      if(!r.ok) throw new Error('raw ' + r.status);
+      MD_SRC.raw++; return r;
+    }).catch(function(){
+      return natif(f + t, init || { cache: 'no-store' }).then(function(r){
+        if(r.ok){ MD_SRC.pages++; console.warn('[macrodesk] ' + f + ' lu depuis GitHub Pages (repli) - peut etre perime'); }
+        return r;
+      });
+    });
+  };
+})();
 const $=id=>document.getElementById(id);
 const num=v=>{const n=parseFloat(v);return isFinite(n)?n:NaN;};
 // parse "2.22B" / "850M" / "1.2T" / "500K" / nombre nu -> MILLIONS de $
