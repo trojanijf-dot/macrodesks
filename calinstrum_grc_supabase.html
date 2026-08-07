@@ -1161,7 +1161,11 @@ function computeAdminReport(year){
     caHT+=Number(f.ht)||0; caTTC+=Number(f.ttc)||0;
     var mIdx=Number(String(f.date).substring(5,7))-1;
     if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(f.ht)||0;
-    var cl=f.client||'(sans client)';
+    // Regroupement par ENTITÉ cliente (SLN/PRNC/AEI SNC...), pas par le nom
+    // brut de la facture qui peut inclure un contact ("SLN - Yannick PAKORO")
+    // — même fonction tolérante que partout ailleurs dans l'app. Ne touche
+    // QUE ce graphique : f.client lui-même reste inchangé partout dans le GRC.
+    var cl=getClientPrefix(f.client||'')||'(sans client)';
     byClient[cl]=(byClient[cl]||0)+(Number(f.ht)||0);
     addLinesTGC(f.lines);
   });
@@ -1169,7 +1173,7 @@ function computeAdminReport(year){
     caHT+=Number(a.ht)||0; caTTC+=Number(a.ttc)||0;
     var mIdx=Number(String(a.date).substring(5,7))-1;
     if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(a.ht)||0;
-    var cl=a.client||'(sans client)';
+    var cl=getClientPrefix(a.client||'')||'(sans client)';
     byClient[cl]=(byClient[cl]||0)+(Number(a.ht)||0);
     addLinesTGC(a.lines);
   });
