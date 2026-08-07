@@ -1109,6 +1109,17 @@ body.has-dashboard-bg #page-dashboard .metric{
 // ET sur le PDF exporté pour que l'expert-comptable comprenne le périmètre.
 var ADMIN_C1='#3987e5',ADMIN_C2='#d95926',ADMIN_C3='#199e70',ADMIN_C4='#c98500',ADMIN_C5='#d55181',ADMIN_C6='#9085e9';
 var ADMIN_RATE_COLOR={'3':ADMIN_C1,'6':ADMIN_C2,'11':ADMIN_C3,'22':ADMIN_C4};
+// Bascule écran uniquement (donut "CA par client") — 'detail' = par contact réel,
+// 'prefix' = groupé par entité (SLN/PRNC/AEI...). L'export PDF reste toujours
+// figé sur 'prefix', indépendamment de ce choix (cf printAdminReport()).
+var _adminClientMode='detail';
+function _adminSetClientMode(mode){
+  _adminClientMode=mode;
+  var r=window._adminLastReport;
+  if(!r) return;
+  var body=document.getElementById('adminBody');
+  if(body) body.innerHTML=_adminReportHtml(r,true,_adminClientMode==='prefix');
+}
 
 function _adminYearOf(d){ if(!d) return null; var m=String(d).match(/^(\d{4})/); return m?m[1]:null; }
 
@@ -1138,7 +1149,8 @@ function computeAdminReport(year){
 
   var caHT=0, caTTC=0;
   var monthlyHT=[0,0,0,0,0,0,0,0,0,0,0,0];
-  var byClient={};
+  var byClient={}; // détaillé (contact réel, ex "SLN - Yannick PAKORO") — GRC écran
+  var byClientPrefix={}; // groupé par entité (SLN/PRNC/AEI SNC...) — export PDF
   var tgcByRate={}; // {taux:{taux,baseHT,tgc,n}}
 
   function addLinesTGC(lines){
@@ -1161,20 +1173,25 @@ function computeAdminReport(year){
     caHT+=Number(f.ht)||0; caTTC+=Number(f.ttc)||0;
     var mIdx=Number(String(f.date).substring(5,7))-1;
     if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(f.ht)||0;
+    var clDet=f.client||'(sans client)';
+    byClient[clDet]=(byClient[clDet]||0)+(Number(f.ht)||0);
     // Regroupement par ENTITÉ cliente (SLN/PRNC/AEI SNC...), pas par le nom
     // brut de la facture qui peut inclure un contact ("SLN - Yannick PAKORO")
-    // — même fonction tolérante que partout ailleurs dans l'app. Ne touche
-    // QUE ce graphique : f.client lui-même reste inchangé partout dans le GRC.
+    // — même fonction tolérante que partout ailleurs dans l'app. Réservé au
+    // donut de l'EXPORT PDF (demande explicite) ; le GRC écran garde byClient
+    // détaillé par contact.
     var cl=getClientPrefix(f.client||'')||'(sans client)';
-    byClient[cl]=(byClient[cl]||0)+(Number(f.ht)||0);
+    byClientPrefix[cl]=(byClientPrefix[cl]||0)+(Number(f.ht)||0);
     addLinesTGC(f.lines);
   });
   avoirs.forEach(function(a){
     caHT+=Number(a.ht)||0; caTTC+=Number(a.ttc)||0;
     var mIdx=Number(String(a.date).substring(5,7))-1;
     if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(a.ht)||0;
+    var clDet=a.client||'(sans client)';
+    byClient[clDet]=(byClient[clDet]||0)+(Number(a.ht)||0);
     var cl=getClientPrefix(a.client||'')||'(sans client)';
-    byClient[cl]=(byClient[cl]||0)+(Number(a.ht)||0);
+    byClientPrefix[cl]=(byClientPrefix[cl]||0)+(Number(a.ht)||0);
     addLinesTGC(a.lines);
   });
 
@@ -1200,7 +1217,7 @@ function computeAdminReport(year){
   }
 
   return {year:year,factures:factures,avoirs:avoirs,caHT:caHT,caTTC:caTTC,
-    monthlyHT:monthlyHT,byClient:byClient,tgcByRate:tgcByRate,tgcTotal:tgcTotal,masse:masse};
+    monthlyHT:monthlyHT,byClient:byClient,byClientPrefix:byClientPrefix,tgcByRate:tgcByRate,tgcTotal:tgcTotal,masse:masse};
 }
 
 // ---- Petits composants graphiques (SVG, palette validée dataviz) ----------
@@ -1273,10 +1290,11 @@ function _adminScopeBoxHtml(){
 // utile pour SOI dans le GRC (rappel du périmètre en travaillant), mais n'a
 // pas besoin d'être imprimé sur le PDF envoyé à l'expert-comptable (demande
 // explicite utilisateur, après avoir vu le rendu réel) — écran=true, PDF=false.
-function _adminReportHtml(r,includeScope){
+function _adminReportHtml(r,includeScope,groupClientByPrefix){
   if(includeScope==null) includeScope=true;
-  var nbClients=Object.keys(r.byClient).length;
-  var clientEntries=Object.keys(r.byClient).map(function(k){return {label:k,value:r.byClient[k]};})
+  var byClientSrc=groupClientByPrefix?r.byClientPrefix:r.byClient;
+  var nbClients=Object.keys(byClientSrc).length;
+  var clientEntries=Object.keys(byClientSrc).map(function(k){return {label:k,value:byClientSrc[k]};})
     .sort(function(a,b){return Math.abs(b.value)-Math.abs(a.value);});
   var top=clientEntries.slice(0,5), rest=clientEntries.slice(5);
   var restSum=rest.reduce(function(s,x){return s+x.value;},0);
@@ -1319,7 +1337,13 @@ function _adminReportHtml(r,includeScope){
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">CA mensuel HT (XPF)</h3>'+
       _adminBarChartSVG(r.monthlyHT)+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
-      '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">CA par client'+(rest.length?' (top 5)':'')+'</h3>'+
+      '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px">'+
+        '<span>CA par client'+(rest.length?' (top 5)':'')+'</span>'+
+        (includeScope?('<span class="no-print" style="display:inline-flex;background:var(--bg,#0d1117);border:1px solid var(--border);border-radius:8px;padding:2px;gap:2px;flex-shrink:0">'+
+          '<button type="button" onclick="_adminSetClientMode(\'prefix\')" style="border:none;background:'+(groupClientByPrefix?ADMIN_C1:'transparent')+';color:'+(groupClientByPrefix?'#fff':'var(--muted)')+';font-size:9.5px;font-weight:700;padding:4px 8px;border-radius:6px;cursor:pointer;text-transform:none;letter-spacing:0">Gros Clients</button>'+
+          '<button type="button" onclick="_adminSetClientMode(\'detail\')" style="border:none;background:'+(!groupClientByPrefix?ADMIN_C1:'transparent')+';color:'+(!groupClientByPrefix?'#fff':'var(--muted)')+';font-size:9.5px;font-weight:700;padding:4px 8px;border-radius:6px;cursor:pointer;text-transform:none;letter-spacing:0">Clients internes</button>'+
+        '</span>'):'')+
+      '</h3>'+
       (clientTotal?_adminDonutSVG(clientSegs, (Math.round(clientTotal/1000))+'K','XPF HT'):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
       _adminLegendHtml(clientSegs,clientTotal)+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
@@ -1406,7 +1430,7 @@ function renderAdmin(){
   var r=computeAdminReport(year);
   window._adminLastReport=r; // réutilisé par printAdminReport() pour rester cohérent (pas de recalcul divergent)
   var body=document.getElementById('adminBody');
-  if(body) body.innerHTML=_adminReportHtml(r);
+  if(body) body.innerHTML=_adminReportHtml(r,true,_adminClientMode==='prefix');
 }
 
 // Export PDF : nouvelle fenêtre dédiée (pas le pipeline .doc des devis/factures,
@@ -1426,7 +1450,7 @@ function printAdminReport(){
   var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
-    _adminReportHtml(r,false);
+    _adminReportHtml(r,false,true);
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+esc(r.year)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
