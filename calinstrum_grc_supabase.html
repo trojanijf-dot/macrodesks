@@ -1265,7 +1265,12 @@ function _adminScopeBoxHtml(){
       '</div>'+
     '</div></div>';
 }
-function _adminReportHtml(r){
+// [07/08/2026] includeScope : le bandeau "Ce qui est/n'est pas calculé" reste
+// utile pour SOI dans le GRC (rappel du périmètre en travaillant), mais n'a
+// pas besoin d'être imprimé sur le PDF envoyé à l'expert-comptable (demande
+// explicite utilisateur, après avoir vu le rendu réel) — écran=true, PDF=false.
+function _adminReportHtml(r,includeScope){
+  if(includeScope==null) includeScope=true;
   var nbClients=Object.keys(r.byClient).length;
   var clientEntries=Object.keys(r.byClient).map(function(k){return {label:k,value:r.byClient[k]};})
     .sort(function(a,b){return Math.abs(b.value)-Math.abs(a.value);});
@@ -1283,7 +1288,7 @@ function _adminReportHtml(r){
 
   var nbFac=r.factures.length, nbAv=r.avoirs.length;
 
-  var html=_adminScopeBoxHtml();
+  var html=includeScope?_adminScopeBoxHtml():'';
 
   html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px">'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
@@ -1415,9 +1420,9 @@ function printAdminReport(){
     '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
     '.hd .sub{font-size:11px;color:#555}';
   var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
-      '<div class="sub">RIDET '+CI.ridet+' · Édité le '+fD(td())+' · Pour transmission à l\'expert-comptable</div></div>'+
+      '<div class="sub">RIDET '+CI.ridet+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
-    _adminReportHtml(r);
+    _adminReportHtml(r,false);
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+esc(r.year)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
