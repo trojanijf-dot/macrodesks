@@ -1312,7 +1312,7 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix){
 
   var html=includeScope?_adminScopeBoxHtml():'';
 
-  html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px">'+
+  html+='<div style="display:grid;grid-template-columns:repeat('+(includeScope?4:3)+',1fr);gap:12px;margin-bottom:22px">'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">CA net HT '+esc(r.year)+'</div>'+
       '<div style="font-size:20px;font-weight:800;color:'+ADMIN_C1+'">'+fN(r.caHT)+' XPF</div>'+
@@ -1325,10 +1325,12 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix){
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">Factures / Avoirs</div>'+
       '<div style="font-size:20px;font-weight:800">'+nbFac+' / '+nbAv+'</div>'+
       '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">émis sur l\'année</div></div>'+
-    '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
+    // Masse salariale : réservée au GRC écran (includeScope) — retirée du PDF
+    // expert-comptable à la demande de l'utilisateur (07/08/2026).
+    (includeScope?('<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">Masse salariale brute</div>'+
       '<div style="font-size:20px;font-weight:800;color:'+ADMIN_C6+'">'+fN(r.masse.total)+' XPF</div>'+
-      '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">'+r.masse.byEmp.length+' salarié(s)'+(r.masse.dirigeantsExclus.length?' — '+r.masse.dirigeantsExclus.length+' dirigeant(s) exclu(s)':'')+'</div></div>'+
+      '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">'+r.masse.byEmp.length+' salarié(s)'+(r.masse.dirigeantsExclus.length?' — '+r.masse.dirigeantsExclus.length+' dirigeant(s) exclu(s)':'')+'</div></div>'):'')+
   '</div>';
 
   html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Graphiques</div>';
@@ -1370,25 +1372,30 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix){
       '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+rateKeys.reduce(function(s,k){return s+r.tgcByRate[k].n;},0)+'</td></tr>'+
     '</tbody></table></div>';
 
-  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Détail — Masse salariale brute (Pointage/Paie)</div>';
-  html+='<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;overflow-x:auto">'+
-    (r.masse.dirigeantsExclus.length?'<div style="font-size:10.5px;color:var(--muted-soft);margin-bottom:8px">Exclu(s) : '+r.masse.dirigeantsExclus.map(function(d){return esc(d.nom+' '+(d.prenom||''));}).join(', ')+' (marqué(s) "Dirigeant" — rémunération hors régime salarié classique).</div>':'')+
-    '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr>'+
-      '<th style="text-align:left;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Salarié</th>'+
-      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Heures normales</th>'+
-      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Heures majorées</th>'+
-      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Brut annuel (XPF)</th>'+
-    '</tr></thead><tbody>'+
-    (r.masse.byEmp.length?r.masse.byEmp.map(function(e){return '<tr><td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(e.nom+' '+(e.prenom||''))+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fH(e.heuresNormales)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fH(e.heuresMajorees)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(e.brut)+'</td></tr>';}).join('')
-      :'<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:14px">Aucune heure pointée cette année</td></tr>')+
-    '<tr style="font-weight:800"><td style="padding:7px 9px;border-top:2px solid var(--border)">Total</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fH(r.masse.heuresNormales)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fH(r.masse.heuresMajorees)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.masse.total)+'</td></tr>'+
-    '</tbody></table></div>';
+  // Détail masse salariale : réservé au GRC écran (includeScope) — retiré du
+  // PDF expert-comptable à la demande de l'utilisateur (07/08/2026), même
+  // logique que la carte KPI ci-dessus.
+  if(includeScope){
+    html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Détail — Masse salariale brute (Pointage/Paie)</div>';
+    html+='<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;overflow-x:auto">'+
+      (r.masse.dirigeantsExclus.length?'<div style="font-size:10.5px;color:var(--muted-soft);margin-bottom:8px">Exclu(s) : '+r.masse.dirigeantsExclus.map(function(d){return esc(d.nom+' '+(d.prenom||''));}).join(', ')+' (marqué(s) "Dirigeant" — rémunération hors régime salarié classique).</div>':'')+
+      '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr>'+
+        '<th style="text-align:left;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Salarié</th>'+
+        '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Heures normales</th>'+
+        '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Heures majorées</th>'+
+        '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Brut annuel (XPF)</th>'+
+      '</tr></thead><tbody>'+
+      (r.masse.byEmp.length?r.masse.byEmp.map(function(e){return '<tr><td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(e.nom+' '+(e.prenom||''))+'</td>'+
+        '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fH(e.heuresNormales)+'</td>'+
+        '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fH(e.heuresMajorees)+'</td>'+
+        '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(e.brut)+'</td></tr>';}).join('')
+        :'<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:14px">Aucune heure pointée cette année</td></tr>')+
+      '<tr style="font-weight:800"><td style="padding:7px 9px;border-top:2px solid var(--border)">Total</td>'+
+        '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fH(r.masse.heuresNormales)+'</td>'+
+        '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fH(r.masse.heuresMajorees)+'</td>'+
+        '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.masse.total)+'</td></tr>'+
+      '</tbody></table></div>';
+  }
 
   html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Liste des factures &amp; avoirs de l\'année</div>';
   var rows=r.factures.map(function(f){return {num:f.num,date:f.date,client:f.client,ht:f.ht,tgc:f.tgc,ttc:f.ttc,isAvoir:false};})
