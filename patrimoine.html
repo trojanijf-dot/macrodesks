@@ -1,0 +1,341 @@
+﻿<!DOCTYPE html>
+<html lang="fr"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0e0e0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MacroDesk">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>MacroDesk — Patrimoine · Robinet de tendance</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+:root{--bg:#0e0e0c;--bg1:#0a0a08;--bg2:#1a1a17;--bg3:#14140f;--bg4:#222220;--border:rgba(255,255,250,0.08);--border-2:rgba(255,255,250,0.13);--text:#f5f5f0;--text-2:#c7c7c0;--muted:#a3a39a;--muted-soft:#6e6e66;--faint:#46463f;--red:#f09595;--green:#5dcaa5;--amber:#ef9f27;--blue:#88aae0;--purple:#a78bfa;--cyan:#4fc4d6;--mono:'JetBrains Mono',monospace;--font:'Inter',system-ui,sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;line-height:1.55;letter-spacing:-0.005em;-webkit-font-smoothing:antialiased;padding:22px 26px 70px;max-width:1420px;margin:0 auto}
+[data-num]{font-family:var(--mono);letter-spacing:-0.02em}
+.up{color:var(--green)}.down{color:var(--red)}.flat{color:var(--amber)}
+
+/* nav */
+.topnav{display:flex;gap:4px;margin-bottom:16px;border-bottom:.5px solid var(--border);flex-wrap:wrap}
+.topnav a{font-family:var(--mono);font-size:11px;color:var(--muted);text-decoration:none;padding:9px 15px;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px;transition:.12s;margin-bottom:-.5px}
+.topnav a:hover{color:var(--text)}
+.topnav a.active{color:var(--blue);border-bottom-color:var(--blue)}
+
+/* header */
+.top{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px;margin-bottom:20px}
+h1{font-size:22px;font-weight:700;letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
+h1 i{color:var(--cyan)}
+.stamp{font:500 11px/1.7 var(--mono);color:var(--muted-soft);text-align:right}
+.stamp b{color:var(--green);font-weight:600}
+.stamp .warn{color:var(--amber)}
+
+/* erreur de chargement */
+#err{display:none;background:rgba(240,149,149,.08);border:1px solid rgba(240,149,149,.3);border-radius:10px;padding:14px 17px;margin-bottom:16px;color:var(--red);font-size:12.5px}
+
+/* KPIs */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:16px 18px}
+.kpi .l{font:600 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted-soft);margin-bottom:9px}
+.kpi .v{font:650 28px/1 var(--mono);letter-spacing:-.03em}
+.kpi .s{font-size:11.5px;color:var(--muted-soft);margin-top:7px}
+.kpi.accent{border-color:rgba(93,202,165,.28);background:linear-gradient(180deg,rgba(93,202,165,.07),rgba(93,202,165,.01))}
+.bar{height:6px;border-radius:4px;background:var(--bg4);margin-top:11px;overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--cyan))}
+
+/* cartes */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px 22px;margin-bottom:16px}
+.card h2{font-size:15px;font-weight:620;margin-bottom:3px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.card .lead{color:var(--muted);font-size:12.5px;margin-bottom:16px;max-width:86ch}
+.tag{font:600 9px/1 var(--mono);letter-spacing:.08em;padding:4px 7px;border-radius:4px;background:var(--bg4);color:var(--muted-soft);border:1px solid var(--border-2)}
+
+/* compartiments */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(236px,1fr));gap:8px}
+.sl{background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:11px 13px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.sl.off{border-color:rgba(240,149,149,.24);background:rgba(240,149,149,.04)}
+.sl.err{border-color:rgba(239,159,39,.3);background:rgba(239,159,39,.05)}
+.sl .nm{font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px}
+.sl .sub{font:500 10.5px/1.5 var(--mono);color:var(--muted-soft);display:block;margin-top:2px}
+.pill{font:600 9px/1 var(--mono);letter-spacing:.07em;padding:5px 8px;border-radius:4px;white-space:nowrap}
+.on{background:rgba(93,202,165,.14);color:var(--green);border:1px solid rgba(93,202,165,.3)}
+.offp{background:rgba(240,149,149,.12);color:var(--red);border:1px solid rgba(240,149,149,.28)}
+.errp{background:rgba(239,159,39,.12);color:var(--amber);border:1px solid rgba(239,159,39,.3)}
+.cc-dot{font-size:10px;color:var(--amber);cursor:default}
+
+/* prime */
+.prime{display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:center}
+.spark{height:130px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;position:relative;overflow:hidden}
+.spark svg{width:100%;height:100%;display:block}
+.legend{font-size:12px;color:var(--muted)}
+.legend b{color:var(--text)}
+.legend .li{display:flex;gap:9px;align-items:baseline;margin-bottom:9px}
+.dot{width:9px;height:9px;border-radius:2px;flex:0 0 auto;margin-top:5px}
+
+/* ombre */
+.shadow{border:1px dashed rgba(167,139,250,.34);background:rgba(167,139,250,.04);border-radius:11px;padding:15px 17px;margin-top:14px}
+.shadow .h{font-size:12.5px;font-weight:620;color:var(--purple);margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.shadow p{font-size:12.5px;color:var(--muted)}
+.mini{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:12px}
+.mini div{background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:9px 11px}
+.mini .l{font:600 9px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted-soft)}
+.mini .v{font:600 15px/1.2 var(--mono);margin-top:6px}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font:600 9.5px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted-soft);padding:7px 9px;border-bottom:1px solid var(--border-2)}
+td{padding:8px 9px;border-bottom:1px solid var(--border);color:var(--muted)}
+td.k{color:var(--text);font-weight:500}
+td.n{font-family:var(--mono);font-size:11.5px;text-align:right}
+tr.best td{background:rgba(93,202,165,.05)}
+.g{color:var(--green)}.r{color:var(--red)}.a{color:var(--amber)}.p{color:var(--purple)}
+.scroll{overflow-x:auto}
+.note{font-size:12px;color:var(--muted-soft);margin-top:13px;padding-top:13px;border-top:1px solid var(--border)}
+.foot{color:var(--muted-soft);font-size:11.5px;margin-top:24px;padding-top:16px;border-top:1px solid var(--border);max-width:100ch}
+@media(max-width:820px){.prime{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<nav class="topnav"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html"><i class="ti ti-shield-half"></i>Moniteur</a><a href="validateur.html"><i class="ti ti-checkup-list"></i>Validateur</a><a href="portfolio.html"><i class="ti ti-briefcase"></i>Portfolio</a><a href="fxdesk.html"><i class="ti ti-currency-dollar"></i>Desk FX</a><a href="patrimoine.html" class="active"><i class="ti ti-droplet"></i>Patrimoine</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
+
+<div class="top">
+  <h1><i class="ti ti-droplet"></i>Robinet de tendance</h1>
+  <div class="stamp" id="stamp">chargement…</div>
+</div>
+
+<div id="err"></div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="card">
+  <h2>Les 13 compartiments <span class="tag">PERF 12 MOIS &gt; 0 → EXPOSÉ</span></h2>
+  <p class="lead">Vert/rouge indique ce que la poche <b>détient</b>, pas où verser. La protection vient
+  des sorties : un compartiment qui passe au rouge est vendu, sa part va en monétaire. Un compartiment
+  = un ticker, cible 1/13 par ligne.</p>
+  <div class="grid" id="sleeves"></div>
+  <div class="note">⚠️ <b>Matières premières = PDBC</b> (pas DBC : commodity pool à K-1, retenue de 10 %
+  sur le produit brut de chaque vente pour un non-résident US — rédhibitoire quand on vend une fois l'an).
+  PDBC vérifié : corrélation mensuelle 0,9966 avec DBC, signal 12 mois identique 99,3 % des mois.</div>
+</div>
+
+<div class="card">
+  <h2>La prime, affichée en permanence <span class="tag">MÊME QUAND ELLE EST NÉGATIVE</span></h2>
+  <p class="lead">Le robinet perd contre « ne rien faire » 18 années sur 24 mesurées, et se rattrape dans
+  les krachs (2008 : −2,3 % contre −19,4 %). Cette courbe montre le prix de l'assurance pendant qu'on la
+  paie, pas seulement le jour où elle sert.</p>
+  <div class="prime">
+    <div class="spark" id="spark"></div>
+    <div class="legend">
+      <div class="li"><span class="dot" style="background:var(--green)"></span>
+        <span><b>Prime cumulée</b><br>écart composé robinet − témoin équipondéré</span></div>
+      <div class="li"><span class="dot" style="background:var(--faint)"></span>
+        <span><b>Ligne zéro</b><br>au-dessus = l'assurance a rapporté ;<br>au-dessous = elle coûte</span></div>
+      <div class="li" style="color:var(--muted-soft);font-size:11.5px">
+        <span class="dot" style="background:transparent"></span>
+        <span id="spark-note">—</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Krach éclair — le coupe-circuit, en ombre <span class="tag">AFFICHÉ, PAS SUIVI</span></h2>
+  <p class="lead">Mesuré sur 2 univers (2003→ et 1990→), moteur quotidien : la variante qui protège le
+  mieux en 2020 est la <b>pire</b> globalement. Le coupe-circuit 200 j améliore le MaxDD mais coûte du
+  Sharpe et ×7 de bascules, sur la foi d'<b>un seul épisode</b>. Décision : on l'observe, on ne le suit pas —
+  on tranchera sur des observations réelles.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>variante mesurée</th><th>krach 2020</th><th>2008</th><th>Sharpe</th><th>MaxDD</th><th>Calmar</th><th>bascules/an</th></tr></thead>
+    <tbody>
+      <tr class="best"><td class="k">A · canonique 12 m (suivie)</td><td class="n">−13,8 %</td><td class="n">−2,6 %</td><td class="n g">0,73</td><td class="n">−14,6 %</td><td class="n">0,49</td><td class="n g">8</td></tr>
+      <tr><td class="k">B · 12 m ET 1 m &gt; 0</td><td class="n g">−0,7 %</td><td class="n">−1,4 %</td><td class="n r">0,54</td><td class="n">−8,3 %</td><td class="n">0,54</td><td class="n">11</td></tr>
+      <tr><td class="k">C · coupe-circuit 200 j</td><td class="n">−5,3 %</td><td class="n">−0,2 %</td><td class="n a">0,61</td><td class="n g">−8,8 %</td><td class="n g">0,59</td><td class="n r">56</td></tr>
+      <tr><td class="k">D · coupe-circuit 100 j</td><td class="n">−4,1 %</td><td class="n">+0,3 %</td><td class="n r">0,53</td><td class="n g">−7,2 %</td><td class="n g">0,61</td><td class="n r">77</td></tr>
+      <tr><td class="k">— ne rien faire —</td><td class="n r">−20,1 %</td><td class="n r">−29,3 %</td><td class="n">0,69</td><td class="n r">−34,7 %</td><td class="n r">0,27</td><td class="n">0</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="shadow">
+    <div class="h"><i class="ti ti-eye"></i> Observation en cours — fin de mois, sans agir</div>
+    <p>État du coupe-circuit 200 jours relevé à chaque clôture mensuelle. Granularité fin de mois :
+    on n'affiche pas d'écart de performance contrefactuel — ce serait une fausse précision.</p>
+    <div class="mini" id="ombre"></div>
+  </div>
+</div>
+
+<div class="foot" id="foot">
+  Source unique : <span data-num>data/robinet.json</span> écrit par le workflow n8n « 🚰 Patrimoine — Robinet de tendance »
+  (quotidien 07:15 Nouméa, n'agit qu'au premier relevé suivant chaque mois complet ; verrou CAS à l'écriture).
+  Mesures : tsmom.py · tsmom_adverse.py · krach_eclair.py (MacroDesk_local\recherche). Frais modélisés 10 pb
+  par bascule ; monétaire au T-bill 13 semaines ; fiscalité non modélisée ; exécution supposée à la clôture de
+  fin de mois. Matières premières : PDBC depuis 08/2026 (mesure historique faite sur DBC, signal identique
+  99,3 % des mois). Cette page mesure et affiche — elle ne passe aucun ordre et ne contient aucune
+  recommandation personnalisée.
+</div>
+
+<script>
+'use strict';
+/* ============================================================================
+   PATRIMOINE — page de lecture du robinet de tendance.
+   Donnees : data/robinet.json ecrit par le workflow n8n (etat mensuel, prime,
+   historique 120 mois). GitHub Pages sert les data/*.json avec ~12 h de retard
+   -> on lit raw.githubusercontent, comme les autres pages du site.
+   ========================================================================== */
+var MD_RAW = 'https://raw.githubusercontent.com/trojanijf-dot/macrodesks/main/';
+
+/* Noms affiches (le JSON du workflow est en ASCII sans accents) */
+var NOMS_FR = { SPY:'Actions US large', IWM:'Actions US small', QQQ:'Nasdaq 100',
+  EFA:'Actions dév. hors US', EEM:'Actions émergents', IEF:'UST 7-10 ans',
+  TLT:'UST 20 ans +', LQD:'Crédit IG', HYG:'Crédit HY', TIP:'TIPS', GLD:'Or',
+  PDBC:'Matières premières', DBC:'Matières premières', VNQ:'REIT US' };
+
+function pct(x, d){ if (x === null || x === undefined || isNaN(x)) return '—';
+  var s = (x * 100).toFixed(d === undefined ? 1 : d).replace('.', ',');
+  return (x >= 0 ? '+' : '') + s + ' %'; }
+function pctAbs(x, d){ if (x === null || x === undefined || isNaN(x)) return '—';
+  return (x * 100).toFixed(d === undefined ? 0 : d).replace('.', ',') + ' %'; }
+function esc(s){ return String(s === undefined || s === null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function el(id){ return document.getElementById(id); }
+
+function moisFr(ym){
+  var M = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+  var p = String(ym || '').split('-');
+  if (p.length < 2) return esc(ym);
+  return M[(+p[1]) - 1] + ' ' + p[0];
+}
+
+/* ---- bascules de l'annee en cours, derivees de l'historique (etats mois a mois) */
+function basculesAnnee(hist, annee){
+  var n = 0;
+  for (var i = 1; i < hist.length; i++){
+    if (String(hist[i].mois).slice(0, 4) !== String(annee)) continue;
+    var a = hist[i - 1].etats || {}, b = hist[i].etats || {};
+    for (var k in b){ if (a.hasOwnProperty(k) && a[k] !== b[k]) n++; }
+  }
+  return n;
+}
+
+function render(j){
+  var lignes = (j.lignes || []).slice();
+  var ok = lignes.filter(function(l){ return !l.erreur; });
+  var enErreur = lignes.filter(function(l){ return l.erreur; });
+  var hist = j.historique || [];
+  var anneeRef = String(j.mois || '').slice(0, 4);
+
+  /* ---- bandeau haut */
+  var maj = j.maj ? new Date(j.maj) : null;
+  el('stamp').innerHTML =
+    'source <b>data/robinet.json</b><br>' +
+    'mois traité <b>' + esc(j.mois || '?') + '</b>' +
+    (j.moisEnCours ? ' · <span data-num>' + esc(j.moisEnCours) + '</span> en cours' : '') +
+    ' · maj ' + (maj ? esc(maj.toLocaleString('fr-FR', {dateStyle: 'short', timeStyle: 'short'})) : '?') + '<br>' +
+    ok.length + '/' + lignes.length + ' compartiments lus · monétaire ' +
+    (j.cashMensuel ? pctAbs(j.cashMensuel * 12, 1) + '/an' : '—') +
+    (j.cashErreur ? ' · <span class="warn">⚠ taux monétaire illisible</span>' : '');
+
+  /* ---- KPIs */
+  var prime = j.primeCumulee;
+  var nMoisPrime = Math.max(hist.length - 1, 0); /* le 1er releve n'a pas de rendement */
+  var basc = basculesAnnee(hist, anneeRef);
+  el('kpis').innerHTML =
+    '<div class="kpi accent"><div class="l">Exposition</div>' +
+      '<div class="v g" data-num>' + pctAbs(j.exposition) + '</div>' +
+      '<div class="bar"><i style="width:' + Math.round((j.exposition || 0) * 100) + '%"></i></div>' +
+      '<div class="s">' + ok.filter(function(l){ return l.expose; }).length + ' exposés · ' +
+        ok.filter(function(l){ return !l.expose; }).length + ' en monétaire</div></div>' +
+    '<div class="kpi"><div class="l">Prime cumulée</div>' +
+      '<div class="v ' + (prime > 0.0005 ? 'g' : prime < -0.0005 ? 'r' : '') + '" data-num>' + pct(prime) + '</div>' +
+      '<div class="s">contre « ne rien faire » · ' +
+        (nMoisPrime > 0 ? nMoisPrime + ' mois de suivi' : 'la série commence — 1er relevé ' + moisFr(j.mois)) + '</div></div>' +
+    '<div class="kpi"><div class="l">Bascules ' + esc(anneeRef) + '</div>' +
+      '<div class="v" data-num>' + basc + '</div>' +
+      '<div class="s">~4 par an attendues (mesure 2003-2026)</div></div>' +
+    '<div class="kpi"><div class="l">Mode</div>' +
+      '<div class="v" style="font-size:18px;color:var(--amber)">OBSERVATION</div>' +
+      '<div class="s">aucun capital engagé · la machine ne passe aucun ordre</div></div>';
+
+  /* ---- compartiments, tries par perf 12 mois */
+  ok.sort(function(a, b){ return (b.perf12 || 0) - (a.perf12 || 0); });
+  var h = ok.map(function(l){
+    var ccWarn = (l.cc200 === false && l.expose)
+      ? ' <span class="cc-dot" title="Sous sa moyenne 200 jours à la clôture du mois — le coupe-circuit (en ombre) aurait coupé">●</span>' : '';
+    return '<div class="sl' + (l.expose ? '' : ' off') + '">' +
+      '<span><span class="nm">' + esc(NOMS_FR[l.sym] || l.nom) + ccWarn + '</span>' +
+      '<span class="sub" data-num>' + esc(l.sym) + ' · 12 m ' + pct(l.perf12) +
+      ' · mois ' + pct(l.perfMois) + '</span></span>' +
+      '<span class="pill ' + (l.expose ? 'on">EXPOSÉ' : 'offp">MONÉTAIRE') + '</span></div>';
+  }).join('');
+  h += enErreur.map(function(l){
+    return '<div class="sl err"><span><span class="nm">' + esc(NOMS_FR[l.sym] || l.nom) + '</span>' +
+      '<span class="sub" data-num>' + esc(l.sym) + ' · ' + esc(l.erreur) + '</span></span>' +
+      '<span class="pill errp">ERREUR</span></div>';
+  }).join('');
+  el('sleeves').innerHTML = h;
+
+  /* ---- courbe de prime */
+  renderSpark(hist);
+
+  /* ---- ombre : coupe-circuit 200 j (present seulement si le node v3 est en place) */
+  var avecCC = ok.filter(function(l){ return l.cc200 !== undefined; });
+  var sous = avecCC.filter(function(l){ return l.cc200 === false; }).length;
+  var conflits = avecCC.filter(function(l){ return l.expose && l.cc200 === false; }).length;
+  var moisCC = hist.filter(function(x){ return x.etatsCC; }).length;
+  el('ombre').innerHTML = avecCC.length
+    ? '<div><div class="l">Sous la moyenne 200 j</div><div class="v ' + (sous ? 'a' : 'g') + '" data-num>' + sous + ' / ' + avecCC.length + '</div></div>' +
+      '<div><div class="l">Exposé mais sous 200 j</div><div class="v ' + (conflits ? 'a' : 'g') + '" data-num>' + conflits + '</div></div>' +
+      '<div><div class="l">Mois observés</div><div class="v" data-num>' + moisCC + '</div></div>' +
+      '<div><div class="l">Statut</div><div class="v p">OMBRE</div></div>'
+    : '<div><div class="l">Sous la moyenne 200 j</div><div class="v" data-num>—</div></div>' +
+      '<div><div class="l">Statut</div><div class="v p">OMBRE</div></div>' +
+      '<div style="grid-column:span 2"><div class="l">Collecte</div><div class="v" style="font-size:11.5px;color:var(--muted)">' +
+      'démarre au prochain relevé (node « Prix » v3)</div></div>';
+}
+
+function renderSpark(hist){
+  var pts = hist.map(function(x){ return { m: x.mois, v: (x.primeCumulee === undefined ? null : x.primeCumulee) }; })
+                .filter(function(p){ return p.v !== null; });
+  var W = 700, H = 130, padX = 14, padY = 16;
+  if (!pts.length){
+    el('spark').innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
+      '<text x="20" y="70" fill="#6e6e66" font-size="11" font-family="monospace">aucune donnée</text></svg>';
+    return;
+  }
+  var vs = pts.map(function(p){ return p.v; });
+  var lo = Math.min(0, Math.min.apply(null, vs)), hi = Math.max(0, Math.max.apply(null, vs));
+  if (hi - lo < 0.004){ hi += 0.002; lo -= 0.002; }  /* zoom minimal : ±0,2 pt */
+  var X = function(i){ return pts.length === 1 ? padX + 10 : padX + i * (W - 2 * padX) / (pts.length - 1); };
+  var Y = function(v){ return padY + (hi - v) * (H - 2 * padY) / (hi - lo); };
+  var y0 = Y(0);
+  var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
+    '<line x1="0" y1="' + y0 + '" x2="' + W + '" y2="' + y0 + '" stroke="rgba(255,255,250,0.13)" stroke-width="1" stroke-dasharray="3 4"/>' +
+    '<text x="8" y="' + (y0 - 5) + '" fill="#46463f" font-size="9.5" font-family="monospace">0 %</text>';
+  if (pts.length > 1){
+    var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.v).toFixed(1); }).join(' ');
+    svg += '<path d="' + d + '" fill="none" stroke="#5dcaa5" stroke-width="1.8" stroke-linejoin="round"/>';
+  }
+  var last = pts[pts.length - 1];
+  svg += '<circle cx="' + X(pts.length - 1) + '" cy="' + Y(last.v) + '" r="3.5" fill="#5dcaa5"/>' +
+    '<text x="' + Math.min(X(pts.length - 1) + 9, W - 130) + '" y="' + (Y(last.v) + 4) + '" fill="#a3a39a" font-size="10" font-family="monospace">' +
+    esc(last.m) + ' · ' + pct(last.v) + '</text></svg>';
+  el('spark').innerHTML = svg;
+  el('spark-note').textContent = pts.length === 1
+    ? '07/2026 — premier point, la série commence ici. 120 mois conservés dans le fichier.'
+    : pts.length + ' mois tracés · 120 conservés dans le fichier.';
+}
+
+fetch(MD_RAW + 'data/robinet.json?t=' + Date.now())
+  .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+  .then(render)
+  .catch(function(e){
+    var b = el('err');
+    b.style.display = 'block';
+    b.innerHTML = '<b>Données injoignables</b> — ' + esc(e.message) +
+      '. La page lit <span data-num>raw.githubusercontent.com/…/data/robinet.json</span> ; ' +
+      'vérifier la connexion, puis que le workflow n8n « Robinet » a bien publié au moins un relevé.';
+    el('stamp').textContent = 'hors ligne';
+  });
+</script>
+</body></html>
