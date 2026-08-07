@@ -1038,6 +1038,8 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="nav('clients')" title="Clients · Alt+W/X pour naviguer · Ctrl+N : nouveau client · Ctrl+F : rechercher"><span class="ico"><span class="ico-classic">🏢</span><i class="ti ti-users ico-pro"></i></span>Clients</button>
   <button class="sb-item" onclick="nav('historique')" title="Historique · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">📅</span><i class="ti ti-history ico-pro"></i></span>Historique</button>
   <button class="sb-item" onclick="nav('catalogue')" title="Catalogue · Alt+W/X pour naviguer · Ctrl+N : nouvel article · Ctrl+F : rechercher"><span class="ico"><span class="ico-classic">🔧</span><i class="ti ti-package ico-pro"></i></span>Catalogue</button>
+  <div class="sb-sec">Administratif</div>
+  <button class="sb-item" onclick="nav('administratif');renderAdmin()" title="Administratif · export annuel CA/TGC/masse salariale pour l'expert-comptable"><span class="ico"><span class="ico-classic">📊</span><i class="ti ti-report-money ico-pro"></i></span>Administratif</button>
   <div class="sb-sec">Paramètres</div>
   <button class="sb-item" onclick="nav('params');renderParams()" title="Listes déroulantes · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">⚙️</span><i class="ti ti-list ico-pro"></i></span>Listes déroulantes</button>
   <div class="sb-sec">Données</div>
@@ -1561,7 +1563,7 @@ body.has-dashboard-bg #page-dashboard .metric{
       <button class="btn btn-teal" onclick="openEMP()">+ Ajouter un salarié</button>
     </div>
     <div class="tbl-wrap">
-      <table><thead><tr><th>Nom</th><th>Prénom</th><th>Poste</th><th>Qualification</th><th>Régime</th><th>Actif</th><th class="no-print">Actions</th></tr></thead>
+      <table><thead><tr><th>Nom</th><th>Prénom</th><th>Poste</th><th>Qualification</th><th>Régime</th><th>Actif</th><th>Statut</th><th class="no-print">Actions</th></tr></thead>
       <tbody id="tbEMP"></tbody></table>
     </div>
     <!-- Grilles de tarifs de VENTE par client : tarif de base éditable par salarié,
@@ -3025,11 +3027,20 @@ body.has-dashboard-bg #page-dashboard .metric{
         </select>
       </div>
     </div>
-    <div class="form-group"><label>Actif</label>
-      <select class="form-select" id="emp-actif">
-        <option value="oui">Oui — apparaît dans la grille de saisie</option>
-        <option value="non">Non — archivé (historique conservé)</option>
-      </select>
+    <div class="form-row">
+      <div class="form-group"><label>Actif</label>
+        <select class="form-select" id="emp-actif">
+          <option value="oui">Oui — apparaît dans la grille de saisie</option>
+          <option value="non">Non — archivé (historique conservé)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="emp-dirigeant" style="width:16px;height:16px">
+          Dirigeant / associé
+        </label>
+        <small style="display:block;font-size:10px;color:var(--muted);margin-top:3px">Exclu de la masse salariale dans l'export Administratif (rémunération hors régime salarié classique). N'affecte pas la Paie ni le Pointage.</small>
+      </div>
     </div>
   </div>
   <div class="modal-footer">
@@ -5635,7 +5646,7 @@ function nav(p){
   // le seul endroit où il était mis à jour).
   if(typeof _refreshAlertPill==='function') _refreshAlertPill();
   var T={dashboard:'Dashboard',devis:'Devis',factures:'Factures',suivi:'Suivi Factures',
-    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue'};
+    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue',administratif:'Administratif'};
   sv('topTitle',T[p]||p);
   // Sous-titre informatif (visible uniquement en mode pro via CSS)
   var fy=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
@@ -5649,7 +5660,8 @@ function nav(p){
     pointage:'Heures de prestation · paie et facturation par période',
     clients:'Annuaire clients',
     historique:'Historique des modifications',
-    catalogue:'Articles et tarifs'
+    catalogue:'Articles et tarifs',
+    administratif:'Export annuel CA / TGC / masse salariale pour l\'expert-comptable'
   };
   var subEl=document.getElementById('topSubtitle');
   if(subEl) subEl.textContent=sub[p]||'';
@@ -39229,9 +39241,10 @@ function renderEmployes(){
       '<td>'+esc(e.poste||'')+'</td><td>'+esc(e.qualification||'—')+'</td>'+
       '<td>'+esc(e.regime||'Semaine')+'</td>'+
       '<td>'+(e.actif===false?'—':'✅')+'</td>'+
+      '<td>'+(e.dirigeant?'👔 Dirigeant':'—')+'</td>'+
       '<td class="no-print"><button class="btn btn-ghost btn-sm" onclick="openEMP('+e.id+')">✏️</button> '+
       '<button class="btn btn-ghost btn-sm" onclick="delEMP('+e.id+')" title="Désactive le salarié (historique de pointage conservé)">🗑</button></td></tr>';
-  }).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px">Aucun salarié</td></tr>';
+  }).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px">Aucun salarié</td></tr>';
   renderPtTarifs();
 }
 function openEMP(id){
@@ -39242,6 +39255,7 @@ function openEMP(id){
   gv('emp-tarif',e?(e.tarifPaie!=null?e.tarifPaie:''):'');
   gv('emp-regime',e?(e.regime||'Semaine'):'Semaine');
   gv('emp-actif',(e&&e.actif===false)?'non':'oui');
+  var dirEl=document.getElementById('emp-dirigeant'); if(dirEl) dirEl.checked=!!(e&&e.dirigeant);
   sv('mEMPtitle',e?('Modifier — '+e.nom+' '+(e.prenom||'')):'Nouveau salarié');
   om('mEMP');
 }
@@ -39257,7 +39271,8 @@ function saveEMP(){
     qualification:(gvg('emp-qualif')||'').trim(),
     tarifPaie:Number(gvg('emp-tarif'))||0,
     regime:gvg('emp-regime')||'Semaine',
-    actif:gvg('emp-actif')!=='non'
+    actif:gvg('emp-actif')!=='non',
+    dirigeant:!!(document.getElementById('emp-dirigeant')&&document.getElementById('emp-dirigeant').checked)
   };
   var i=DB.employes.findIndex(function(x){return x.id===rec.id;});
   if(i>=0)DB.employes[i]=rec;else DB.employes.push(rec);
@@ -46303,6 +46318,336 @@ function critProceed(){
   _critState.callback=null;
   _critState.stage=1;
   if(typeof cb==='function')cb();
+}
+</script>
+
+<!-- ADMINISTRATIF — export annuel CA/TGC/masse salariale pour l'expert-comptable -->
+<div class="page" id="page-administratif">
+  <div class="flex-between mb12 no-print" style="flex-wrap:wrap;gap:10px">
+    <h2 style="font-family:var(--display);color:var(--teal);font-size:18px">📊 Administratif</h2>
+    <div style="display:flex;gap:10px;align-items:center">
+      <select class="filter-sel" id="admin-year" onchange="renderAdmin()"></select>
+      <button class="btn btn-teal" onclick="printAdminReport()">⬇ Export PDF pour l'expert-comptable</button>
+    </div>
+  </div>
+  <div id="adminBody"></div>
+</div>
+<script>
+// ============================================================================
+// ADMINISTRATIF — export annuel CA / TGC / masse salariale (chantier 2026-08-05)
+// ============================================================================
+// Périmètre volontairement limité à ce que le GRC sait calculer HONNÊTEMENT :
+//   - CA (factures+avoirs nettés), TGC COLLECTÉE (sur les ventes, PAS la TGC
+//     déductible sur les achats — non trackée ici), masse salariale BRUTE
+//     (module Pointage/Paie, hors salariés marqués "Dirigeant").
+// PAS de bilan/IS/IRPP : le GRC ne suit ni achats/charges, ni trésorerie, ni
+// immobilisations, ni capital — hors de portée, cf bandeau affiché à l'écran
+// ET sur le PDF exporté pour que l'expert-comptable comprenne le périmètre.
+var ADMIN_C1='#3987e5',ADMIN_C2='#d95926',ADMIN_C3='#199e70',ADMIN_C4='#c98500',ADMIN_C5='#d55181',ADMIN_C6='#9085e9';
+var ADMIN_RATE_COLOR={'3':ADMIN_C1,'6':ADMIN_C2,'11':ADMIN_C3,'22':ADMIN_C4};
+
+function _adminYearOf(d){ if(!d) return null; var m=String(d).match(/^(\d{4})/); return m?m[1]:null; }
+
+function _adminAvailableYears(){
+  var ys={};
+  (DB.factures||[]).forEach(function(f){var y=_adminYearOf(f.date);if(y)ys[y]=true;});
+  (DB.avoirs||[]).forEach(function(a){var y=_adminYearOf(a.date);if(y)ys[y]=true;});
+  var arr=Object.keys(ys).sort().reverse();
+  if(!arr.length) arr=[String(new Date().getFullYear())];
+  return arr;
+}
+
+// Construit le rapport complet pour une année civile (string "2026").
+function computeAdminReport(year){
+  var factures=(DB.factures||[]).filter(function(f){return _adminYearOf(f.date)===year;});
+  var avoirs=(DB.avoirs||[]).filter(function(a){return _adminYearOf(a.date)===year;});
+
+  var caHT=0, caTTC=0;
+  var monthlyHT=[0,0,0,0,0,0,0,0,0,0,0,0];
+  var byClient={};
+  var tgcByRate={}; // {taux:{taux,baseHT,tgc,n}}
+
+  function addLinesTGC(lines){
+    (lines||[]).forEach(function(l){
+      if(!l || l.type==='section_banner' || l.type==='header') return;
+      var qte=Number(l.qte)||0, pu=Number(l.pu)||0;
+      if(!qte) return;
+      var baseHT=Math.round(qte*pu);
+      var taux=Number(l.tgc)||0;
+      var tgcAmt=Math.round(baseHT*taux/100);
+      var key=String(taux);
+      if(!tgcByRate[key]) tgcByRate[key]={taux:taux,baseHT:0,tgc:0,n:0};
+      tgcByRate[key].baseHT+=baseHT;
+      tgcByRate[key].tgc+=tgcAmt;
+      tgcByRate[key].n++;
+    });
+  }
+
+  factures.forEach(function(f){
+    caHT+=Number(f.ht)||0; caTTC+=Number(f.ttc)||0;
+    var mIdx=Number(String(f.date).substring(5,7))-1;
+    if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(f.ht)||0;
+    var cl=f.client||'(sans client)';
+    byClient[cl]=(byClient[cl]||0)+(Number(f.ht)||0);
+    addLinesTGC(f.lines);
+  });
+  avoirs.forEach(function(a){
+    caHT+=Number(a.ht)||0; caTTC+=Number(a.ttc)||0;
+    var mIdx=Number(String(a.date).substring(5,7))-1;
+    if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(a.ht)||0;
+    var cl=a.client||'(sans client)';
+    byClient[cl]=(byClient[cl]||0)+(Number(a.ht)||0);
+    addLinesTGC(a.lines);
+  });
+
+  var tgcTotal=Object.keys(tgcByRate).reduce(function(s,k){return s+tgcByRate[k].tgc;},0);
+
+  // Masse salariale brute, hors salariés marqués "Dirigeant" — agrégat pointage
+  // sur l'année civile complète (opts.site omis = tous sites/clients confondus).
+  var masse={total:0,heuresNormales:0,heuresMajorees:0,byEmp:[],dirigeantsExclus:[]};
+  if(typeof ptAggregatePeriod==='function'){
+    var agg=ptAggregatePeriod(year+'-01-01', year+'-12-31', {});
+    (DB.employes||[]).forEach(function(e){
+      var h=(agg.byEmp&&agg.byEmp[e.id])||null;
+      if(!h) return;
+      var totH=(h.hnj||0)+(h.hs25||0)+(h.hs50||0)+(h.dim||0)+(h.fer||0)+(h.nuit||0);
+      if(!totH) return; // pas d'heures cette année : ne pas lister
+      if(e.dirigeant){ masse.dirigeantsExclus.push({nom:e.nom,prenom:e.prenom}); return; }
+      var brut=(typeof _ptBrut==='function')?_ptBrut(h,Number(e.tarifPaie)||0):0;
+      masse.total+=brut;
+      masse.heuresNormales+=(h.hnj||0);
+      masse.heuresMajorees+=totH-(h.hnj||0);
+      masse.byEmp.push({nom:e.nom,prenom:e.prenom,heuresNormales:h.hnj||0,heuresMajorees:totH-(h.hnj||0),brut:brut});
+    });
+  }
+
+  return {year:year,factures:factures,avoirs:avoirs,caHT:caHT,caTTC:caTTC,
+    monthlyHT:monthlyHT,byClient:byClient,tgcByRate:tgcByRate,tgcTotal:tgcTotal,masse:masse};
+}
+
+// ---- Petits composants graphiques (SVG, palette validée dataviz) ----------
+function _adminDonutSVG(segments, centerLabel, centerSub){
+  var total=segments.reduce(function(s,x){return s+Math.abs(x.value);},0);
+  var r=46, C=2*Math.PI*r, offset=0, gap=3, arcs='';
+  segments.forEach(function(seg){
+    var v=Math.abs(seg.value);
+    if(!v || !total) return;
+    var len=Math.max(0,(v/total)*C-gap);
+    arcs+='<circle cx="60" cy="60" r="'+r+'" fill="none" stroke="'+seg.color+'" stroke-width="16" '+
+      'stroke-dasharray="'+len.toFixed(1)+' '+(C-len).toFixed(1)+'" stroke-dashoffset="'+(-offset).toFixed(1)+'" '+
+      'transform="rotate(-90 60 60)"></circle>';
+    offset+=(v/total)*C;
+  });
+  return '<svg viewBox="0 0 120 120" style="width:100%;max-width:160px;display:block;margin:0 auto">'+
+    '<circle cx="60" cy="60" r="'+r+'" fill="none" stroke="var(--border)" stroke-width="16"></circle>'+arcs+
+    '<text x="60" y="57" text-anchor="middle" font-size="11" fill="var(--text,#e6edf3)" font-weight="800">'+esc(centerLabel||'')+'</text>'+
+    '<text x="60" y="70" text-anchor="middle" font-size="7" fill="var(--muted-soft)">'+esc(centerSub||'')+'</text>'+
+  '</svg>';
+}
+function _adminLegendHtml(segments,total){
+  return '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;font-size:10.5px">'+
+    segments.filter(function(s){return s.value;}).map(function(s){
+      var pct=total?Math.round(Math.abs(s.value)/total*100):0;
+      return '<div style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:'+s.color+'"></span>'+esc(s.label)+' — '+pct+'%</div>';
+    }).join('')+
+  '</div>';
+}
+function _adminBarChartSVG(monthlyHT){
+  var max=Math.max.apply(null, monthlyHT.map(function(v){return Math.abs(v);}).concat([1]));
+  var months=['J','F','M','A','M','J','J','A','S','O','N','D'];
+  var w=380,h=140,barW=22,gap=8,baseY=130,bars='';
+  monthlyHT.forEach(function(v,i){
+    var x=6+i*(barW+gap);
+    var bh=Math.round(Math.abs(v)/max*100);
+    var y=baseY-bh;
+    bars+='<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+Math.max(bh,1)+'" rx="3" fill="'+ADMIN_C1+'"></rect>';
+  });
+  return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:140px">'+bars+
+      '<line x1="0" y1="'+baseY+'" x2="'+w+'" y2="'+baseY+'" stroke="var(--border)" stroke-width="1"></line>'+
+    '</svg>'+
+    '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted-soft);padding:0 4px">'+
+      months.map(function(m){return '<span>'+m+'</span>';}).join('')+
+    '</div>';
+}
+
+// ---- Assemblage HTML (partagé écran + PDF) --------------------------------
+function _adminScopeBoxHtml(){
+  return '<div style="background:var(--panel2,#161b24);border:1.5px solid rgba(96,165,250,.4);border-radius:10px;padding:14px 18px;margin-bottom:20px">'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">'+
+      '<div><h3 style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;color:#34d399">✓ Ce qui est calculé (données réelles du GRC)</h3>'+
+        '<ul style="margin-left:16px;font-size:11.5px;color:var(--muted)">'+
+          '<li>Chiffre d\'affaires (factures + avoirs nettés)</li>'+
+          '<li>TGC <b>collectée</b> sur les ventes, par taux</li>'+
+          '<li>Masse salariale <b>brute</b> (module Pointage/Paie, hors dirigeants)</li>'+
+          '<li>Liste détaillée factures/avoirs de l\'année</li>'+
+        '</ul></div>'+
+      '<div><h3 style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;color:#f87171">✕ Ce qui n\'est PAS inclus (absent du GRC)</h3>'+
+        '<ul style="margin-left:16px;font-size:11.5px;color:var(--muted)">'+
+          '<li>Bilan (actif/passif), immobilisations, trésorerie</li>'+
+          '<li>Bénéfice net, IS, IRPP</li>'+
+          '<li>TGC déductible (achats) — déclaration incomplète sans elle</li>'+
+        '</ul>'+
+        '<div style="margin-top:8px;font-size:10.5px;color:var(--muted-soft);font-style:italic">Le GRC ne suit ni les achats, ni la banque, ni le capital — seul un logiciel comptable complet (celui de l\'expert-comptable) a ces données.</div>'+
+      '</div>'+
+    '</div></div>';
+}
+function _adminReportHtml(r){
+  var nbClients=Object.keys(r.byClient).length;
+  var clientEntries=Object.keys(r.byClient).map(function(k){return {label:k,value:r.byClient[k]};})
+    .sort(function(a,b){return Math.abs(b.value)-Math.abs(a.value);});
+  var top=clientEntries.slice(0,5), rest=clientEntries.slice(5);
+  var restSum=rest.reduce(function(s,x){return s+x.value;},0);
+  var clientSegs=top.map(function(c,i){return {label:c.label,value:c.value,color:[ADMIN_C1,ADMIN_C2,ADMIN_C3,ADMIN_C4,ADMIN_C5][i]||ADMIN_C6};});
+  if(rest.length) clientSegs.push({label:'Autres ('+rest.length+')',value:restSum,color:ADMIN_C6});
+  var clientTotal=clientSegs.reduce(function(s,x){return s+Math.abs(x.value);},0);
+
+  var rateKeys=Object.keys(r.tgcByRate).sort(function(a,b){return Number(a)-Number(b);});
+  var tgcSegs=rateKeys.filter(function(k){return Number(k)>0;}).map(function(k){
+    return {label:k+'%',value:r.tgcByRate[k].tgc,color:ADMIN_RATE_COLOR[k]||ADMIN_C5};
+  });
+  var tgcSegTotal=tgcSegs.reduce(function(s,x){return s+Math.abs(x.value);},0);
+
+  var nbFac=r.factures.length, nbAv=r.avoirs.length;
+
+  var html=_adminScopeBoxHtml();
+
+  html+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px">'+
+    '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">CA net HT '+esc(r.year)+'</div>'+
+      '<div style="font-size:20px;font-weight:800;color:'+ADMIN_C1+'">'+fN(r.caHT)+' XPF</div>'+
+      '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">après avoirs déduits</div></div>'+
+    '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">TGC collectée</div>'+
+      '<div style="font-size:20px;font-weight:800;color:'+ADMIN_C4+'">'+fN(r.tgcTotal)+' XPF</div>'+
+      '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">tous taux confondus</div></div>'+
+    '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">Factures / Avoirs</div>'+
+      '<div style="font-size:20px;font-weight:800">'+nbFac+' / '+nbAv+'</div>'+
+      '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">émis sur l\'année</div></div>'+
+    '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">Masse salariale brute</div>'+
+      '<div style="font-size:20px;font-weight:800;color:'+ADMIN_C6+'">'+fN(r.masse.total)+' XPF</div>'+
+      '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">'+r.masse.byEmp.length+' salarié(s)'+(r.masse.dirigeantsExclus.length?' — '+r.masse.dirigeantsExclus.length+' dirigeant(s) exclu(s)':'')+'</div></div>'+
+  '</div>';
+
+  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Graphiques</div>';
+  html+='<div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:14px;margin-bottom:22px">'+
+    '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
+      '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">CA mensuel HT (XPF)</h3>'+
+      _adminBarChartSVG(r.monthlyHT)+'</div>'+
+    '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
+      '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">CA par client'+(rest.length?' (top 5)':'')+'</h3>'+
+      (clientTotal?_adminDonutSVG(clientSegs, (Math.round(clientTotal/1000))+'K','XPF HT'):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
+      _adminLegendHtml(clientSegs,clientTotal)+'</div>'+
+    '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
+      '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">TGC collectée par taux</h3>'+
+      (tgcSegTotal?_adminDonutSVG(tgcSegs, (Math.round(tgcSegTotal/1000))+'K','XPF TGC'):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
+      _adminLegendHtml(tgcSegs,tgcSegTotal)+'</div>'+
+  '</div>';
+
+  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Détail — TGC collectée par taux</div>';
+  html+='<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;overflow-x:auto">'+
+    '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr>'+
+      '<th style="text-align:left;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Taux</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Base HT</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">TGC collectée</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Nb lignes</th>'+
+    '</tr></thead><tbody>'+
+    rateKeys.map(function(k){var t=r.tgcByRate[k];return '<tr><td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+t.taux+'%</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(t.baseHT)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(t.tgc)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+t.n+'</td></tr>';}).join('')+
+    '<tr style="font-weight:800"><td style="padding:7px 9px;border-top:2px solid var(--border)">Total</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(rateKeys.reduce(function(s,k){return s+r.tgcByRate[k].baseHT;},0))+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.tgcTotal)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+rateKeys.reduce(function(s,k){return s+r.tgcByRate[k].n;},0)+'</td></tr>'+
+    '</tbody></table></div>';
+
+  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Détail — Masse salariale brute (Pointage/Paie)</div>';
+  html+='<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;overflow-x:auto">'+
+    (r.masse.dirigeantsExclus.length?'<div style="font-size:10.5px;color:var(--muted-soft);margin-bottom:8px">Exclu(s) : '+r.masse.dirigeantsExclus.map(function(d){return esc(d.nom+' '+(d.prenom||''));}).join(', ')+' (marqué(s) "Dirigeant" — rémunération hors régime salarié classique).</div>':'')+
+    '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr>'+
+      '<th style="text-align:left;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Salarié</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Heures normales</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Heures majorées</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Brut annuel (XPF)</th>'+
+    '</tr></thead><tbody>'+
+    (r.masse.byEmp.length?r.masse.byEmp.map(function(e){return '<tr><td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(e.nom+' '+(e.prenom||''))+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fH(e.heuresNormales)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fH(e.heuresMajorees)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(e.brut)+'</td></tr>';}).join('')
+      :'<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:14px">Aucune heure pointée cette année</td></tr>')+
+    '<tr style="font-weight:800"><td style="padding:7px 9px;border-top:2px solid var(--border)">Total</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fH(r.masse.heuresNormales)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fH(r.masse.heuresMajorees)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.masse.total)+'</td></tr>'+
+    '</tbody></table></div>';
+
+  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Liste des factures &amp; avoirs de l\'année</div>';
+  var rows=r.factures.map(function(f){return {num:f.num,date:f.date,client:f.client,ht:f.ht,tgc:f.tgc,ttc:f.ttc,isAvoir:false};})
+    .concat(r.avoirs.map(function(a){return {num:a.num,date:a.date,client:a.client,ht:a.ht,tgc:a.tgc,ttc:a.ttc,isAvoir:true};}))
+    .sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;});
+  html+='<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;overflow-x:auto">'+
+    '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr>'+
+      '<th style="text-align:left;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">N°</th>'+
+      '<th style="text-align:left;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Date</th>'+
+      '<th style="text-align:left;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">Client</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">HT</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">TGC</th>'+
+      '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">TTC</th>'+
+    '</tr></thead><tbody>'+
+    rows.map(function(x){var c=x.isAvoir?'color:#f87171':'';return '<tr style="'+c+'"><td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(x.num)+'</td>'+
+      '<td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+fD(x.date)+'</td>'+
+      '<td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(x.client)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ht)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.tgc)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ttc)+'</td></tr>';}).join('')+
+    '<tr style="font-weight:800"><td colspan="3" style="padding:7px 9px;border-top:2px solid var(--border)">Total net ('+nbFac+' facture(s) − '+nbAv+' avoir(s))</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.caHT)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.tgcTotal)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.caTTC)+'</td></tr>'+
+    '</tbody></table></div>';
+
+  return html;
+}
+
+function renderAdmin(){
+  _ensurePointageShape(); _ensureAvoirShape();
+  var ySel=document.getElementById('admin-year');
+  if(ySel && !ySel._filled){
+    var years=_adminAvailableYears();
+    ySel.innerHTML=years.map(function(y){return '<option value="'+y+'">'+y+'</option>';}).join('');
+    ySel._filled=true;
+  }
+  var year=(ySel&&ySel.value)?ySel.value:String(new Date().getFullYear());
+  var r=computeAdminReport(year);
+  window._adminLastReport=r; // réutilisé par printAdminReport() pour rester cohérent (pas de recalcul divergent)
+  var body=document.getElementById('adminBody');
+  if(body) body.innerHTML=_adminReportHtml(r);
+}
+
+// Export PDF : nouvelle fenêtre dédiée (pas le pipeline .doc des devis/factures,
+// mise en page dashboard différente) — même pattern window.open+write+print que
+// doPrint(). Pagination naturelle du tableau (thead répété, tr non coupée).
+function printAdminReport(){
+  var r=window._adminLastReport || computeAdminReport(document.getElementById('admin-year')?document.getElementById('admin-year').value:String(new Date().getFullYear()));
+  var w=window.open('','_blank','');
+  if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
+  var css='@page{size:A4 portrait;margin:14mm 12mm;}'+
+    'body{font-family:Calibri,Arial,sans-serif;margin:0;padding:0;color:#111;background:#fff;font-size:11px;'+
+    '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
+    'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'+
+    'h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
+    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
+    '.hd .sub{font-size:11px;color:#555}';
+  var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
+      '<div class="sub">RIDET '+CI.ridet+' · Édité le '+fD(td())+' · Pour transmission à l\'expert-comptable</div></div>'+
+      '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
+    _adminReportHtml(r);
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+esc(r.year)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
+  w.document.close();
+  w.focus();
+  setTimeout(function(){ w.print(); w.close(); }, 400);
 }
 </script>
 
