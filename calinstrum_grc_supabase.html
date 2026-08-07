@@ -1123,7 +1123,17 @@ function _adminAvailableYears(){
 
 // Construit le rapport complet pour une année civile (string "2026").
 function computeAdminReport(year){
-  var factures=(DB.factures||[]).filter(function(f){return _adminYearOf(f.date)===year;});
+  // [07/08/2026] Exclusion des factures PRÉ-FACTURÉES (numéro réservé à
+  // l'acceptation du devis pour verrouiller la séquence, mais chantier pas
+  // commencé/fini — PAS une vente réelle, cf isPrebilled()/PHASES{} : phases
+  // emerson/transit/douane/chantier_attente/chantier_cours = billed:false).
+  // Sans ce filtre, le CA/TGC déclarés à l'expert-comptable incluraient des
+  // factures qui n'ont jamais été réellement émises au client. On réutilise
+  // la MÊME fonction que le Pipeline Encaissement (Suivi Factures) pour que
+  // l'export reste cohérent avec ce qui est déjà affiché à l'écran ailleurs.
+  var factures=(DB.factures||[]).filter(function(f){
+    return _adminYearOf(f.date)===year && !(typeof isPrebilled==='function' && isPrebilled(f));
+  });
   var avoirs=(DB.avoirs||[]).filter(function(a){return _adminYearOf(a.date)===year;});
 
   var caHT=0, caTTC=0;
@@ -1240,7 +1250,7 @@ function _adminScopeBoxHtml(){
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">'+
       '<div><h3 style="font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;color:#34d399">✓ Ce qui est calculé (données réelles du GRC)</h3>'+
         '<ul style="margin-left:16px;font-size:11.5px;color:var(--muted)">'+
-          '<li>Chiffre d\'affaires (factures + avoirs nettés)</li>'+
+          '<li>Chiffre d\'affaires (factures + avoirs nettés, <b>pré-facturées exclues</b> — numéro réservé mais chantier non terminé/PV non reçu)</li>'+
           '<li>TGC <b>collectée</b> sur les ventes, par taux</li>'+
           '<li>Masse salariale <b>brute</b> (module Pointage/Paie, hors dirigeants)</li>'+
           '<li>Liste détaillée factures/avoirs de l\'année</li>'+
