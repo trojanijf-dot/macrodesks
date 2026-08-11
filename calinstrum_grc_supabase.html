@@ -27406,7 +27406,10 @@ function openFA(id,fromDV,preSelectedClient){
       rebuildFaEmailOptions(f.email||'');
       gv('fa-objet',f.objet||'');
       gv('fa-dvlie',f.dvlie||'');_faDvlieInit(f.dvlie||'');
-      gv('fa-dvlie-print',f.dvliePrint||'');
+      // [11/08/2026] REAPPRO PAKORO : pré-affiche le devis cadre à l'OUVERTURE
+      // (pas seulement à l'enregistrement) pour que le champ soit déjà correct
+      // à l'écran, sans ressaisie manuelle à chaque facture.
+      gv('fa-dvlie-print', f.dvliePrint || (/PAKORO/i.test(f.client||'') ? PAKORO_CADRE_DEVIS : ''));
       gv('fa-type',f.type||'Fourniture');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
       gv('fa-notes',f.notes||'');
@@ -29320,6 +29323,10 @@ function bAvoir(av){
 // IMPORTANT : ne touche QUE le champ f.objet (visible dans la modale). Le titre du
 // PDF généré reste inchangé (généré par d'autres fonctions à partir d'autres sources).
 // =============================================================================
+// Devis cadre réel de PAKORO (grille tarifaire annuelle) — à distinguer du
+// devis-miroir SLN-DV-BCGMAO-xxxxx (fictif, sert uniquement à verrouiller le
+// N° de BC pour le suivi GRC interne). Utilisé pour pré-remplir f.dvliePrint.
+var PAKORO_CADRE_DEVIS='SLN-DV143-CADRE-2026';
 function _buildFAFournitureObjet(f){
   if(!f) return '';
   // 1) BC Client : priorité au champ explicite, fallback sur les alias
@@ -29403,7 +29410,7 @@ async function saveFA(){
   // distinct du devis-miroir de suivi GRC) s'il n'a pas déjà été saisi/modifié
   // manuellement — ne jamais écraser une valeur que l'utilisateur a lui-même posée.
   if(!f.dvliePrint && /PAKORO/i.test(f.client||'') && f.type==='Fourniture'){
-    f.dvliePrint='SLN-DV143-CADRE-2026';
+    f.dvliePrint=PAKORO_CADRE_DEVIS;
   }
   if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
   // Suivi BC hebdomadaire : getFA() a DÉJÀ appliqué _faPendingBcConsumption sur
