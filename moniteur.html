@@ -1,0 +1,299 @@
+﻿<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0e0e0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MacroDesk">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>MacroDesk — Moniteur de position</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+:root{--bg:#0e0e0c;--bg1:#0a0a08;--bg2:#1a1a17;--bg3:#14140f;--bg4:#222220;--border:rgba(255,255,250,0.08);--border-2:rgba(255,255,250,0.13);--text:#f5f5f0;--muted:#a3a39a;--muted-soft:#6e6e66;--faint:#46463f;--red:#f09595;--green:#5dcaa5;--amber:#ef9f27;--blue:#88aae0;--purple:#a78bfa;--mono:'JetBrains Mono',monospace;--font:'Inter',system-ui,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:22px 24px 70px;max-width:1080px;margin:0 auto}
+.topnav{display:flex;gap:4px;margin-bottom:16px;border-bottom:.5px solid var(--border)}
+.topnav a{font-family:var(--mono);font-size:11px;color:var(--muted);text-decoration:none;padding:9px 15px;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px;transition:.12s;margin-bottom:-.5px}
+.topnav a:hover{color:var(--text)}.topnav a.active{color:var(--blue);border-bottom-color:var(--blue)}
+.head{display:flex;align-items:center;gap:11px;margin-bottom:3px}
+.head .logo{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--red),#8f3a3a);color:#210707;font-weight:800;font-size:17px}
+.head h1{font-size:19px;font-weight:800;color:#fff}
+.head .badge{margin-left:auto;font-family:var(--mono);font-size:9px;font-weight:700;color:var(--amber);background:rgba(239,159,39,.14);padding:3px 10px;border-radius:999px;text-transform:uppercase;letter-spacing:.08em}
+.sub{color:var(--muted);font-size:12px;margin-bottom:16px}
+.kpi{display:flex;background:var(--bg2);border:.5px solid var(--border);border-radius:11px;margin-bottom:14px;overflow:hidden}
+.kpi .c{flex:1;padding:10px 15px;border-right:.5px solid var(--border)}.kpi .c:last-child{border-right:none}
+.kpi .k{font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-soft);font-weight:600}
+.kpi .v{font-family:var(--mono);font-size:16px;font-weight:700;margin-top:2px}
+.up{color:var(--green)}.down{color:var(--red)}
+.feed{display:flex;flex-direction:column;gap:9px}
+.pos{background:var(--bg2);border:.5px solid var(--border);border-radius:12px;padding:13px 15px;display:grid;grid-template-columns:130px 150px 110px 1fr 160px;gap:14px;align-items:center}
+.pos.sortir{border-left:3px solid var(--red)}.pos.trim{border-left:3px solid var(--amber)}.pos.hold{border-left:3px solid var(--green)}
+.pos .tk{font-weight:800;font-size:16px;color:#fff}.pos .nm{font-size:10px;color:var(--muted-soft);margin-top:1px}
+.pos .px{font-family:var(--mono);font-size:11.5px;color:var(--muted)}.pos .px b{color:#fff}
+.pos .pl{font-family:var(--mono);text-align:right}.pos .pl .v{font-size:17px;font-weight:800}.pos .pl .r{font-size:10px;color:var(--muted-soft)}
+.sigs{display:flex;flex-wrap:wrap;gap:5px}
+.sig{font-family:var(--mono);font-size:9px;font-weight:600;padding:2px 7px;border-radius:5px;display:inline-flex;align-items:center;gap:4px}
+.s-red{background:rgba(240,149,149,.13);color:var(--red)}.s-amb{background:rgba(239,159,39,.12);color:var(--amber)}.s-ok{background:var(--bg4);color:var(--muted-soft)}
+.verdict{text-align:right}
+.vpill{font-family:var(--mono);font-size:12px;font-weight:800;padding:6px 12px;border-radius:8px;display:inline-block}
+.v-sortir{background:rgba(240,149,149,.15);color:var(--red)}.v-trim{background:rgba(239,159,39,.14);color:var(--amber)}.v-hold{background:rgba(93,202,165,.13);color:var(--green)}
+.verdict .why{font-size:9.5px;color:var(--muted-soft);margin-top:4px}
+.note{background:rgba(240,149,149,.06);border:.5px dashed rgba(240,149,149,.3);border-radius:11px;padding:12px 15px;margin-top:16px;font-size:11.5px;color:var(--muted);line-height:1.55}.note b{color:var(--text)}
+.foot{margin-top:14px;color:var(--faint);font-size:10px;font-family:var(--mono)}
+@media(max-width:860px){.pos{grid-template-columns:1fr 1fr;gap:8px}.verdict,.pl{text-align:left}}
+/* ---- éditeur Mes positions ---- */
+.editbtn{background:var(--bg2);border:.5px solid var(--border-2);color:var(--muted);border-radius:8px;padding:6px 11px;font-family:var(--mono);font-size:10.5px;font-weight:600;cursor:pointer;margin-left:auto;display:inline-flex;align-items:center;gap:6px}
+.editbtn:hover{border-color:var(--green);color:var(--text)}
+.pos-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
+.pos-modal{background:var(--bg2);border:.5px solid var(--border-2);border-radius:14px;padding:18px 20px;max-width:780px;width:100%;max-height:88vh;overflow:auto;position:relative}
+.pos-modal h2{font-size:15px;font-weight:800;color:#fff;display:flex;align-items:center;gap:9px;margin-bottom:4px}
+.pos-modal h2 i{color:var(--green)}
+.pos-modal .x{position:absolute;top:13px;right:16px;background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer}
+.pe-intro{font-size:11px;color:var(--muted);line-height:1.55;margin-bottom:11px}.pe-intro b{color:var(--text)}.pe-intro code{font-family:var(--mono);color:var(--blue);font-size:10.5px}
+.pe-wh{width:100%;background:var(--bg1);border:.5px solid var(--border-2);border-radius:7px;padding:8px 10px;color:var(--text);font-family:var(--mono);font-size:11px;outline:none;margin:4px 0 12px}
+.pe-add{display:grid;grid-template-columns:1fr 1fr .8fr .8fr .8fr .7fr auto;gap:7px;align-items:end;background:var(--bg3);border:.5px solid var(--border);border-radius:10px;padding:11px;margin-bottom:13px}
+@media(max-width:720px){.pe-add{grid-template-columns:1fr 1fr 1fr}}
+.pe-fld{display:flex;flex-direction:column;gap:4px}
+.pe-fld label{font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-weight:600}
+.pe-fld input,.pe-fld select{background:var(--bg1);border:.5px solid var(--border-2);border-radius:7px;padding:7px 9px;color:var(--text);font-family:var(--mono);font-size:11.5px;outline:none;width:100%}
+.pe-fld input:focus,.pe-fld select:focus{border-color:var(--blue)}
+.pe-addbtn{background:linear-gradient(135deg,var(--green),#3a8f74);color:#07211b;font-weight:700;font-size:14px;border:none;border-radius:8px;padding:0 12px;cursor:pointer;height:33px;display:inline-flex;align-items:center}
+.pe-tbl{width:100%;border-collapse:collapse}
+.pe-tbl th{text-align:left;font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-weight:600;padding:7px 8px;border-bottom:.5px solid var(--border)}
+.pe-tbl td{padding:9px 8px;border-bottom:.5px solid var(--border);font-size:11.5px}
+.pe-tbl tr:last-child td{border-bottom:none}
+.pe-tbl .tk{font-weight:800;color:#fff}.pe-tbl [data-num]{font-family:var(--mono)}
+.pe-del{background:none;border:.5px solid var(--border);color:var(--muted-soft);border-radius:6px;width:26px;height:26px;cursor:pointer}.pe-del:hover{color:var(--red);border-color:rgba(240,149,149,.4)}
+.pe-save{display:flex;gap:10px;align-items:center;margin-top:13px;flex-wrap:wrap}
+.pe-savebtn{background:linear-gradient(135deg,var(--green),#3a8f74);color:#07211b;font-weight:700;font-size:12px;border:none;border-radius:9px;padding:10px 16px;cursor:pointer}
+.pe-msg{font-size:10.5px;color:var(--muted-soft)}
+.pe-fw{display:none;border-radius:10px;padding:11px 14px;margin-bottom:13px;gap:11px;align-items:flex-start}
+.pe-fw .fic{font-size:18px;flex:none;margin-top:1px}
+.pe-fw .ftx{flex:1;font-size:11.5px;line-height:1.5;color:var(--muted)}.pe-fw .ftx b{color:var(--text)}
+.pe-fw .facts{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+.pe-fw .fbtn{border-radius:7px;padding:6px 11px;font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;border:.5px solid var(--border-2);background:var(--bg3);color:var(--text);display:inline-flex;align-items:center;gap:5px;text-decoration:none}
+.pe-fw .fbtn.val{border-color:rgba(93,202,165,.45);color:var(--green)}.pe-fw .fbtn.go{border-color:rgba(136,170,224,.45);color:var(--blue)}.pe-fw .fbtn.danger{border-color:rgba(240,149,149,.5);color:var(--red)}
+.pe-fw.none{background:rgba(136,170,224,.1);border:.5px solid rgba(136,170,224,.32)}.pe-fw.none .fic{color:var(--blue)}
+.pe-fw.evit{background:rgba(240,149,149,.1);border:.5px solid rgba(240,149,149,.34)}.pe-fw.evit .fic{color:var(--red)}
+.vbadge{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:8.5px;font-weight:700;padding:2px 6px;border-radius:5px;margin-left:7px;vertical-align:middle}
+.vbadge.tres{background:rgba(93,202,165,.14);color:var(--green)}.vbadge.pot{background:rgba(239,159,39,.13);color:var(--amber)}.vbadge.evit{background:rgba(240,149,149,.13);color:var(--red)}.vbadge.none{background:var(--bg4);color:var(--muted-soft)}.vbadge.old{background:rgba(136,170,224,.12);color:var(--blue)}
+</style></head><body>
+<nav class="topnav"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html" class="active"><i class="ti ti-shield-half"></i>Moniteur</a><a href="validateur.html"><i class="ti ti-checkup-list"></i>Validateur</a><a href="portfolio.html"><i class="ti ti-briefcase"></i>Portfolio</a><a href="patrimoine.html"><i class="ti ti-droplet"></i>Patrimoine</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
+<div class="head"><span class="logo">M</span><h1>Moniteur de position <span style="color:var(--muted-soft);font-weight:600;font-size:14px">— signaux de sortie</span></h1><button class="editbtn" onclick="openEditor()"><i class="ti ti-pencil"></i> Mes positions</button><span class="badge" id="badge" style="margin-left:10px"><i class="ti ti-flask" style="font-size:11px"></i>DEMO</span></div>
+<div class="sub">Le robot surveille tes positions : <b style="color:var(--text)">424B5 · Form 4 · lock-up · RVOL ↓ · stop/cible</b> → te dit <b style="color:var(--text)">quand sortir</b>. Savoir sortir = pérennité.</div>
+
+<div class="kpi" id="kpi"></div>
+<div class="feed" id="feed"></div>
+
+<div class="note"><b>D'où viennent les signaux :</b> 424B5 / Form 4 / 13F → <b>EDGAR</b>. RVOL & prix → <b>Yahoo</b>. Lock-up → <b>IPO + 180j</b>. Stop / Cible → tes niveaux. → calculés par le node <b>SmallCap Positions Monitor</b> → <code>data/positions.json</code>.</div>
+<div class="foot" id="foot">DEMO inline · positions & signaux simulés</div>
+
+<!-- éditeur Mes positions -->
+<div class="pos-overlay" id="pos-overlay">
+ <div class="pos-modal">
+  <button class="x" onclick="closeEditor()">&times;</button>
+  <h2><i class="ti ti-briefcase"></i>Mes positions <span style="font-size:11px;color:var(--muted-soft);font-weight:500" id="pe-count"></span></h2>
+  <div class="pe-intro">Tes <b>vraies positions</b>. Au clic <b>Enregistrer</b>, elles partent vers n8n (<code>positions_input.json</code>) ; le robot calcule les verdicts (cours/P&L/SORTIR…) au prochain run. Stocké dans <b>ton navigateur</b> + n8n, jamais dans le repo.</div>
+  <label style="font-size:8px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-weight:600">URL webhook positions (PRODUCTION)</label>
+  <input class="pe-wh" id="pe-wh" placeholder="https://...app.n8n.cloud/webhook/smallcap-positions">
+  <div class="pe-add">
+   <div class="pe-fld"><label>Ticker</label><input id="pe-tk" placeholder="OKLO" autocomplete="off"></div>
+   <div class="pe-fld"><label>Thème</label><select id="pe-theme"><option>Datacenter</option><option>Énergie</option><option>Métaux</option><option>Défense</option><option>Biotech</option></select></div>
+   <div class="pe-fld"><label>Entrée $</label><input id="pe-entry" placeholder="0.00" inputmode="decimal"></div>
+   <div class="pe-fld"><label>Stop $</label><input id="pe-stop" placeholder="0.00" inputmode="decimal"></div>
+   <div class="pe-fld"><label>Cible $</label><input id="pe-target" placeholder="0.00" inputmode="decimal"></div>
+   <div class="pe-fld"><label>Qté</label><input id="pe-qty" placeholder="opt." inputmode="decimal"></div>
+   <button class="pe-addbtn" onclick="addPos()" title="Ajouter"><i class="ti ti-plus"></i></button>
+  </div>
+  <div class="pe-fw" id="pe-fw"></div>
+  <table class="pe-tbl"><thead><tr><th>Ticker</th><th>Thème</th><th>Entrée</th><th>Stop</th><th>Cible</th><th>Qté</th><th></th></tr></thead><tbody id="pe-body"></tbody></table>
+  <div class="pe-save">
+   <button class="pe-savebtn" id="pe-savebtn" onclick="savePositions()"><i class="ti ti-device-floppy"></i> Enregistrer mes positions</button>
+   <span class="pe-msg">* Cours / P&amp;L / Verdict calculés par le robot, pas saisis ici.</span>
+  </div>
+ </div>
+</div>
+
+<script>
+const VLABEL={sortir:['SORTIR','v-sortir'],trim:['ALLÉGER','v-trim'],hold:['CONSERVER','v-hold']};
+const DEMO={generatedAt:'2026-06-05',positions:[
+ {tk:'AVTX',nm:'Avalo · Biotech',entry:1.10,now:0.80,r:-1.0,sigs:[['s-red','ti-arrow-down','Stop -25% touché'],['s-red','ti-file-dollar','424B5 dilution']],verdict:'sortir',why:'Stop déclenché + dilution → coupe.'},
+ {tk:'OKLO',nm:'Oklo · Énergie',entry:52.00,now:46.30,r:-0.5,sigs:[['s-red','ti-file-dollar','424B5 dilution'],['s-red','ti-user-x','Form 4 vente initiés']],verdict:'sortir',why:'Thèse cassée : dilution + initiés qui vendent.'},
+ {tk:'GENB',nm:'Generate Bio · Biotech',entry:13.00,now:18.40,r:2.1,sigs:[['s-amb','ti-lock-open','Lock-up J-12'],['s-amb','ti-trending-up','+42% atteint']],verdict:'trim',why:'Encaisse avant la pression vendeuse du lock-up.'},
+ {tk:'USAR',nm:'USA Rare Earth · Métaux',entry:9.20,now:14.10,r:2.7,sigs:[['s-amb','ti-activity','RVOL ↓ 0.9×'],['s-amb','ti-flame','Parabole']],verdict:'trim',why:'Le carburant (RVOL) retombe → prends une partie dans la force.'},
+ {tk:'RCAT',nm:'Red Cat · Défense',entry:7.80,now:9.05,r:0.8,sigs:[['s-ok','ti-check','Thèse intacte · RVOL ok']],verdict:'hold',why:'Aucun signal négatif, momentum sain → laisse courir (trailing stop).'},
+]};
+let DATA=DEMO;
+function pct(p){return ((p.now-p.entry)/p.entry*100);}
+function apply(){const P=DATA.positions||[];
+ document.getElementById('kpi').innerHTML=`
+  <div class="c"><div class="k">Positions</div><div class="v">${P.length}</div></div>
+  <div class="c"><div class="k">À sortir</div><div class="v down">${P.filter(p=>p.verdict==='sortir').length}</div></div>
+  <div class="c"><div class="k">À alléger</div><div class="v" style="color:var(--amber)">${P.filter(p=>p.verdict==='trim').length}</div></div>
+  <div class="c"><div class="k">À conserver</div><div class="v up">${P.filter(p=>p.verdict==='hold').length}</div></div>`;
+ document.getElementById('feed').innerHTML=P.map(p=>{const pc=pct(p),up=pc>=0,vl=VLABEL[p.verdict]||VLABEL.hold;
+  return `<div class="pos ${p.verdict}">
+   <div><div class="tk">${p.tk}</div><div class="nm">${p.nm||''}</div></div>
+   <div class="px">Entrée <b>$${(+p.entry).toFixed(2)}</b><br>Actuel <b>$${(+p.now).toFixed(2)}</b></div>
+   <div class="pl"><div class="v ${up?'up':'down'}">${up?'+':''}${pc.toFixed(1)}%</div><div class="r">${p.r>=0?'+':''}${p.r}R</div></div>
+   <div class="sigs">${(p.sigs||[]).map(s=>`<span class="sig ${s[0]}"><i class="ti ${s[1]}"></i>${s[2]}</span>`).join('')}</div>
+   <div class="verdict"><span class="vpill ${vl[1]}">${vl[0]}</span><div class="why">${p.why||''}</div></div>
+  </div>`;}).join('') || '<div class="nm" style="color:var(--muted-soft);padding:14px">Aucune position réelle suivie (canal vivant — fichier régénéré 2×/j). Ajoute une position via l\'éditeur ✏️ de cette page.</div>';
+}
+apply();
+(async()=>{try{const r=await fetch('data/positions.json',{cache:'no-store'});if(!r.ok)throw 0;const j=await r.json();if(j&&j.positions){DATA=j;document.getElementById('badge').innerHTML='<i class="ti ti-broadcast" style="font-size:11px"></i>LIVE JSON · '+String(j.generatedAt||'').slice(0,10);document.getElementById('foot').textContent='data/positions.json chargé · '+j.positions.length+' positions';apply();}}catch(e){console.warn('positions.json indisponible → DEMO (normal en file://)');}})();
+</script>
+
+<script>
+/* ---- Éditeur "Mes positions" (alimente le node Positions Monitor via webhook) ---- */
+const PWH_KEY='mk_positions_webhook', POS_KEY='mk_positions';
+function peLoad(){try{return JSON.parse(localStorage.getItem(POS_KEY)||'[]');}catch(e){return[];}}
+function peSaveLocal(a){try{localStorage.setItem(POS_KEY,JSON.stringify(a));}catch(e){}}
+let POSED=peLoad();
+function peToast(m,ok){var el=document.getElementById('peToast');if(!el){el=document.createElement('div');el.id='peToast';el.style.cssText='position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:200;border-radius:9px;padding:10px 16px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5)';document.body.appendChild(el);}el.style.background=ok?'rgba(93,202,165,.16)':'rgba(240,149,149,.16)';el.style.color=ok?'#5dcaa5':'#f09595';el.style.border='.5px solid '+(ok?'rgba(93,202,165,.4)':'rgba(240,149,149,.4)');el.textContent=m;clearTimeout(el._t);el._t=setTimeout(function(){el.remove();},4000);}
+function openEditor(){document.getElementById('pe-wh').value=localStorage.getItem(PWH_KEY)||'';renderEditor();document.getElementById('pos-overlay').style.display='flex';}
+function closeEditor(){document.getElementById('pos-overlay').style.display='none';}
+function fmt2(v){return (v!=null&&v!=='')?(+v).toFixed(2):'—';}
+/* ---- pare-feu Validateur : lecture du verdict partagé (localStorage mk_validations) ---- */
+var VLAB={tres:'Très potentiel',pot:'Potentiel',evit:'Éviter'};
+function getVerdict(tk){try{return (JSON.parse(localStorage.getItem('mk_validations')||'{}'))[String(tk).toUpperCase()]||null;}catch(e){return null;}}
+function vStale(v){return !!(v&&v.at&&(Date.now()-new Date(v.at).getTime())>14*86400000);}
+function vBadge(tk){var v=getVerdict(tk);
+ if(!v)return '<span class="vbadge none"><i class="ti ti-shield-off"></i>non validé</span>';
+ var stale=vStale(v), cls=(v.lvl==='evit')?'evit':(stale?'old':v.lvl);
+ var ic=(v.lvl==='evit')?'ti-shield-x':(v.lvl==='tres'?'ti-shield-check':'ti-shield-half');
+ return '<span class="vbadge '+cls+'"><i class="ti '+ic+'"></i>'+(VLAB[v.lvl]||v.lvl)+' '+v.score+((stale&&v.lvl!=='evit')?' · ancien':'')+'</span>';
+}
+function clearFw(){var el=document.getElementById('pe-fw');if(el){el.style.display='none';el.className='pe-fw';el.innerHTML='';}}
+function renderFw(tk,state,v){var el=document.getElementById('pe-fw');if(!el)return;
+ var vurl='validateur.html?tk='+encodeURIComponent(tk);
+ if(state==='none'){el.className='pe-fw none';
+  el.innerHTML='<i class="ti ti-shield-question fic"></i><div class="ftx"><b>⛡ '+tk+' n\'a pas passé le Validateur.</b> Tu vas enregistrer une position sans pare-feu fondamental. Recommandé : valider d\'abord.<div class="facts"><a class="fbtn val" href="'+vurl+'"><i class="ti ti-shield-check"></i> Valider maintenant</a><button class="fbtn go" onclick="addPos(true)"><i class="ti ti-arrow-right"></i> Ajouter quand même</button></div></div>';
+ }else{el.className='pe-fw evit';
+  el.innerHTML='<i class="ti ti-alert-triangle fic"></i><div class="ftx"><b>⛔ Validateur : Éviter · '+v.score+'/100.</b> Prendre cette position va à l\'encontre du pare-feu fondamental.<div class="facts"><a class="fbtn val" href="'+vurl+'"><i class="ti ti-refresh"></i> Re-valider</a><button class="fbtn danger" onclick="addPos(true)"><i class="ti ti-arrow-right"></i> Ajouter quand même</button></div></div>';
+ }
+ el.style.display='flex';
+}
+function renderEditor(){
+ document.getElementById('pe-body').innerHTML=POSED.length?POSED.map(function(p,i){return '<tr><td class="tk">'+p.tk+vBadge(p.tk)+'</td><td>'+(p.theme||'—')+'</td><td data-num>'+fmt2(p.entry)+'</td><td data-num>'+fmt2(p.stop)+'</td><td data-num>'+fmt2(p.target)+'</td><td data-num>'+(p.qty||'—')+'</td><td><button class="pe-del" onclick="delPos('+i+')"><i class="ti ti-trash"></i></button></td></tr>';}).join(''):'<tr><td colspan="7" style="text-align:center;color:var(--muted-soft);padding:16px">Aucune position — ajoute ta 1ère ci-dessus.</td></tr>';
+ document.getElementById('pe-count').textContent=POSED.length?('· '+POSED.length+' position'+(POSED.length>1?'s':'')):'';
+}
+function addPos(force){
+ var tk=(document.getElementById('pe-tk').value||'').toUpperCase().trim();
+ if(!tk){peToast('Ticker requis',false);return;}
+ var entry=parseFloat(document.getElementById('pe-entry').value);
+ if(isNaN(entry)){peToast('Prix d\'entrée requis',false);return;}
+ // PARE-FEU : bloque (contournable) si pas de verdict OU verdict Éviter
+ var v=getVerdict(tk);
+ if(!force){
+  if(!v){ renderFw(tk,'none'); return; }
+  if(v.lvl==='evit'){ renderFw(tk,'evit',v); return; }
+ }
+ var sv=document.getElementById('pe-stop').value, tv=document.getElementById('pe-target').value, qv=document.getElementById('pe-qty').value;
+ var p={tk:tk,theme:document.getElementById('pe-theme').value,entry:entry,
+        stop:sv!==''?parseFloat(sv):'',target:tv!==''?parseFloat(tv):'',qty:qv!==''?parseFloat(qv):''};
+ var ix=POSED.findIndex(function(x){return x.tk===tk;}); if(ix>=0)POSED[ix]=p; else POSED.push(p);
+ peSaveLocal(POSED); renderEditor(); clearFw();
+ // rappels NON bloquants (verdict ≥ Potentiel mais ancien ou maigre)
+ if(!force&&v&&v.lvl!=='evit'){
+  if(vStale(v)) peToast('⏳ '+tk+' ajouté — verdict ancien ('+v.score+'/100, >14j), pense à re-valider',true);
+  else if((v.filled||0)<4) peToast('⚠️ '+tk+' ajouté — verdict sur '+(v.filled||0)+'/5 dimensions, à confirmer',true);
+ }
+ ['pe-tk','pe-entry','pe-stop','pe-target','pe-qty'].forEach(function(id){document.getElementById(id).value='';});
+ document.getElementById('pe-tk').focus();
+}
+function delPos(i){POSED.splice(i,1);peSaveLocal(POSED);renderEditor();}
+const MK_AUTH_HEADER='X-MacroDesk-Key'; // nom d'en-tete (public) — la CLE vit desormais dans localStorage
+
+/* ===== Clé desk — le secret n'est PLUS dans le code publié (31/07/2026) =========
+   Saisie une seule fois par navigateur, conservée en localStorage. Sans clé la page
+   reste ENTIÈREMENT consultable : seules les actions qui déclenchent un workflow n8n
+   (donc une dépense) sont bloquées. Le nom de l'en-tête est resté en clair : il
+   n'a aucune valeur sans la clé. ============================================== */
+function deskKey(){ try{ return localStorage.getItem('md_desk_key')||''; }catch(e){ return ''; } }
+function setDeskKey(v){ try{ if(v){ localStorage.setItem('md_desk_key',v); } else { localStorage.removeItem('md_desk_key'); } }catch(e){} mdKeyBadge(); }
+function askDeskKey(){
+  var w=document.getElementById('mdKeyModal');
+  if(w){ w.style.display='flex'; var f=document.getElementById('mdKeyInput'); if(f){ f.value=''; f.focus(); } return; }
+  w=document.createElement('div'); w.id='mdKeyModal';
+  w.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(2,4,9,.82);display:flex;align-items:center;justify-content:center;padding:18px';
+  w.innerHTML='<div style="background:#080e1c;border:1px solid #243156;border-radius:12px;padding:20px 22px;max-width:430px;width:100%;font:14px/1.55 Segoe UI,system-ui,sans-serif;color:#dbe4f5">'
+   +'<div style="font-weight:700;font-size:16px;margin-bottom:6px">&#128273; Cl&eacute; desk requise</div>'
+   +'<div style="color:#7c8db0;font-size:12.5px;margin-bottom:13px">Cette action d&eacute;clenche un workflow n8n. Saisis ta cl&eacute; : elle est m&eacute;moris&eacute;e sur cet appareil uniquement et n\'est jamais publi&eacute;e.</div>'
+   +'<input id="mdKeyInput" type="password" autocomplete="off" placeholder="cl&eacute; desk" style="width:100%;background:#0b0f18;border:1px solid #243156;border-radius:7px;padding:9px 12px;color:#dbe4f5;font-family:Consolas,monospace;font-size:13px;box-sizing:border-box">'
+   +'<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">'
+   +'<button id="mdKeyCancel" style="background:#101a2e;border:1px solid #243156;color:#7c8db0;border-radius:7px;padding:7px 14px;font-size:13px;cursor:pointer">Annuler</button>'
+   +'<button id="mdKeyOk" style="background:#03262a;border:1px solid #0a4d52;color:#2dd4bf;border-radius:7px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer">Enregistrer</button>'
+   +'</div></div>';
+  document.body.appendChild(w);
+  var close=function(){ w.style.display='none'; };
+  var save=function(){ var v=(document.getElementById('mdKeyInput').value||'').trim(); if(v){ setDeskKey(v); close(); } };
+  document.getElementById('mdKeyCancel').onclick=close;
+  document.getElementById('mdKeyOk').onclick=save;
+  document.getElementById('mdKeyInput').onkeydown=function(e){ if(e.key==='Enter'){ save(); } if(e.key==='Escape'){ close(); } };
+  document.getElementById('mdKeyInput').focus();
+}
+/* utilisé À LA PLACE du secret dans les en-têtes : sans clé -> invite + action annulée */
+function mdAuth(){ var k=deskKey(); if(!k){ askDeskKey(); throw new Error('Cle desk requise - action annulee'); } return k; }
+function mdKeyBadge(){
+  var b=document.getElementById('mdKeyBadge');
+  if(!b){
+    b=document.createElement('div'); b.id='mdKeyBadge';
+    b.style.cssText='position:fixed;right:12px;bottom:12px;z-index:99998;font:11.5px Consolas,monospace;border-radius:14px;padding:4px 11px;cursor:pointer;user-select:none';
+    b.onclick=function(){ if(deskKey()){ if(confirm('Effacer la cle desk de cet appareil ?')) setDeskKey(''); } else { askDeskKey(); } };
+    document.body.appendChild(b);
+  }
+  var on=!!deskKey();
+  b.textContent=on?'\u{1F511} cl\u00e9 pos\u00e9e':'\u{1F511} cl\u00e9 absente';
+  b.style.background=on?'#04231a':'#0d1424';
+  b.style.border='1px solid '+(on?'#0d4a37':'#243156');
+  b.style.color=on?'#10b981':'#4a5878';
+  b.title=on?'Clic pour effacer la cle de cet appareil':'Clic pour saisir la cle desk';
+}
+if(document.readyState==='loading'){ document.addEventListener('DOMContentLoaded',mdKeyBadge); } else { mdKeyBadge(); }
+/* ===== fin cle desk ===== */
+
+async function savePositions(){
+ var url=(document.getElementById('pe-wh').value||'').trim();
+ if(url)localStorage.setItem(PWH_KEY,url);
+ if(!url){peToast('Configure l\'URL webhook positions (champ en haut)',false);return;}
+ if(!POSED.length){peToast('Aucune position à envoyer',false);return;}
+ var btn=document.getElementById('pe-savebtn'),old=btn.innerHTML;btn.disabled=true;btn.innerHTML='Envoi…';
+ try{
+  var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',[MK_AUTH_HEADER]:mdAuth()},body:JSON.stringify({positions:POSED})});
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  peToast(POSED.length+' position(s) envoyée(s) · visibles au Moniteur au prochain run',true);
+ }catch(e){ peToast('Erreur : '+e.message+' — vérifie URL prod + CORS du webhook',false); }
+ btn.disabled=false;btn.innerHTML=old;
+}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeEditor();});
+</script>
+
+<!-- PWA service worker -->
+<script>if('serviceWorker' in navigator){window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(e){console.warn('SW register failed',e);});});}</script>
+
+<!-- macrodesk-tab-shortcuts : Ctrl+Tab/Ctrl+Shift+Tab + Ctrl+1..5 + bouton Double vue -->
+<script>
+(function(){
+  var PAGES=['smallcap.html','decouvertes.html','moniteur.html','validateur.html','portfolio.html','smallcap_guide.html'];
+  function cur(){var p=(location.pathname.split('/').pop()||'smallcap.html');var i=PAGES.indexOf(p);return i<0?0:i;}
+  function go(i){location.href=PAGES[(i+PAGES.length)%PAGES.length];}
+  function openSplit(){location.href='split.html?left='+PAGES[cur()]+'&right=moniteur.html';}
+  document.addEventListener('keydown',function(e){
+    if(e.ctrlKey&&!e.altKey&&(e.key==='Tab'||e.code==='Tab')){e.preventDefault();go(cur()+(e.shiftKey?-1:1));}
+    else if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&e.key>='1'&&e.key<='6'){e.preventDefault();go(+e.key-1);}
+    else if(e.ctrlKey&&!e.shiftKey&&!e.altKey&&e.code==='KeyB'){e.preventDefault();openSplit();}
+  });
+  var nav=document.querySelector('nav.topnav');
+  if(nav&&!nav.querySelector('.splitlink')){
+    var a=document.createElement('a');
+    a.className='splitlink';a.href='split.html?left='+PAGES[cur()]+'&right=moniteur.html';
+    a.style.marginLeft='auto';a.title='Deux onglets cote a cote (Ctrl + B)';
+    a.innerHTML='<i class="ti ti-layout-columns"></i>Double vue';
+    nav.appendChild(a);
+  }
+})();
+</script>
+</body></html>
