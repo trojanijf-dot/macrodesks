@@ -487,7 +487,10 @@ tr.best td{background:rgba(93,202,165,.05)}
 
   function load(){ try{ var j=JSON.parse(localStorage.getItem(KEY)||'null');
     if(j&&j.v===1&&Array.isArray(j.tx))return j; }catch(e){} return {v:1,tx:[]}; }
-  function save(j){ localStorage.setItem(KEY,JSON.stringify(j)); }
+  function save(j){ try{ localStorage.setItem(KEY,JSON.stringify(j)); }
+    catch(e){ alert('Sauvegarde impossible — stockage navigateur bloqué ou plein. La transaction n’est PAS enregistrée.'); } }
+  function todayLocal(){ var d=new Date();
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
   function num(x){ var v=parseFloat(String(x).replace(',','.')); return isFinite(v)?v:0; }
   function money(x){ var s=x<0?'−':''; x=Math.abs(x);
     return s+(x>=100?Math.round(x).toLocaleString('fr-FR'):x.toFixed(2))+' $'; }
@@ -496,7 +499,7 @@ tr.best td{background:rgba(93,202,165,.05)}
 
   // moteur : PRU moyen pondere, P&L realise sur les ventes, cash suivi
   function compute(tx){
-    var pos={},cash=0,deposits=0,divs=0,realized=0,buys=0;
+    var pos={},cash=0,deposits=0,divs=0,realized=0,buys=0,anom=0;
     var list=tx.slice().sort(function(a,b){ return a.d<b.d?-1:a.d>b.d?1:0; });
     for(var i=0;i<list.length;i++){ var x=list[i];
       if(x.s==='CASH'){ deposits+=x.u; cash+=x.u; }
@@ -506,10 +509,12 @@ tr.best td{background:rgba(93,202,165,.05)}
         pos[x.t].q+=x.q; pos[x.t].cost+=c; cash-=c; }
       else if(x.s==='SELL'){ var pp=pos[x.t];
         if(pp&&pp.q>1e-9){ var pru=pp.cost/pp.q; var sold=Math.min(x.q,pp.q);
+          if(x.q>pp.q+1e-9)anom++;
           realized+=sold*(x.p-pru)-x.f; pp.cost-=sold*pru; pp.q-=sold;
-          cash+=sold*x.p-x.f; } }
+          cash+=sold*x.p-x.f; }
+        else anom++; }
     }
-    return {pos:pos,cash:cash,deposits:deposits,divs:divs,realized:realized,buys:buys};
+    return {pos:pos,cash:cash,deposits:deposits,divs:divs,realized:realized,buys:buys,anom:anom};
   }
 
   function render(){
@@ -523,22 +528,26 @@ tr.best td{background:rgba(93,202,165,.05)}
     var lignes=[],valL=0,costL=0;
     for(var t in st.pos){ var p=st.pos[t]; if(p.q<=1e-9)continue;
       var d=DERNIER[t]||null;
-      var val=d?p.q*d:null; if(val)valL+=val; costL+=p.cost;
+      var val=d!==null?p.q*d:null; if(val!==null)valL+=val; costL+=p.cost;
       lignes.push({t:t,q:p.q,pru:p.cost/p.q,d:d,val:val,cost:p.cost,
         pnl:val!==null?val-p.cost:null}); }
     lignes.sort(function(a,b){ return (b.val||0)-(a.val||0); });
+    // asymetrie de preuve : sans cours, on affiche l inconnu, jamais un chiffre
+    var prixOK=lignes.length>0&&lignes.every(function(l){ return l.d!==null; });
 
     var cash=st.cash, total=valL+Math.max(cash,0);
     var investi=st.deposits>0?st.deposits:costL;
     var pl=st.deposits>0?(valL+cash-st.deposits)
       :(valL-costL)+st.realized+st.divs;
-    var kp='<div class="pf-kpi"><div class="l">Valeur poche</div><div class="v">'+money(total)
-      +'</div><div class="s">'+lignes.length+' ligne'+(lignes.length>1?'s':'')+' + cash</div></div>'
+    var kp='<div class="pf-kpi"><div class="l">Valeur poche</div><div class="v">'+(prixOK?money(total):'—')
+      +'</div><div class="s">'+(prixOK?lignes.length+' ligne'+(lignes.length>1?'s':'')+' + cash':'cours indisponibles')+'</div></div>'
       +'<div class="pf-kpi"><div class="l">Investi (net)</div><div class="v">'+money(investi)
       +'</div><div class="s">'+(st.deposits>0?'somme des dépôts':'coût des positions')+'</div></div>'
-      +'<div class="pf-kpi"><div class="l">P&amp;L</div><div class="v '+(pl>=0?'g':'r')+'">'+money(pl)
-      +'</div><div class="s '+(pl>=0?'g':'r')+'">'+(investi>0?pctf(pl/investi):'—')
-      +(st.realized||st.divs?'</div><div class="s">dont réalisé '+money(st.realized)+' · div '+money(st.divs):'')+'</div></div>'
+      +(prixOK
+        ?'<div class="pf-kpi"><div class="l">P&amp;L</div><div class="v '+(pl>=0?'g':'r')+'">'+money(pl)
+          +'</div><div class="s '+(pl>=0?'g':'r')+'">'+(investi>0?pctf(pl/investi):'—')
+          +(st.realized||st.divs?'</div><div class="s">dont réalisé '+money(st.realized)+' · div '+money(st.divs):'')+'</div></div>'
+        :'<div class="pf-kpi"><div class="l">P&amp;L</div><div class="v">—</div><div class="s">cours indisponibles</div></div>')
       +'<div class="pf-kpi"><div class="l">Cash USD</div><div class="v'+(cash<0?' a':'')+'">'+money(cash)+'</div><div class="s">solde du journal</div></div>';
     if(EXPOSES!==null){ kp+='<div class="pf-kpi"><div class="l">Vs modèle</div><div class="v a">'
       +lignes.length+'/'+EXPOSES+'</div><div class="s">lignes détenues / exposées</div></div>'; }
@@ -567,14 +576,15 @@ tr.best td{background:rgba(93,202,165,.05)}
         +'<div class="pf-btrack"><i style="width:'+w.toFixed(0)+'%;background:var(--'+(up?'green':'red')+')"></i></div>'
         +'<span class="pc '+(up?'g':'r')+'">'+pctf(pc)+'</span></div>'; }).join('');
 
-    // tableau
+    // tableau — jamais de vert par absence de donnee
     document.getElementById('pf-tbody').innerHTML=lignes.map(function(l){
       var w=total>0&&l.val?l.val/total:0;
+      var cls=l.pnl===null?'':(l.pnl>=0?'g':'r');
       return '<tr><td class="k">'+l.t+' · '+(NOM[l.t]||'')+'</td>'
         +'<td>'+l.q.toFixed(2)+'</td><td>'+l.pru.toFixed(2)+'</td>'
-        +'<td>'+(l.d?l.d.toFixed(2):'—')+'</td><td>'+(l.val?money(l.val):'—')+'</td>'
-        +'<td class="'+(l.pnl>=0?'g':'r')+'">'+(l.pnl!==null?money(l.pnl):'—')+'</td>'
-        +'<td class="'+(l.pnl>=0?'g':'r')+'">'+(l.pnl!==null&&l.cost>0?pctf(l.pnl/l.cost):'—')+'</td>'
+        +'<td>'+(l.d!==null?l.d.toFixed(2):'—')+'</td><td>'+(l.val!==null?money(l.val):'—')+'</td>'
+        +'<td class="'+cls+'">'+(l.pnl!==null?money(l.pnl):'—')+'</td>'
+        +'<td class="'+cls+'">'+(l.pnl!==null&&l.cost>0?pctf(l.pnl/l.cost):'—')+'</td>'
         +'<td><span class="pf-wbar"><i style="width:'+Math.min(100,w*100/0.15*1).toFixed(0)+'%"></i></span>'+(w*100).toFixed(0)+' %</td>'
         +'<td class="m" style="color:var(--muted-soft)">7,7 %</td></tr>'; }).join('')
       +(cash>0?'<tr><td class="k" style="color:var(--muted-soft)">Cash USD</td><td>—</td><td>—</td><td>—</td>'
@@ -582,10 +592,12 @@ tr.best td{background:rgba(93,202,165,.05)}
         +'<td><span class="pf-wbar"><i style="width:'+Math.min(100,cash/total*100/0.15).toFixed(0)+'%;background:var(--faint)"></i></span>'+(cash/total*100).toFixed(0)+' %</td>'
         +'<td style="color:var(--muted-soft)">7,7 %</td></tr>':'');
 
-    var warn=document.getElementById('pf-warn');
-    if(cash<-0.01){ warn.style.display='block';
-      warn.textContent='⚠️ cash négatif : il manque probablement des lignes DÉPÔT CASH — saisis tes versements pour un suivi exact'; }
-    else warn.style.display='none';
+    var warn=document.getElementById('pf-warn'), warns=[];
+    if(!prixOK)warns.push('⚠️ cours du robinet indisponibles — valeur et P&L non calculables pour l’instant, tes saisies restent intactes');
+    if(cash<-0.01)warns.push('⚠️ cash négatif : il manque probablement des lignes DÉPÔT CASH — saisis tes versements pour un suivi exact');
+    if(st.anom>0)warns.push('⚠️ '+st.anom+' vente'+(st.anom>1?'s':'')+' dépassant la position détenue — ignorée'+(st.anom>1?'s':'')+' dans le calcul, vérifie tes saisies');
+    warn.innerHTML=warns.join('<br>');
+    warn.style.display=warns.length?'block':'none';
   }
 
   function renderTx(J){
@@ -609,7 +621,7 @@ tr.best td{background:rgba(93,202,165,.05)}
   // formulaire
   var selT=document.getElementById('pf-t');
   selT.innerHTML=TICKERS.map(function(t){ return '<option value="'+t+'">'+t+' — '+NOM[t]+'</option>'; }).join('');
-  document.getElementById('pf-d').value=new Date().toISOString().slice(0,10);
+  document.getElementById('pf-d').value=todayLocal();
   var selS=document.getElementById('pf-s');
   function syncForm(){ var s=selS.value, qty=(s==='BUY'||s==='SELL');
     document.getElementById('pf-fq').style.display=qty?'flex':'none';
@@ -641,19 +653,28 @@ tr.best td{background:rgba(93,202,165,.05)}
   document.getElementById('pf-export').onclick=function(){
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([localStorage.getItem(KEY)||'{"v":1,"tx":[]}'],{type:'application/json'}));
-    a.download='portefeuille_robinet_'+new Date().toISOString().slice(0,10)+'.json';
+    a.download='portefeuille_robinet_'+todayLocal()+'.json';
     a.click(); URL.revokeObjectURL(a.href);
   };
   document.getElementById('pf-importbtn').onclick=function(){ document.getElementById('pf-import').click(); };
   document.getElementById('pf-import').onchange=function(ev){
     var f=ev.target.files[0]; if(!f)return;
+    ev.target.value='';
     var r=new FileReader();
     r.onload=function(){ try{ var j=JSON.parse(r.result);
         if(!j||j.v!==1||!Array.isArray(j.tx))throw new Error('format');
-        if(!confirm('Remplacer le journal actuel par le fichier importé ('+j.tx.length+' transactions) ?'))return;
-        save(j); render();
-      }catch(e){ alert('Fichier illisible — export attendu du même format.'); }
-      ev.target.value=''; };
+        // normalisation stricte : un fichier malforme ne peut ni corrompre ni injecter
+        var okS={BUY:1,SELL:1,DIV:1,CASH:1}, tx=[];
+        for(var i=0;i<j.tx.length;i++){ var x=j.tx[i]||{};
+          var s=String(x.s||''); if(!okS[s])throw new Error('sens');
+          var t=s==='CASH'?'CASH':String(x.t||'');
+          if(t!=='CASH'&&TICKERS.indexOf(t)<0)throw new Error('ticker');
+          var d=String(x.d||''); if(!/^\d{4}-\d{2}-\d{2}$/.test(d))throw new Error('date');
+          tx.push({d:d,t:t,s:s,q:num(x.q),p:num(x.p),f:num(x.f),u:num(x.u)});
+        }
+        if(!confirm('Remplacer le journal actuel par le fichier importé ('+tx.length+' transactions) ?'))return;
+        save({v:1,tx:tx}); render();
+      }catch(e){ alert('Fichier illisible ou invalide — export attendu du même format, rien n’a été modifié.'); } };
     r.readAsText(f);
   };
 
