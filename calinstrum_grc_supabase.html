@@ -1615,7 +1615,12 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
   var rowsFac=rows.filter(function(x){return !x.isAvoir;}).length;
   var rowsAv=rows.filter(function(x){return x.isAvoir;}).length;
 
-  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'+
+  // class="admListHead" : n'a d'effet QUE dans les fenêtres d'impression, dont
+  // le CSS lui donne page-break-before:always. La page 1 reste ainsi la page de
+  // chiffres (KPI + graphiques + détail TGC) et la liste démarre en page 2
+  // (demande utilisateur). À l'écran la classe est inerte : l'app ne la définit
+  // nulle part, et l'aperçu défile d'un seul tenant de toute façon.
+  html+='<div class="admListHead" style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'+
     '<span>Liste des factures &amp; avoirs'+(activeFilter?'':' de la période')+'</span>'+
     (activeFilter?('<span class="no-print" style="text-transform:none;letter-spacing:0;font-size:11px;color:var(--text);display:flex;align-items:center;gap:8px">'+
       '<span style="background:rgba(57,135,229,.15);border:1px solid rgba(57,135,229,.4);color:'+ADMIN_C1+';border-radius:6px;padding:3px 9px;font-weight:700">Filtré : '+esc(activeFilter.label)+'</span>'+
@@ -1679,9 +1684,12 @@ function printAdminReport(){
     '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
     'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'+
     'h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
-    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
-    '.hd .sub{font-size:11px;color:#555}';
-  var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
+    '.admhd{background:#fff;display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
+    '.admhd .sub{font-size:11px;color:#555}'+
+    // La liste des factures demarre toujours en page 2 : la page 1 reste
+    // la page de chiffres (KPI + graphiques + detail TGC).
+    '.admListHead{page-break-before:always;break-before:page}';
+  var html='<div class="admhd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
     _adminReportHtml(r,false,true);
@@ -1833,9 +1841,12 @@ function printAdminReportPeriod(){
     '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
     'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'+
     'h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
-    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
-    '.hd .sub{font-size:11px;color:#555}';
-  var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
+    '.admhd{background:#fff;display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
+    '.admhd .sub{font-size:11px;color:#555}'+
+    // La liste des factures demarre toujours en page 2 : la page 1 reste
+    // la page de chiffres (KPI + graphiques + detail TGC).
+    '.admListHead{page-break-before:always;break-before:page}';
+  var html='<div class="admhd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
     _adminReportHtml(r,false,true); // rendu SVG natif (pas de staticTables) -- fiable en impression navigateur
@@ -1870,7 +1881,7 @@ function _admPrvSig(range){ return range.start+'|'+range.end; }
 
 // En-tête + corps de la synthèse (identiques à printAdminReportPeriod).
 function _admPrvSynthHtml(r){
-  return '<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
+  return '<div class="admhd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
     _adminReportHtml(r,false,false); // SVG natif, jamais staticTables/canvas
@@ -1882,14 +1893,25 @@ function _admPrvFacturesHtml(forPrint){
   var pages=_admPrvState.pages;
   if(!pages.length) return '';
   var br=forPrint?'page-break-before:always;break-before:page;':'';
-  var h='<div class="fsep" style="'+br+'">Factures signées archivées — '+
+  // [11/08/2026] L'intercalaire est COLLÉ à la première page de facture : il n'a
+  // plus son propre saut de page. Sinon il tombait seul en haut d'une feuille
+  // (l'image suivante ouvrant toujours une nouvelle page), d'où la page quasi
+  // vide signalée par l'utilisateur. Sa position ne dépend plus de l'endroit où
+  // le tableau des factures s'est terminé : aucune page vide possible, quel que
+  // soit le volume de la période.
+  var intercalaire='<div class="fsep">Factures signées archivées — '+
     _admPrvState.facs.length+' facture(s), '+pages.length+' page(s)</div>'+
-    '<div style="font-size:10.5px;color:#64748b;margin-bottom:6px">'+
+    '<div class="flist">'+
       _admPrvState.facs.map(function(f){return esc(f.num);}).join(' · ')+'</div>';
-  pages.forEach(function(p){
+  var h='';
+  pages.forEach(function(p,i){
+    var first=(i===0);
     h+='<div style="'+br+'">'+
+      (first?intercalaire:'')+
       '<div class="fcap">'+esc(p.num)+' — '+esc(p.client||'')+' · page '+p.page+'/'+p.total+'</div>'+
-      '<img class="fpage" src="'+p.url+'" alt="'+esc(p.num)+'">'+
+      // fpage-first : hauteur réduite pour laisser la place à l'intercalaire sur
+      // cette feuille-là, sans repousser l'image à la page suivante.
+      '<img class="fpage'+(first?' fpage-first':'')+'" src="'+p.url+'" alt="'+esc(p.num)+'">'+
     '</div>';
   });
   return h;
@@ -2031,10 +2053,17 @@ function admPreviewPrint(){
     '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
     'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'+
     'h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
-    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
-    '.hd .sub{font-size:11px;color:#555}'+
-    '.fsep{border-top:2px solid #1e3a5f;padding-top:8px;font-size:12px;font-weight:800;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}'+
+    '.admhd{background:#fff;display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
+    '.admhd .sub{font-size:11px;color:#555}'+
+    // La liste des factures demarre toujours en page 2 : la page 1 reste
+    // la page de chiffres (KPI + graphiques + detail TGC).
+    '.admListHead{page-break-before:always;break-before:page}'+
+    
     '.fcap{font-size:9px;color:#64748b;margin:0 0 3px}'+
+    '.fsep{border-top:2px solid #1e3a5f;padding-top:8px;font-size:12px;font-weight:800;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px}'+
+    '.flist{font-size:9.5px;color:#64748b;margin-bottom:8px}'+
+    // fpage-first laisse ~25 mm a l'intercalaire sur la meme feuille.
+    '.fpage-first{max-height:225mm}'+
     // max-height garantit qu'une page de facture tient sur UNE page papier
     // (A4 utile ≈ 269 mm ; on laisse la place à la légende).
     '.fpage{display:block;max-width:100%;max-height:252mm;margin:0 auto}';
@@ -4283,9 +4312,17 @@ function admPreviewPrint(){
 #admPrvPaper th{background:transparent!important;color:#64748b!important;border-radius:0}
 #admPrvPaper td{background:transparent!important;color:#111}
 #admPrvPaper h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}
-#admPrvPaper .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}
-#admPrvPaper .hd .sub{font-size:11px;color:#555}
+/* .admhd et PAS .hd : .hd est deja pris par une classe de surlignage
+   globale de l'app (ligne ~783, .hd/.hf/.hbc/.hbl) qui posait un fond
+   bleu translucide sur le bandeau d'en-tete DANS L'APERCU seulement --
+   la fenetre d'impression, isolee, n'a jamais eu ce fond. L'apercu ne
+   montrait donc pas le vrai rendu. Meme famille de collision que
+   th{background:var(--bg3)}. background:#fff explicite pour que le
+   bandeau reste blanc quoi qu'il arrive. */
+#admPrvPaper .admhd{background:#fff;display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}
+#admPrvPaper .admhd .sub{font-size:11px;color:#555}
 #admPrvPaper .fsep{margin:22px 0 12px;border-top:2px solid #1e3a5f;padding-top:8px;font-size:12px;font-weight:800;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px}
+#admPrvPaper .flist{font-size:9.5px;color:#64748b;margin-bottom:8px}
 #admPrvPaper .fcap{font-size:10px;color:#64748b;margin:14px 0 4px}
 #admPrvPaper .fpage{display:block;width:100%;border:1px solid #e2e8f0}
 </style>
