@@ -1087,29 +1087,22 @@ body.has-dashboard-bg #page-dashboard .metric{
 </div>
 <div id="content">
 
-<!-- ADMINISTRATIF — export annuel CA/TGC/masse salariale pour l'expert-comptable -->
+<!-- ADMINISTRATIF — export CA/TGC/masse salariale pour l'expert-comptable.
+     UN SEUL sélecteur de période pilote à la fois l'écran (KPI/donuts/tableaux)
+     ET le PDF téléchargé — plus de double logique Année (écran) / Période (export)
+     qui pouvait diverger (demande explicite utilisateur, 11/08/2026). -->
 <div class="page" id="page-administratif">
   <div class="flex-between mb12 no-print" style="flex-wrap:wrap;gap:10px">
     <h2 style="font-family:var(--display);color:var(--teal);font-size:18px">📊 Administratif</h2>
-    <div style="display:flex;gap:10px;align-items:center">
-      <select class="filter-sel" id="admin-year" onchange="renderAdmin()"></select>
-      <button class="btn btn-teal" onclick="printAdminReport()">⬇ Export PDF pour l'expert-comptable</button>
-    </div>
   </div>
-  <div id="adminBody"></div>
-
-  <!-- EXPORT PAR PÉRIODE — synthèse + factures signées archivées, fusionnées en
-       UN SEUL PDF téléchargé directement (html2pdf pour la synthèse + pdf-lib
-       pour la fusion avec les archives IndexedDB/Supabase). Aucune étape manuelle
-       de type "imprimer puis enregistrer" : le bouton produit le fichier final. -->
-  <div class="card no-print" style="margin-top:18px;padding:14px 16px">
-    <div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px">Export par période (avec factures archivées)</div>
+  <div class="card no-print" style="margin-bottom:16px;padding:14px 16px">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span id="admExpPresetTg" style="display:inline-flex;background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:8px;padding:2px;gap:2px">
         <button type="button" class="admexp-preset-btn" data-preset="year" onclick="admExpSetPreset('year')" style="border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:10.5px;font-weight:700">Année</button>
         <button type="button" class="admexp-preset-btn" data-preset="quarter" onclick="admExpSetPreset('quarter')" style="border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:10.5px;font-weight:700">Trimestre</button>
         <button type="button" class="admexp-preset-btn" data-preset="custom" onclick="admExpSetPreset('custom')" style="border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:10.5px;font-weight:700">Personnalisé</button>
       </span>
+      <select class="filter-sel" id="admin-year" onchange="admExpRecompute()"></select>
       <select class="filter-sel" id="admExpQuarter" style="display:none" onchange="admExpRecompute()">
         <option value="1">T1 (Jan-Mars)</option><option value="2">T2 (Avr-Juin)</option>
         <option value="3">T3 (Juil-Sept)</option><option value="4">T4 (Oct-Déc)</option>
@@ -1120,8 +1113,9 @@ body.has-dashboard-bg #page-dashboard .metric{
       </span>
       <button class="btn btn-teal" style="margin-left:auto" onclick="printAdminReportPeriod()" id="admExpGoBtn">⬇ Générer le PDF pour la période</button>
     </div>
-    <div id="admExpCoverage" style="margin-top:12px;font-size:11px;color:var(--muted)"></div>
+    <div id="admExpCoverage" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
   </div>
+  <div id="adminBody"></div>
 </div>
 <script>
 // ============================================================================
@@ -1142,6 +1136,10 @@ var ADMIN_RATE_COLOR={'3':ADMIN_C1,'6':ADMIN_C2,'11':ADMIN_C3,'22':ADMIN_C4};
 var _adminClientMode='detail';
 function _adminSetClientMode(mode){
   _adminClientMode=mode;
+  // Un filtre "client" posé en mode détaillé (clé = contact complet) ne
+  // correspond plus à rien en mode groupé (clé = entité SLN/PRNC/...) et
+  // inversement — on l'enlève pour éviter un tableau vide sans explication.
+  if(admDetailFilter && admDetailFilter.type==='client') admDetailFilter=null;
   var r=window._adminLastReport;
   if(!r) return;
   var body=document.getElementById('adminBody');
@@ -1178,8 +1176,16 @@ function computeAdminReport(startDate,endDate){
   // la MÊME fonction que le Pipeline Encaissement (Suivi Factures) pour que
   // l'export reste cohérent avec ce qui est déjà affiché à l'écran ailleurs.
   var inRange=function(d){ d=String(d||''); return d && d>=startDate && d<=endDate; };
+  // [11/08/2026] La date d'imputation fiscale d'une facture est sa date d'ENVOI
+  // réelle au client (dateEnvoi), PAS sa date de création dans le GRC (f.date).
+  // Une facture peut être créée/verrouillée des mois avant d'être effectivement
+  // envoyée (pré-facturation pour suivi de chantier interne) — utiliser f.date
+  // l'attribuerait au mauvais trimestre, voire compterait une facture jamais
+  // envoyée. Double garde : dateEnvoi doit être renseignée ET la phase ne doit
+  // pas être billed:false (une facture peut techniquement changer de phase sans
+  // que dateEnvoi ait été fixée si la promotion auto n'a pas eu lieu).
   var factures=(DB.factures||[]).filter(function(f){
-    return inRange(f.date) && !(typeof isPrebilled==='function' && isPrebilled(f));
+    return f.dateEnvoi && inRange(f.dateEnvoi) && !(typeof isPrebilled==='function' && isPrebilled(f));
   });
   var avoirs=(DB.avoirs||[]).filter(function(a){return inRange(a.date);});
 
@@ -1205,9 +1211,13 @@ function computeAdminReport(startDate,endDate){
     });
   }
 
+  // Détail unifié factures+avoirs — SOURCE UNIQUE pour le tableau ET pour le
+  // clic-filtre des graphiques (donuts/barres), afin que le tableau, les
+  // totaux et les graphiques ne puissent jamais diverger.
+  var detail=[];
   factures.forEach(function(f){
     caHT+=Number(f.ht)||0; caTTC+=Number(f.ttc)||0;
-    var mIdx=Number(String(f.date).substring(5,7))-1;
+    var mIdx=Number(String(f.dateEnvoi).substring(5,7))-1;
     if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(f.ht)||0;
     var clDet=f.client||'(sans client)';
     byClient[clDet]=(byClient[clDet]||0)+(Number(f.ht)||0);
@@ -1216,9 +1226,13 @@ function computeAdminReport(startDate,endDate){
     // — même fonction tolérante que partout ailleurs dans l'app. Réservé au
     // donut de l'EXPORT PDF (demande explicite) ; le GRC écran garde byClient
     // détaillé par contact.
-    var cl=getClientPrefix(f.client||'')||'(sans client)';
-    byClientPrefix[cl]=(byClientPrefix[cl]||0)+(Number(f.ht)||0);
+    var clPfx=getClientPrefix(f.client||'')||'(sans client)';
+    byClientPrefix[clPfx]=(byClientPrefix[clPfx]||0)+(Number(f.ht)||0);
     addLinesTGC(f.lines);
+    var rates=[];
+    (f.lines||[]).forEach(function(l){if(l&&Number(l.tgc)>0&&rates.indexOf(String(l.tgc))<0)rates.push(String(l.tgc));});
+    detail.push({num:f.num,date:f.dateEnvoi,client:f.client,clientPrefix:clPfx,monthIdx:mIdx,
+      ht:f.ht,tgc:f.tgc,ttc:f.ttc,isAvoir:false,tgcRates:rates});
   });
   avoirs.forEach(function(a){
     caHT+=Number(a.ht)||0; caTTC+=Number(a.ttc)||0;
@@ -1226,9 +1240,13 @@ function computeAdminReport(startDate,endDate){
     if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(a.ht)||0;
     var clDet=a.client||'(sans client)';
     byClient[clDet]=(byClient[clDet]||0)+(Number(a.ht)||0);
-    var cl=getClientPrefix(a.client||'')||'(sans client)';
-    byClientPrefix[cl]=(byClientPrefix[cl]||0)+(Number(a.ht)||0);
+    var clPfx=getClientPrefix(a.client||'')||'(sans client)';
+    byClientPrefix[clPfx]=(byClientPrefix[clPfx]||0)+(Number(a.ht)||0);
     addLinesTGC(a.lines);
+    var ratesA=[];
+    (a.lines||[]).forEach(function(l){if(l&&Number(l.tgc)>0&&ratesA.indexOf(String(l.tgc))<0)ratesA.push(String(l.tgc));});
+    detail.push({num:a.num,date:a.date,client:a.client,clientPrefix:clPfx,monthIdx:mIdx,
+      ht:a.ht,tgc:a.tgc,ttc:a.ttc,isAvoir:true,tgcRates:ratesA});
   });
 
   var tgcTotal=Object.keys(tgcByRate).reduce(function(s,k){return s+tgcByRate[k].tgc;},0);
@@ -1252,21 +1270,38 @@ function computeAdminReport(startDate,endDate){
     });
   }
 
+  detail.sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;});
+
   return {year:year,startDate:startDate,endDate:endDate,factures:factures,avoirs:avoirs,caHT:caHT,caTTC:caTTC,
-    monthlyHT:monthlyHT,byClient:byClient,byClientPrefix:byClientPrefix,tgcByRate:tgcByRate,tgcTotal:tgcTotal,masse:masse};
+    monthlyHT:monthlyHT,byClient:byClient,byClientPrefix:byClientPrefix,tgcByRate:tgcByRate,tgcTotal:tgcTotal,
+    masse:masse,detail:detail};
 }
 
 // ---- Petits composants graphiques (SVG, palette validée dataviz) ----------
-function _adminDonutSVG(segments, centerLabel, centerSub){
+// Échappement combiné HTML-attribut + chaîne JS (pour les arguments dans un
+// onclick="..." construit par concaténation de chaînes).
+function _admJsAttr(s){ return esc(String(s==null?'':s).replace(/'/g,"\\'")); }
+
+// filterType : 'client' | 'taux' | null (null = non cliquable, ex. mode PDF où
+// includeScope=false rend toujours la vue complète sans interactivité).
+function _adminDonutSVG(segments, centerLabel, centerSub, filterType){
   var total=segments.reduce(function(s,x){return s+Math.abs(x.value);},0);
   var r=46, C=2*Math.PI*r, offset=0, gap=3, arcs='';
+  var activeKey=(filterType && admDetailFilter && admDetailFilter.type===filterType)?admDetailFilter.key:null;
   segments.forEach(function(seg){
     var v=Math.abs(seg.value);
     if(!v || !total) return;
     var len=Math.max(0,(v/total)*C-gap);
-    arcs+='<circle cx="60" cy="60" r="'+r+'" fill="none" stroke="'+seg.color+'" stroke-width="16" '+
+    var clickable=filterType && seg.key!=null;
+    var isActive=clickable && activeKey===seg.key;
+    var dim=activeKey!=null && !isActive;
+    var attrs=clickable
+      ? (' onclick="admApplyFilter(\''+filterType+'\',\''+_admJsAttr(seg.key)+'\',\''+_admJsAttr(seg.label)+'\')" style="cursor:pointer"')
+      : '';
+    var title=clickable?('<title>'+esc(seg.label)+' : '+fN(v)+' XPF ('+Math.round(v/total*100)+'%)</title>'):'';
+    arcs+='<circle cx="60" cy="60" r="'+r+'" fill="none" stroke="'+seg.color+'" stroke-width="'+(isActive?19:16)+'" opacity="'+(dim?0.35:1)+'" '+
       'stroke-dasharray="'+len.toFixed(1)+' '+(C-len).toFixed(1)+'" stroke-dashoffset="'+(-offset).toFixed(1)+'" '+
-      'transform="rotate(-90 60 60)"></circle>';
+      'transform="rotate(-90 60 60)"'+attrs+'>'+title+'</circle>';
     offset+=(v/total)*C;
   });
   return '<svg viewBox="0 0 120 120" style="width:100%;max-width:160px;display:block;margin:0 auto">'+
@@ -1275,23 +1310,40 @@ function _adminDonutSVG(segments, centerLabel, centerSub){
     '<text x="60" y="70" text-anchor="middle" font-size="7" fill="var(--muted-soft)">'+esc(centerSub||'')+'</text>'+
   '</svg>';
 }
-function _adminLegendHtml(segments,total){
+function _adminLegendHtml(segments,total,filterType){
+  var activeKey=(filterType && admDetailFilter && admDetailFilter.type===filterType)?admDetailFilter.key:null;
   return '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;font-size:10.5px">'+
     segments.filter(function(s){return s.value;}).map(function(s){
-      var pct=total?Math.round(Math.abs(s.value)/total*100):0;
-      return '<div style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:'+s.color+'"></span>'+esc(s.label)+' — '+pct+'%</div>';
+      var v=Math.abs(s.value);
+      var pct=total?Math.round(v/total*100):0;
+      var clickable=filterType && s.key!=null;
+      var isActive=clickable && activeKey===s.key;
+      var dim=activeKey!=null && !isActive;
+      var attrs=clickable
+        ? (' onclick="admApplyFilter(\''+filterType+'\',\''+_admJsAttr(s.key)+'\',\''+_admJsAttr(s.label)+'\')" style="cursor:pointer;'+(isActive?'font-weight:800;':'')+(dim?'opacity:.45;':'')+'"')
+        : '';
+      return '<div'+attrs+'><span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:'+s.color+'"></span>'+esc(s.label)+' — '+fN(v)+' XPF ('+pct+'%)</span></div>';
     }).join('')+
   '</div>';
 }
-function _adminBarChartSVG(monthlyHT){
+// clickable : true active le clic-filtre par mois (écran uniquement — jamais
+// dans le PDF, includeScope=false désactive systématiquement l'interactivité).
+function _adminBarChartSVG(monthlyHT,clickable){
   var max=Math.max.apply(null, monthlyHT.map(function(v){return Math.abs(v);}).concat([1]));
   var months=['J','F','M','A','M','J','J','A','S','O','N','D'];
   var w=380,h=140,barW=22,gap=8,baseY=130,bars='';
+  var activeMonth=(clickable && admDetailFilter && admDetailFilter.type==='month')?admDetailFilter.key:null;
   monthlyHT.forEach(function(v,i){
     var x=6+i*(barW+gap);
     var bh=Math.round(Math.abs(v)/max*100);
     var y=baseY-bh;
-    bars+='<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+Math.max(bh,1)+'" rx="3" fill="'+ADMIN_C1+'"></rect>';
+    var isActive=activeMonth===String(i);
+    var dim=activeMonth!=null && !isActive;
+    var attrs=(clickable && v)
+      ? (' onclick="admApplyFilter(\'month\',\''+i+'\',\''+_admJsAttr(months[i]+' ('+fN(v)+' XPF)')+'\')" style="cursor:pointer"')
+      : '';
+    var title=(clickable&&v)?('<title>'+fN(v)+' XPF</title>'):'';
+    bars+='<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+Math.max(bh,1)+'" rx="3" fill="'+ADMIN_C1+'" opacity="'+(dim?0.35:1)+'"'+(isActive?' stroke="#fff" stroke-width="1.5"':'')+attrs+'>'+title+'</rect>';
   });
   return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:140px">'+bars+
       '<line x1="0" y1="'+baseY+'" x2="'+w+'" y2="'+baseY+'" stroke="var(--border)" stroke-width="1"></line>'+
@@ -1329,18 +1381,23 @@ function _adminScopeBoxHtml(){
 function _adminReportHtml(r,includeScope,groupClientByPrefix){
   if(includeScope==null) includeScope=true;
   var byClientSrc=groupClientByPrefix?r.byClientPrefix:r.byClient;
+  // clientFilterField : quel champ de r.detail une portion "client" doit matcher
+  // — cohérent avec le mode d'affichage actif (groupé par entité ou détaillé par
+  // contact), sinon un clic sur "SLN" en mode groupé ne retrouverait aucune ligne.
+  var clientFilterField=groupClientByPrefix?'clientPrefix':'client';
   var nbClients=Object.keys(byClientSrc).length;
-  var clientEntries=Object.keys(byClientSrc).map(function(k){return {label:k,value:byClientSrc[k]};})
+  var clientEntries=Object.keys(byClientSrc).map(function(k){return {label:k,value:byClientSrc[k],key:k};})
     .sort(function(a,b){return Math.abs(b.value)-Math.abs(a.value);});
   var top=clientEntries.slice(0,5), rest=clientEntries.slice(5);
   var restSum=rest.reduce(function(s,x){return s+x.value;},0);
-  var clientSegs=top.map(function(c,i){return {label:c.label,value:c.value,color:[ADMIN_C1,ADMIN_C2,ADMIN_C3,ADMIN_C4,ADMIN_C5][i]||ADMIN_C6};});
-  if(rest.length) clientSegs.push({label:'Autres ('+rest.length+')',value:restSum,color:ADMIN_C6});
+  var clientSegs=top.map(function(c,i){return {label:c.label,value:c.value,key:c.key,color:[ADMIN_C1,ADMIN_C2,ADMIN_C3,ADMIN_C4,ADMIN_C5][i]||ADMIN_C6};});
+  // "Autres" agrège plusieurs clients — pas de clé unique, donc non cliquable.
+  if(rest.length) clientSegs.push({label:'Autres ('+rest.length+')',value:restSum,key:null,color:ADMIN_C6});
   var clientTotal=clientSegs.reduce(function(s,x){return s+Math.abs(x.value);},0);
 
   var rateKeys=Object.keys(r.tgcByRate).sort(function(a,b){return Number(a)-Number(b);});
   var tgcSegs=rateKeys.filter(function(k){return Number(k)>0;}).map(function(k){
-    return {label:k+'%',value:r.tgcByRate[k].tgc,color:ADMIN_RATE_COLOR[k]||ADMIN_C5};
+    return {label:k+'%',value:r.tgcByRate[k].tgc,key:k,color:ADMIN_RATE_COLOR[k]||ADMIN_C5};
   });
   var tgcSegTotal=tgcSegs.reduce(function(s,x){return s+Math.abs(x.value);},0);
 
@@ -1373,7 +1430,7 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix){
   html+='<div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:14px;margin-bottom:22px">'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">CA mensuel HT (XPF)</h3>'+
-      _adminBarChartSVG(r.monthlyHT)+'</div>'+
+      _adminBarChartSVG(r.monthlyHT,includeScope)+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px">'+
         '<span>CA par client'+(rest.length?' (top 5)':'')+'</span>'+
@@ -1382,12 +1439,12 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix){
           '<button type="button" onclick="_adminSetClientMode(\'detail\')" style="border:none;background:'+(!groupClientByPrefix?ADMIN_C1:'transparent')+';color:'+(!groupClientByPrefix?'#fff':'var(--muted)')+';font-size:9.5px;font-weight:700;padding:4px 8px;border-radius:6px;cursor:pointer;text-transform:none;letter-spacing:0">Clients internes</button>'+
         '</span>'):'')+
       '</h3>'+
-      (clientTotal?_adminDonutSVG(clientSegs, (Math.round(clientTotal/1000))+'K','XPF HT'):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
-      _adminLegendHtml(clientSegs,clientTotal)+'</div>'+
+      (clientTotal?_adminDonutSVG(clientSegs, (Math.round(clientTotal/1000))+'K','XPF HT',includeScope?'client':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
+      _adminLegendHtml(clientSegs,clientTotal,includeScope?'client':null)+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">TGC collectée par taux</h3>'+
-      (tgcSegTotal?_adminDonutSVG(tgcSegs, (Math.round(tgcSegTotal/1000))+'K','XPF TGC'):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
-      _adminLegendHtml(tgcSegs,tgcSegTotal)+'</div>'+
+      (tgcSegTotal?_adminDonutSVG(tgcSegs, (Math.round(tgcSegTotal/1000))+'K','XPF TGC',includeScope?'taux':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
+      _adminLegendHtml(tgcSegs,tgcSegTotal,includeScope?'taux':null)+'</div>'+
   '</div>';
 
   html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Détail — TGC collectée par taux</div>';
@@ -1433,10 +1490,32 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix){
       '</tbody></table></div>';
   }
 
-  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Liste des factures &amp; avoirs de l\'année</div>';
-  var rows=r.factures.map(function(f){return {num:f.num,date:f.date,client:f.client,ht:f.ht,tgc:f.tgc,ttc:f.ttc,isAvoir:false};})
-    .concat(r.avoirs.map(function(a){return {num:a.num,date:a.date,client:a.client,ht:a.ht,tgc:a.tgc,ttc:a.ttc,isAvoir:true};}))
-    .sort(function(a,b){return (a.date||'')<(b.date||'')?-1:1;});
+  // Filtre-tableau (clic sur une portion de donut / une barre mensuelle) —
+  // ÉCRAN UNIQUEMENT (includeScope) : le PDF exporté reste toujours complet,
+  // quel que soit ce que l'utilisateur regardait au moment de générer.
+  var activeFilter=includeScope?admDetailFilter:null;
+  var rows=r.detail;
+  if(activeFilter){
+    rows=rows.filter(function(d){
+      if(activeFilter.type==='month') return String(d.monthIdx)===activeFilter.key;
+      if(activeFilter.type==='client') return (groupClientByPrefix?d.clientPrefix:d.client)===activeFilter.key;
+      if(activeFilter.type==='taux') return d.tgcRates.indexOf(activeFilter.key)>=0;
+      return true;
+    });
+  }
+  var rowsHT=rows.reduce(function(s,x){return s+(Number(x.ht)||0);},0);
+  var rowsTGC=rows.reduce(function(s,x){return s+(Number(x.tgc)||0);},0);
+  var rowsTTC=rows.reduce(function(s,x){return s+(Number(x.ttc)||0);},0);
+  var rowsFac=rows.filter(function(x){return !x.isAvoir;}).length;
+  var rowsAv=rows.filter(function(x){return x.isAvoir;}).length;
+
+  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'+
+    '<span>Liste des factures &amp; avoirs'+(activeFilter?'':' de la période')+'</span>'+
+    (activeFilter?('<span class="no-print" style="text-transform:none;letter-spacing:0;font-size:11px;color:var(--text);display:flex;align-items:center;gap:8px">'+
+      '<span style="background:rgba(57,135,229,.15);border:1px solid rgba(57,135,229,.4);color:'+ADMIN_C1+';border-radius:6px;padding:3px 9px;font-weight:700">Filtré : '+esc(activeFilter.label)+'</span>'+
+      '<button type="button" onclick="admClearFilter()" style="border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:11px;text-decoration:underline">✕ Réinitialiser</button>'+
+    '</span>'):'')+
+  '</div>';
   html+='<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;overflow-x:auto">'+
     '<table style="width:100%;border-collapse:collapse;font-size:11.5px"><thead><tr>'+
       '<th style="text-align:left;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">N°</th>'+
@@ -1446,16 +1525,19 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix){
       '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">TGC</th>'+
       '<th style="text-align:right;padding:7px 9px;color:var(--muted);text-transform:uppercase;font-size:9px;border-bottom:1px solid var(--border)">TTC</th>'+
     '</tr></thead><tbody>'+
-    rows.map(function(x){var c=x.isAvoir?'color:#f87171':'';return '<tr style="'+c+'"><td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(x.num)+'</td>'+
+    (rows.length?rows.map(function(x){var c=x.isAvoir?'color:#f87171':'';return '<tr style="'+c+'"><td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(x.num)+'</td>'+
       '<td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+fD(x.date)+'</td>'+
       '<td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(x.client)+'</td>'+
       '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ht)+'</td>'+
       '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.tgc)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ttc)+'</td></tr>';}).join('')+
-    '<tr style="font-weight:800"><td colspan="3" style="padding:7px 9px;border-top:2px solid var(--border)">Total net ('+nbFac+' facture(s) − '+nbAv+' avoir(s))</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.caHT)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.tgcTotal)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(r.caTTC)+'</td></tr>'+
+      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ttc)+'</td></tr>';}).join('')
+      :'<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:14px">Aucune ligne pour ce filtre</td></tr>')+
+    '<tr style="font-weight:800"><td colspan="3" style="padding:7px 9px;border-top:2px solid var(--border)">'+
+      (activeFilter?('Sous-total filtré ('+rowsFac+' facture(s) − '+rowsAv+' avoir(s))'):('Total net ('+nbFac+' facture(s) − '+nbAv+' avoir(s))'))+
+      '</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(activeFilter?rowsHT:r.caHT)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(activeFilter?rowsTGC:r.tgcTotal)+'</td>'+
+      '<td style="text-align:right;padding:7px 9px;border-top:2px solid var(--border)">'+fN(activeFilter?rowsTTC:r.caTTC)+'</td></tr>'+
     '</tbody></table></div>';
 
   return html;
@@ -1469,12 +1551,14 @@ function renderAdmin(){
     ySel.innerHTML=years.map(function(y){return '<option value="'+y+'">'+y+'</option>';}).join('');
     ySel._filled=true;
   }
-  var year=(ySel&&ySel.value)?ySel.value:String(new Date().getFullYear());
-  var r=computeAdminReport(year);
-  window._adminLastReport=r; // réutilisé par printAdminReport() pour rester cohérent (pas de recalcul divergent)
+  if(typeof _admSyncPresetButtons==='function') _admSyncPresetButtons();
+  var range=(typeof admExpGetRange==='function')?admExpGetRange():{start:(ySel&&ySel.value||String(new Date().getFullYear()))+'-01-01',end:(ySel&&ySel.value||String(new Date().getFullYear()))+'-12-31'};
+  var r=computeAdminReport(range.start,range.end);
+  window._adminLastReport=r; // réutilisé par printAdminReportPeriod() pour rester cohérent (pas de recalcul divergent)
+  admDetailFilter=null; // tout changement de période réinitialise le filtre du tableau
   var body=document.getElementById('adminBody');
   if(body) body.innerHTML=_adminReportHtml(r,true,_adminClientMode==='prefix');
-  if(typeof admExpSetPreset==='function') admExpSetPreset(admExpState.preset);
+  if(typeof admExpRefreshCoverage==='function') admExpRefreshCoverage(r);
 }
 
 // Export PDF : nouvelle fenêtre dédiée (pas le pipeline .doc des devis/factures,
@@ -1508,25 +1592,54 @@ function printAdminReport(){
 // avec les PDF de factures archivés (IndexedDB, cf. renderFaPdfArchiveBlock).
 // ============================================================================
 var admExpState={preset:'year'};
+// Filtre actif sur le tableau "Liste des factures & avoirs" — posé en cliquant
+// une portion de donut ou une barre mensuelle. {type:'month'|'client'|'taux',
+// key, label} ou null. Ne touche JAMAIS les KPI/donuts (qui restent sur toute
+// la période) ni le PDF exporté (toujours complet, cf _adminReportHtml includeScope).
+var admDetailFilter=null;
+function admApplyFilter(type,key,label){
+  if(admDetailFilter && admDetailFilter.type===type && admDetailFilter.key===key){
+    admDetailFilter=null; // reclic sur la même portion = on enlève le filtre
+  } else {
+    admDetailFilter={type:type,key:key,label:label};
+  }
+  var r=window._adminLastReport;
+  if(!r) return;
+  var body=document.getElementById('adminBody');
+  if(body) body.innerHTML=_adminReportHtml(r,true,_adminClientMode==='prefix');
+}
+function admClearFilter(){
+  admDetailFilter=null;
+  var r=window._adminLastReport;
+  if(!r) return;
+  var body=document.getElementById('adminBody');
+  if(body) body.innerHTML=_adminReportHtml(r,true,_adminClientMode==='prefix');
+}
 
-function admExpSetPreset(preset){
-  admExpState.preset=preset;
+function _admSyncPresetButtons(){
   document.querySelectorAll('#admExpPresetTg .admexp-preset-btn').forEach(function(b){
-    var active=b.dataset.preset===preset;
+    var active=b.dataset.preset===admExpState.preset;
     b.style.background=active?'#3987e5':'transparent';
     b.style.color=active?'#fff':'var(--muted)';
   });
+}
+
+function admExpSetPreset(preset){
+  admExpState.preset=preset;
+  _admSyncPresetButtons();
   var qSel=document.getElementById('admExpQuarter');
   var dWrap=document.getElementById('admExpDatesWrap');
+  var ySel=document.getElementById('admin-year');
   if(qSel) qSel.style.display=preset==='quarter'?'':'none';
   if(dWrap) dWrap.style.display=preset==='custom'?'inline-flex':'none';
+  if(ySel) ySel.style.display=preset==='custom'?'none':'';
   if(preset==='custom'){
     var sEl=document.getElementById('admExpStart'), eEl=document.getElementById('admExpEnd');
     var yr=(document.getElementById('admin-year')||{}).value||String(new Date().getFullYear());
     if(sEl && !sEl.value) sEl.value=yr+'-01-01';
     if(eEl && !eEl.value) eEl.value=yr+'-12-31';
   }
-  admExpRecompute();
+  renderAdmin();
 }
 
 function admExpGetRange(){
@@ -1546,13 +1659,16 @@ function admExpGetRange(){
   return {start:yr+'-01-01', end:yr+'-12-31'};
 }
 
+// Alias conservé pour le wiring onchange existant (année/trimestre/dates) —
+// tout changement de période redéclenche un rendu complet (source unique).
+function admExpRecompute(){ renderAdmin(); }
+
 // Vérifie, pour toutes les factures de la période, lesquelles ont un PDF archivé
 // — état de couverture toujours visible, jamais bloquant, jamais silencieux.
-function admExpRecompute(){
+// Reçoit le rapport déjà calculé par renderAdmin() (pas de recalcul divergent).
+function admExpRefreshCoverage(r){
   var wrap=document.getElementById('admExpCoverage');
   if(!wrap)return;
-  var range=admExpGetRange();
-  var r=computeAdminReport(range.start,range.end);
   var factures=r.factures;
   if(!factures.length){
     wrap.innerHTML='<span style="color:var(--muted-soft)">Aucune facture sur cette période.</span>';
