@@ -1381,7 +1381,35 @@ function _adminScopeBoxHtml(){
 // utile pour SOI dans le GRC (rappel du périmètre en travaillant), mais n'a
 // pas besoin d'être imprimé sur le PDF envoyé à l'expert-comptable (demande
 // explicite utilisateur, après avoir vu le rendu réel) — écran=true, PDF=false.
-function _adminReportHtml(r,includeScope,groupClientByPrefix){
+// Tableau de repli pour les segments d'un donut/graphique — utilisé UNIQUEMENT
+// dans le PDF généré via html2pdf/html2canvas (staticTables=true), qui ne sait
+// pas rasteriser correctement le SVG dynamique (rendu vide observé en test réel,
+// 11/08/2026). L'écran garde les vrais donuts SVG cliquables (rendu navigateur
+// natif, aucun souci de rendu).
+function _adminMiniTableHtml(segments,total,unitLabel){
+  if(!total) return '<div style="text-align:center;color:var(--muted);padding:10px 0;font-size:11px">Aucune donnée</div>';
+  return '<table style="width:100%;border-collapse:collapse;font-size:11px">'+
+    segments.filter(function(s){return s.value;}).map(function(s){
+      var v=Math.abs(s.value), pct=Math.round(v/total*100);
+      return '<tr><td style="padding:3px 4px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:'+s.color+';margin-right:5px;vertical-align:1px"></span>'+esc(s.label)+'</td>'+
+        '<td style="padding:3px 4px;text-align:right;white-space:nowrap">'+fN(v)+' '+esc(unitLabel||'')+'</td>'+
+        '<td style="padding:3px 4px;text-align:right;color:var(--muted-soft);width:38px">'+pct+'%</td></tr>';
+    }).join('')+
+  '</table>';
+}
+function _adminMonthlyTableHtml(monthlyHT){
+  var months=['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
+  var rows=monthlyHT.map(function(v,i){return {m:months[i],v:v};}).filter(function(x){return x.v;});
+  if(!rows.length) return '<div style="text-align:center;color:var(--muted);padding:10px 0;font-size:11px">Aucune donnée</div>';
+  return '<table style="width:100%;border-collapse:collapse;font-size:11px">'+
+    rows.map(function(x){return '<tr><td style="padding:3px 4px">'+x.m+'</td><td style="padding:3px 4px;text-align:right">'+fN(x.v)+' XPF</td></tr>';}).join('')+
+  '</table>';
+}
+
+// staticTables : true dans le PDF rendu via html2pdf (le SVG dynamique n'y est
+// pas fiable), false à l'écran ET dans l'ancien pipeline window.print() (rendu
+// navigateur natif, le SVG s'affiche très bien).
+function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
   if(includeScope==null) includeScope=true;
   var byClientSrc=groupClientByPrefix?r.byClientPrefix:r.byClient;
   // clientFilterField : quel champ de r.detail une portion "client" doit matcher
@@ -1429,25 +1457,29 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix){
       '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">'+r.masse.byEmp.length+' salarié(s)'+(r.masse.dirigeantsExclus.length?' — '+r.masse.dirigeantsExclus.length+' dirigeant(s) exclu(s)':'')+'</div></div>'):'')+
   '</div>';
 
-  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Graphiques</div>';
+  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">'+(staticTables?'Répartitions':'Graphiques')+'</div>';
   html+='<div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:14px;margin-bottom:22px">'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">CA mensuel HT (XPF)</h3>'+
-      _adminBarChartSVG(r.monthlyHT,includeScope)+'</div>'+
+      (staticTables?_adminMonthlyTableHtml(r.monthlyHT):_adminBarChartSVG(r.monthlyHT,includeScope))+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px">'+
         '<span>CA par client'+(rest.length?' (top 5)':'')+'</span>'+
-        (includeScope?('<span class="no-print" style="display:inline-flex;background:var(--bg,#0d1117);border:1px solid var(--border);border-radius:8px;padding:2px;gap:2px;flex-shrink:0">'+
+        (includeScope&&!staticTables?('<span class="no-print" style="display:inline-flex;background:var(--bg,#0d1117);border:1px solid var(--border);border-radius:8px;padding:2px;gap:2px;flex-shrink:0">'+
           '<button type="button" onclick="_adminSetClientMode(\'prefix\')" style="border:none;background:'+(groupClientByPrefix?ADMIN_C1:'transparent')+';color:'+(groupClientByPrefix?'#fff':'var(--muted)')+';font-size:9.5px;font-weight:700;padding:4px 8px;border-radius:6px;cursor:pointer;text-transform:none;letter-spacing:0">Gros Clients</button>'+
           '<button type="button" onclick="_adminSetClientMode(\'detail\')" style="border:none;background:'+(!groupClientByPrefix?ADMIN_C1:'transparent')+';color:'+(!groupClientByPrefix?'#fff':'var(--muted)')+';font-size:9.5px;font-weight:700;padding:4px 8px;border-radius:6px;cursor:pointer;text-transform:none;letter-spacing:0">Clients internes</button>'+
         '</span>'):'')+
       '</h3>'+
-      (clientTotal?_adminDonutSVG(clientSegs, (Math.round(clientTotal/1000))+'K','XPF HT',includeScope?'client':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
-      _adminLegendHtml(clientSegs,clientTotal,includeScope?'client':null)+'</div>'+
+      (staticTables?_adminMiniTableHtml(clientSegs,clientTotal,'XPF'):(
+        (clientTotal?_adminDonutSVG(clientSegs, (Math.round(clientTotal/1000))+'K','XPF HT',includeScope?'client':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
+        _adminLegendHtml(clientSegs,clientTotal,includeScope?'client':null)
+      ))+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">TGC collectée par taux</h3>'+
-      (tgcSegTotal?_adminDonutSVG(tgcSegs, (Math.round(tgcSegTotal/1000))+'K','XPF TGC',includeScope?'taux':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
-      _adminLegendHtml(tgcSegs,tgcSegTotal,includeScope?'taux':null)+'</div>'+
+      (staticTables?_adminMiniTableHtml(tgcSegs,tgcSegTotal,'XPF'):(
+        (tgcSegTotal?_adminDonutSVG(tgcSegs, (Math.round(tgcSegTotal/1000))+'K','XPF TGC',includeScope?'taux':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
+        _adminLegendHtml(tgcSegs,tgcSegTotal,includeScope?'taux':null)
+      ))+'</div>'+
   '</div>';
 
   html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Détail — TGC collectée par taux</div>';
@@ -1705,7 +1737,7 @@ function _renderSynthesisToPdfBytes(r){
     var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
         '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
         '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
-      _adminReportHtml(r,false,true);
+      _adminReportHtml(r,false,true,true); // staticTables=true : html2canvas ne rend pas fiablement le SVG dynamique
     var host=document.createElement('div');
     host.style.position='absolute';host.style.left='-99999px';host.style.top='0';host.style.width='794px';
     var styleEl=document.createElement('style'); styleEl.textContent=css;
