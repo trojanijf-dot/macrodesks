@@ -1359,8 +1359,8 @@ function _adminBarChartSVG(monthlyHT,clickable){
 // ---- Graphiques PDF rendus en <canvas> (html2canvas ne rasterise pas
 // fiablement le SVG dynamique — bug "graphiques vides" observé en test réel,
 // 11/08/2026). _adminReportHtml() (staticTables=true) pose des <canvas>
-// vides + empile une "job" de dessin ici ; _renderSynthesisToPdfBytes()
-// exécute _adminDrawChartJobs() APRÈS insertion dans le DOM, AVANT html2pdf.
+// vides + empile une "job" de dessin ici ; printAdminReportPeriod() exécute
+// _adminDrawChartJobs() APRÈS insertion dans #prvBody (aperçu), AVANT html2pdf.
 var _adminPdfChartJobs=[];
 function _adminCanvasBarHTML(canvasId){
   return '<canvas id="'+canvasId+'" width="380" height="150" style="width:100%;height:150px"></canvas>';
@@ -1507,7 +1507,7 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
   '</div>';
 
   // [11/08/2026] Mode PDF (staticTables) : canvas dessinés APRÈS insertion DOM
-  // (cf _adminDrawChartJobs, appelé par _renderSynthesisToPdfBytes) — jamais de
+  // (cf _adminDrawChartJobs, appelé par printAdminReportPeriod()) — jamais de
   // SVG dynamique dans ce mode (html2canvas ne le rasterise pas fiablement).
   if(staticTables){
     _adminPdfChartJobs.push({type:'bar', canvasId:'pdfBarChart', monthlyHT:r.monthlyHT});
@@ -1784,38 +1784,32 @@ function admExpRefreshCoverage(r){
 }
 
 // Rend la synthèse HTML en PDF (ArrayBuffer, sans téléchargement) via html2pdf/jsPDF.
-function _renderSynthesisToPdfBytes(r){
-  return new Promise(function(resolve,reject){
-    var css='@page{size:A4 portrait;margin:14mm 12mm;}'+
-      'body{font-family:Calibri,Arial,sans-serif;margin:0;padding:0;color:#111;background:#fff;font-size:11px;'+
-      '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
-      'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'+
-      'h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
-      '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
-      '.hd .sub{font-size:11px;color:#555}';
-    _adminPdfChartJobs=[]; // reset : _adminReportHtml() va les re-empiler ci-dessous
-    var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
-        '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
-        '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
-      _adminReportHtml(r,false,true,true); // staticTables=true : graphiques en <canvas>, dessinés plus bas (html2canvas ne rend pas fiablement le SVG dynamique)
-    var host=document.createElement('div');
-    host.style.position='absolute';host.style.left='-99999px';host.style.top='0';host.style.width='794px';
-    var styleEl=document.createElement('style'); styleEl.textContent=css;
-    host.appendChild(styleEl);
-    var inner=document.createElement('div'); inner.innerHTML=html;
-    host.appendChild(inner);
-    document.body.appendChild(host);
-    _adminDrawChartJobs(); // les <canvas> existent maintenant dans le DOM : on les dessine AVANT la capture html2canvas
-    html2pdf().set({margin:0,filename:'synthese.pdf',html2canvas:{scale:2,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}})
-      .from(inner).toPdf().get('pdf').then(function(pdf){
-        var ab=pdf.output('arraybuffer');
-        if(host.parentNode) document.body.removeChild(host);
-        resolve(ab);
-      }).catch(function(err){
-        if(host.parentNode) document.body.removeChild(host);
-        reject(err);
-      });
-  });
+// Construit le HTML de la synthèse (thème clair PDF, graphiques <canvas>) tel
+// qu'affiché dans l'aperçu #prvBody. Le CSS est injecté INLINE (<style> dans
+// le HTML lui-même) car #prvBody n'a pas de point d'injection séparé comme
+// l'ancien host hors-écran.
+// [11/08/2026] th{background:var(--bg3)} est une règle GLOBALE du site
+// (ligne ~665, tableaux de l'app) qui s'appliquait aussi aux tableaux de cet
+// aperçu, rendant les en-têtes de tableau noirs au lieu de blancs — d'où
+// l'override explicite ci-dessous (plus fiable que de deviner toutes les
+// variables CSS que la règle globale référence).
+function _adminBuildPreviewHtml(r){
+  var css='<style>'+
+    'body{font-family:Calibri,Arial,sans-serif;color:#111;background:#fff;font-size:11px;'+
+    '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
+    '#prvBody table{page-break-inside:auto}#prvBody tr{page-break-inside:avoid}#prvBody thead{display:table-header-group}'+
+    '#prvBody th{background:#f8fafc!important;color:#64748b!important}'+
+    '.admHd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
+    '.admHd h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
+    '.admHd .sub{font-size:11px;color:#555}'+
+  '</style>';
+  _adminPdfChartJobs=[]; // reset : _adminReportHtml() va les re-empiler ci-dessous
+  return css+'<div style="background:#fff;color:#111;padding:4px">'+
+    '<div class="admHd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
+      '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
+      '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
+    _adminReportHtml(r,false,true,true)+ // staticTables=true : graphiques en <canvas> (html2canvas ne rend pas fiablement le SVG dynamique)
+  '</div>';
 }
 
 // Fusionne une liste d'entrées (ArrayBuffer ou Blob) en un seul PDF (pdf-lib).
@@ -1842,44 +1836,63 @@ function _mergePdfBytesList(items){
   });
 }
 
-// Bouton principal : synthèse (période choisie) + factures archivées trouvées,
-// fusionnées et téléchargées en 1 seul fichier. Rien de silencieux : le nombre
-// de factures couvertes/manquantes est toujours annoncé à la fin.
+// Bouton "Générer le PDF pour la période" : affiche d'ABORD un APERÇU (modal
+// mPRV, même mécanisme que partout ailleurs dans le GRC — devis/factures/BC),
+// avant toute génération. Le téléchargement réel n'a lieu qu'après confirmation
+// via le bouton "🖨️ Imprimer / PDF" de l'aperçu (cf printPreviewBC() qui route
+// vers _adminConfirmExportFromPreview() en détectant le titre "Export Administratif").
 function printAdminReportPeriod(){
-  var btn=document.getElementById('admExpGoBtn');
   var range=admExpGetRange();
   if(!range.start||!range.end||range.start>range.end){alert('Période invalide.');return;}
-  if(btn){btn.disabled=true;btn.textContent='⏳ Génération…';}
   var r=computeAdminReport(range.start,range.end);
   window._adminLastReport=r;
+  window._adminExportRange=range;
+  var html=_adminBuildPreviewHtml(r);
+  showPrv('Export Administratif '+range.start+'_au_'+range.end, html);
+  _adminDrawChartJobs(); // les <canvas> existent maintenant dans #prvBody (visible) : on les dessine
+}
 
-  _renderSynthesisToPdfBytes(r).then(function(synthesisBytes){
-    return Promise.all(r.factures.map(function(f){
-      return _getFacturePdfRecord(f.id).then(function(rec){return {f:f, rec:rec};});
-    })).then(function(results){
-      var found=results.filter(function(x){return x.rec;});
-      var missing=results.filter(function(x){return !x.rec;}).map(function(x){return x.f.num;});
-      return _mergePdfBytesList([synthesisBytes].concat(found.map(function(x){return x.rec.blob;}))).then(function(mergedBytes){
-        return {mergedBytes:mergedBytes, missing:missing, count:found.length, total:r.factures.length};
+// Déclenché par le bouton "🖨️ Imprimer / PDF" de l'aperçu quand celui-ci montre
+// un export Administratif (cf printPreviewBC()). Génère le PDF depuis le
+// contenu RÉELLEMENT affiché (#prvBody, déjà validé visuellement par
+// l'utilisateur), le fusionne avec les factures archivées trouvées, télécharge.
+// Rien de silencieux : le nombre de factures couvertes/manquantes est toujours annoncé.
+function _adminConfirmExportFromPreview(){
+  var src=document.getElementById('prvBody');
+  var r=window._adminLastReport, range=window._adminExportRange;
+  if(!src||!r||!range){alert('Aperçu invalide — régénère le PDF depuis l\'écran Administratif.');return;}
+  var btn=document.querySelector('#mPRV .modal-footer .btn-teal');
+  if(btn){btn.disabled=true;btn.textContent='⏳ Génération…';}
+  html2pdf().set({margin:0,filename:'synthese.pdf',html2canvas:{scale:2,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}})
+    .from(src).toPdf().get('pdf').then(function(pdf){
+      var synthesisBytes=pdf.output('arraybuffer');
+      return Promise.all(r.factures.map(function(f){
+        return _getFacturePdfRecord(f.id).then(function(rec){return {f:f, rec:rec};});
+      })).then(function(results){
+        var found=results.filter(function(x){return x.rec;});
+        var missing=results.filter(function(x){return !x.rec;}).map(function(x){return x.f.num;});
+        return _mergePdfBytesList([synthesisBytes].concat(found.map(function(x){return x.rec.blob;}))).then(function(mergedBytes){
+          return {mergedBytes:mergedBytes, missing:missing, count:found.length, total:r.factures.length};
+        });
       });
+    }).then(function(res){
+      var blob=new Blob([res.mergedBytes],{type:'application/pdf'});
+      var url=URL.createObjectURL(blob);
+      var a=document.createElement('a');
+      var fname='CALINSTRUM Administratif '+range.start+'_au_'+range.end+'.pdf';
+      a.href=url; a.download=fname;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){URL.revokeObjectURL(url);},30000);
+      if(btn){btn.disabled=false;btn.textContent='🖨️ Imprimer / PDF';}
+      cm('mPRV');
+      var msg='✓ PDF généré : '+res.count+'/'+res.total+' facture(s) archivée(s) incluse(s).';
+      if(res.missing.length) msg+=' Manquantes : '+res.missing.join(', ')+'.';
+      if(typeof showBCSaveToast==='function') showBCSaveToast(msg); else alert(msg);
+    }).catch(function(err){
+      console.error('[admin-export-periode] échec :',err);
+      if(btn){btn.disabled=false;btn.textContent='🖨️ Imprimer / PDF';}
+      alert('Erreur lors de la génération du PDF :\n'+(err.message||err));
     });
-  }).then(function(res){
-    var blob=new Blob([res.mergedBytes],{type:'application/pdf'});
-    var url=URL.createObjectURL(blob);
-    var a=document.createElement('a');
-    var fname='CALINSTRUM Administratif '+range.start+'_au_'+range.end+'.pdf';
-    a.href=url; a.download=fname;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function(){URL.revokeObjectURL(url);},30000);
-    if(btn){btn.disabled=false;btn.textContent='⬇ Générer le PDF pour la période';}
-    var msg='✓ PDF généré : '+res.count+'/'+res.total+' facture(s) archivée(s) incluse(s).';
-    if(res.missing.length) msg+=' Manquantes : '+res.missing.join(', ')+'.';
-    if(typeof showBCSaveToast==='function') showBCSaveToast(msg); else alert(msg);
-  }).catch(function(err){
-    console.error('[admin-export-periode] échec :',err);
-    if(btn){btn.disabled=false;btn.textContent='⬇ Générer le PDF pour la période';}
-    alert('Erreur lors de la génération du PDF :\n'+(err.message||err));
-  });
 }
 </script>
 
@@ -44844,6 +44857,11 @@ function printPreviewBC(){
   // explicitement via window.doPrint pour éviter le shadowing.
   var titleElEarly=document.getElementById('prvTitle');
   var docTitleEarly=titleElEarly?titleElEarly.textContent:'';
+  // === ADMINISTRATIF : déléguer à _adminConfirmExportFromPreview() (pipeline
+  // html2pdf + canvas + fusion pdf-lib avec les factures archivées) ===
+  if(/^Export Administratif/i.test(docTitleEarly)){
+    return _adminConfirmExportFromPreview();
+  }
   if(/^Devis\s/i.test(docTitleEarly) || /^Facture\s/i.test(docTitleEarly)){
     return window.doPrint();
   }
