@@ -1693,7 +1693,7 @@ function printAdminReport(){
       '<div class="sub">RIDET '+CI.ridet+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
     _adminReportHtml(r,false,true);
-  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+esc(r.year)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+esc(_admPeriodLabel(r))+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
   setTimeout(function(){ w.print(); w.close(); }, 400);
@@ -1850,7 +1850,7 @@ function printAdminReportPeriod(){
       '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
     _adminReportHtml(r,false,true); // rendu SVG natif (pas de staticTables) -- fiable en impression navigateur
-  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+esc(r.year)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+esc(_admPeriodLabel(r))+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
   setTimeout(function(){ w.print(); }, 400);
@@ -1878,6 +1878,31 @@ function printAdminReportPeriod(){
 var _admPrvState={sig:'',pages:[],facs:[],synth:'',busy:false};
 
 function _admPrvSig(range){ return range.start+'|'+range.end; }
+
+// Libellé de période pour le TITRE du document — c'est lui que Chrome propose
+// comme nom de fichier dans « Enregistrer en PDF ».
+//   année pleine → "2026 Année 01-01 au 31-12"
+//   trimestre    → "2026 T2 01-04 au 30-06"
+//   personnalisé → "2026 05-02 au 18-03"  (à cheval sur 2 ans : années incluses)
+// Déduit des DATES elles-mêmes, PAS de l'état des boutons de preset : le titre
+// ne peut donc pas annoncer un trimestre différent de ce qui est réellement
+// calculé, même si l'utilisateur bricole les dates après avoir cliqué "T2".
+// Séparateur "-" et non "/" : Windows interdit "/" dans un nom de fichier,
+// Chrome le remplacerait silencieusement par autre chose.
+function _admPeriodLabel(r){
+  var s=String(r.startDate||''), e=String(r.endDate||'');
+  if(s.length<10||e.length<10) return String(r.year||'');
+  var sy=s.substring(0,4), ey=e.substring(0,4);
+  var sd=s.substring(8,10)+'-'+s.substring(5,7);
+  var ed=e.substring(8,10)+'-'+e.substring(5,7);
+  if(sy!==ey) return sd+'-'+sy+' au '+ed+'-'+ey;
+  if(s===sy+'-01-01' && e===sy+'-12-31') return sy+' Année '+sd+' au '+ed;
+  var qs={'01':1,'04':2,'07':3,'10':4}[s.substring(5,7)];
+  var qe={'03':1,'06':2,'09':3,'12':4}[e.substring(5,7)];
+  var dernierJour=new Date(Number(sy),Number(e.substring(5,7)),0).getDate();
+  var trimestre=qs&&qe&&qs===qe&&s.substring(8,10)==='01'&&Number(e.substring(8,10))===dernierJour;
+  return sy+(trimestre?(' T'+qs):'')+' '+sd+' au '+ed;
+}
 
 // En-tête + corps de la synthèse (identiques à printAdminReportPeriod).
 function _admPrvSynthHtml(r){
@@ -1988,7 +2013,7 @@ function admPreviewOpen(){
   window._adminLastReport=r;
   _admPrvState.synth=_admPrvSynthHtml(r);
   var t=document.getElementById('admPrvTitle');
-  if(t) t.textContent='Aperçu avant impression — '+fD(r.startDate)+' au '+fD(r.endDate);
+  if(t) t.textContent='Aperçu — CALINSTRUM Administratif '+_admPeriodLabel(r);
   om('mADMPRV');
   // Période inchangée depuis la dernière ouverture : on garde les pages déjà
   // rastérisées (évite de relire tous les PDF à chaque aller-retour).
@@ -2069,7 +2094,7 @@ function admPreviewPrint(){
     '.fpage{display:block;max-width:100%;max-height:252mm;margin:0 auto}';
   var html=_admPrvState.synth+(withFa?_admPrvFacturesHtml(true):'');
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+
-    esc(r.year)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
+    esc(_admPeriodLabel(r))+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
   // Les <img> sont des data:URL (déjà décodées) mais on laisse le layout se
