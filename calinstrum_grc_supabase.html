@@ -1176,16 +1176,18 @@ function computeAdminReport(startDate,endDate){
   // la MÊME fonction que le Pipeline Encaissement (Suivi Factures) pour que
   // l'export reste cohérent avec ce qui est déjà affiché à l'écran ailleurs.
   var inRange=function(d){ d=String(d||''); return d && d>=startDate && d<=endDate; };
-  // [11/08/2026] La date d'imputation fiscale d'une facture est sa date d'ENVOI
-  // réelle au client (dateEnvoi), PAS sa date de création dans le GRC (f.date).
-  // Une facture peut être créée/verrouillée des mois avant d'être effectivement
-  // envoyée (pré-facturation pour suivi de chantier interne) — utiliser f.date
-  // l'attribuerait au mauvais trimestre, voire compterait une facture jamais
-  // envoyée. Double garde : dateEnvoi doit être renseignée ET la phase ne doit
-  // pas être billed:false (une facture peut techniquement changer de phase sans
-  // que dateEnvoi ait été fixée si la promotion auto n'a pas eu lieu).
+  // [11/08/2026] La date d'imputation fiscale préférée est dateEnvoi (date
+  // d'émission réelle au client), avec repli sur f.date (date de création GRC)
+  // — MÊME motif que _getAvailableYears() ailleurs dans l'app. ⚠️ Exiger
+  // dateEnvoi STRICTEMENT (sans repli) a été testé et cassait la quasi-totalité
+  // des factures réellement envoyées : beaucoup de factures historiques n'ont
+  // jamais eu ce champ rempli malgré une émission bien réelle (migration
+  // incomplète). L'exclusion des VRAIES pré-factures (numéro réservé, chantier
+  // pas terminé) reste garantie par isPrebilled()/PHASES{}.billed===false,
+  // seul signal fiable pour cette distinction sur ce jeu de données.
   var factures=(DB.factures||[]).filter(function(f){
-    return f.dateEnvoi && inRange(f.dateEnvoi) && !(typeof isPrebilled==='function' && isPrebilled(f));
+    var d=f.dateEnvoi||f.date;
+    return d && inRange(d) && !(typeof isPrebilled==='function' && isPrebilled(f));
   });
   var avoirs=(DB.avoirs||[]).filter(function(a){return inRange(a.date);});
 
@@ -1216,8 +1218,9 @@ function computeAdminReport(startDate,endDate){
   // totaux et les graphiques ne puissent jamais diverger.
   var detail=[];
   factures.forEach(function(f){
+    var fDate=f.dateEnvoi||f.date;
     caHT+=Number(f.ht)||0; caTTC+=Number(f.ttc)||0;
-    var mIdx=Number(String(f.dateEnvoi).substring(5,7))-1;
+    var mIdx=Number(String(fDate).substring(5,7))-1;
     if(mIdx>=0&&mIdx<12) monthlyHT[mIdx]+=Number(f.ht)||0;
     var clDet=f.client||'(sans client)';
     byClient[clDet]=(byClient[clDet]||0)+(Number(f.ht)||0);
@@ -1231,7 +1234,7 @@ function computeAdminReport(startDate,endDate){
     addLinesTGC(f.lines);
     var rates=[];
     (f.lines||[]).forEach(function(l){if(l&&Number(l.tgc)>0&&rates.indexOf(String(l.tgc))<0)rates.push(String(l.tgc));});
-    detail.push({num:f.num,date:f.dateEnvoi,client:f.client,clientPrefix:clPfx,monthIdx:mIdx,
+    detail.push({num:f.num,date:fDate,client:f.client,clientPrefix:clPfx,monthIdx:mIdx,
       ht:f.ht,tgc:f.tgc,ttc:f.ttc,isAvoir:false,tgcRates:rates});
   });
   avoirs.forEach(function(a){
