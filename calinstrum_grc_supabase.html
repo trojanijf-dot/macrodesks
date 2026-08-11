@@ -1794,25 +1794,33 @@ function admExpRefreshCoverage(r){
 // l'override explicite ci-dessous (plus fiable que de deviner toutes les
 // variables CSS que la règle globale référence).
 function _adminBuildPreviewHtml(r){
-  // [11/08/2026] BUG CRITIQUE CORRIGÉ : une balise <style> s'applique à TOUTE
-  // la page dès qu'elle est dans le DOM, quel que soit l'endroit où elle est
-  // insérée — un sélecteur "body{...}" ici repeignait donc TOUTE l'app en
-  // blanc, pas juste l'aperçu. Tout doit être scopé sous #prvBody.
+  // [11/08/2026] BUG CRITIQUE #1 (corrigé) : une balise <style> s'applique à
+  // TOUTE la page dès qu'elle est dans le DOM — un sélecteur "body{...}" ici
+  // repeignait donc TOUTE l'app en blanc, pas juste l'aperçu.
+  // BUG CRITIQUE #2 (corrigé, PDF réellement livré encore noir) : les
+  // variables CSS étaient déclarées sur #prvBody, mais html2pdf/html2canvas
+  // ne capture QUE #adminSynthesisOnly (un enfant) — html2canvas ne résout
+  // pas fiablement les custom properties héritées d'un ANCÊTRE situé hors de
+  // la racine capturée, donc tout retombait sur les valeurs de repli sombres
+  // (var(--panel2,#161b24) etc.). Fix : déclarer les variables DIRECTEMENT
+  // sur #adminSynthesisOnly — le même nœud que celui capturé, dans les deux
+  // cas (style inline ET règles CSS ci-dessous), pour qu'il n'y ait plus
+  // AUCUNE dépendance à un ancêtre hors du périmètre capturé.
   var css='<style>'+
-    '#prvBody{font-family:Calibri,Arial,sans-serif;color:#111;background:#fff;font-size:11px;'+
-    '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
-    '#prvBody table{page-break-inside:auto}#prvBody tr{page-break-inside:avoid}#prvBody thead{display:table-header-group}'+
-    '#prvBody th{background:#f8fafc!important;color:#64748b!important}'+
-    '#prvBody .admHd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
-    '#prvBody .admHd h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
-    '#prvBody .admHd .sub{font-size:11px;color:#555}'+
+    '#adminSynthesisOnly table{page-break-inside:auto}#adminSynthesisOnly tr{page-break-inside:avoid}#adminSynthesisOnly thead{display:table-header-group}'+
+    '#adminSynthesisOnly th{background:#f8fafc!important;color:#64748b!important}'+
+    '#adminSynthesisOnly .admHd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
+    '#adminSynthesisOnly .admHd h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
+    '#adminSynthesisOnly .admHd .sub{font-size:11px;color:#555}'+
   '</style>';
   _adminPdfChartJobs=[]; // reset : _adminReportHtml() va les re-empiler ci-dessous
   // id dédié : _adminConfirmExportFromPreview() capture SEULEMENT ce bloc en
   // PDF (html2pdf) — les factures archivées, ajoutées à la suite en <iframe>
   // par printAdminReportPeriod(), sont fusionnées séparément via pdf-lib
   // (leurs octets réels, pas une recapture visuelle de l'iframe).
-  return css+'<div id="adminSynthesisOnly" style="background:#fff;color:#111;padding:4px">'+
+  var synthesisVars='font-family:Calibri,Arial,sans-serif;color:#111;background:#fff;font-size:11px;padding:4px;'+
+    '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;';
+  return css+'<div id="adminSynthesisOnly" style="'+synthesisVars+'">'+
     '<div class="admHd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
