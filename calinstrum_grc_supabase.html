@@ -2897,6 +2897,12 @@ function printAdminReportPeriod(){
       <div class="form-row">
         <div class="form-group"><label>📋 N° PO Client <span style="color:var(--muted);font-weight:400;font-size:10px">(synchronisé avec le N° PO du Suivi Factures)</span></label><input class="form-input" id="fa-po" placeholder="ex: 28042026/97 ou 00734811-01" title="Numéro de bon de commande du client final (SLN, PRNC...). Format Calinstrum interne : DDMMYYYY/NNN. Champ unifié avec le N° PO du Suivi Factures."></div>
         <div class="form-group">
+          <label>🖨 Devis à IMPRIMER sur le PDF <span style="color:var(--muted);font-weight:400;font-size:10px">(si différent du devis de suivi GRC ci-dessus)</span></label>
+          <input class="form-input" id="fa-dvlie-print" placeholder="ex: SLN-DV143-CADRE-2026" title="Laisse vide pour imprimer le devis de suivi GRC (Devis liés, ci-dessus). Utile pour les factures REAPPRO dont le devis GRC est un devis-miroir auto-généré (SLN-DV-BCGMAO-...) : le PDF envoyé au client doit référencer le vrai devis cadre.">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
           <label>💰 % de la commande <span style="color:var(--muted);font-weight:400;font-size:10px">(part du BC global facturée par cette facture)</span></label>
           <div style="display:flex;gap:6px;align-items:stretch">
             <select class="form-select" id="fa-pctOfBC" style="flex:1" onchange="onFaPctOfBCChange()" title="% de la commande totale (du BC) que représente cette facture. 30/70 = acompte/solde classique, 100 = facture complète, 50/50 = répartition équilibrée. Sert à calculer correctement la marge par affaire (un BC peut être facturé en plusieurs fois).">
@@ -27400,6 +27406,7 @@ function openFA(id,fromDV,preSelectedClient){
       rebuildFaEmailOptions(f.email||'');
       gv('fa-objet',f.objet||'');
       gv('fa-dvlie',f.dvlie||'');_faDvlieInit(f.dvlie||'');
+      gv('fa-dvlie-print',f.dvliePrint||'');
       gv('fa-type',f.type||'Fourniture');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
       gv('fa-notes',f.notes||'');
@@ -27481,7 +27488,7 @@ function openFA(id,fromDV,preSelectedClient){
     // bon préfixe via fillCCFromSelect (qui appelle nxt('fa', clientPrefix)).
     var faPfx=preSelectedClient?getClientPrefix(preSelectedClient):'SLN';
     gv('fa-num',nxt('fa',faPfx));gv('fa-date',td());gv('fa-contact','');
-    gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');_faDvlieInit('');
+    gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');_faDvlieInit('');gv('fa-dvlie-print','');
     // Email vide → dropdown initialisé avec valeur courante = ''
     rebuildFaEmailOptions('');
     gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
@@ -28288,7 +28295,7 @@ function getFA(){
   }
   var fa={id:eFAid||Date.now(),num:gvg('fa-num'),date:gvg('fa-date'),client:gvg('fa-client'),
     contact:gvg('fa-contact'),adresse:gvg('fa-adresse'),email:gvg('fa-email'),objet:gvg('fa-objet'),
-    dvlie:gvg('fa-dvlie'),type:gvg('fa-type')||'Fourniture',status:gvg('fa-status'),tgcM:gvg('fa-tgc-mention'),
+    dvlie:gvg('fa-dvlie'),dvliePrint:gvg('fa-dvlie-print'),type:gvg('fa-type')||'Fourniture',status:gvg('fa-status'),tgcM:gvg('fa-tgc-mention'),
     delai:gvg('fa-delai'),paye:totVerse,versements:JSON.parse(JSON.stringify(faVersements)),notes:gvg('fa-notes'),
     // Date d'encaissement effective : à renseigner à la réception de l'avis de règlement
     // Distincte de la date d'émission (date) et de l'échéance théorique calculée depuis le délai.
@@ -29340,6 +29347,12 @@ function _buildFAFournitureObjet(f){
   }
   // 3) Devis lié
   var dvNum=String(f.dvlie||'').trim();
+  // [11/08/2026] Cas REAPPRO PAKORO (demande explicite utilisateur) : le devis
+  // GRC est un devis-miroir auto-généré (verrouillage de N° de BC uniquement),
+  // sans intérêt pour le client final. Format simplifié, pas de PO/REF DEVIS.
+  if(/PAKORO/i.test(f.client||'')){
+    return 'REAPPRO Fourniture Matériel BC '+(bcClient||'?');
+  }
   // Construction avec placeholders pour les champs manquants
   return 'Fourniture Matériel BC '+(bcClient||'?')+' / PO '+(poCalinstrum||'?')+' / REF DEVIS '+(dvNum||'?');
 }
@@ -29362,6 +29375,7 @@ function _refreshFAObjet(){
     id:(typeof eFAid!=='undefined')?eFAid:null,
     po:(document.getElementById('fa-po')||{}).value||'',
     dvlie:(document.getElementById('fa-dvlie')||{}).value||'',
+    client:(document.getElementById('fa-client')||{}).value||'',
     type:type
   };
   faObjetEl.value=_buildFAFournitureObjet(tempF);
@@ -29384,6 +29398,12 @@ async function saveFA(){
   // d'autres fonctions à partir d'autres sources) n'est pas affecté.
   if(f.type==='Fourniture'){
     f.objet=_buildFAFournitureObjet(f);
+  }
+  // [11/08/2026] REAPPRO PAKORO : auto-remplit le devis à IMPRIMER (cadre réel,
+  // distinct du devis-miroir de suivi GRC) s'il n'a pas déjà été saisi/modifié
+  // manuellement — ne jamais écraser une valeur que l'utilisateur a lui-même posée.
+  if(!f.dvliePrint && /PAKORO/i.test(f.client||'') && f.type==='Fourniture'){
+    f.dvliePrint='SLN-DV143-CADRE-2026';
   }
   if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
   // Suivi BC hebdomadaire : getFA() a DÉJÀ appliqué _faPendingBcConsumption sur
@@ -43238,6 +43258,13 @@ function bFA(f){
     var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
     if(_dvObj) devisNumLink=(_dvObj.num||'')+(_dvObj.rev?' '+String(_dvObj.rev).toUpperCase():'');
   }
+  // [11/08/2026] Devis IMPRIMÉ ≠ devis de suivi GRC : certaines factures (ex.
+  // REAPPRO PAKORO) sont rattachées en interne à un devis-miroir auto-généré
+  // (SLN-DV-BCGMAO-xxxxx, sert à verrouiller le N° de BC) alors que le devis
+  // RÉELLEMENT applicable pour le client est un devis cadre (SLN-DV143-CADRE-2026).
+  // f.dvliePrint (champ dédié, distinct de f.dvlie) permet d'imprimer le bon
+  // numéro sans toucher au suivi GRC interne.
+  if(f.dvliePrint) devisNumLink=f.dvliePrint;
   return'<div class="doc">'+
     '<div class="doc-head">'+
       '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
