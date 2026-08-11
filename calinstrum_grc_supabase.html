@@ -2686,6 +2686,17 @@ function printAdminReport(){
         </div>
         <div id="faAvoirsList" style="font-size:11px"></div>
       </div>
+      <!-- BLOC ARCHIVAGE PDF SIGNÉ — copie du PDF réellement signé/envoyé, utilisée
+           par l'export par période (Administratif). Stockage IndexedDB + Supabase
+           Storage (bucket pdfs), même pattern que le colisage BL. Étape manuelle :
+           le navigateur ne peut pas capturer le PDF généré par window.print(). -->
+      <div style="margin-top:10px;padding:10px;background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.25);border-radius:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+          <strong style="color:var(--teal)">📎 PDF signé (archivage)</strong>
+        </div>
+        <div id="faPdfArchiveBlock" style="font-size:11px"></div>
+        <input type="file" id="faPdfArchiveInput" accept=".pdf" style="display:none" onchange="onFaPdfArchiveChosen(this)">
+      </div>
       <div class="form-group" style="margin-top:10px"><label>Notes</label><textarea class="form-textarea" id="fa-notes" rows="2"></textarea></div>
       <div style="background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.2);border-radius:6px;padding:10px;font-size:10.5px;line-height:1.8;color:var(--teal);margin-top:10px">
         <strong style="display:block;margin-bottom:4px">🏦 Coordonnées bancaires CALINSTRUM</strong>
@@ -27132,6 +27143,7 @@ function openFA(id,fromDV,preSelectedClient){
   // Afficher la liste des acomptes liés à cette facture (si c'est une facture existante)
   if(typeof renderAcomptesList==='function') renderAcomptesList();
   if(typeof renderAvoirsListForFA==='function') renderAvoirsListForFA(eFAid);
+  if(typeof renderFaPdfArchiveBlock==='function') renderFaPdfArchiveBlock(eFAid);
   // Rendu initial du bloc historique délai
   setTimeout(function(){if(typeof renderFADelaiHistory==='function')renderFADelaiHistory();},50);
   om('mFA');
@@ -39225,6 +39237,159 @@ function _ptAddDays(iso,n){
   d.setDate(d.getDate()+n);
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
+
+// =============================================================================
+// ===== ARCHIVAGE PDF SIGNÉ PAR FACTURE ======================================
+// =============================================================================
+// Même pattern que le colisage BL (IndexedDB devis_pdfs + Supabase Storage bucket
+// pdfs, upload cloud fire-and-forget). Clé composite ['facture:'+factureId,'signee'].
+// Étape manuelle : le navigateur ne peut pas capturer le PDF généré par
+// window.print() → l'utilisateur glisse le PDF qu'il vient d'enregistrer.
+function _facturePdfKey(factureId){ return 'facture:'+String(factureId); }
+
+function _storeFacturePdf(factureId,filename,bytes,numFacture,onLocalOk){
+  if(!factureId||!bytes)return;
+  openAttachDB().then(function(db){
+    var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
+    var store=tx.objectStore(DEVIS_PDF_STORE);
+    var idx=store.index('devisKind');
+    var key=_facturePdfKey(factureId);
+    var getReq=idx.get([key,'signee']);
+    var _localFail=function(err){
+      console.warn('[facture-pdf] Archivage IndexedDB échoué :',err);
+      if(typeof showBCSaveToast==='function')showBCSaveToast('⚠ Archivage local du PDF échoué — réessaie');
+    };
+    getReq.onerror=function(e){_localFail(e.target.error);};
+    getReq.onsuccess=function(){
+      var existing=getReq.result;
+      var blob=new Blob([bytes],{type:'application/pdf'});
+      var record={devisId:key,kind:'signee',filename:filename||'facture.pdf',
+        refValue:numFacture||'',refDate:'',fileSize:bytes.byteLength||bytes.length||0,
+        blob:blob,savedAt:new Date().toISOString()};
+      if(existing&&existing.id)record.id=existing.id;
+      var putReq=store.put(record);
+      putReq.onerror=function(e){_localFail(e.target.error);};
+      putReq.onsuccess=function(){
+        if(typeof onLocalOk==='function')onLocalOk();
+        _uploadFacturePdfToCloud(numFacture,blob,record.filename).catch(function(err){
+          console.warn('[facture-pdf] Upload cloud échoué :',err);
+          if(typeof showBCSaveToast==='function')showBCSaveToast('⚠ PDF archivé en local mais l\'envoi cloud a échoué');
+        });
+      };
+    };
+  }).catch(function(err){console.warn('[facture-pdf] Archivage IndexedDB échoué :',err);});
+}
+
+function _deleteFacturePdf(factureId,onDone){
+  openAttachDB().then(function(db){
+    var tx=db.transaction(DEVIS_PDF_STORE,'readwrite');
+    var store=tx.objectStore(DEVIS_PDF_STORE);
+    var idx=store.index('devisKind');
+    var getReq=idx.get([_facturePdfKey(factureId),'signee']);
+    getReq.onsuccess=function(){
+      var existing=getReq.result;
+      if(existing&&existing.id){
+        var delReq=store.delete(existing.id);
+        delReq.onsuccess=function(){if(typeof onDone==='function')onDone();};
+        delReq.onerror=function(){if(typeof onDone==='function')onDone();};
+      } else if(typeof onDone==='function') onDone();
+    };
+    getReq.onerror=function(){if(typeof onDone==='function')onDone();};
+  }).catch(function(){if(typeof onDone==='function')onDone();});
+}
+
+function _getFacturePdfRecord(factureId){
+  return openAttachDB().then(function(db){
+    return new Promise(function(resolve){
+      var tx=db.transaction(DEVIS_PDF_STORE,'readonly');
+      var idx=tx.objectStore(DEVIS_PDF_STORE).index('devisKind');
+      var getReq=idx.get([_facturePdfKey(factureId),'signee']);
+      getReq.onsuccess=function(){resolve(getReq.result||null);};
+      getReq.onerror=function(){resolve(null);};
+    });
+  }).catch(function(){return null;});
+}
+
+function _uploadFacturePdfToCloud(numFacture,blob,filename){
+  return new Promise(function(resolve,reject){
+    if(!window._supaClient){reject(new Error('Supabase client absent'));return;}
+    var seg=(typeof _safeSeg==='function')?_safeSeg:function(s){return String(s||'').replace(/[^A-Za-z0-9 .\-_]/g,'_');};
+    var dest='factures_signees/'+seg(numFacture||'sans-num')+'/'+seg(filename||'facture.pdf');
+    var p=window._supaClient.storage.from('pdfs').upload(dest,blob,{contentType:'application/pdf',upsert:true});
+    if(p&&typeof p.then==='function'){
+      p.then(function(res){
+        if(res&&res.error){reject(new Error(res.error.message||'upload error'));return;}
+        console.log('[facture-pdf] PDF archivé cloud :',dest);
+        resolve(dest);
+      }).catch(reject);
+    } else resolve(dest);
+  });
+}
+
+// Affiche l'état d'archivage (badge + actions) dans le bloc mFA. factureId peut
+// être null (brouillon non encore enregistré) → invite à sauvegarder d'abord.
+function renderFaPdfArchiveBlock(factureId){
+  var wrap=document.getElementById('faPdfArchiveBlock');
+  if(!wrap)return;
+  if(!factureId){wrap.innerHTML='<span style="color:var(--muted)">Enregistre la facture pour pouvoir archiver son PDF signé.</span>';return;}
+  wrap.innerHTML='<span style="color:var(--muted)">Vérification…</span>';
+  _getFacturePdfRecord(factureId).then(function(rec){
+    if(!wrap)return;
+    if(!rec){
+      wrap.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">'+
+        '<span style="color:#f87171">✕ Non archivé</span>'+
+        '<button type="button" class="btn btn-sm btn-teal" onclick="document.getElementById(\'faPdfArchiveInput\').click()">📎 Archiver le PDF signé</button>'+
+      '</div>';
+      return;
+    }
+    var savedStr=rec.savedAt?fD(rec.savedAt.substring(0,10))+' '+new Date(rec.savedAt).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}):'';
+    wrap.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">'+
+      '<span style="color:#34d399">✓ Archivé le '+esc(savedStr)+' — '+esc(rec.filename||'')+'</span>'+
+      '<span style="white-space:nowrap">'+
+        '<button type="button" class="btn btn-ghost btn-sm" onclick="_openFacturePdfBlob('+factureId+')" title="Voir le PDF archivé">👁</button> '+
+        '<button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById(\'faPdfArchiveInput\').click()" title="Remplacer">🔄</button> '+
+        '<button type="button" class="btn btn-red btn-sm" onclick="onFaPdfArchiveDelete('+factureId+')" title="Supprimer l\'archive">🗑</button>'+
+      '</span>'+
+    '</div>';
+  });
+}
+
+function _openFacturePdfBlob(factureId){
+  _getFacturePdfRecord(factureId).then(function(rec){
+    if(!rec||!rec.blob){alert('PDF introuvable.');return;}
+    var url=URL.createObjectURL(rec.blob);
+    window.open(url,'_blank');
+    setTimeout(function(){URL.revokeObjectURL(url);},60000);
+  });
+}
+
+function onFaPdfArchiveDelete(factureId){
+  if(!confirm('Supprimer le PDF archivé pour cette facture ?\n\n(Le document original sur ton disque n\'est pas touché — seule l\'archive dans le GRC est supprimée.)'))return;
+  _deleteFacturePdf(factureId,function(){renderFaPdfArchiveBlock(factureId);});
+}
+
+function onFaPdfArchiveChosen(input){
+  var f=input.files&&input.files[0];
+  if(!f)return;
+  if(!/\.pdf$/i.test(f.name)){alert('Merci de choisir un fichier .pdf');input.value='';return;}
+  var maxBytes=20*1024*1024;
+  if(f.size>maxBytes){alert('⚠️ Fichier trop volumineux ('+_fmtFileSize(f.size)+'). Max : '+_fmtFileSize(maxBytes)+'.');input.value='';return;}
+  var factureId=eFAid;
+  if(!factureId){alert('Enregistre la facture avant d\'archiver son PDF.');input.value='';return;}
+  var fRec=DB.factures.find(function(x){return x.id===factureId;});
+  var numFacture=fRec?fRec.num:'';
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var bytes=new Uint8Array(e.target.result);
+    _storeFacturePdf(factureId,f.name,bytes,numFacture,function(){
+      renderFaPdfArchiveBlock(factureId);
+      if(typeof showBCSaveToast==='function')showBCSaveToast('✓ PDF archivé pour '+numFacture);
+    });
+  };
+  reader.readAsArrayBuffer(f);
+  input.value='';
+}
+
 // N° de semaine ISO 8601
 function _ptWeekNum(mondayIso){
   var p=mondayIso.split('-');var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
