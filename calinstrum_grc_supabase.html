@@ -7,6 +7,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- pdf-lib : fusion de PDF côté navigateur (export Administratif par période) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <!-- SheetJS pour parser les fichiers .xlsx (Suivi factures pré-GRC) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <!-- Supabase JS v2 (intégration cloud — voir bloc SUPABASE INTEGRATION en fin de body) -->
@@ -1095,6 +1097,31 @@ body.has-dashboard-bg #page-dashboard .metric{
     </div>
   </div>
   <div id="adminBody"></div>
+
+  <!-- EXPORT PAR PÉRIODE — synthèse + factures signées archivées, fusionnées en
+       UN SEUL PDF téléchargé directement (html2pdf pour la synthèse + pdf-lib
+       pour la fusion avec les archives IndexedDB/Supabase). Aucune étape manuelle
+       de type "imprimer puis enregistrer" : le bouton produit le fichier final. -->
+  <div class="card no-print" style="margin-top:18px;padding:14px 16px">
+    <div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px">Export par période (avec factures archivées)</div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span id="admExpPresetTg" style="display:inline-flex;background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:8px;padding:2px;gap:2px">
+        <button type="button" class="admexp-preset-btn" data-preset="year" onclick="admExpSetPreset('year')" style="border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:10.5px;font-weight:700">Année</button>
+        <button type="button" class="admexp-preset-btn" data-preset="quarter" onclick="admExpSetPreset('quarter')" style="border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:10.5px;font-weight:700">Trimestre</button>
+        <button type="button" class="admexp-preset-btn" data-preset="custom" onclick="admExpSetPreset('custom')" style="border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:10.5px;font-weight:700">Personnalisé</button>
+      </span>
+      <select class="filter-sel" id="admExpQuarter" style="display:none" onchange="admExpRecompute()">
+        <option value="1">T1 (Jan-Mars)</option><option value="2">T2 (Avr-Juin)</option>
+        <option value="3">T3 (Juil-Sept)</option><option value="4">T4 (Oct-Déc)</option>
+      </select>
+      <span id="admExpDatesWrap" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--muted)">
+        du <input type="date" class="form-input" id="admExpStart" style="width:150px" onchange="admExpRecompute()">
+        au <input type="date" class="form-input" id="admExpEnd" style="width:150px" onchange="admExpRecompute()">
+      </span>
+      <button class="btn btn-teal" style="margin-left:auto" onclick="printAdminReportPeriod()" id="admExpGoBtn">⬇ Générer le PDF pour la période</button>
+    </div>
+    <div id="admExpCoverage" style="margin-top:12px;font-size:11px;color:var(--muted)"></div>
+  </div>
 </div>
 <script>
 // ============================================================================
@@ -1132,8 +1159,16 @@ function _adminAvailableYears(){
   return arr;
 }
 
-// Construit le rapport complet pour une année civile (string "2026").
-function computeAdminReport(year){
+// Construit le rapport complet pour une PÉRIODE (startDate/endDate, "YYYY-MM-DD").
+// Rétrocompat : computeAdminReport("2026") — un seul argument 4 chiffres — reste
+// équivalent à l'année civile complète (tous les appels existants : renderAdmin,
+// printAdminReport, scripts console déjà utilisés par l'utilisateur).
+function computeAdminReport(startDate,endDate){
+  if(endDate==null && /^\d{4}$/.test(String(startDate))){
+    var yr=String(startDate);
+    startDate=yr+'-01-01'; endDate=yr+'-12-31';
+  }
+  var year=startDate.substring(0,4)+(endDate.substring(0,4)!==startDate.substring(0,4)?'–'+endDate.substring(0,4):'');
   // [07/08/2026] Exclusion des factures PRÉ-FACTURÉES (numéro réservé à
   // l'acceptation du devis pour verrouiller la séquence, mais chantier pas
   // commencé/fini — PAS une vente réelle, cf isPrebilled()/PHASES{} : phases
@@ -1142,10 +1177,11 @@ function computeAdminReport(year){
   // factures qui n'ont jamais été réellement émises au client. On réutilise
   // la MÊME fonction que le Pipeline Encaissement (Suivi Factures) pour que
   // l'export reste cohérent avec ce qui est déjà affiché à l'écran ailleurs.
+  var inRange=function(d){ d=String(d||''); return d && d>=startDate && d<=endDate; };
   var factures=(DB.factures||[]).filter(function(f){
-    return _adminYearOf(f.date)===year && !(typeof isPrebilled==='function' && isPrebilled(f));
+    return inRange(f.date) && !(typeof isPrebilled==='function' && isPrebilled(f));
   });
-  var avoirs=(DB.avoirs||[]).filter(function(a){return _adminYearOf(a.date)===year;});
+  var avoirs=(DB.avoirs||[]).filter(function(a){return inRange(a.date);});
 
   var caHT=0, caTTC=0;
   var monthlyHT=[0,0,0,0,0,0,0,0,0,0,0,0];
@@ -1198,10 +1234,10 @@ function computeAdminReport(year){
   var tgcTotal=Object.keys(tgcByRate).reduce(function(s,k){return s+tgcByRate[k].tgc;},0);
 
   // Masse salariale brute, hors salariés marqués "Dirigeant" — agrégat pointage
-  // sur l'année civile complète (opts.site omis = tous sites/clients confondus).
+  // sur la période demandée (opts.site omis = tous sites/clients confondus).
   var masse={total:0,heuresNormales:0,heuresMajorees:0,byEmp:[],dirigeantsExclus:[]};
   if(typeof ptAggregatePeriod==='function'){
-    var agg=ptAggregatePeriod(year+'-01-01', year+'-12-31', {});
+    var agg=ptAggregatePeriod(startDate, endDate, {});
     (DB.employes||[]).forEach(function(e){
       var h=(agg.byEmp&&agg.byEmp[e.id])||null;
       if(!h) return;
@@ -1216,7 +1252,7 @@ function computeAdminReport(year){
     });
   }
 
-  return {year:year,factures:factures,avoirs:avoirs,caHT:caHT,caTTC:caTTC,
+  return {year:year,startDate:startDate,endDate:endDate,factures:factures,avoirs:avoirs,caHT:caHT,caTTC:caTTC,
     monthlyHT:monthlyHT,byClient:byClient,byClientPrefix:byClientPrefix,tgcByRate:tgcByRate,tgcTotal:tgcTotal,masse:masse};
 }
 
@@ -1438,6 +1474,7 @@ function renderAdmin(){
   window._adminLastReport=r; // réutilisé par printAdminReport() pour rester cohérent (pas de recalcul divergent)
   var body=document.getElementById('adminBody');
   if(body) body.innerHTML=_adminReportHtml(r,true,_adminClientMode==='prefix');
+  if(typeof admExpSetPreset==='function') admExpSetPreset(admExpState.preset);
 }
 
 // Export PDF : nouvelle fenêtre dédiée (pas le pipeline .doc des devis/factures,
@@ -1462,6 +1499,175 @@ function printAdminReport(){
   w.document.close();
   w.focus();
   setTimeout(function(){ w.print(); w.close(); }, 400);
+}
+
+// ============================================================================
+// EXPORT PAR PÉRIODE — synthèse + factures signées archivées fusionnées en UN
+// SEUL PDF téléchargé directement (pas d'étape "imprimer puis enregistrer").
+// html2pdf (déjà utilisé pour les BC) rend la synthèse en PDF ; pdf-lib fusionne
+// avec les PDF de factures archivés (IndexedDB, cf. renderFaPdfArchiveBlock).
+// ============================================================================
+var admExpState={preset:'year'};
+
+function admExpSetPreset(preset){
+  admExpState.preset=preset;
+  document.querySelectorAll('#admExpPresetTg .admexp-preset-btn').forEach(function(b){
+    var active=b.dataset.preset===preset;
+    b.style.background=active?'#3987e5':'transparent';
+    b.style.color=active?'#fff':'var(--muted)';
+  });
+  var qSel=document.getElementById('admExpQuarter');
+  var dWrap=document.getElementById('admExpDatesWrap');
+  if(qSel) qSel.style.display=preset==='quarter'?'':'none';
+  if(dWrap) dWrap.style.display=preset==='custom'?'inline-flex':'none';
+  if(preset==='custom'){
+    var sEl=document.getElementById('admExpStart'), eEl=document.getElementById('admExpEnd');
+    var yr=(document.getElementById('admin-year')||{}).value||String(new Date().getFullYear());
+    if(sEl && !sEl.value) sEl.value=yr+'-01-01';
+    if(eEl && !eEl.value) eEl.value=yr+'-12-31';
+  }
+  admExpRecompute();
+}
+
+function admExpGetRange(){
+  var yr=(document.getElementById('admin-year')||{}).value||String(new Date().getFullYear());
+  var pad=function(n){return String(n).length<2?'0'+n:String(n);};
+  if(admExpState.preset==='quarter'){
+    var q=Number((document.getElementById('admExpQuarter')||{}).value)||1;
+    var startMonth=(q-1)*3+1, endMonth=startMonth+2;
+    var lastDay=new Date(Number(yr),endMonth,0).getDate();
+    return {start:yr+'-'+pad(startMonth)+'-01', end:yr+'-'+pad(endMonth)+'-'+pad(lastDay)};
+  }
+  if(admExpState.preset==='custom'){
+    var s=(document.getElementById('admExpStart')||{}).value;
+    var e=(document.getElementById('admExpEnd')||{}).value;
+    if(s && e) return {start:s, end:e};
+  }
+  return {start:yr+'-01-01', end:yr+'-12-31'};
+}
+
+// Vérifie, pour toutes les factures de la période, lesquelles ont un PDF archivé
+// — état de couverture toujours visible, jamais bloquant, jamais silencieux.
+function admExpRecompute(){
+  var wrap=document.getElementById('admExpCoverage');
+  if(!wrap)return;
+  var range=admExpGetRange();
+  var r=computeAdminReport(range.start,range.end);
+  var factures=r.factures;
+  if(!factures.length){
+    wrap.innerHTML='<span style="color:var(--muted-soft)">Aucune facture sur cette période.</span>';
+    return;
+  }
+  wrap.innerHTML='<span style="color:var(--muted-soft)">Vérification des archives…</span>';
+  Promise.all(factures.map(function(f){
+    return _getFacturePdfRecord(f.id).then(function(rec){return {f:f, has:!!rec};});
+  })).then(function(results){
+    if(!wrap)return;
+    var missing=results.filter(function(x){return !x.has;}).map(function(x){return x.f.num;});
+    var n=factures.length;
+    if(!missing.length){
+      wrap.innerHTML='<div style="background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.35);border-radius:8px;padding:9px 12px;color:#34d399">✓ '+n+' facture(s) sur la période, toutes archivées — le PDF fusionné sera complet.</div>';
+    } else {
+      wrap.innerHTML='<div style="background:rgba(240,180,41,.1);border:1px solid rgba(240,180,41,.35);border-radius:8px;padding:9px 12px;color:#f0b429">⚠ '+missing.length+' facture(s) sur '+n+' sans PDF archivé : '+missing.map(esc).join(', ')+'. Comptées dans la synthèse mais absentes du PDF fusionné.</div>';
+    }
+  });
+}
+
+// Rend la synthèse HTML en PDF (ArrayBuffer, sans téléchargement) via html2pdf/jsPDF.
+function _renderSynthesisToPdfBytes(r){
+  return new Promise(function(resolve,reject){
+    var css='@page{size:A4 portrait;margin:14mm 12mm;}'+
+      'body{font-family:Calibri,Arial,sans-serif;margin:0;padding:0;color:#111;background:#fff;font-size:11px;'+
+      '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
+      'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'+
+      'h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
+      '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
+      '.hd .sub{font-size:11px;color:#555}';
+    var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
+        '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
+        '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
+      _adminReportHtml(r,false,true);
+    var host=document.createElement('div');
+    host.style.position='absolute';host.style.left='-99999px';host.style.top='0';host.style.width='794px';
+    var styleEl=document.createElement('style'); styleEl.textContent=css;
+    host.appendChild(styleEl);
+    var inner=document.createElement('div'); inner.innerHTML=html;
+    host.appendChild(inner);
+    document.body.appendChild(host);
+    html2pdf().set({margin:0,filename:'synthese.pdf',html2canvas:{scale:2,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}})
+      .from(inner).toPdf().get('pdf').then(function(pdf){
+        var ab=pdf.output('arraybuffer');
+        if(host.parentNode) document.body.removeChild(host);
+        resolve(ab);
+      }).catch(function(err){
+        if(host.parentNode) document.body.removeChild(host);
+        reject(err);
+      });
+  });
+}
+
+// Fusionne une liste d'entrées (ArrayBuffer ou Blob) en un seul PDF (pdf-lib).
+function _mergePdfBytesList(items){
+  if(typeof PDFLib==='undefined') return Promise.reject(new Error('pdf-lib non chargé'));
+  var toArrayBuffer=function(item){
+    if(item instanceof Blob) return item.arrayBuffer();
+    return Promise.resolve(item);
+  };
+  return Promise.all(items.map(toArrayBuffer)).then(function(buffers){
+    return PDFLib.PDFDocument.create().then(function(outDoc){
+      var chain=Promise.resolve();
+      buffers.forEach(function(buf){
+        chain=chain.then(function(){
+          return PDFLib.PDFDocument.load(buf).then(function(srcDoc){
+            return outDoc.copyPages(srcDoc, srcDoc.getPageIndices());
+          }).then(function(pages){
+            pages.forEach(function(p){outDoc.addPage(p);});
+          });
+        });
+      });
+      return chain.then(function(){return outDoc.save();});
+    });
+  });
+}
+
+// Bouton principal : synthèse (période choisie) + factures archivées trouvées,
+// fusionnées et téléchargées en 1 seul fichier. Rien de silencieux : le nombre
+// de factures couvertes/manquantes est toujours annoncé à la fin.
+function printAdminReportPeriod(){
+  var btn=document.getElementById('admExpGoBtn');
+  var range=admExpGetRange();
+  if(!range.start||!range.end||range.start>range.end){alert('Période invalide.');return;}
+  if(btn){btn.disabled=true;btn.textContent='⏳ Génération…';}
+  var r=computeAdminReport(range.start,range.end);
+  window._adminLastReport=r;
+
+  _renderSynthesisToPdfBytes(r).then(function(synthesisBytes){
+    return Promise.all(r.factures.map(function(f){
+      return _getFacturePdfRecord(f.id).then(function(rec){return {f:f, rec:rec};});
+    })).then(function(results){
+      var found=results.filter(function(x){return x.rec;});
+      var missing=results.filter(function(x){return !x.rec;}).map(function(x){return x.f.num;});
+      return _mergePdfBytesList([synthesisBytes].concat(found.map(function(x){return x.rec.blob;}))).then(function(mergedBytes){
+        return {mergedBytes:mergedBytes, missing:missing, count:found.length, total:r.factures.length};
+      });
+    });
+  }).then(function(res){
+    var blob=new Blob([res.mergedBytes],{type:'application/pdf'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    var fname='CALINSTRUM Administratif '+range.start+'_au_'+range.end+'.pdf';
+    a.href=url; a.download=fname;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},30000);
+    if(btn){btn.disabled=false;btn.textContent='⬇ Générer le PDF pour la période';}
+    var msg='✓ PDF généré : '+res.count+'/'+res.total+' facture(s) archivée(s) incluse(s).';
+    if(res.missing.length) msg+=' Manquantes : '+res.missing.join(', ')+'.';
+    if(typeof showBCSaveToast==='function') showBCSaveToast(msg); else alert(msg);
+  }).catch(function(err){
+    console.error('[admin-export-periode] échec :',err);
+    if(btn){btn.disabled=false;btn.textContent='⬇ Générer le PDF pour la période';}
+    alert('Erreur lors de la génération du PDF :\n'+(err.message||err));
+  });
 }
 </script>
 
