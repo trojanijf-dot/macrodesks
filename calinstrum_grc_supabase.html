@@ -1808,7 +1808,11 @@ function _adminBuildPreviewHtml(r){
     '#prvBody .admHd .sub{font-size:11px;color:#555}'+
   '</style>';
   _adminPdfChartJobs=[]; // reset : _adminReportHtml() va les re-empiler ci-dessous
-  return css+'<div style="background:#fff;color:#111;padding:4px">'+
+  // id dédié : _adminConfirmExportFromPreview() capture SEULEMENT ce bloc en
+  // PDF (html2pdf) — les factures archivées, ajoutées à la suite en <iframe>
+  // par printAdminReportPeriod(), sont fusionnées séparément via pdf-lib
+  // (leurs octets réels, pas une recapture visuelle de l'iframe).
+  return css+'<div id="adminSynthesisOnly" style="background:#fff;color:#111;padding:4px">'+
     '<div class="admHd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
@@ -1854,6 +1858,51 @@ function printAdminReportPeriod(){
   var html=_adminBuildPreviewHtml(r);
   showPrv('Export Administratif '+range.start+'_au_'+range.end, html);
   _adminDrawChartJobs(); // les <canvas> existent maintenant dans #prvBody (visible) : on les dessine
+  _adminAppendArchivedInvoicesToPreview(r);
+}
+
+// Ajoute, À LA SUITE de la synthèse dans l'aperçu, une <iframe> par facture
+// archivée trouvée (PDF réel, octets d'origine) — pour que l'utilisateur voie
+// EXACTEMENT ce qui sera dans le fichier final avant de télécharger. Les
+// factures sans PDF archivé affichent un bandeau d'avertissement à leur place
+// dans la séquence (jamais silencieux). Asynchrone : s'ajoute après le rendu
+// initial de la synthèse (déjà visible pendant le chargement).
+function _adminAppendArchivedInvoicesToPreview(r){
+  var body=document.getElementById('prvBody');
+  if(!body) return;
+  // Nettoie les <iframe> d'un aperçu précédent + révoque leurs URL blob (fuite mémoire sinon)
+  (window._adminPreviewBlobUrls||[]).forEach(function(u){URL.revokeObjectURL(u);});
+  window._adminPreviewBlobUrls=[];
+  var oldWrap=document.getElementById('adminInvoicesPreviewWrap');
+  if(oldWrap) oldWrap.remove();
+
+  var wrap=document.createElement('div');
+  wrap.id='adminInvoicesPreviewWrap';
+  wrap.innerHTML='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 4px 14px">Factures archivées (ordre chronologique)</div>';
+  body.appendChild(wrap);
+
+  // r.detail est déjà trié par date — on ne montre que les FACTURES (pas les
+  // avoirs, non archivables pour l'instant), dans le même ordre que le tableau.
+  var facturesOnly=r.detail.filter(function(d){return !d.isAvoir;});
+  facturesOnly.reduce(function(chain,d){
+    return chain.then(function(){
+      var f=r.factures.find(function(x){return x.num===d.num;});
+      if(!f) return;
+      return _getFacturePdfRecord(f.id).then(function(rec){
+        var item=document.createElement('div');
+        item.style.margin='0 4px 16px';
+        if(rec&&rec.blob){
+          var url=URL.createObjectURL(rec.blob);
+          window._adminPreviewBlobUrls.push(url);
+          item.innerHTML='<div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+esc(f.num)+' — '+esc(rec.filename||'')+'</div>'+
+            '<iframe src="'+url+'" style="width:100%;height:1000px;border:1px solid var(--border);border-radius:6px;background:#fff"></iframe>';
+        } else {
+          item.innerHTML='<div style="background:rgba(240,180,41,.1);border:1px solid rgba(240,180,41,.35);border-radius:8px;padding:10px 14px;color:#f0b429;font-size:12px">⚠ '+esc(f.num)+' — aucun PDF archivé, absente du fichier final.</div>';
+        }
+        wrap.appendChild(item);
+      });
+    });
+  }, Promise.resolve());
 }
 
 // Déclenché par le bouton "🖨️ Imprimer / PDF" de l'aperçu quand celui-ci montre
@@ -1862,7 +1911,10 @@ function printAdminReportPeriod(){
 // l'utilisateur), le fusionne avec les factures archivées trouvées, télécharge.
 // Rien de silencieux : le nombre de factures couvertes/manquantes est toujours annoncé.
 function _adminConfirmExportFromPreview(){
-  var src=document.getElementById('prvBody');
+  // Capture UNIQUEMENT la synthèse (#adminSynthesisOnly) — pas les <iframe>
+  // de factures ajoutées à la suite par _adminAppendArchivedInvoicesToPreview :
+  // celles-ci sont fusionnées séparément via pdf-lib avec leurs octets réels.
+  var src=document.getElementById('adminSynthesisOnly');
   var r=window._adminLastReport, range=window._adminExportRange;
   if(!src||!r||!range){alert('Aperçu invalide — régénère le PDF depuis l\'écran Administratif.');return;}
   var btn=document.querySelector('#mPRV .modal-footer .btn-teal');
