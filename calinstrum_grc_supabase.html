@@ -1111,7 +1111,10 @@ body.has-dashboard-bg #page-dashboard .metric{
         du <input type="date" class="form-input" id="admExpStart" style="width:150px" onchange="admExpRecompute()">
         au <input type="date" class="form-input" id="admExpEnd" style="width:150px" onchange="admExpRecompute()">
       </span>
-      <button class="btn btn-teal" style="margin-left:auto" onclick="printAdminReportPeriod()" id="admExpGoBtn">⬇ Générer le PDF pour la période</button>
+      <span style="margin-left:auto;display:inline-flex;gap:8px">
+        <button class="btn btn-ghost" onclick="printAdminReportPeriod()" title="Imprime directement la synthèse seule, sans aperçu ni factures jointes">🖨 Synthèse seule</button>
+        <button class="btn btn-teal" onclick="admPreviewOpen()" id="admExpGoBtn" title="Aperçu papier avant impression : synthèse + factures signées archivées de la période, dans un seul document">👁 Aperçu avant impression</button>
+      </span>
     </div>
     <div id="admExpCoverage" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
   </div>
@@ -1347,12 +1350,21 @@ function _adminBarChartSVG(monthlyHT,clickable){
       : '';
     var title=(clickable&&v)?('<title>'+fN(v)+' XPF</title>'):'';
     bars+='<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+Math.max(bh,1)+'" rx="3" fill="'+ADMIN_C1+'" opacity="'+(dim?0.35:1)+'"'+(isActive?' stroke="#fff" stroke-width="1.5"':'')+attrs+'>'+title+'</rect>';
+    // [11/08/2026] Montant affiché au-dessus de chaque barre (demande utilisateur) :
+    // en milliers de XPF pour rester lisible à cette largeur. Les barres montent au
+    // maximum à 100 px sous baseY=130, donc y>=30 — la place au-dessus est garantie.
+    if(v) bars+='<text x="'+(x+barW/2)+'" y="'+Math.max(9,y-4)+'" text-anchor="middle" font-size="8" font-weight="700" fill="var(--text,#e6edf3)" opacity="'+(dim?0.35:1)+'">'+fN(Math.round(v/1000))+'K</text>';
   });
+  var totYear=monthlyHT.reduce(function(s,v){return s+(Number(v)||0);},0);
   return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:140px">'+bars+
       '<line x1="0" y1="'+baseY+'" x2="'+w+'" y2="'+baseY+'" stroke="var(--border)" stroke-width="1"></line>'+
     '</svg>'+
     '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted-soft);padding:0 4px">'+
       months.map(function(m){return '<span>'+m+'</span>';}).join('')+
+    '</div>'+
+    '<div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10.5px">'+
+      '<span style="color:var(--muted)">Total période</span>'+
+      '<span style="font-weight:800;color:'+ADMIN_C1+'">'+fN(totYear)+' XPF HT</span>'+
     '</div>';
 }
 
@@ -1530,13 +1542,13 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
         '</span>'):'')+
       '</h3>'+
       (staticTables?_adminCanvasDonutHTML('pdfDonutClient','pdfLegendClient'):(
-        (clientTotal?_adminDonutSVG(clientSegs, (Math.round(clientTotal/1000))+'K','XPF HT',includeScope?'client':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
+        (clientTotal?_adminDonutSVG(clientSegs, fN(Math.round(clientTotal/1000))+'K','XPF HT',includeScope?'client':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
         _adminLegendHtml(clientSegs,clientTotal,includeScope?'client':null)
       ))+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">TGC collectée par taux</h3>'+
       (staticTables?_adminCanvasDonutHTML('pdfDonutTgc','pdfLegendTgc'):(
-        (tgcSegTotal?_adminDonutSVG(tgcSegs, (Math.round(tgcSegTotal/1000))+'K','XPF TGC',includeScope?'taux':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
+        (tgcSegTotal?_adminDonutSVG(tgcSegs, fN(Math.round(tgcSegTotal/1000))+'K','XPF TGC',includeScope?'taux':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
         _adminLegendHtml(tgcSegs,tgcSegTotal,includeScope?'taux':null)
       ))+'</div>'+
   '</div>';
@@ -1831,6 +1843,209 @@ function printAdminReportPeriod(){
   w.document.close();
   w.focus();
   setTimeout(function(){ w.print(); }, 400);
+}
+
+// ============================================================================
+// APERÇU AVANT IMPRESSION + FACTURES COMPILÉES (11/08/2026)
+// ============================================================================
+// Trois exigences : (1) montants visibles sur le graphe mensuel, (2) un aperçu
+// papier AVANT la boîte d'impression, (3) une impression unique contenant la
+// synthèse ET les factures signées archivées.
+//
+// Choix technique — pourquoi ça ne rejoue PAS l'échec html2pdf/html2canvas :
+//   * La synthèse reste rendue en HTML/SVG natif et imprimée par window.print()
+//     dans une fenêtre isolée : exactement la méthode qui marchait déjà. Aucun
+//     html2canvas, donc aucun des bugs de couleur/décalage constatés.
+//   * Les factures archivées sont des PDF : impossible à imprimer via un
+//     <iframe> (Chrome ne les rend pas). On les rastérise page par page avec
+//     PDF.JS (bibliothèque déjà utilisée partout dans le GRC pour lire des PDF,
+//     fiable ici — ce n'est PAS html2canvas, qui échouait à photographier du
+//     DOM) puis on les insère comme <img>. Le moteur d'impression natif fait
+//     alors un seul document continu.
+// Le paquet {synthèse + images} est construit UNE fois, affiché dans l'aperçu
+// et réutilisé tel quel à l'impression : ce qu'on voit est ce qui sort.
+var _admPrvState={sig:'',pages:[],facs:[],synth:'',busy:false};
+
+function _admPrvSig(range){ return range.start+'|'+range.end; }
+
+// En-tête + corps de la synthèse (identiques à printAdminReportPeriod).
+function _admPrvSynthHtml(r){
+  return '<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
+      '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
+      '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
+    _adminReportHtml(r,false,false); // SVG natif, jamais staticTables/canvas
+}
+
+// Bloc "factures jointes" : intercalaire + une <img> par page de PDF archivé.
+// forPrint=true ajoute les sauts de page (une page PDF = une page papier).
+function _admPrvFacturesHtml(forPrint){
+  var pages=_admPrvState.pages;
+  if(!pages.length) return '';
+  var br=forPrint?'page-break-before:always;break-before:page;':'';
+  var h='<div class="fsep" style="'+br+'">Factures signées archivées — '+
+    _admPrvState.facs.length+' facture(s), '+pages.length+' page(s)</div>'+
+    '<div style="font-size:10.5px;color:#64748b;margin-bottom:6px">'+
+      _admPrvState.facs.map(function(f){return esc(f.num);}).join(' · ')+'</div>';
+  pages.forEach(function(p){
+    h+='<div style="'+br+'">'+
+      '<div class="fcap">'+esc(p.num)+' — '+esc(p.client||'')+' · page '+p.page+'/'+p.total+'</div>'+
+      '<img class="fpage" src="'+p.url+'" alt="'+esc(p.num)+'">'+
+    '</div>';
+  });
+  return h;
+}
+
+function _admPrvRender(){
+  var paper=document.getElementById('admPrvPaper');
+  if(!paper) return;
+  var inc=document.getElementById('admPrvIncFa');
+  var withFa=inc?inc.checked:true;
+  paper.innerHTML=_admPrvState.synth+(withFa?_admPrvFacturesHtml(false):'');
+}
+
+function _admPrvSetState(txt){
+  var el=document.getElementById('admPrvFaState');
+  if(el) el.innerHTML=txt;
+}
+
+// Rastérisation séquentielle (une facture après l'autre) : borne la mémoire et
+// permet d'afficher une progression honnête. scale 2 ≈ 200 dpi sur A4, JPEG 0.82
+// — net à l'impression sans faire exploser la taille du document.
+function _admPrvRasterize(factures){
+  _admPrvState.pages=[]; _admPrvState.facs=[];
+  var missing=[];
+  var chain=loadPdfJs();
+  factures.forEach(function(f){
+    chain=chain.then(function(){
+      return _getFacturePdfRecord(f.id).then(function(rec){
+        if(!rec||!rec.blob){ missing.push(f.num); return null; }
+        return rec.blob.arrayBuffer().then(function(buf){
+          var bytes=new Uint8Array(buf);
+          // bytes.slice(0) obligatoire : pdf.js détache le buffer source.
+          return pdfjsLib.getDocument({data:bytes.slice(0)}).promise.then(function(pdf){
+            _admPrvState.facs.push({num:f.num,client:f.client});
+            var seq=Promise.resolve();
+            for(var i=1;i<=pdf.numPages;i++){
+              (function(pageNo,total){
+                seq=seq.then(function(){
+                  return pdf.getPage(pageNo).then(function(page){
+                    var vp=page.getViewport({scale:2});
+                    var cv=document.createElement('canvas');
+                    cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
+                    var ctx=cv.getContext('2d');
+                    ctx.fillStyle='#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+                    // intent:'print' — PAS cosmétique : en rendu écran, pdf.js
+                    // enchaîne ses passes via requestAnimationFrame, qui ne se
+                    // déclenche PAS si l'onglet passe en arrière-plan. La
+                    // rastérisation restait alors bloquée indéfiniment (vérifié
+                    // en test réel, 11/08/2026). En 'print' pdf.js boucle sans
+                    // rAF : on peut changer d'onglet pendant la lecture d'un
+                    // gros trimestre sans que ça se fige.
+                    return page.render({canvasContext:ctx,viewport:vp,intent:'print'}).promise.then(function(){
+                      _admPrvState.pages.push({num:f.num,client:f.client,page:pageNo,
+                        total:total,url:cv.toDataURL('image/jpeg',0.82)});
+                      _admPrvSetState('— lecture '+_admPrvState.pages.length+' page(s)…');
+                    });
+                  });
+                });
+              })(i,pdf.numPages);
+            }
+            return seq;
+          });
+        });
+      }).catch(function(e){ missing.push(f.num); console.warn('[admin-preview] '+f.num,e); });
+    });
+  });
+  return chain.then(function(){ return missing; });
+}
+
+function admPreviewOpen(){
+  var range=admExpGetRange();
+  if(!range.start||!range.end||range.start>range.end){alert('Période invalide.');return;}
+  var r=computeAdminReport(range.start,range.end);
+  window._adminLastReport=r;
+  _admPrvState.synth=_admPrvSynthHtml(r);
+  var t=document.getElementById('admPrvTitle');
+  if(t) t.textContent='Aperçu avant impression — '+fD(r.startDate)+' au '+fD(r.endDate);
+  om('mADMPRV');
+  // Période inchangée depuis la dernière ouverture : on garde les pages déjà
+  // rastérisées (évite de relire tous les PDF à chaque aller-retour).
+  if(_admPrvState.sig===_admPrvSig(range) && _admPrvState.pages.length){
+    _admPrvRender();
+    _admPrvSetState('— '+_admPrvState.pages.length+' page(s) prêtes');
+    return;
+  }
+  _admPrvState.sig=_admPrvSig(range);
+  _admPrvState.pages=[]; _admPrvState.facs=[];
+  _admPrvRender();
+  admPreviewRefreshFactures();
+}
+
+function admPreviewRefreshFactures(){
+  var inc=document.getElementById('admPrvIncFa');
+  var btn=document.getElementById('admPrvPrintBtn');
+  var r=window._adminLastReport;
+  if(!r) return;
+  if(inc && !inc.checked){ _admPrvSetState('(synthèse seule)'); _admPrvRender(); return; }
+  if(_admPrvState.pages.length){ // déjà en mémoire
+    _admPrvSetState('— '+_admPrvState.pages.length+' page(s) prêtes');
+    _admPrvRender();
+    return;
+  }
+  var factures=(r.factures||[]).slice().sort(function(a,b){
+    return String(a.num||'')<String(b.num||'')?-1:1;
+  });
+  if(!factures.length){ _admPrvSetState('(aucune facture sur la période)'); return; }
+  if(_admPrvState.busy) return;
+  _admPrvState.busy=true;
+  if(btn){ btn.disabled=true; btn.style.opacity='.5'; }
+  _admPrvSetState('— lecture des PDF archivés…');
+  _admPrvRasterize(factures).then(function(missing){
+    _admPrvState.busy=false;
+    if(btn){ btn.disabled=false; btn.style.opacity=''; }
+    var msg='— '+_admPrvState.facs.length+'/'+factures.length+' facture(s), '+
+      _admPrvState.pages.length+' page(s)';
+    if(missing.length) msg+=' <span style="color:#f0b429">· sans archive : '+missing.map(esc).join(', ')+'</span>';
+    _admPrvSetState(msg);
+    _admPrvRender();
+  }).catch(function(e){
+    _admPrvState.busy=false;
+    if(btn){ btn.disabled=false; btn.style.opacity=''; }
+    _admPrvSetState('<span style="color:#f87171">— lecture impossible ('+esc(String(e&&e.message||e))+')</span>');
+  });
+}
+
+// Impression : fenêtre isolée (aucun CSS de l'app, donc aucun en-tête noir) —
+// même pattern éprouvé que printAdminReportPeriod, avec en plus les pages de
+// factures. On imprime EXACTEMENT le HTML de l'aperçu.
+function admPreviewPrint(){
+  if(_admPrvState.busy){alert('Lecture des factures archivées en cours — réessaie dans quelques secondes.');return;}
+  var r=window._adminLastReport;
+  if(!r){alert('Aperçu vide.');return;}
+  var inc=document.getElementById('admPrvIncFa');
+  var withFa=inc?inc.checked:true;
+  var w=window.open('','_blank','');
+  if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
+  var css='@page{size:A4 portrait;margin:14mm 12mm;}'+
+    'body{font-family:Calibri,Arial,sans-serif;margin:0;padding:0;color:#111;background:#fff;font-size:11px;'+
+    '--panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;--text:#111;--teal:#0f766e;}'+
+    'table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}'+
+    'h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
+    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
+    '.hd .sub{font-size:11px;color:#555}'+
+    '.fsep{border-top:2px solid #1e3a5f;padding-top:8px;font-size:12px;font-weight:800;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}'+
+    '.fcap{font-size:9px;color:#64748b;margin:0 0 3px}'+
+    // max-height garantit qu'une page de facture tient sur UNE page papier
+    // (A4 utile ≈ 269 mm ; on laisse la place à la légende).
+    '.fpage{display:block;max-width:100%;max-height:252mm;margin:0 auto}';
+  var html=_admPrvState.synth+(withFa?_admPrvFacturesHtml(true):'');
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Administratif '+
+    esc(r.year)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
+  w.document.close();
+  w.focus();
+  // Les <img> sont des data:URL (déjà décodées) mais on laisse le layout se
+  // stabiliser avant d'ouvrir la boîte d'impression.
+  setTimeout(function(){ w.print(); }, withFa&&_admPrvState.pages.length?900:400);
 }
 </script>
 
@@ -4047,6 +4262,50 @@ function printAdminReportPeriod(){
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mAIMP')">Annuler</button>
     <button class="btn btn-teal" id="aimp-confirm-btn" onclick="confirmACTImport()" disabled style="border-color:rgba(251,191,36,.5);color:#fbbf24;background:rgba(251,191,36,.1)">✓ Importer dans le devis</button>
+  </div>
+</div></div>
+
+<!-- APERÇU AVANT IMPRESSION — ADMINISTRATIF ==================================
+     Modale dédiée (PAS mPRV, réservée aux devis/factures/BC avec son tampon).
+     Le contenu affiché ici est EXACTEMENT la chaîne HTML envoyée à la fenêtre
+     d'impression : ce qu'on voit est ce qui sort. Le thème clair est posé en
+     variables CSS sur #admPrvPaper lui-même + overrides scopés (la règle
+     globale th{background:var(--bg3)} de l'app noircissait les en-têtes de
+     tableau — bug constaté le 11/08/2026, corrigé ici par spécificité). -->
+<style>
+#admPrvPaper{
+  --panel2:#f8fafc;--border:#e2e8f0;--muted:#64748b;--muted-soft:#94a3b8;
+  --text:#111;--teal:#0f766e;--bg:#ffffff;--bg3:#f1f5f9;--panel:#ffffff;
+  background:#fff;color:#111;font-family:Calibri,Arial,sans-serif;font-size:11px;
+  padding:16px 18px;border-radius:6px;box-shadow:0 2px 18px rgba(0,0,0,.45);
+}
+#admPrvPaper table{background:transparent}
+#admPrvPaper th{background:transparent!important;color:#64748b!important;border-radius:0}
+#admPrvPaper td{background:transparent!important;color:#111}
+#admPrvPaper h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}
+#admPrvPaper .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}
+#admPrvPaper .hd .sub{font-size:11px;color:#555}
+#admPrvPaper .fsep{margin:22px 0 12px;border-top:2px solid #1e3a5f;padding-top:8px;font-size:12px;font-weight:800;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px}
+#admPrvPaper .fcap{font-size:10px;color:#64748b;margin:14px 0 4px}
+#admPrvPaper .fpage{display:block;width:100%;border:1px solid #e2e8f0}
+</style>
+<div class="modal-overlay" id="mADMPRV">
+<div class="modal modal-lg" style="max-width:920px;display:flex;flex-direction:column;max-height:92vh">
+  <div class="modal-header">
+    <h3 id="admPrvTitle">Aperçu avant impression</h3>
+    <button class="modal-close" onclick="cm('mADMPRV')">✕</button>
+  </div>
+  <div class="modal-body" style="overflow:auto;background:#4b5563;padding:18px">
+    <div id="admPrvPaper"></div>
+  </div>
+  <div class="modal-footer no-print" style="flex-wrap:wrap;gap:10px">
+    <label style="display:inline-flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);cursor:pointer;margin-right:auto">
+      <input type="checkbox" id="admPrvIncFa" checked onchange="admPreviewRefreshFactures()">
+      Joindre les factures signées archivées
+      <span id="admPrvFaState" style="color:var(--muted-soft)"></span>
+    </label>
+    <button class="btn btn-ghost" onclick="cm('mADMPRV')">Fermer</button>
+    <button class="btn btn-teal" id="admPrvPrintBtn" onclick="admPreviewPrint()" title="Ouvre la boîte d'impression — choisir « Enregistrer en PDF » comme imprimante">🖨️ Imprimer / Enregistrer en PDF</button>
   </div>
 </div></div>
 
