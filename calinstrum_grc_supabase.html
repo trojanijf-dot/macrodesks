@@ -1356,6 +1356,80 @@ function _adminBarChartSVG(monthlyHT,clickable){
     '</div>';
 }
 
+// ---- Graphiques PDF rendus en <canvas> (html2canvas ne rasterise pas
+// fiablement le SVG dynamique — bug "graphiques vides" observé en test réel,
+// 11/08/2026). _adminReportHtml() (staticTables=true) pose des <canvas>
+// vides + empile une "job" de dessin ici ; _renderSynthesisToPdfBytes()
+// exécute _adminDrawChartJobs() APRÈS insertion dans le DOM, AVANT html2pdf.
+var _adminPdfChartJobs=[];
+function _adminCanvasBarHTML(canvasId){
+  return '<canvas id="'+canvasId+'" width="380" height="150" style="width:100%;height:150px"></canvas>';
+}
+function _adminCanvasDonutHTML(canvasId,legendId){
+  return '<canvas id="'+canvasId+'" width="150" height="150" style="width:100%;max-width:160px;display:block;margin:0 auto"></canvas>'+
+    '<div id="'+legendId+'" style="display:flex;flex-wrap:wrap;gap:6px 10px;margin-top:10px;font-size:9.5px"></div>';
+}
+function _adminDrawChartJobs(){
+  _adminPdfChartJobs.forEach(function(job){
+    if(job.type==='bar') _adminDrawBarCanvas(job.canvasId,job.monthlyHT);
+    else if(job.type==='donut') _adminDrawDonutCanvas(job.canvasId,job.legendId,job.segments,job.centerLabel,job.centerSub,job.unit);
+  });
+}
+function _adminDrawBarCanvas(canvasId,monthlyHT){
+  var cv=document.getElementById(canvasId); if(!cv) return;
+  var ctx=cv.getContext('2d'); var w=cv.width,h=cv.height;
+  var months=['J','F','M','A','M','J','J','A','S','O','N','D'];
+  var max=Math.max.apply(null, monthlyHT.map(function(v){return Math.abs(v);}).concat([1]));
+  var baseY=h-22, barW=22, gap=8;
+  ctx.clearRect(0,0,w,h);
+  monthlyHT.forEach(function(v,i){
+    var x=6+i*(barW+gap);
+    var bh=Math.round(Math.abs(v)/max*(baseY-24));
+    var y=baseY-bh;
+    if(v){
+      ctx.fillStyle=ADMIN_C1;
+      var r=3;
+      ctx.beginPath();
+      ctx.moveTo(x+r,y); ctx.arcTo(x+barW,y,x+barW,y+bh,r); ctx.arcTo(x+barW,y+bh,x,y+bh,r);
+      ctx.lineTo(x,y+bh); ctx.arcTo(x,y,x+r,y,r); ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#1e3a5f'; ctx.font='700 8px Calibri,Arial,sans-serif'; ctx.textAlign='center';
+      ctx.fillText(fN(Math.round(v/1000))+'K', x+barW/2, Math.max(9,y-3));
+    }
+    ctx.fillStyle='#94a3b8'; ctx.font='9px Calibri,Arial,sans-serif'; ctx.textAlign='center';
+    ctx.fillText(months[i], x+barW/2, h-6);
+  });
+  ctx.strokeStyle='#e2e8f0'; ctx.beginPath(); ctx.moveTo(0,baseY); ctx.lineTo(w,baseY); ctx.stroke();
+}
+function _adminDrawDonutCanvas(canvasId,legendId,segments,centerLabel,centerSub,unit){
+  var cv=document.getElementById(canvasId); if(!cv) return;
+  var ctx=cv.getContext('2d'); var w=cv.width,h=cv.height,cx=w/2,cy=h/2,r=46,lw=16;
+  var total=segments.reduce(function(s,x){return s+Math.abs(x.value);},0);
+  ctx.clearRect(0,0,w,h);
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,2*Math.PI); ctx.strokeStyle='#e2e8f0'; ctx.lineWidth=lw; ctx.stroke();
+  var start=-Math.PI/2;
+  segments.forEach(function(seg){
+    var v=Math.abs(seg.value);
+    if(!v||!total) return;
+    var frac=v/total;
+    var gapRad=frac>=0.999?0:0.025;
+    var end=start+frac*2*Math.PI-gapRad;
+    ctx.beginPath(); ctx.arc(cx,cy,r,start,Math.max(start,end));
+    ctx.strokeStyle=seg.color; ctx.lineWidth=lw; ctx.lineCap='butt'; ctx.stroke();
+    start+=frac*2*Math.PI;
+  });
+  ctx.fillStyle='#111'; ctx.font='800 12px Calibri,Arial,sans-serif'; ctx.textAlign='center';
+  ctx.fillText(centerLabel, cx, cy-1);
+  ctx.fillStyle='#64748b'; ctx.font='7px Calibri,Arial,sans-serif';
+  ctx.fillText(centerSub, cx, cy+11);
+  var legend=document.getElementById(legendId);
+  if(legend){
+    legend.innerHTML=segments.filter(function(s){return s.value;}).map(function(s){
+      var pct=total?Math.round(Math.abs(s.value)/total*100):0;
+      return '<div style="display:flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:2px;background:'+s.color+';flex-shrink:0;display:inline-block"></span>'+esc(s.label)+' — '+fN(Math.abs(s.value))+' '+unit+' ('+pct+'%)</div>';
+    }).join('');
+  }
+}
+
 // ---- Assemblage HTML (partagé écran + PDF) --------------------------------
 function _adminScopeBoxHtml(){
   return '<div style="background:var(--panel2,#161b24);border:1.5px solid rgba(96,165,250,.4);border-radius:10px;padding:14px 18px;margin-bottom:20px">'+
@@ -1381,31 +1455,6 @@ function _adminScopeBoxHtml(){
 // utile pour SOI dans le GRC (rappel du périmètre en travaillant), mais n'a
 // pas besoin d'être imprimé sur le PDF envoyé à l'expert-comptable (demande
 // explicite utilisateur, après avoir vu le rendu réel) — écran=true, PDF=false.
-// Tableau de repli pour les segments d'un donut/graphique — utilisé UNIQUEMENT
-// dans le PDF généré via html2pdf/html2canvas (staticTables=true), qui ne sait
-// pas rasteriser correctement le SVG dynamique (rendu vide observé en test réel,
-// 11/08/2026). L'écran garde les vrais donuts SVG cliquables (rendu navigateur
-// natif, aucun souci de rendu).
-function _adminMiniTableHtml(segments,total,unitLabel){
-  if(!total) return '<div style="text-align:center;color:var(--muted);padding:10px 0;font-size:11px">Aucune donnée</div>';
-  return '<table style="width:100%;border-collapse:collapse;font-size:11px">'+
-    segments.filter(function(s){return s.value;}).map(function(s){
-      var v=Math.abs(s.value), pct=Math.round(v/total*100);
-      return '<tr><td style="padding:3px 4px"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:'+s.color+';margin-right:5px;vertical-align:1px"></span>'+esc(s.label)+'</td>'+
-        '<td style="padding:3px 4px;text-align:right;white-space:nowrap">'+fN(v)+' '+esc(unitLabel||'')+'</td>'+
-        '<td style="padding:3px 4px;text-align:right;color:var(--muted-soft);width:38px">'+pct+'%</td></tr>';
-    }).join('')+
-  '</table>';
-}
-function _adminMonthlyTableHtml(monthlyHT){
-  var months=['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
-  var rows=monthlyHT.map(function(v,i){return {m:months[i],v:v};}).filter(function(x){return x.v;});
-  if(!rows.length) return '<div style="text-align:center;color:var(--muted);padding:10px 0;font-size:11px">Aucune donnée</div>';
-  return '<table style="width:100%;border-collapse:collapse;font-size:11px">'+
-    rows.map(function(x){return '<tr><td style="padding:3px 4px">'+x.m+'</td><td style="padding:3px 4px;text-align:right">'+fN(x.v)+' XPF</td></tr>';}).join('')+
-  '</table>';
-}
-
 // staticTables : true dans le PDF rendu via html2pdf (le SVG dynamique n'y est
 // pas fiable), false à l'écran ET dans l'ancien pipeline window.print() (rendu
 // navigateur natif, le SVG s'affiche très bien).
@@ -1457,11 +1506,21 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
       '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">'+r.masse.byEmp.length+' salarié(s)'+(r.masse.dirigeantsExclus.length?' — '+r.masse.dirigeantsExclus.length+' dirigeant(s) exclu(s)':'')+'</div></div>'):'')+
   '</div>';
 
-  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">'+(staticTables?'Répartitions':'Graphiques')+'</div>';
+  // [11/08/2026] Mode PDF (staticTables) : canvas dessinés APRÈS insertion DOM
+  // (cf _adminDrawChartJobs, appelé par _renderSynthesisToPdfBytes) — jamais de
+  // SVG dynamique dans ce mode (html2canvas ne le rasterise pas fiablement).
+  if(staticTables){
+    _adminPdfChartJobs.push({type:'bar', canvasId:'pdfBarChart', monthlyHT:r.monthlyHT});
+    _adminPdfChartJobs.push({type:'donut', canvasId:'pdfDonutClient', legendId:'pdfLegendClient',
+      segments:clientSegs, centerLabel:(Math.round(clientTotal/1000))+'K', centerSub:'XPF HT', unit:'XPF'});
+    _adminPdfChartJobs.push({type:'donut', canvasId:'pdfDonutTgc', legendId:'pdfLegendTgc',
+      segments:tgcSegs, centerLabel:(Math.round(tgcSegTotal/1000))+'K', centerSub:'XPF TGC', unit:'XPF'});
+  }
+  html+='<div style="font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);border-bottom:1px solid var(--border);padding-bottom:6px;margin:28px 0 14px">Graphiques</div>';
   html+='<div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:14px;margin-bottom:22px">'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">CA mensuel HT (XPF)</h3>'+
-      (staticTables?_adminMonthlyTableHtml(r.monthlyHT):_adminBarChartSVG(r.monthlyHT,includeScope))+'</div>'+
+      (staticTables?_adminCanvasBarHTML('pdfBarChart'):_adminBarChartSVG(r.monthlyHT,includeScope))+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:8px">'+
         '<span>CA par client'+(rest.length?' (top 5)':'')+'</span>'+
@@ -1470,13 +1529,13 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
           '<button type="button" onclick="_adminSetClientMode(\'detail\')" style="border:none;background:'+(!groupClientByPrefix?ADMIN_C1:'transparent')+';color:'+(!groupClientByPrefix?'#fff':'var(--muted)')+';font-size:9.5px;font-weight:700;padding:4px 8px;border-radius:6px;cursor:pointer;text-transform:none;letter-spacing:0">Clients internes</button>'+
         '</span>'):'')+
       '</h3>'+
-      (staticTables?_adminMiniTableHtml(clientSegs,clientTotal,'XPF'):(
+      (staticTables?_adminCanvasDonutHTML('pdfDonutClient','pdfLegendClient'):(
         (clientTotal?_adminDonutSVG(clientSegs, (Math.round(clientTotal/1000))+'K','XPF HT',includeScope?'client':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
         _adminLegendHtml(clientSegs,clientTotal,includeScope?'client':null)
       ))+'</div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:10px">TGC collectée par taux</h3>'+
-      (staticTables?_adminMiniTableHtml(tgcSegs,tgcSegTotal,'XPF'):(
+      (staticTables?_adminCanvasDonutHTML('pdfDonutTgc','pdfLegendTgc'):(
         (tgcSegTotal?_adminDonutSVG(tgcSegs, (Math.round(tgcSegTotal/1000))+'K','XPF TGC',includeScope?'taux':null):'<div style="text-align:center;color:var(--muted);padding:20px 0">Aucune donnée</div>')+
         _adminLegendHtml(tgcSegs,tgcSegTotal,includeScope?'taux':null)
       ))+'</div>'+
@@ -1734,10 +1793,11 @@ function _renderSynthesisToPdfBytes(r){
       'h1{font-size:18px;color:#1e3a5f;margin:0 0 4px}'+
       '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #1e3a5f;padding-bottom:8px;margin-bottom:16px}'+
       '.hd .sub{font-size:11px;color:#555}';
+    _adminPdfChartJobs=[]; // reset : _adminReportHtml() va les re-empiler ci-dessous
     var html='<div class="hd"><div><h1>CALINSTRUM SARL — Export Administratif '+esc(r.year)+'</h1>'+
         '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
         '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
-      _adminReportHtml(r,false,true,true); // staticTables=true : html2canvas ne rend pas fiablement le SVG dynamique
+      _adminReportHtml(r,false,true,true); // staticTables=true : graphiques en <canvas>, dessinés plus bas (html2canvas ne rend pas fiablement le SVG dynamique)
     var host=document.createElement('div');
     host.style.position='absolute';host.style.left='-99999px';host.style.top='0';host.style.width='794px';
     var styleEl=document.createElement('style'); styleEl.textContent=css;
@@ -1745,6 +1805,7 @@ function _renderSynthesisToPdfBytes(r){
     var inner=document.createElement('div'); inner.innerHTML=html;
     host.appendChild(inner);
     document.body.appendChild(host);
+    _adminDrawChartJobs(); // les <canvas> existent maintenant dans le DOM : on les dessine AVANT la capture html2canvas
     html2pdf().set({margin:0,filename:'synthese.pdf',html2canvas:{scale:2,useCORS:true},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}})
       .from(inner).toPdf().get('pdf').then(function(pdf){
         var ab=pdf.output('arraybuffer');
