@@ -159,6 +159,47 @@ tr.best td{background:rgba(93,202,165,.05)}
 .xarr{color:var(--faint)}
 .xfoot{font:500 11px/1.7 var(--mono);color:var(--muted-soft);margin-top:12px;border-top:.5px solid var(--border);padding-top:10px}
 .xfoot b{color:var(--muted)}
+
+/* --- portefeuille reel (journal prive, localStorage) --- */
+.pf-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:14px}
+.pf-kpi{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:13px 15px}
+.pf-kpi .l{font:600 9.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted-soft);margin-bottom:7px}
+.pf-kpi .v{font:650 21px/1 var(--mono)}
+.pf-kpi .s{font-size:11px;color:var(--muted-soft);margin-top:5px}
+.pf-viz{display:flex;gap:26px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.pf-donutbox{position:relative;width:150px;height:150px;flex:0 0 auto}
+.pf-donutbox svg{width:150px;height:150px;transform:rotate(-90deg)}
+.pf-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.pf-center b{font:650 16px var(--mono)}
+.pf-center span{font:500 9px var(--mono);color:var(--muted-soft)}
+.pf-legend{font:500 11.5px var(--mono);color:var(--muted);display:flex;flex-direction:column;gap:6px;min-width:185px}
+.pf-legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:8px}
+.pf-bars{flex:1;min-width:230px}
+.pf-bars .h{font:600 9.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted-soft);margin-bottom:10px}
+.pf-brow{display:flex;align-items:center;gap:9px;font:500 11px var(--mono);margin-bottom:8px}
+.pf-brow .sym{width:38px}
+.pf-btrack{flex:1;height:7px;background:var(--bg4);border-radius:4px;overflow:hidden;display:flex}
+.pf-btrack i{display:block;height:100%}
+.pf-brow .pc{width:56px;text-align:right}
+.pf-wbar{width:54px;height:5px;border-radius:3px;background:var(--bg4);overflow:hidden;display:inline-block;vertical-align:middle;margin-right:7px}
+.pf-wbar i{display:block;height:100%;background:var(--cyan)}
+.pf-form{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:12px 14px;margin-top:4px}
+.pf-f{display:flex;flex-direction:column;gap:4px}
+.pf-f label{font:600 9px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--muted-soft)}
+.pf-f input,.pf-f select{background:var(--bg1);border:1px solid var(--border-2);border-radius:6px;color:var(--text);font:500 12px var(--mono);padding:7px 9px;width:112px}
+.pf-f.sm input{width:86px}
+.pf-btn{background:rgba(93,202,165,.14);color:var(--green);border:1px solid rgba(93,202,165,.35);border-radius:7px;font:600 11.5px var(--mono);padding:9px 16px;cursor:pointer}
+.pf-btn.ghost{background:var(--bg4);color:var(--muted);border-color:var(--border-2)}
+.pf-txrow{display:flex;gap:10px;align-items:center;font:500 11.5px var(--mono);color:var(--muted);padding:7px 4px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.pf-txrow .del{margin-left:auto;color:var(--faint);cursor:pointer;padding:2px 7px}
+.pf-txrow .del:hover{color:var(--red)}
+.pf-pill{font:600 9px/1 var(--mono);padding:4px 7px;border-radius:4px}
+.pf-pill.buy{background:rgba(93,202,165,.13);color:var(--green)}
+.pf-pill.sell{background:rgba(240,149,149,.12);color:var(--red)}
+.pf-pill.div{background:rgba(136,170,224,.12);color:var(--blue)}
+.pf-pill.cash{background:rgba(239,159,39,.12);color:var(--amber)}
+.pf-empty{font:500 12px/1.7 var(--mono);color:var(--muted-soft);background:var(--bg3);border:1px dashed var(--border-2);border-radius:9px;padding:16px 18px;text-align:center}
+.pf-warn{display:none;font:500 11px/1.6 var(--mono);color:var(--amber);margin-top:8px}
 </style>
 </head>
 <body>
@@ -364,6 +405,264 @@ tr.best td{background:rgba(93,202,165,.05)}
       ?'saison détectée : <b>été US</b> — après le 1<sup>er</sup> novembre tout décale d\'une heure, la frise suivra automatiquement'
       :'saison détectée : <b>hiver US</b> — à partir de mars tout avance d\'une heure, la frise suivra automatiquement';
   }catch(e){}
+})();
+</script>
+
+<div class="secdiv"><span class="t"><i class="ti ti-wallet" style="color:var(--green)"></i>Portefeuille réel — la poche robinet</span>
+<span class="tag" style="color:var(--green);border-color:rgba(93,202,165,.35)">🔒 PRIVÉ · JAMAIS SUR GITHUB</span><span class="line"></span></div>
+
+<div class="card">
+  <h2>Vue d'ensemble <span class="tag">VALORISÉ SUR LE DERNIER COURS DU ROBINET</span></h2>
+  <div id="pf-empty" class="pf-empty">Aucune transaction enregistrée. Après ton premier ordre exécuté,
+  saisis-le ci-dessous — la vue se construit toute seule.</div>
+  <div id="pf-full" style="display:none">
+    <div class="pf-kpis" id="pf-kpis"></div>
+    <div class="pf-viz">
+      <div class="pf-donutbox">
+        <svg viewBox="0 0 120 120" id="pf-donut"></svg>
+        <div class="pf-center"><b id="pf-total">—</b><span>RÉPARTITION</span></div>
+      </div>
+      <div class="pf-legend" id="pf-legend"></div>
+      <div class="pf-bars"><div class="h">P&amp;L latent par ligne</div><div id="pf-bars"></div></div>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>ligne</th><th>parts</th><th>PRU</th><th>dernier</th><th>valeur</th><th>P&amp;L</th><th>P&amp;L %</th><th>poids réel</th><th>cible</th></tr></thead>
+      <tbody id="pf-tbody"></tbody>
+    </table></div>
+    <div class="pf-warn" id="pf-warn"></div>
+    <div class="xfoot">les poids convergent vers 1/13 ≈ 7,7 % au fil de la rotation — l'écart en démarrage est <b>normal</b>
+    · P&amp;L <b>sur les prix</b> : saisis les dividendes du relevé IBKR en « DIVIDENDE », sinon ils ne sont pas comptés</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Saisir une transaction <span class="tag">~30 SECONDES APRÈS CHAQUE ORDRE EXÉCUTÉ</span></h2>
+  <div class="pf-form">
+    <div class="pf-f"><label>date</label><input type="date" id="pf-d"></div>
+    <div class="pf-f"><label>ligne</label><select id="pf-t"></select></div>
+    <div class="pf-f"><label>sens</label><select id="pf-s">
+      <option value="BUY">ACHAT</option><option value="SELL">VENTE</option>
+      <option value="DIV">DIVIDENDE</option><option value="CASH">DÉPÔT CASH</option></select></div>
+    <div class="pf-f sm" id="pf-fq"><label>parts</label><input type="number" step="any" min="0" id="pf-q" placeholder="9,25"></div>
+    <div class="pf-f sm" id="pf-fp"><label>prix $</label><input type="number" step="any" min="0" id="pf-p" placeholder="108,11"></div>
+    <div class="pf-f sm" id="pf-ff"><label>frais $</label><input type="number" step="any" min="0" id="pf-f" value="0.35"></div>
+    <div class="pf-f sm" id="pf-fu" style="display:none"><label>montant $</label><input type="number" step="any" min="0" id="pf-u" placeholder="1000"></div>
+    <button class="pf-btn" id="pf-add">Ajouter</button>
+    <button class="pf-btn ghost" id="pf-export">Exporter le journal</button>
+    <button class="pf-btn ghost" id="pf-importbtn">Importer</button>
+    <input type="file" id="pf-import" accept=".json" style="display:none">
+  </div>
+  <div id="pf-txlist" style="margin-top:14px"></div>
+  <div class="xfoot"><b>stockage : ce navigateur uniquement</b> — jamais envoyé sur GitHub ni ailleurs
+  · Export = fichier JSON de sauvegarde sur ton disque, Import le restaure
+  · source de vérité en cas de doute : tes relevés IBKR</div>
+</div>
+
+<div class="card">
+  <h2>📖 Lexique <span class="tag">CHAQUE TERME, CONCRÈTEMENT</span></h2>
+  <div class="scroll"><table><tbody>
+  <tr><td class="k" style="width:110px">parts</td><td>le nombre d'unités de l'ETF que tu détiens. Avec les fractions ce n'est plus un entier : 1 000 $ d'EFA à 108,11 $ = <b>9,25 parts</b>. C'est la colonne « Position » de ton compte IBKR.</td></tr>
+  <tr><td class="k">PRU</td><td><b>P</b>rix de <b>R</b>evient <b>U</b>nitaire : ce que chaque part t'a coûté <b>en moyenne</b>, frais inclus. Racheter plus cher fait monter le PRU. Dernier cours au-dessus du PRU = plus-value.</td></tr>
+  <tr><td class="k">dernier</td><td>le dernier cours de clôture publié par le robinet — c'est lui qui valorise tes lignes, sans appel supplémentaire.</td></tr>
+  <tr><td class="k">valeur</td><td>parts × dernier cours = ce que vaut la ligne <b>aujourd'hui</b> si tu la vendais.</td></tr>
+  <tr><td class="k">P&amp;L</td><td>« Profit &amp; Loss » : valeur − coût. En $ et en % de l'investi. Tant que tu n'as pas vendu, c'est <b>latent</b> : ça bouge chaque jour, ce n'est ni un gain ni une perte réalisés.</td></tr>
+  <tr><td class="k">poids réel</td><td>la part de la ligne dans la poche totale, cash compris. Cible : 1/13 ≈ <b>7,7 %</b> par ligne — l'écart en début de rotation est normal et se referme versement après versement.</td></tr>
+  <tr><td class="k">DIV</td><td>dividende reçu en cash (IEF, TLT, HYG en versent chaque mois) — à recopier du relevé IBKR mensuel, sinon le P&amp;L les ignore.</td></tr>
+  <tr><td class="k">dépôt cash</td><td>l'argent que tu ajoutes à la poche (versement mensuel converti en USD). C'est lui qui distingue « la poche a monté » de « j'ai ajouté de l'argent ».</td></tr>
+  </tbody></table></div>
+</div>
+
+<script>
+(function(){
+  var KEY='mk_pf_journal';
+  var RAW='https://raw.githubusercontent.com/trojanijf-dot/macrodesks/main/data/robinet.json';
+  var NOM={SPY:'Actions US large',IWM:'Actions US small',QQQ:'Nasdaq 100',EFA:'Actions dév. hors US',
+    EEM:'Actions émergents',IEF:'UST 7-10 ans',TLT:'UST 20 ans +',LQD:'Crédit IG',HYG:'Crédit HY',
+    TIP:'TIPS',GLD:'Or',PDBC:'Matières premières',VNQ:'REIT US'};
+  var COL={SPY:'#88aae0',IWM:'#7fd6b2',QQQ:'#5aa9e6',EFA:'#4fc4d6',EEM:'#3f9d8a',IEF:'#c9b458',
+    TLT:'#ef9f27',LQD:'#d4a373',HYG:'#a78bfa',TIP:'#b48ead',GLD:'#f2c94c',PDBC:'#e58e5a',
+    VNQ:'#f095c0',CASH:'#46463f'};
+  var TICKERS=Object.keys(NOM);
+  var DERNIER={}, EXPOSES=null;
+
+  function load(){ try{ var j=JSON.parse(localStorage.getItem(KEY)||'null');
+    if(j&&j.v===1&&Array.isArray(j.tx))return j; }catch(e){} return {v:1,tx:[]}; }
+  function save(j){ localStorage.setItem(KEY,JSON.stringify(j)); }
+  function num(x){ var v=parseFloat(String(x).replace(',','.')); return isFinite(v)?v:0; }
+  function money(x){ var s=x<0?'−':''; x=Math.abs(x);
+    return s+(x>=100?Math.round(x).toLocaleString('fr-FR'):x.toFixed(2))+' $'; }
+  function pctf(x){ return (x>=0?'+':'−')+Math.abs(x*100).toFixed(1)+' %'; }
+  function esc(s){ return String(s).replace(/[<>&]/g,function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];}); }
+
+  // moteur : PRU moyen pondere, P&L realise sur les ventes, cash suivi
+  function compute(tx){
+    var pos={},cash=0,deposits=0,divs=0,realized=0,buys=0;
+    var list=tx.slice().sort(function(a,b){ return a.d<b.d?-1:a.d>b.d?1:0; });
+    for(var i=0;i<list.length;i++){ var x=list[i];
+      if(x.s==='CASH'){ deposits+=x.u; cash+=x.u; }
+      else if(x.s==='DIV'){ divs+=x.u; cash+=x.u; }
+      else if(x.s==='BUY'){ var c=x.q*x.p+x.f; buys+=c;
+        if(!pos[x.t])pos[x.t]={q:0,cost:0};
+        pos[x.t].q+=x.q; pos[x.t].cost+=c; cash-=c; }
+      else if(x.s==='SELL'){ var pp=pos[x.t];
+        if(pp&&pp.q>1e-9){ var pru=pp.cost/pp.q; var sold=Math.min(x.q,pp.q);
+          realized+=sold*(x.p-pru)-x.f; pp.cost-=sold*pru; pp.q-=sold;
+          cash+=sold*x.p-x.f; } }
+    }
+    return {pos:pos,cash:cash,deposits:deposits,divs:divs,realized:realized,buys:buys};
+  }
+
+  function render(){
+    var J=load(), st=compute(J.tx);
+    var empty=!J.tx.length;
+    document.getElementById('pf-empty').style.display=empty?'block':'none';
+    document.getElementById('pf-full').style.display=empty?'none':'block';
+    renderTx(J);
+    if(empty)return;
+
+    var lignes=[],valL=0,costL=0;
+    for(var t in st.pos){ var p=st.pos[t]; if(p.q<=1e-9)continue;
+      var d=DERNIER[t]||null;
+      var val=d?p.q*d:null; if(val)valL+=val; costL+=p.cost;
+      lignes.push({t:t,q:p.q,pru:p.cost/p.q,d:d,val:val,cost:p.cost,
+        pnl:val!==null?val-p.cost:null}); }
+    lignes.sort(function(a,b){ return (b.val||0)-(a.val||0); });
+
+    var cash=st.cash, total=valL+Math.max(cash,0);
+    var investi=st.deposits>0?st.deposits:costL;
+    var pl=st.deposits>0?(valL+cash-st.deposits)
+      :(valL-costL)+st.realized+st.divs;
+    var kp='<div class="pf-kpi"><div class="l">Valeur poche</div><div class="v">'+money(total)
+      +'</div><div class="s">'+lignes.length+' ligne'+(lignes.length>1?'s':'')+' + cash</div></div>'
+      +'<div class="pf-kpi"><div class="l">Investi (net)</div><div class="v">'+money(investi)
+      +'</div><div class="s">'+(st.deposits>0?'somme des dépôts':'coût des positions')+'</div></div>'
+      +'<div class="pf-kpi"><div class="l">P&amp;L</div><div class="v '+(pl>=0?'g':'r')+'">'+money(pl)
+      +'</div><div class="s '+(pl>=0?'g':'r')+'">'+(investi>0?pctf(pl/investi):'—')
+      +(st.realized||st.divs?'</div><div class="s">dont réalisé '+money(st.realized)+' · div '+money(st.divs):'')+'</div></div>'
+      +'<div class="pf-kpi"><div class="l">Cash USD</div><div class="v'+(cash<0?' a':'')+'">'+money(cash)+'</div><div class="s">solde du journal</div></div>';
+    if(EXPOSES!==null){ kp+='<div class="pf-kpi"><div class="l">Vs modèle</div><div class="v a">'
+      +lignes.length+'/'+EXPOSES+'</div><div class="s">lignes détenues / exposées</div></div>'; }
+    document.getElementById('pf-kpis').innerHTML=kp;
+
+    // donut
+    var C=2*Math.PI*45, off=0, svg='<circle cx="60" cy="60" r="45" fill="none" stroke="var(--bg4)" stroke-width="14"/>';
+    var parts=lignes.map(function(l){ return {t:l.t,v:l.val||0}; });
+    if(cash>0)parts.push({t:'CASH',v:cash});
+    for(var i=0;i<parts.length;i++){ var frac=total>0?parts[i].v/total:0; var seg=frac*C;
+      svg+='<circle cx="60" cy="60" r="45" fill="none" stroke="'+(COL[parts[i].t]||'#666')
+        +'" stroke-width="14" stroke-dasharray="'+seg.toFixed(1)+' '+(C-seg).toFixed(1)
+        +'" stroke-dashoffset="'+(-off).toFixed(1)+'"/>'; off+=seg; }
+    document.getElementById('pf-donut').innerHTML=svg;
+    document.getElementById('pf-total').textContent=money(total);
+    document.getElementById('pf-legend').innerHTML=parts.map(function(x){
+      var w=total>0?Math.round(x.v/total*100):0;
+      return '<span><i style="background:'+(COL[x.t]||'#666')+'"></i>'+x.t+' · '+w+' % · '+money(x.v)+'</span>'; }).join('');
+
+    // barres P&L
+    var mx=0; lignes.forEach(function(l){ if(l.pnl!==null&&l.cost>0)mx=Math.max(mx,Math.abs(l.pnl/l.cost)); });
+    document.getElementById('pf-bars').innerHTML=lignes.map(function(l){
+      if(l.pnl===null)return '';
+      var pc=l.cost>0?l.pnl/l.cost:0, w=Math.abs(pc)/Math.max(mx,0.02)*100, up=pc>=0;
+      return '<div class="pf-brow"><span class="sym">'+l.t+'</span>'
+        +'<div class="pf-btrack"><i style="width:'+w.toFixed(0)+'%;background:var(--'+(up?'green':'red')+')"></i></div>'
+        +'<span class="pc '+(up?'g':'r')+'">'+pctf(pc)+'</span></div>'; }).join('');
+
+    // tableau
+    document.getElementById('pf-tbody').innerHTML=lignes.map(function(l){
+      var w=total>0&&l.val?l.val/total:0;
+      return '<tr><td class="k">'+l.t+' · '+(NOM[l.t]||'')+'</td>'
+        +'<td>'+l.q.toFixed(2)+'</td><td>'+l.pru.toFixed(2)+'</td>'
+        +'<td>'+(l.d?l.d.toFixed(2):'—')+'</td><td>'+(l.val?money(l.val):'—')+'</td>'
+        +'<td class="'+(l.pnl>=0?'g':'r')+'">'+(l.pnl!==null?money(l.pnl):'—')+'</td>'
+        +'<td class="'+(l.pnl>=0?'g':'r')+'">'+(l.pnl!==null&&l.cost>0?pctf(l.pnl/l.cost):'—')+'</td>'
+        +'<td><span class="pf-wbar"><i style="width:'+Math.min(100,w*100/0.15*1).toFixed(0)+'%"></i></span>'+(w*100).toFixed(0)+' %</td>'
+        +'<td class="m" style="color:var(--muted-soft)">7,7 %</td></tr>'; }).join('')
+      +(cash>0?'<tr><td class="k" style="color:var(--muted-soft)">Cash USD</td><td>—</td><td>—</td><td>—</td>'
+        +'<td>'+money(cash)+'</td><td>—</td><td>—</td>'
+        +'<td><span class="pf-wbar"><i style="width:'+Math.min(100,cash/total*100/0.15).toFixed(0)+'%;background:var(--faint)"></i></span>'+(cash/total*100).toFixed(0)+' %</td>'
+        +'<td style="color:var(--muted-soft)">7,7 %</td></tr>':'');
+
+    var warn=document.getElementById('pf-warn');
+    if(cash<-0.01){ warn.style.display='block';
+      warn.textContent='⚠️ cash négatif : il manque probablement des lignes DÉPÔT CASH — saisis tes versements pour un suivi exact'; }
+    else warn.style.display='none';
+  }
+
+  function renderTx(J){
+    var el=document.getElementById('pf-txlist');
+    var lbl={BUY:['ACHAT','buy'],SELL:['VENTE','sell'],DIV:['DIV','div'],CASH:['DÉPÔT','cash']};
+    el.innerHTML=J.tx.slice().reverse().map(function(x,ri){
+      var i=J.tx.length-1-ri, L=lbl[x.s]||['?',''];
+      var det=x.s==='BUY'||x.s==='SELL'
+        ? '<b style="color:var(--text)">'+esc(x.t)+'</b> · '+x.q+' parts × '+x.p+' $'
+        : '<b style="color:var(--text)">'+(x.s==='CASH'?'CASH':esc(x.t))+'</b>';
+      return '<div class="pf-txrow"><span>'+esc(x.d)+'</span>'
+        +'<span class="pf-pill '+L[1]+'">'+L[0]+'</span><span>'+det+'</span>'
+        +'<span>'+money(x.u)+'</span>'
+        +'<span class="del" data-i="'+i+'" title="supprimer">✕</span></div>'; }).join('')
+      ||'<div class="pf-empty">journal vide</div>';
+    el.querySelectorAll('.del').forEach(function(b){ b.onclick=function(){
+      if(!confirm('Supprimer cette transaction ?'))return;
+      var J2=load(); J2.tx.splice(parseInt(b.dataset.i,10),1); save(J2); render(); }; });
+  }
+
+  // formulaire
+  var selT=document.getElementById('pf-t');
+  selT.innerHTML=TICKERS.map(function(t){ return '<option value="'+t+'">'+t+' — '+NOM[t]+'</option>'; }).join('');
+  document.getElementById('pf-d').value=new Date().toISOString().slice(0,10);
+  var selS=document.getElementById('pf-s');
+  function syncForm(){ var s=selS.value, qty=(s==='BUY'||s==='SELL');
+    document.getElementById('pf-fq').style.display=qty?'flex':'none';
+    document.getElementById('pf-fp').style.display=qty?'flex':'none';
+    document.getElementById('pf-ff').style.display=qty?'flex':'none';
+    document.getElementById('pf-fu').style.display=qty?'none':'flex';
+    selT.disabled=(s==='CASH'); }
+  selS.onchange=syncForm; syncForm();
+
+  document.getElementById('pf-add').onclick=function(){
+    var s=selS.value, d=document.getElementById('pf-d').value;
+    if(!d){ alert('Date manquante.'); return; }
+    var x={d:d,t:s==='CASH'?'CASH':selT.value,s:s,q:0,p:0,f:0,u:0};
+    if(s==='BUY'||s==='SELL'){
+      x.q=num(document.getElementById('pf-q').value);
+      x.p=num(document.getElementById('pf-p').value);
+      x.f=num(document.getElementById('pf-f').value);
+      if(x.q<=0||x.p<=0){ alert('Parts et prix doivent être positifs.'); return; }
+      x.u=x.s==='BUY'?x.q*x.p+x.f:x.q*x.p-x.f;
+    } else {
+      x.u=num(document.getElementById('pf-u').value);
+      if(x.u<=0){ alert('Montant manquant.'); return; }
+    }
+    var J=load(); J.tx.push(x); save(J); render();
+    document.getElementById('pf-q').value=''; document.getElementById('pf-p').value='';
+    document.getElementById('pf-u').value='';
+  };
+
+  document.getElementById('pf-export').onclick=function(){
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([localStorage.getItem(KEY)||'{"v":1,"tx":[]}'],{type:'application/json'}));
+    a.download='portefeuille_robinet_'+new Date().toISOString().slice(0,10)+'.json';
+    a.click(); URL.revokeObjectURL(a.href);
+  };
+  document.getElementById('pf-importbtn').onclick=function(){ document.getElementById('pf-import').click(); };
+  document.getElementById('pf-import').onchange=function(ev){
+    var f=ev.target.files[0]; if(!f)return;
+    var r=new FileReader();
+    r.onload=function(){ try{ var j=JSON.parse(r.result);
+        if(!j||j.v!==1||!Array.isArray(j.tx))throw new Error('format');
+        if(!confirm('Remplacer le journal actuel par le fichier importé ('+j.tx.length+' transactions) ?'))return;
+        save(j); render();
+      }catch(e){ alert('Fichier illisible — export attendu du même format.'); }
+      ev.target.value=''; };
+    r.readAsText(f);
+  };
+
+  // cours du robinet puis rendu
+  fetch(RAW+'?t='+Date.now()).then(function(r){ return r.json(); }).then(function(j){
+    (j.lignes||[]).forEach(function(l){ if(l.sym&&l.dernier)DERNIER[l.sym]=l.dernier; });
+    if(j.etats)EXPOSES=Object.keys(j.etats).filter(function(k){ return j.etats[k]===true; }).length;
+    render();
+  }).catch(function(){ render(); });
 })();
 </script>
 
