@@ -47062,9 +47062,13 @@ function _pgAuditPages(pdoc,titre){
       // concluait « aucun débordement ». On mesure donc sa hauteur RÉELLE :
       // la barre fait ~19px (padding 5px + police 9px) quand elle est saine.
       var barre=pg.querySelector('.doc-footer-bar');
-      var barreH=barre?Math.round(barre.getBoundingClientRect().height):0;
-      var piedEcrase=!!barre && barreH<12;
-      if(piedEcrase) rapport.piedsEcrases=(rapport.piedsEcrases||0)+1;
+      var barreH=barre?Math.round(barre.getBoundingClientRect().height*10)/10:0;
+      // Pas de seuil absolu : un seuil arbitraire (12px) laissait passer une
+      // barre a 14px alors que la saine fait 19px -- visiblement plus fine,
+      // test au vert. L'invariant JUSTE est l'UNIFORMITE : toutes les barres
+      // du document doivent avoir la meme hauteur. Verdict rendu apres la
+      // boucle, quand on connait la hauteur de reference (la plus grande).
+      var piedEcrase=false;
       // Un sous-total est attendu sur toute page qui porte des lignes et qui
       // n'est pas la dernière (la dernière porte le bloc final avec le total).
       var sousTotalAttendu=(!estDerniere && aLignes);
@@ -47077,14 +47081,25 @@ function _pgAuditPages(pdoc,titre){
         piedCoupe:piedCoupe,piedEcrase:piedEcrase,barrePx:barreH,
         lignes:pg.querySelectorAll('table.doc-tbl tbody tr').length});
     });
+    // --- UNIFORMITE DES BANDEAUX : toute barre plus fine que la plus haute
+    //     du document est un ecrasement, quel que soit son nombre de pixels.
+    var ref=0;
+    rapport.pages.forEach(function(x){ if(x.barrePx>ref) ref=x.barrePx; });
+    rapport.barreRefPx=ref;
+    rapport.piedsEcrases=0;
+    rapport.pages.forEach(function(x){
+      x.piedEcrase=(ref>0 && x.barrePx<ref-0.5);
+      if(x.piedEcrase){ rapport.piedsEcrases++; rapport.ok=false; }
+    });
+    rapport.barresPx=rapport.pages.map(function(x){return x.barrePx;}).join(' | ');
     try{ window._pgLastAudit=rapport; }catch(e){}
     if(rapport.ok){
-      console.log('[PAGINATION] OK — '+rapport.nbPages+' page(s), aucun débordement.',rapport.pages);
+      console.log('[PAGINATION] OK — '+rapport.nbPages+' page(s), aucun débordement. Bandeaux (px) : '+rapport.barresPx,rapport.pages);
     } else {
       console.warn('[PAGINATION] ANOMALIE sur « '+rapport.titre+' » — '+
         rapport.debordements+' page(s) en débordement, '+
         rapport.sousTotauxManquants+' sous-total(aux) manquant(s), '+
-        (rapport.piedsEcrases||0)+' bandeau(x) écrasé(s).');
+        (rapport.piedsEcrases||0)+' bandeau(x) écrasé(s). Bandeaux (px) : '+rapport.barresPx+' | référence : '+rapport.barreRefPx);
       console.table?console.table(rapport.pages):console.warn(rapport.pages);
       console.warn('[PAGINATION] Rapport complet : window._pgLastAudit');
     }
