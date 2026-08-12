@@ -46627,6 +46627,20 @@ function doPrint(){
        ⚠️ NE PAS DÉSACTIVER ce bloc sans retester avec headless (Puppeteer)
        sur PRNC-DV030 (2 lignes + 1 section) ET SLN-DV164 (notes longues). */
     .doc-page{height:271mm!important;}
+    /* === INTERDICTION D'ECRASER LES ENFANTS (12/08/2026) ==============
+       .doc-page est un conteneur flex column a hauteur fixe. Par defaut
+       flex-shrink vaut 1 : quand le contenu est trop haut, le navigateur
+       ne fait PAS deborder la page -- il COMPRESSE les enfants. Le pied
+       de page (bandeau bleu + mention) etait donc aplati jusqu'a quasi
+       zero, ce qui donnait un bandeau 'tronque' sur la page 1 et un
+       bandeau normal sur la page 2.
+       Effet pervers : la compression MASQUE le debordement. scrollHeight
+       redevient egal a clientHeight, donc toute mesure de debordement
+       (dont _pgAuditPages) concluait a tort que la page tenait.
+       flex-shrink:0 rend le debordement REEL, donc VISIBLE a la mesure,
+       donc corrigeable par _pgFixPages. Sans cette regle, le correcteur
+       est aveugle par construction. NE PAS RETIRER. */
+    .doc-page>*{flex-shrink:0!important;}
     .doc-sign-box{min-height:120px!important;}
     .doc-sign-box .ds-siglot{height:65px!important;}
     .doc-sign-box .ds-siglot img{max-height:60px!important;}
@@ -47041,16 +47055,27 @@ function _pgAuditPages(pdoc,titre){
         var rp=pied.getBoundingClientRect(), rg=pg.getBoundingClientRect();
         piedCoupe=(rp.bottom>rg.bottom+1);
       }
+      // ÉCRASEMENT (12/08/2026) — mode de défaillance DISTINCT du débordement,
+      // et invisible pour scrollHeight : .doc-page étant un flex column, un
+      // contenu trop haut fait COMPRESSER les enfants au lieu de déborder. Le
+      // bandeau bleu était ainsi aplati à quasi zéro pendant que l'audit
+      // concluait « aucun débordement ». On mesure donc sa hauteur RÉELLE :
+      // la barre fait ~19px (padding 5px + police 9px) quand elle est saine.
+      var barre=pg.querySelector('.doc-footer-bar');
+      var barreH=barre?Math.round(barre.getBoundingClientRect().height):0;
+      var piedEcrase=!!barre && barreH<12;
+      if(piedEcrase) rapport.piedsEcrases=(rapport.piedsEcrases||0)+1;
       // Un sous-total est attendu sur toute page qui porte des lignes et qui
       // n'est pas la dernière (la dernière porte le bloc final avec le total).
       var sousTotalAttendu=(!estDerniere && aLignes);
       var sousTotalManquant=(sousTotalAttendu && !aSousTotal);
       if(debord>0) rapport.debordements++;
       if(sousTotalManquant) rapport.sousTotauxManquants++;
-      if(debord>0||sousTotalManquant||piedCoupe) rapport.ok=false;
+      if(debord>0||sousTotalManquant||piedCoupe||piedEcrase) rapport.ok=false;
       rapport.pages.push({page:i+1,boitePx:Math.round(boite),contenuPx:Math.round(contenu),
         debordementPx:Math.round(debord),sousTotal:aSousTotal,sousTotalAttendu:sousTotalAttendu,
-        piedCoupe:piedCoupe,lignes:pg.querySelectorAll('table.doc-tbl tbody tr').length});
+        piedCoupe:piedCoupe,piedEcrase:piedEcrase,barrePx:barreH,
+        lignes:pg.querySelectorAll('table.doc-tbl tbody tr').length});
     });
     try{ window._pgLastAudit=rapport; }catch(e){}
     if(rapport.ok){
@@ -47058,7 +47083,8 @@ function _pgAuditPages(pdoc,titre){
     } else {
       console.warn('[PAGINATION] ANOMALIE sur « '+rapport.titre+' » — '+
         rapport.debordements+' page(s) en débordement, '+
-        rapport.sousTotauxManquants+' sous-total(aux) manquant(s).');
+        rapport.sousTotauxManquants+' sous-total(aux) manquant(s), '+
+        (rapport.piedsEcrases||0)+' bandeau(x) écrasé(s).');
       console.table?console.table(rapport.pages):console.warn(rapport.pages);
       console.warn('[PAGINATION] Rapport complet : window._pgLastAudit');
     }
