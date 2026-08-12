@@ -46626,7 +46626,25 @@ function doPrint(){
        une marge de sécurité de ~6-8px en bas du footer.
        ⚠️ NE PAS DÉSACTIVER ce bloc sans retester avec headless (Puppeteer)
        sur PRNC-DV030 (2 lignes + 1 section) ET SLN-DV164 (notes longues). */
-    .doc-page{height:271mm!important;}
+    /* HAUTEUR DE PAGE PRUDENTE (12/08/2026) ==========================
+       271mm = 297 - 10 (haut) - 16 (bas) : la valeur THEORIQUE exacte.
+       En pratique le bas des pages non finales etait rabote a l'impression
+       (mesure : bandeaux identiques a 20px dans le DOM, donc coupe PHYSIQUE
+       au passage sur le papier, pas un ecrasement CSS). La zone imprimable
+       reelle depend de l'imprimante, de l'echelle et des marges choisies
+       dans la boite de dialogue -- des parametres qu'AUCUN JS ne peut lire
+       avant impression. Viser la valeur exacte est donc structurellement
+       impossible.
+       CE QUI A CHANGE : tant qu'il n'existait pas de boucle de correction,
+       l'erreur etait symetrique -- trop grand = contenu rabote, trop petit =
+       pages fantomes (regressions d'avril 2026). Il fallait viser juste.
+       Depuis _pgFixPages(), trop petit est INOFFENSIF : la boucle mesure les
+       hauteurs reelles et redistribue les lignes, au pire une ligne de moins
+       par page. L'erreur n'est plus symetrique, donc on choisit PRUDENT.
+       6mm de garde absorbent les ecarts d'imprimante et d'arrondi.
+       Si un jour le bas est encore rabote : BAISSER cette valeur, jamais la
+       monter, et surtout ne pas retoucher PAGE1_BUDGET/LAST_EXTRA. */
+    .doc-page{height:265mm!important;}
     /* === INTERDICTION D'ECRASER LES ENFANTS (12/08/2026) ==============
        .doc-page est un conteneur flex column a hauteur fixe. Par defaut
        flex-shrink vaut 1 : quand le contenu est trop haut, le navigateur
