@@ -46825,6 +46825,7 @@ function doPrint(){
 
   var w=window.open('','_blank','');
   if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
+  window._pgLastAudit=null; // rempli juste avant l'impression, cf _pgAuditPages()
   // Préchargement Inter dans la fenêtre d'impression pour garantir police vectorielle haute qualité
   var fontPreload=isBCDoc
     ? '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">'
@@ -46837,11 +46838,89 @@ function doPrint(){
   setTimeout(function(){
     // Vérifier que les polices sont chargées avant d'imprimer (si API dispo)
     if(isBCDoc && w.document.fonts && w.document.fonts.ready){
-      w.document.fonts.ready.then(function(){w.print();w.close();});
+      w.document.fonts.ready.then(function(){_pgAuditPages(w.document,safeDocTitle);w.print();w.close();});
     } else {
+      _pgAuditPages(w.document,safeDocTitle);
       w.print();w.close();
     }
   },printDelay);
+}
+
+// =============================================================================
+// _pgAuditPages — MESURE DE VÉRITÉ SUR LA PAGINATION (12/08/2026)
+// =============================================================================
+// Pourquoi cette fonction existe.
+//
+// `.doc-page` a une hauteur FIXE (271mm) et `overflow:hidden` (cf PRINT_CSS).
+// Consequence : quand une page est trop remplie, le contenu excédentaire n'est
+// ni signalé ni déplacé — il est COUPÉ, silencieusement. C'est ainsi que le
+// sous-total bleu et le bandeau de pied « disparaissent » : ils sont bien dans
+// le DOM, ils tombent simplement hors de la boîte.
+//
+// Et jusqu'ici RIEN ne vérifiait qu'une page tenait. Les moteurs
+// (buildPaginatedDV / buildPaginatedFA) décident où couper à partir de hauteurs
+// mesurées dans un tableau FICTIF : largeur 703px en dur, font-size 14px alors
+// que l'impression réelle applique 13px, largeurs de colonnes devinées. Cet
+// écart est invisible tant que les textes sont courts, et devient décisif dès
+// qu'une référence longue passe sur 2-3 lignes : l'erreur s'accumule ligne
+// après ligne jusqu'à faire déborder la page. D'où des réglages successifs de
+// PAGE1_BUDGET / LAST_EXTRA qui corrigent un document et en cassent un autre
+// (historique des régressions consigné au-dessus de ces constantes).
+//
+// Cette fonction ne corrige RIEN et ne modifie RIEN. Elle mesure, dans la vraie
+// fenêtre d'impression, à la vraie largeur, avec le vrai CSS :
+//   - de combien chaque page déborde (0 = elle tient),
+//   - si une page non finale a bien son sous-total,
+//   - si son pied de page est bien à l'intérieur de la boîte.
+// Le rapport est laissé dans window._pgLastAudit (côté app) et loggé en
+// console. C'est la donnée qui manquait pour corriger la cause au lieu de
+// re-calibrer des constantes à l'aveugle.
+function _pgAuditPages(pdoc,titre){
+  var rapport={titre:titre||'',pages:[],debordements:0,sousTotauxManquants:0,ok:true};
+  try{
+    var pages=Array.prototype.slice.call(pdoc.querySelectorAll('.doc-page'));
+    rapport.nbPages=pages.length;
+    if(!pages.length){ rapport.note='document non paginé (.doc-page absent)'; }
+    pages.forEach(function(pg,i){
+      var boite=pg.clientHeight;              // hauteur utile réelle de la page
+      var contenu=pg.scrollHeight;            // hauteur réelle du contenu
+      var debord=Math.max(0,contenu-boite);
+      var estDerniere=(i===pages.length-1);
+      var aSousTotal=!!pg.querySelector('table.doc-tbl tfoot');
+      var aLignes=!!pg.querySelector('table.doc-tbl tbody tr');
+      var pied=pg.querySelector('.doc-page-footer');
+      // Pied coupé : son bas dépasse le bas de la boîte de page.
+      var piedCoupe=false;
+      if(pied){
+        var rp=pied.getBoundingClientRect(), rg=pg.getBoundingClientRect();
+        piedCoupe=(rp.bottom>rg.bottom+1);
+      }
+      // Un sous-total est attendu sur toute page qui porte des lignes et qui
+      // n'est pas la dernière (la dernière porte le bloc final avec le total).
+      var sousTotalAttendu=(!estDerniere && aLignes);
+      var sousTotalManquant=(sousTotalAttendu && !aSousTotal);
+      if(debord>0) rapport.debordements++;
+      if(sousTotalManquant) rapport.sousTotauxManquants++;
+      if(debord>0||sousTotalManquant||piedCoupe) rapport.ok=false;
+      rapport.pages.push({page:i+1,boitePx:Math.round(boite),contenuPx:Math.round(contenu),
+        debordementPx:Math.round(debord),sousTotal:aSousTotal,sousTotalAttendu:sousTotalAttendu,
+        piedCoupe:piedCoupe,lignes:pg.querySelectorAll('table.doc-tbl tbody tr').length});
+    });
+    try{ window._pgLastAudit=rapport; }catch(e){}
+    if(rapport.ok){
+      console.log('[PAGINATION] OK — '+rapport.nbPages+' page(s), aucun débordement.',rapport.pages);
+    } else {
+      console.warn('[PAGINATION] ANOMALIE sur « '+rapport.titre+' » — '+
+        rapport.debordements+' page(s) en débordement, '+
+        rapport.sousTotauxManquants+' sous-total(aux) manquant(s).');
+      console.table?console.table(rapport.pages):console.warn(rapport.pages);
+      console.warn('[PAGINATION] Rapport complet : window._pgLastAudit');
+    }
+  }catch(e){
+    // L'audit ne doit JAMAIS empêcher une impression.
+    console.warn('[PAGINATION] audit impossible :',e&&e.message);
+  }
+  return rapport;
 }
 
 
