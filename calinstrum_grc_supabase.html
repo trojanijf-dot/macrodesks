@@ -44315,7 +44315,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
   lineData.forEach(function(item){
     if(item.isSec){
       var h='<tr><td colspan="8" style="background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+item.label+'</td></tr>';
-      rowItems.push({html:h,height:measureRow(h),isSec:true,tot:0});
+      h=h.replace('<tr','<tr data-pgsec="1"');rowItems.push({html:h,height:measureRow(h),isSec:true,tot:0});
     } else if(item.isHeader){
       // Sous-titre ITEMS (bleu clair), KIT (violet), ou TASK (ambre)
       var bg, col, bdr, badge;
@@ -44330,10 +44330,10 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
         badge='';
       }
       var hH='<tr><td colspan="8" style="background:'+bg+';color:'+col+';padding:5px 9px;font-weight:700;font-size:11px;border-left:3px solid '+bdr+';text-transform:uppercase;letter-spacing:.05em;-webkit-print-color-adjust:exact;print-color-adjust:exact">▸ '+esc(item.desc||'')+badge+'</td></tr>';
-      rowItems.push({html:hH,height:measureRow(hH),isSec:true,tot:0});
+      hH=hH.replace('<tr','<tr data-pgsec="1"');rowItems.push({html:hH,height:measureRow(hH),isSec:true,tot:0});
     } else if(item.isSubLine){
       var sub=item.sub;
-      var hS='<tr style="background:rgba(124,58,237,.04);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+      var hS='<tr data-pgtot="0" style="background:rgba(124,58,237,.04);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
         '<td></td>'+
         '<td style="padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">'+esc(sub.ref||'')+'</td>'+
         '<td colspan="3" style="padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">↳ '+esc(sub.designation||'')+'</td>'+
@@ -44352,7 +44352,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       var hT;
       if(item.isFirstOfTask){
         var rspn=item.taskRowspan||1;
-        hT='<tr style="background:rgba(245,158,11,.05);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+        hT='<tr data-pgtot="'+(Number(item.tot)||0)+'" style="background:rgba(245,158,11,.05);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
           '<td rowspan="'+rspn+'" style="vertical-align:middle;text-align:center;padding:6px 5px">'+(item.idx||'')+'</td>'+
           '<td rowspan="'+rspn+'" style="vertical-align:middle;text-align:center;padding:6px 5px">'+esc(item.taskRef||'')+'</td>'+
           '<td rowspan="'+rspn+'" style="vertical-align:middle;padding:6px 5px">'+esc(item.taskDesignation||'')+'</td>'+
@@ -44363,7 +44363,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
           '<td style="text-align:right;font-weight:700;padding:6px 5px;white-space:nowrap">'+fN(item.tot)+'</td></tr>';
       } else {
         // Sous-lignes 2 → N : seulement 5 cellules (TGC, Uté, Qté, PU, Total)
-        hT='<tr style="background:rgba(245,158,11,.03);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+        hT='<tr data-pgtot="'+(Number(item.tot)||0)+'" style="background:rgba(245,158,11,.03);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
           '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+subTgcD+'</td>'+
           '<td style="text-align:center;padding:6px 5px;white-space:nowrap;word-break:keep-all;overflow-wrap:normal">'+(sub2.unite||'U')+'</td>'+
           '<td style="text-align:center;padding:6px 5px;white-space:nowrap">'+(sub2.qte||0)+'</td>'+
@@ -44374,12 +44374,12 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
       // toutes les suivantes doivent rester sur la même page (sinon le rowspan visuel
       // serait cassé entre 2 pages). On utilise un flag taskGroup pour la logique de
       // saut de page plus bas.
-      rowItems.push({html:hT,height:measureRow(hT),isSec:false,tot:item.tot,taskGroup:true,taskGroupStart:item.isFirstOfTask});
+      hT=hT.replace('<tr ','<tr data-pgtask="1"'+(item.isFirstOfTask?' data-pgtaskstart="1"':'')+' ');rowItems.push({html:hT,height:measureRow(hT),isSec:false,tot:item.tot,taskGroup:true,taskGroupStart:item.isFirstOfTask});
     } else {
       var l=item.l,tot=item.tot,tgcD=(l.tgc||0)+'%';
       // Ligne KIT principale : fond légèrement violet pour distinguer
       var rowBg=item.isKitMain?'background:rgba(124,58,237,.06);-webkit-print-color-adjust:exact;print-color-adjust:exact;':'';
-      var h='<tr style="'+rowBg+'"><td style="text-align:center;padding:6px 5px">'+item.idx+'</td><td style="text-align:center;padding:6px 5px">'+esc(l.ref||'')+'</td>'+
+      var h='<tr data-pgtot="'+(Number(tot)||0)+'" style="'+rowBg+'"><td style="text-align:center;padding:6px 5px">'+item.idx+'</td><td style="text-align:center;padding:6px 5px">'+esc(l.ref||'')+'</td>'+
         '<td style="padding:6px 5px">'+esc(l.designation||'')+'</td>'+
         '<td style="text-align:center;padding:6px 5px">'+tgcD+'</td><td style="text-align:center;padding:6px 5px">'+(l.unite||'U')+'</td>'+
         '<td style="text-align:center;padding:6px 5px">'+(l.qte||0)+'</td><td style="text-align:right;padding:6px 5px">'+fN(l.pu)+'</td>'+
@@ -46838,12 +46838,158 @@ function doPrint(){
   setTimeout(function(){
     // Vérifier que les polices sont chargées avant d'imprimer (si API dispo)
     if(isBCDoc && w.document.fonts && w.document.fonts.ready){
-      w.document.fonts.ready.then(function(){_pgAuditPages(w.document,safeDocTitle);w.print();w.close();});
+      w.document.fonts.ready.then(function(){_pgFixPages(w.document);_pgAuditPages(w.document,safeDocTitle);w.print();w.close();});
     } else {
+      _pgFixPages(w.document);
       _pgAuditPages(w.document,safeDocTitle);
       w.print();w.close();
     }
   },printDelay);
+}
+
+// =============================================================================
+// _pgFixPages — BOUCLE DE CORRECTION DE LA PAGINATION (12/08/2026)
+// =============================================================================
+// LE PRINCIPE, ET POURQUOI IL CLÔT LE SUJET.
+//
+// Les moteurs (buildPaginatedDV/FA) décident où couper à partir de hauteurs
+// ESTIMÉES dans un tableau fictif (703px/14px alors que l'impression réelle
+// applique 13px, largeurs de colonnes devinées). Une estimation finit toujours
+// par dériver : mesuré sur PRNC-DV034, la page 1 dépassait sa boîte de 65px
+// (contenu 1089px pour une boîte de 1024px), et comme .doc-page a
+// overflow:hidden, le sous-total bleu et le pied de page étaient coupés SANS
+// AUCUN signal. D'où des mois de recalibrage de PAGE1_BUDGET/LAST_EXTRA qui
+// corrigent un document et en cassent un autre.
+//
+// Cette fonction ne remplace pas l'estimation : elle la VÉRIFIE et la CORRIGE.
+// Après construction, elle mesure chaque page réelle et, tant qu'une page
+// déborde, repousse sa dernière ligne sur la suivante puis re-mesure. Une
+// estimation peut se tromper ; une boucle qui constate et corrige, non. C'est
+// la différence entre « corrigé pour ce devis » et « corrigé ».
+//
+// Elle est CONSERVATRICE : si une page tient déjà, elle n'y touche pas. Sur un
+// document correct, elle ne fait strictement rien.
+//
+// Invariants tenus :
+//   - aucune page ne déborde de sa boîte (sinon contenu coupé en silence) ;
+//   - un groupe TÂCHE (rowspan) n'est jamais scindé entre deux pages ;
+//   - un titre de section ne reste jamais orphelin en bas de page ;
+//   - le bloc final (totaux/signatures) reste sur la dernière page ;
+//   - les sous-totaux sont recalculés depuis data-pgtot (montant EXACT posé à
+//     la génération), jamais en relisant du texte déjà formaté.
+//
+// GARDE : ne s'active que si les lignes portent data-pgtot. Tant qu'un type de
+// document n'est pas étiqueté (facture/BC/BL au 12/08), la fonction s'abstient
+// plutôt que de recalculer un sous-total qu'elle ne sait pas sommer.
+function _pgFixPages(pdoc){
+  var rap={actif:false,deplacements:0,pagesAjoutees:0,iterations:0,ok:true};
+  try{
+    if(!pdoc.querySelector('tr[data-pgtot]')){ rap.note='document non étiqueté — correction non appliquée'; return rap; }
+    rap.actif=true;
+    var MAX=600, guard=0;
+    function listePages(){ return Array.prototype.slice.call(pdoc.querySelectorAll('.doc-page')); }
+    function corps(pg){ return pg.querySelector('table.doc-tbl>tbody'); }
+    function deborde(pg){ return pg.scrollHeight-pg.clientHeight>0; }
+
+    // Crée une page vide APRÈS pg, en y transférant le bloc final s'il existe
+    // (le bloc final doit toujours rester sur la dernière page).
+    function nouvellePageApres(pg){
+      var neuf=pg.cloneNode(true);
+      var tb=corps(neuf);
+      if(!tb) return null;
+      while(tb.firstChild) tb.removeChild(tb.firstChild);
+      var tf=neuf.querySelector('table.doc-tbl>tfoot');
+      if(tf) tf.parentNode.removeChild(tf);
+      var blocNeuf=neuf.querySelector('.doc-page-final-block');
+      if(blocNeuf) blocNeuf.parentNode.removeChild(blocNeuf);
+      var blocOld=pg.querySelector('.doc-page-final-block');
+      if(blocOld){
+        var pied=neuf.querySelector('.doc-page-footer');
+        if(pied) pied.parentNode.insertBefore(blocOld,pied); else neuf.appendChild(blocOld);
+      }
+      pg.parentNode.insertBefore(neuf,pg.nextSibling);
+      rap.pagesAjoutees++;
+      return neuf;
+    }
+
+    // Déplace la dernière ligne de tb vers le début de ntb, en respectant
+    // l'atomicité des groupes TÂCHE. Renvoie le nombre de lignes déplacées.
+    function repousserDerniere(tb,ntb){
+      if(!tb.rows.length) return 0;
+      var n=0;
+      var tr=tb.rows[tb.rows.length-1];
+      if(tr.hasAttribute('data-pgtask')){
+        var grp=[],cur=tr;
+        while(cur){
+          grp.unshift(cur);
+          if(cur.hasAttribute('data-pgtaskstart')) break;
+          cur=cur.previousElementSibling;
+          if(!cur||!cur.hasAttribute('data-pgtask')) break;
+        }
+        if(grp.length>=tb.rows.length) return 0; // on ne viderait pas la page
+        for(var i=grp.length-1;i>=0;i--){ ntb.insertBefore(grp[i],ntb.firstChild); n++; }
+      } else {
+        if(tb.rows.length<=1) return 0;
+        ntb.insertBefore(tr,ntb.firstChild); n++;
+      }
+      // Anti-orphelin : un titre de section ne reste jamais seul en fin de page.
+      while(tb.rows.length>1 && tb.rows[tb.rows.length-1].hasAttribute('data-pgsec')){
+        ntb.insertBefore(tb.rows[tb.rows.length-1],ntb.firstChild); n++;
+      }
+      return n;
+    }
+
+    // --- Boucle de correction ---
+    var pages=listePages();
+    for(var i=0;i<pages.length;i++){
+      while(deborde(pages[i]) && guard++<MAX){
+        rap.iterations++;
+        var tb=corps(pages[i]); if(!tb) break;
+        var suiv=pages[i+1];
+        if(!suiv){ suiv=nouvellePageApres(pages[i]); if(!suiv) break; pages=listePages(); suiv=pages[i+1]; }
+        var ntb=corps(suiv); if(!ntb) break;
+        var bouges=repousserDerniere(tb,ntb);
+        if(!bouges) break; // plus rien de déplaçable : pas de boucle infinie
+        rap.deplacements+=bouges;
+        pages=listePages();
+      }
+    }
+
+    // --- Sous-totaux : recalcul exact depuis data-pgtot, cumulé de page en page ---
+    pages=listePages();
+    var cumul=0;
+    pages.forEach(function(pg,i){
+      var estDerniere=(i===pages.length-1);
+      var tb=corps(pg);
+      if(tb){
+        Array.prototype.forEach.call(tb.rows,function(tr){
+          var v=tr.getAttribute('data-pgtot');
+          if(v!==null) cumul+=Number(v)||0;
+        });
+      }
+      var tf=pg.querySelector('table.doc-tbl>tfoot');
+      if(estDerniere){
+        if(tf) tf.parentNode.removeChild(tf); // la dernière page porte le bloc final
+      } else if(tf){
+        var cell=tf.querySelector('td:last-child');
+        if(cell) cell.textContent=String(Math.round(cumul)).replace(/\B(?=(\d{3})+(?!\d))/g,' ');
+      }
+    });
+
+    // --- Vérification finale : plus aucune page ne doit déborder ---
+    rap.restant=listePages().filter(deborde).length;
+    rap.ok=(rap.restant===0);
+    if(rap.deplacements||rap.pagesAjoutees){
+      console.log('[PAGINATION] Correction : '+rap.deplacements+' ligne(s) repoussée(s), '+
+        rap.pagesAjoutees+' page(s) ajoutée(s), '+rap.iterations+' itération(s).');
+    }
+    if(!rap.ok) console.warn('[PAGINATION] '+rap.restant+' page(s) débordent ENCORE après correction.');
+  }catch(e){
+    rap.ok=false; rap.erreur=e&&e.message;
+    console.warn('[PAGINATION] correction impossible :',e&&e.message);
+  }
+  try{ window._pgLastFix=rap; }catch(e){}
+  return rap;
 }
 
 // =============================================================================
