@@ -44796,7 +44796,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   lineData.forEach(function(item){
     if(item.isSec){
       var h='<tr><td colspan="8" style="background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12.5px;padding:6px 7px;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+item.label+'</td></tr>';
-      rowItems.push({html:h,height:measureRow(h),isSec:true,tot:0});
+      h=h.replace('<tr','<tr data-pgsec="1"');rowItems.push({html:h,height:measureRow(h),isSec:true,tot:0});
     } else if(item.isHeader){
       var bg, col, bdr, badge;
       if(item.mode==='kit'){
@@ -44810,7 +44810,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         badge='';
       }
       var hH='<tr><td colspan="8" style="background:'+bg+';color:'+col+';padding:5px 9px;font-weight:700;font-size:11px;border-left:3px solid '+bdr+';text-transform:uppercase;letter-spacing:.05em;-webkit-print-color-adjust:exact;print-color-adjust:exact">▸ '+esc(item.desc||'')+badge+'</td></tr>';
-      rowItems.push({html:hH,height:measureRow(hH),isSec:true,tot:0});
+      hH=hH.replace('<tr','<tr data-pgsec="1"');rowItems.push({html:hH,height:measureRow(hH),isSec:true,tot:0});
     } else if(item.isSubLine){
       var sub=item.sub;
       var hS='<tr style="background:rgba(124,58,237,.04);-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
@@ -44820,7 +44820,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         '<td style="text-align:center;padding:5px 5px;font-style:italic;color:#6b21a8;font-size:10.5px">'+(sub.qte||1)+'</td>'+
         '<td colspan="2" style="text-align:center;padding:5px 5px;font-style:italic;color:#9ca3af;font-size:10px">inclus</td>'+
         '</tr>';
-      rowItems.push({html:hS,height:measureRow(hS),isSec:false,tot:0});
+      hS=hS.replace('<tr','<tr data-pgtot="0"');rowItems.push({html:hS,height:measureRow(hS),isSec:false,tot:0});
     } else if(item.isTaskRow){
       var sub2=item.sub;
       var subTgcD=(sub2.tgc||0)+'%';
@@ -44844,7 +44844,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
           '<td style="text-align:right;padding:6px 5px;white-space:nowrap">'+fN(sub2.pu)+'</td>'+
           '<td style="text-align:right;font-weight:700;padding:6px 5px;white-space:nowrap">'+fN(item.tot)+'</td></tr>';
       }
-      rowItems.push({html:hT,height:measureRow(hT),isSec:false,tot:item.tot,taskGroup:true,taskGroupStart:item.isFirstOfTask});
+      hT=hT.replace('<tr','<tr data-pgtot="'+(Number(item.tot)||0)+'" data-pgtask="1"'+(item.isFirstOfTask?' data-pgtaskstart="1"':''));rowItems.push({html:hT,height:measureRow(hT),isSec:false,tot:item.tot,taskGroup:true,taskGroupStart:item.isFirstOfTask});
     } else {
       var l=item.l,tot=item.tot,tgcD=(l.tgc||0)+'%';
       var rowBg=item.isKitMain?'background:rgba(124,58,237,.06);-webkit-print-color-adjust:exact;print-color-adjust:exact;':'';
@@ -44853,7 +44853,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         '<td style="text-align:center;padding:6px 5px">'+tgcD+'</td><td style="text-align:center;padding:6px 5px">'+(l.unite||'U')+'</td>'+
         '<td style="text-align:center;padding:6px 5px">'+(l.qte||0)+'</td><td style="text-align:right;padding:6px 5px">'+fN(l.pu)+'</td>'+
         '<td style="text-align:right;font-weight:700;padding:6px 5px">'+fN(tot)+'</td></tr>';
-      rowItems.push({html:h,height:measureRow(h),isSec:false,tot:tot});
+      h=h.replace('<tr','<tr data-pgtot="'+(Number(tot)||0)+'"');rowItems.push({html:h,height:measureRow(h),isSec:false,tot:tot});
     }
   });
   document.body.removeChild(measureDiv);
@@ -47058,7 +47058,21 @@ function _pgAuditPages(pdoc,titre){
   try{
     var pages=Array.prototype.slice.call(pdoc.querySelectorAll('.doc-page'));
     rapport.nbPages=pages.length;
-    if(!pages.length){ rapport.note='document non paginé (.doc-page absent)'; }
+    if(!pages.length){
+      // BC et BL n'utilisent PAS la pagination manuelle : pas de .doc-page, pas de
+      // hauteur fixe, pas d'overflow:hidden -- c'est le navigateur qui pagine en flux
+      // naturel (cf doPrint : content=c.innerHTML + .doc-fixed-footer). La classe de
+      // bug corrigee le 12/08 (contenu coupe/ecrase par une boite fixe) n'existe donc
+      // pas chez eux. On le DIT explicitement plutot que d'afficher 'OK - 0 page',
+      // pour qu'un futur probleme sur un BC ne soit pas cherche dans le mauvais moteur.
+      rapport.note='flux naturel navigateur (BC/BL) — pas de pagination manuelle';
+      rapport.moteur='flux-naturel';
+      console.log('[PAGINATION] « '+(titre||'')+' » : flux naturel navigateur (BC/BL). '+
+        'Pas de pagination manuelle, donc rien a verifier ici.');
+      try{ window._pgLastAudit=rapport; }catch(e){}
+      return rapport;
+    }
+    rapport.moteur='pagination-manuelle';
     pages.forEach(function(pg,i){
       var boite=pg.clientHeight;              // hauteur utile réelle de la page
       var contenu=pg.scrollHeight;            // hauteur réelle du contenu
