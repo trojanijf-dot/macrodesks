@@ -23976,6 +23976,9 @@ function importEmersonAsDevis(file){
         return;
       }
       emersonData._saisirObjet=saisi.trim();
+      // Descriptif technique : rawText contient deja les 12 pages, il ne restait
+      // qu'a en extraire la section "Detailed Item Summary" (cf parseEmersonDescriptifs).
+      _emersonDescriptifsPending=parseEmersonDescriptifs(emersonData.rawText||'');
       showEmersonDevisPreview(emersonData,rateInfo,file.name);
     })
     .catch(function(err){
@@ -25700,6 +25703,9 @@ function confirmEmersonDevisImport(){
     lines:lines,
     ht:ht,t11:t11,t22:t22,t6:t6,fr:fretSum,ttc:ttc,
     _emersonImport:true,
+    // Descriptif technique joint en fin de devis (pages "Descriptif technique").
+    // Stocke sur le devis : reimprimable a l'identique sans le PDF Emerson.
+    descriptifs:(_emersonDescriptifsPending||[]),
     // === MÉTADONNÉES INTERNES (non imprimées sur le devis client) ===
     // Affichées dans l'onglet "🔍 Traçabilité" de la modale GRC
     _meta:{
@@ -44637,6 +44643,10 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
     pageHTML+='</div>';
     pagesHTML+=pageHTML;
   });
+  // Pages "Descriptif technique" (devis importes d'Emerson) — APRES les
+  // signatures : ajout purement informatif, il ne s'intercale jamais dans la
+  // partie contractuelle.
+  pagesHTML+=_dvDescriptifHtml(d,buildPageHeader,mention);
   return pagesHTML;
 }
 
@@ -46992,6 +47002,9 @@ function _pgFixPages(pdoc){
         rap.iterations++;
         var tb=corps(pages[i]); if(!tb) break;
         var suiv=pages[i+1];
+        // Une ligne d'article ne doit JAMAIS glisser dans une page de descriptif
+        // technique (ni l'inverse) : ce sont deux tableaux de nature differente.
+        if(suiv && suiv.getAttribute('data-pgkind')!==pages[i].getAttribute('data-pgkind')) break;
         if(!suiv){ suiv=nouvellePageApres(pages[i]); if(!suiv) break; pages=listePages(); suiv=pages[i+1]; }
         var ntb=corps(suiv); if(!ntb) break;
         var bouges=repousserDerniere(tb,ntb);
@@ -47410,6 +47423,197 @@ if (typeof module !== 'undefined') module.exports = {
   lcCoutRevient, lcVerdict, lcModeRecommande, lcCalculDossier, lcPrixVenteCible
 };
 
+
+// =============================================================================
+// parseEmersonDescriptifs — descriptif technique des articles d'un devis Emerson
+// =============================================================================
+// [14/08/2026] Le PDF Emerson contient une section "Detailed Item Summary" qui
+// decrit chaque article option par option. Cette information etait extraite puis
+// JETEE : extractEmersonPdf produit deja le texte des 12 pages dans rawText.
+// On la recupere pour la joindre au devis CALINSTRUM, en fin de document.
+//
+// PERIMETRE VOLONTAIREMENT LIMITE (decision utilisateur) : uniquement les
+// articles reellement chiffres dans le tableau Emerson. Sont EXCLUS :
+//   - la section "Alternates & Recommendations" : elle decrit des produits
+//     RECOMMANDES mais NON chiffres, numerotes 16/17/18 -- or dans le devis
+//     CALINSTRUM 16/17/18 sont Fret, Assurance et Frais locaux. Les inclure
+//     ferait lire au client le descriptif de materiel qu'on ne lui vend pas,
+//     sous les numeros de nos lignes de transport.
+//   - la page de conformite commerciale Emerson (International Trade
+//     Compliance / Product Material Compliance), qui ne concerne pas le client.
+//   - tout l'appareillage Emerson repete en tete de page (FAX_INFO, RETURN TO
+//     FRONT, n° de proposition, pagination) : le document doit etre CALINSTRUM,
+//     aucune mention du fournisseur ni de son tarif ne doit subsister.
+//
+// LANGUE (decision utilisateur) : les libelles techniques restent en ANGLAIS.
+// C'est le vocabulaire exact des plaques constructeur, des certificats
+// d'etalonnage et de la documentation Rosemount. "316L SST", "ATEX Intrinsic
+// Safety", "HART Protocol" ne se traduisent pas, et traduire le reste ferait
+// perdre au technicien client la correspondance avec ses documents. Seuls les
+// intitules de structure sont en francais (Article, Repere, Etalonnage...).
+
+// Lignes d'appareillage Emerson a supprimer partout.
+var EMERSON_BRUIT = [
+  /^FAX_INFO/i,
+  /^RETURN TO FRONT/i,
+  /^Emerson Proposal\s*:/i,
+  /^Emerson$/i,
+  /^Page\s+\d+\s+Of\s+\d+/i,
+  /^\d{1,2}-[A-Za-z]{3}-\d{4}$/,
+  /^Customer Ref\s*#/i,
+  /^FINAL$/i,
+  /^Cust Line\s+Item\s+Qty\s+Units\s+Description/i,
+  /^Detailed Item Summary/i,
+  /^Clarifications and Deviations/i,
+  /^Item\s*#\s+Item\s+Clarification/i,
+  /^Qty\s+Primary Tag/i,
+  /^Type$/i,
+  /^'$/
+];
+
+// Retire d'un intitule les residus tarifaires eventuels (delai + 2 montants).
+// Seconde ligne de defense derriere la garde anti-fuite ci-dessous.
+function _emNettoieTitre(t){
+  return String(t||'')
+    .replace(/\s+\d+\s+weeks?\s+[\d.,]+\s+[\d.,]+\s*$/i,'')
+    .replace(/\s+[\d.,]+\s+[\d.,]+\s*$/,'')
+    .trim();
+}
+
+function _emIsBruit(l){
+  for (var i=0;i<EMERSON_BRUIT.length;i++) if (EMERSON_BRUIT[i].test(l)) return true;
+  return false;
+}
+
+// Debut d'article : "1 1 Each 2051C Pressure Transmitter and Manifold Assembly"
+//                    ^cust ^qte  ^units ^designation   (deux nombres, pas trois)
+var EM_ARTICLE = /^(\d{1,3})\s+(\d{1,4})\s+(Each|EA|Lot|Set)\s+(.+)$/i;
+// Code modele : un seul bloc alphanumerique majuscule, assez long, sans espace.
+var EM_MODELE  = /^[0-9A-Z][0-9A-Z\-\/]{5,}$/;
+// Option : un code court suivi d'un libelle contenant ":"
+var EM_OPTION  = /^(\S{1,8})\s+(.{3,}:.*)$/;
+// Repere / etalonnage : "1 NAME 350-PIT-70011 0 to 5 KPA G"
+var EM_TAG     = /^(\d{1,3})\s+(NAME|WIRE|TAG|NONE)\s+(\S+)\s*(.*)$/i;
+var EM_DIM     = /^Estimated\s+(Weight|Dimensions)\s*:/i;
+
+function parseEmersonDescriptifs(rawText){
+  if (!rawText) return [];
+  var pages = String(rawText).split(/---PAGE BREAK---/);
+
+  // On s'arrete des qu'on rencontre les Alternates ou la conformite commerciale.
+  var utiles = [];
+  for (var p=0; p<pages.length; p++){
+    var txt = pages[p];
+    if (/Alternates\s*(&|and)?\s*Recommendations/i.test(txt)) break;
+    if (/International Trade Compliance|Product Material Compliance/i.test(txt)) break;
+    utiles.push(txt);
+  }
+
+  // ⚠️ ANCRAGE SUR LE VRAI DEBUT DE SECTION — ne pas remplacer par une heuristique.
+  // Le titre "Detailed Item Summary" apparait DEUX fois avant les Alternates : une
+  // fois en sommaire (page 1) et une fois au vrai debut de section (page 4). Entre
+  // les deux se trouve le TABLEAU CHIFFRE, dont les lignes d'article ont la meme
+  // syntaxe ET sont suivies d'une reference constructeur qui ressemble a un code
+  // modele -- la garde "cet article a-t-il des caracteristiques ?" ne suffit donc
+  // PAS a les ecarter (verifie : elle laissait passer 10 articles tarifaires).
+  // On part de la DERNIERE occurrence du titre : tout le tarifaire est alors
+  // physiquement hors du perimetre de lecture, pas seulement filtre apres coup.
+  var complet = utiles.join('\n');
+  var dernier = complet.toLowerCase().lastIndexOf('detailed item summary');
+  if (dernier > 0) complet = complet.slice(dernier);
+  var lignes = complet.split(/\r?\n/);
+  var articles = [], courant = null;
+
+  for (var i=0; i<lignes.length; i++){
+    var l = String(lignes[i]).replace(/\s+/g,' ').trim();
+    if (!l || _emIsBruit(l)) continue;
+
+    var mArt = l.match(EM_ARTICLE);
+    if (mArt){
+      courant = { custLine:Number(mArt[1]), qte:Number(mArt[2]), titre:_emNettoieTitre(mArt[4]), blocs:[] };
+      articles.push(courant);
+      continue;
+    }
+    if (!courant) continue;   // tout ce qui precede le 1er article est ignore
+
+    var mTag = l.match(EM_TAG);
+    if (mTag){
+      courant.blocs.push({ t:'tag', repere:mTag[3], etalonnage:(mTag[4]||'').trim(), qte:Number(mTag[1]) });
+      continue;
+    }
+    if (EM_DIM.test(l)){ courant.blocs.push({ t:'dim', v:l }); continue; }
+    if (EM_MODELE.test(l)){ courant.blocs.push({ t:'modele', v:l }); continue; }
+
+    var mOpt = l.match(EM_OPTION);
+    if (mOpt){ courant.blocs.push({ t:'option', k:mOpt[1], v:mOpt[2].trim() }); continue; }
+
+    // Ligne de continuation : on la recolle a la precedente plutot que de la perdre.
+    var prev = courant.blocs[courant.blocs.length-1];
+    if (prev && (prev.t==='option')) prev.v += ' ' + l;
+    else courant.blocs.push({ t:'texte', v:l });
+  }
+
+  // ⚠️ GARDE ANTI-FUITE TARIFAIRE — indispensable, ne pas retirer.
+  // Le tableau CHIFFRE des premieres pages utilise EXACTEMENT la meme syntaxe de
+  // ligne que le descriptif ("13 4 Each 00625-9200-0102:Pole Mount Kit, 625IR,
+  // 2in Pipe 6 weeks 220.00 880.00"). Un parseur naif y recopierait le PRIX
+  // D'ACHAT EMERSON EN AUD dans un document remis au client.
+  // Ce qui separe les deux : les articles du descriptif portent des
+  // caracteristiques (code modele et/ou options "K : libelle"), ceux du tableau
+  // tarifaire n'en ont aucune. On ne garde donc QUE les articles decrits.
+  return articles.filter(function(a){
+    for (var i=0;i<a.blocs.length;i++){
+      if (a.blocs[i].t==='option' || a.blocs[i].t==='modele') return true;
+    }
+    return false;
+  });
+}
+
+
+
+// Descriptifs du dernier PDF Emerson lu, en attente de creation du devis.
+var _emersonDescriptifsPending=[];
+
+// ---- Rendu des pages "Descriptif technique" -------------------------------
+// Rendu en <tr> d'un table.doc-tbl (et NON en blocs de texte libre) : chaque
+// caracteristique devient une ligne deplacable, donc la boucle de correction de
+// pagination (_pgFixPages) gere le debordement de ces pages exactement comme
+// celles du tableau d'articles. Les titres d'article portent data-pgsec pour ne
+// jamais rester orphelins en bas de page.
+// data-pgkind="descriptif" isole ces pages : le correcteur ne doit JAMAIS y
+// pousser une ligne d'article venue du devis, ni l'inverse.
+function _dvDescriptifHtml(d, buildPageHeader, mention){
+  var arts=(d&&d.descriptifs)||[];
+  if(!arts.length) return '';
+  var rows='';
+  arts.forEach(function(a){
+    rows+='<tr data-pgsec="1"><td colspan="2" style="background:#e8eef5;color:#1e3a5f;font-weight:700;font-size:12px;padding:6px 9px;border-left:3px solid #1e3a5f;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+      'Article '+esc(a.custLine)+' — '+esc(a.titre||'')+'</td></tr>';
+    (a.blocs||[]).forEach(function(b){
+      if(b.t==='modele'){
+        rows+='<tr data-pgtot="0"><td colspan="2" style="padding:5px 9px 3px;font-family:Consolas,monospace;font-size:11px;font-weight:700;color:#0f766e;border-bottom:1px solid #e2e8f0">'+esc(b.v)+'</td></tr>';
+      } else if(b.t==='option'){
+        rows+='<tr data-pgtot="0"><td style="width:70px;padding:3px 9px;font-family:Consolas,monospace;font-weight:700;color:#1e3a5f;font-size:10.5px;vertical-align:top;border-bottom:1px solid #f1f5f9">'+esc(b.k)+'</td>'+
+          '<td style="padding:3px 9px;font-size:11px;border-bottom:1px solid #f1f5f9">'+esc(b.v)+'</td></tr>';
+      } else if(b.t==='tag'){
+        rows+='<tr data-pgtot="0"><td colspan="2" style="padding:4px 9px;background:#fff7ed;border-bottom:1px solid #fed7aa;font-size:10.5px;color:#7c2d12;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+          'Repère : <strong>'+esc(b.repere)+'</strong>'+(b.etalonnage?' · Étalonnage : '+esc(b.etalonnage):'')+'</td></tr>';
+      } else if(b.t==='dim'){
+        rows+='<tr data-pgtot="0"><td colspan="2" style="padding:4px 9px;font-size:10px;color:#64748b;border-bottom:1px solid #e2e8f0">'+esc(b.v)+'</td></tr>';
+      } else {
+        rows+='<tr data-pgtot="0"><td colspan="2" style="padding:3px 9px;font-size:11px;border-bottom:1px solid #f1f5f9">'+esc(b.v||'')+'</td></tr>';
+      }
+    });
+  });
+  var footer='<div class="doc-page-footer"><div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
+    '<p class="doc-legal">'+mention+'</p></div>';
+  return '<div class="doc-page" data-pgkind="descriptif">'+
+    buildPageHeader(1,1)+
+    '<div style="background:#1e3a5f;color:#fff;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;padding:6px 10px;margin:0 0 10px;-webkit-print-color-adjust:exact;print-color-adjust:exact">Descriptif technique</div>'+
+    '<p style="font-size:10.5px;color:#444;font-style:italic;margin:0 0 12px">Caractéristiques détaillées des équipements proposés, par numéro d\'article du devis.</p>'+
+    '<table class="doc-tbl"><colgroup><col style="width:70px"><col></colgroup><tbody>'+rows+'</tbody></table>'+
+    footer+'</div>';
+}
 
 // ===== INIT =====
 document.addEventListener('DOMContentLoaded',function(){
