@@ -13435,6 +13435,35 @@ function _dvlieWithRev(dvlieStr){
 }
 
 // =============================================================================
+// _faDevisNumAffiche(f) — SOURCE UNIQUE du N° de devis affiché sur une FACTURE
+// =============================================================================
+// [14/08/2026] Ce calcul était DUPLIQUÉ mot pour mot dans bFA() (aperçu écran)
+// et buildPaginatedFA() (impression). Le correctif dvliePrint du 11/08 n'avait
+// été greffé que sur la copie de l'aperçu : l'impression affichait donc le
+// devis-miroir interne (SLN-DV-BCGMAO-…) au lieu du devis cadre applicable au
+// client (SLN-DV143-CADRE-2026). L'aperçu et le document imprimé mentaient
+// l'un sur l'autre, sur un champ contractuel.
+// ⛔ TOUT nouveau rendu de facture DOIT appeler cette fonction. Ne JAMAIS
+//    recopier ce calcul : c'est précisément la duplication qui a créé le bug.
+// Ordre de priorité :
+//   1) f.dvliePrint — devis à IMPRIMER (champ dédié, modale « Devis à imprimer »)
+//   2) f.dvlie      — devis de suivi GRC, enrichi de sa dernière révision
+//   3) f.devisLieId — résolution par identifiant si dvlie est vide
+function _faDevisNumAffiche(f){
+  if(!f) return '';
+  // 1) Le devis à imprimer prime TOUJOURS sur le devis de suivi interne.
+  if(f.dvliePrint && String(f.dvliePrint).trim()) return String(f.dvliePrint).trim();
+  // 2) Devis de suivi, enrichi de la dernière révision active.
+  var n=(typeof _dvlieWithRev==='function')?_dvlieWithRev(f.dvlie||''):(f.dvlie||'');
+  // 3) Repli : résolution par identifiant.
+  if(!n && f.devisLieId){
+    var dv=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
+    if(dv) n=(dv.num||'')+(dv.rev?' '+String(dv.rev).toUpperCase():'');
+  }
+  return n||'';
+}
+
+// =============================================================================
 // _findLinkedFactures(d) — Retrouve toutes les factures (GRC + Suivi) liées au devis
 // =============================================================================
 // Multi-passes en cascade pour maximiser les matches malgré les linkFactureId obsolètes :
@@ -43591,20 +43620,8 @@ function bFA(f){
   // Ligne 2 : adresse multi-lignes
   // Ligne 3 : Tél
   // Ligne 4 : Email
-  // Récupérer le N° de devis lié (priorité : dvlie, sinon trouver via devisLieId)
-  // [21/05/2026] enrichi avec la dernière REV (ex: "SLN-DV126 REV3").
-  var devisNumLink=(typeof _dvlieWithRev==='function')?_dvlieWithRev(f.dvlie||''):(f.dvlie||'');
-  if(!devisNumLink && f.devisLieId){
-    var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
-    if(_dvObj) devisNumLink=(_dvObj.num||'')+(_dvObj.rev?' '+String(_dvObj.rev).toUpperCase():'');
-  }
-  // [11/08/2026] Devis IMPRIMÉ ≠ devis de suivi GRC : certaines factures (ex.
-  // REAPPRO PAKORO) sont rattachées en interne à un devis-miroir auto-généré
-  // (SLN-DV-BCGMAO-xxxxx, sert à verrouiller le N° de BC) alors que le devis
-  // RÉELLEMENT applicable pour le client est un devis cadre (SLN-DV143-CADRE-2026).
-  // f.dvliePrint (champ dédié, distinct de f.dvlie) permet d'imprimer le bon
-  // numéro sans toucher au suivi GRC interne.
-  if(f.dvliePrint) devisNumLink=f.dvliePrint;
+  // N° de devis affiché — SOURCE UNIQUE partagée avec l'impression (buildPaginatedFA).
+  var devisNumLink=_faDevisNumAffiche(f);
   return'<div class="doc">'+
     '<div class="doc-head">'+
       '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
@@ -44641,13 +44658,10 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
 function buildPaginatedFA(f, logoSrc, sigSrc){
   var isExo=isClientExo(f.client);
   var clientDetail=getClientDetail(f.client);
-  // === Récup Devis lié pour info-bar ===
-  // [21/05/2026] On enrichit avec la dernière REV (ex: "SLN-DV126 REV3") pour l'impression.
-  var devisNumLink=(typeof _dvlieWithRev==='function')?_dvlieWithRev(f.dvlie||''):(f.dvlie||'');
-  if(!devisNumLink && f.devisLieId){
-    var _dvObj=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
-    if(_dvObj) devisNumLink=(_dvObj.num||'')+(_dvObj.rev?' '+String(_dvObj.rev).toUpperCase():'');
-  }
+  // === N° de devis affiché — SOURCE UNIQUE partagée avec l'aperçu (bFA). ===
+  // ⛔ Ne JAMAIS recopier ce calcul ici : c'est la duplication qui a produit la
+  //    divergence aperçu/impression du champ « Devis N° » (devis-miroir imprimé).
+  var devisNumLink=_faDevisNumAffiche(f);
   // [22/05/2026] Bandeau + récap facture PARTIELLE (Variante A — transparent).
   // Construit si f.acompteType est défini ('acompte' ou 'solde').
   var _acBanner='', _acRecap='';
@@ -44666,7 +44680,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
     }
     var _titreBandeau=_isSolde?'Facture de solde':('Facture partielle — Acompte '+_rang);
     _acBanner='<div style="background:#eaf3fb;border:0.5px solid #b5d4f4;border-radius:4px;padding:8px 11px;margin-bottom:10px;font-size:12px;color:#0c447c;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
-      '<strong>'+_titreBandeau+'</strong> · Avancement facturé : '+_pct+'% du devis '+esc(devisNumLink||(f.dvlie||''))+'<br>'+
+      '<strong>'+_titreBandeau+'</strong> · Avancement facturé : '+_pct+'% du devis '+esc(devisNumLink||'—')+'<br>'+
       '<span style="color:#185fa5">'+(_isSolde?'Solde des travaux — clôture de la facturation de ce devis':'Travaux réalisés à date · le solde fera l\'objet d\'une facturation ultérieure')+'</span>'+
     '</div>';
     // Récap : cumul déjà facturé sur la mère
