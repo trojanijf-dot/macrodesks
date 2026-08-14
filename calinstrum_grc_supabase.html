@@ -47643,7 +47643,19 @@ function _dvDescriptifHtml(d, buildPageHeader, mention){
     'text-align:center;padding:5px 10mm;font-size:9px;'+
     '-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important">'+
     CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div></div>';
-  return '<div class="doc-page" data-pgkind="descriptif">'+
+  // height:252mm au lieu des 265mm generiques — 13mm de garde supplementaire.
+  // POURQUOI : sur une page de descriptif dont le contenu s'arrete tot,
+  // margin-top:auto pousse le pied jusqu'au bord bas de la zone imprimable, et
+  // Chrome cesse d'y peindre le FOND du bandeau bleu (constate page 8/9 sur
+  // PRNC-DV035 : l'audit mesurait barrePx=20 et piedCoupe=false, l'element etait
+  // donc bien present et dans la page -- seul le fond n'etait pas peint).
+  // Les 4mm de padding ne suffisaient pas ; on ecarte franchement le pied.
+  // Ce reglage ne coute RIEN en mise en page : _pgFixPages redistribue les
+  // lignes automatiquement et l'audit verifie qu'aucune page ne deborde. C'est
+  // le meme principe que le passage de 271 a 265mm : depuis qu'il existe une
+  // boucle de correction, une boite trop petite est inoffensive, alors qu'une
+  // boite trop grande coupe du contenu. On choisit donc PRUDENT.
+  return '<div class="doc-page" data-pgkind="descriptif" style="height:252mm">'+
     // buildPageHeader(2,2) et NON (1,1) : la fonction ne renvoie le bandeau
     // DEVIS N°/TYPE/SHIPPING/FREIGHT, les blocs CALINSTRUM/CLIENT et l'objet que
     // pour la page 1 (test isFirstPage). Sur les pages de descriptif on ne veut
