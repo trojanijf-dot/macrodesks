@@ -46942,7 +46942,20 @@ function _pgFixPages(pdoc){
   try{
     if(!pdoc.querySelector('tr[data-pgtot]')){ rap.note='document non étiqueté — correction non appliquée'; return rap; }
     rap.actif=true;
-    var MAX=600, guard=0;
+    // Plafond d'iterations. Ce n'est PAS un reglage esthetique : c'est la seule
+    // protection contre une boucle infinie, et il doit etre dimensionne par la
+    // taille du document, pas devine.
+    // Arithmetique : on deplace les lignes UNE PAR UNE en re-mesurant. Vider une
+    // page de N lignes vers la suivante coute jusqu'a N deplacements, et l'operation
+    // se repete de page en page -> cout en O(N^2/2) dans le pire cas.
+    // Constate le 14/08/2026 : un devis avec descriptif technique (~250 lignes sur
+    // 6 pages) demande ~700 deplacements. Le plafond de 600 s'epuisait AVANT la fin,
+    // laissant les 2 dernieres pages en debordement -> pied de page coupe, bandeau
+    // bleu invisible. Le symptome ressemblait a un bug de rendu ; c'etait un abandon.
+    // 700 iterations = quelques centaines de ms, cout negligeable. On dimensionne
+    // large et proportionnellement au nombre reel de lignes.
+    var nbLignes=pdoc.querySelectorAll('table.doc-tbl>tbody>tr').length;
+    var MAX=Math.max(2000, nbLignes*nbLignes), guard=0;
     function listePages(){ return Array.prototype.slice.call(pdoc.querySelectorAll('.doc-page')); }
     function corps(pg){ return pg.querySelector('table.doc-tbl>tbody'); }
     function deborde(pg){ return pg.scrollHeight-pg.clientHeight>0; }
@@ -47130,7 +47143,12 @@ function _pgAuditPages(pdoc,titre){
       var piedEcrase=false;
       // Un sous-total est attendu sur toute page qui porte des lignes et qui
       // n'est pas la dernière (la dernière porte le bloc final avec le total).
-      var sousTotalAttendu=(!estDerniere && aLignes);
+      // Les pages de DESCRIPTIF TECHNIQUE portent des lignes mais aucun montant :
+      // elles n'attendent aucun sous-total. Sans cette exclusion l'audit signalait
+      // 6 sous-totaux manquants sur un document parfaitement sain -- exactement le
+      // genre de faux positif qui decredibilise une alerte et la fait ignorer.
+      var estDescriptif=(pg.getAttribute('data-pgkind')==='descriptif');
+      var sousTotalAttendu=(!estDerniere && aLignes && !estDescriptif);
       var sousTotalManquant=(sousTotalAttendu && !aSousTotal);
       if(debord>0) rapport.debordements++;
       if(sousTotalManquant) rapport.sousTotauxManquants++;
