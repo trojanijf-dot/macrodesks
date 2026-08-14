@@ -47143,6 +47143,260 @@ function _pgAuditPages(pdoc,titre){
 }
 
 
+// =============================================================================
+// MOTEUR DE COUT DE REVIENT DEBARQUE (landed cost) — 14/08/2026
+// =============================================================================
+// Remplace a terme la regle PV = PA_AUD x taux x 1.2, structurellement
+// insuffisante : elle ne couvre que la marchandise et ignore le transit (fret,
+// douane, honoraires transitaire, livraison) qui pese ~25% du cout de revient.
+// Sur le dossier de reference SLN BC 00749965-01 elle donnait un prix de vente
+// de 416 578 XPF pour un cout reel de 464 676 -> 48 098 de PERTE.
+//
+// ETAT : moteur de calcul PUR (aucun DOM, aucun acces a DB, aucun cablage UI).
+// Rien dans le GRC ne l'appelle. Valide par le harnais contre le jeu du §11.
+//
+// DEUX REGLES D'ARRONDI DEDUITES DES DONNEES REELLES (absentes de la spec, et
+// indispensables pour reproduire le DAU C70429) :
+//   1. CONVERSION CAF TRONQUEE, pas arrondie. Math.round(5304 x 73.5484) donne
+//      390 101 -> CAF 393 629. La troncature donne 390 100 -> CAF 393 628, la
+//      valeur du dossier.
+//   2. BASE TAXABLE ARRONDIE A LA CENTAINE INFERIEURE : 393 628 -> 393 600.
+//      Seule facon d'obtenir a la fois les droits de 39 360 ET la TGC evitee de
+//      47 626. Depuis le CAF brut on obtiendrait 39 363 et 47 629.
+// Ne pas "simplifier" ces deux regles en arrondis standards : le jeu de test
+// tomberait a cote et les montants ne colleraient plus aux documents douaniers.
+//
+// DECISIONS UTILISATEUR (14/08/2026) :
+//   - Poids taxable : arrondi au 0,5 kg le PLUS PROCHE (Math.round), pas
+//     l'arrondi superieur IATA. Motif : la facture reelle a ete payee sur 12 kg
+//     alors que ceil aurait donne 12,5. La regle suit la facturation constatee.
+//   - Change : les DEUX taux cote a cote — marge PREVISIONNELLE au taux
+//     douanier, marge REALISEE au taux bancaire. L'ecart (~3 pts) reste visible.
+//   - Livraison finale : parametre optionnel, 0 par defaut.
+
+// -----------------------------------------------------------------------------
+// SEPARATION FORMULES / PARAMETRES (14/08/2026) — le depot est PUBLIC.
+// -----------------------------------------------------------------------------
+// Les FORMULES peuvent etre publiques : calculer un CAF ou un poids taxable
+// n'apprend rien a personne, ce sont des regles douanieres et IATA connues.
+// Les PARAMETRES COMMERCIAUX, non : le coefficient cible, la marge visee et les
+// tarifs negocies avec le transitaire exposeraient la politique de marge de
+// CALINSTRUM a quiconque lit le depot -- clients compris. Ils ne sont donc PAS
+// dans ce fichier : ils vivent dans les donnees de l'app (DB.paramsCoutRevient),
+// editables par l'utilisateur, comme le demandait deja le §4.7 de la spec.
+// Tant qu'ils ne sont pas renseignes, le moteur calcule la partie douaniere et
+// signale explicitement que le volet commercial est non configure, plutot que
+// de sortir un verdict fonde sur des valeurs inventees.
+
+// Constantes LEGALES ET STANDARDS — publiables sans reserve.
+var LC_PARAMS_PUBLICS = {
+  diviseur_iata_aerien: 6000,      // regle IATA, universelle
+  taux_tgc_prestations: 0.06,      // TGC services, Nouvelle-Caledonie
+  taux_tgc_import: 0.11,           // TGC import, regime 4000
+  taux_dd_defaut: 0.10,            // tarif douanier NC pour la position 9026.20.00
+  taux_assurance: 0.009,           // ad valorem usuel
+  taxes_forfaitaires_xpf: 100,
+  redevance_tresor_xpf: 39,
+  seuil_suremballage: 1.5,
+  seuil_bascule_maritime_kg: 150,
+  seuil_bascule_maritime_m3: 1.0
+};
+
+// Parametres COMMERCIAUX — absents du code, lus dans les donnees de l'app.
+// Forme attendue de DB.paramsCoutRevient :
+//   { taux_had_ad_valorem, coefficient_cible, coefficient_plancher,
+//     taux_marge_cible, taux_marge_alerte, forfaits_act_xpf:{...} }
+function lcParamsCommerciaux(){
+  try{
+    if(typeof DB!=='undefined' && DB && DB.paramsCoutRevient) return DB.paramsCoutRevient;
+  }catch(e){}
+  return null;
+}
+
+// Fusionne standards + commerciaux (+ surcharge explicite pour les tests).
+function lcParams(surcharge){
+  var p={}, k;
+  for(k in LC_PARAMS_PUBLICS) p[k]=LC_PARAMS_PUBLICS[k];
+  var com=surcharge||lcParamsCommerciaux();
+  if(com){ for(k in com) p[k]=com[k]; }
+  p.forfaits_act_xpf=p.forfaits_act_xpf||{};
+  p._commercial_configure=!!(com && com.coefficient_cible!=null);
+  return p;
+}
+
+// --- Poids taxable (regle IATA, arrondi au 0,5 le plus proche) --------------
+function lcPoidsTaxable(o){
+  var P = lcParams(o.params);
+  var d = o.dimensions_cm || [0,0,0];
+  var volume_cm3 = (Number(d[0])||0) * (Number(d[1])||0) * (Number(d[2])||0);
+  var volume_m3 = volume_cm3 / 1000000;
+  var brut = Number(o.poids_brut_kg) || 0;
+  var pv = volume_cm3 / P.diviseur_iata_aerien;
+  var taxable = Math.round(Math.max(brut, pv) * 2) / 2;
+  return {
+    volume_m3: volume_m3,
+    poids_volumetrique_kg: pv,
+    poids_taxable_kg: taxable,
+    // Le suremballage fournisseur est un poste de perte invisible : on le chiffre.
+    suremballage: (brut > 0 && pv > brut * P.seuil_suremballage),
+    ecart_taxable_brut_kg: Math.max(0, taxable - brut)
+  };
+}
+
+// --- Chaine douaniere -------------------------------------------------------
+function lcChaineDouaniere(o){
+  var P = lcParams(o.params);
+  var taux = Number(o.taux_douanier) || 0;
+  var cf_dev = (Number(o.montant_aud)||0) + (Number(o.fret_aud)||0);
+  var assurance = (o.assurance_xpf != null)
+    ? Number(o.assurance_xpf)
+    : Math.round(cf_dev * taux * P.taux_assurance);
+  var caf_xpf = Math.floor(cf_dev * taux) + assurance;   // regle 1 : troncature
+  var base = Math.floor(caf_xpf / 100) * 100;            // regle 2 : centaine inf.
+  var tdd = (o.taux_dd != null) ? Number(o.taux_dd) : P.taux_dd_defaut;
+  var droits = Math.round(base * tdd);
+  var base_tgc = base + droits;
+  var tgc_theorique = Math.round(base_tgc * P.taux_tgc_import);
+  return {
+    cf_dev: cf_dev, assurance_xpf: assurance, caf_xpf: caf_xpf,
+    base_taxable_xpf: base, droits_douane_xpf: droits, base_tgc_xpf: base_tgc,
+    tgc_import_xpf: o.exoneration_tgc ? 0 : tgc_theorique,
+    tgc_import_evitee_xpf: o.exoneration_tgc ? tgc_theorique : 0
+  };
+}
+
+// --- Facture transitaire (modele ACT) ---------------------------------------
+// Bloc A = debours : avances de tresorerie, NON taxes, NON negociables.
+// Bloc B = prestations : taxees TGC 6%, SEULE partie negociable (~25% du total).
+function lcFactureTransitaire(o){
+  var P = lcParams(o.params);
+  var d = o.douane, F = P.forfaits_act_xpf;
+  var f = function(n){ return Number(F[n])||0; };
+  var fret_xpf = (o.fret_xpf != null)
+    ? Number(o.fret_xpf)
+    : Math.floor((Number(o.fret_aud)||0) * (Number(o.taux_douanier)||0));
+  var debours = d.droits_douane_xpf + P.taxes_forfaitaires_xpf
+    + P.redevance_tresor_xpf + fret_xpf + d.assurance_xpf + d.tgc_import_xpf;
+  var had = Math.round(d.caf_xpf * (Number(P.taux_had_ad_valorem)||0));
+  var prestations_ht = f('frais_aeroportuaires') + had + f('frais_dossier') + f('fid')
+    + f('cautionnement_douane') + f('cautionnement_frt') + f('livraison_aerienne')
+    + f('fuel_routier') + (o.exoneration_tgc ? f('exo_sln') : 0);
+  var tgc_prestations = Math.round(prestations_ht * P.taux_tgc_prestations);
+  return {
+    fret_xpf: fret_xpf, had_xpf: had, debours_xpf: debours,
+    prestations_ht_xpf: prestations_ht, tgc_prestations_xpf: tgc_prestations,
+    total_ht_xpf: debours + prestations_ht,
+    total_ttc_xpf: debours + prestations_ht + tgc_prestations,
+    negociable_xpf: prestations_ht  // ce sur quoi une negociation porte reellement
+  };
+}
+
+// --- Cout de revient et marge (les DEUX taux, cote a cote) ------------------
+function lcCoutRevient(o){
+  var taux_doua = Number(o.taux_douanier) || 0;
+  var taux_bank = (o.taux_reglement_reel != null) ? Number(o.taux_reglement_reel) : taux_doua;
+  var livraison = Number(o.cout_livraison_xpf) || 0;
+  var pv = Number(o.prix_vente_xpf) || 0;
+  function bloc(taux){
+    var marchandise = Math.floor((Number(o.montant_aud)||0) * taux);
+    var revient = marchandise + o.transit.total_ttc_xpf + livraison;
+    return {
+      taux_utilise: taux, cout_marchandise_xpf: marchandise,
+      cout_revient_xpf: revient, marge_brute_xpf: pv - revient,
+      taux_marge: pv ? (pv - revient) / pv : 0,
+      coefficient: marchandise ? pv / marchandise : 0
+    };
+  }
+  var prev = bloc(taux_doua), reel = bloc(taux_bank);
+  return {
+    previsionnel: prev, realise: reel,
+    ecart_change_xpf: prev.marge_brute_xpf - reel.marge_brute_xpf,
+    ecart_marge_points: (prev.taux_marge - reel.taux_marge) * 100
+  };
+}
+
+// --- Verdict (seuils du §5) --------------------------------------------------
+function lcVerdict(coefficient, taux_marge, params){
+  var P = lcParams(params);
+  var c = (coefficient >= P.coefficient_cible) ? 'vert'
+        : (coefficient >= P.coefficient_plancher ? 'orange' : 'rouge');
+  var m = (taux_marge >= P.taux_marge_cible) ? 'vert'
+        : (taux_marge >= P.taux_marge_alerte ? 'orange' : 'rouge');
+  if (!P._commercial_configure) {
+    // Aucun verdict invente : sans seuils configures, on le DIT.
+    return { coefficient: 'non-configure', marge: 'non-configure',
+      global: 'non-configure', bloquant: false,
+      message: 'Seuils commerciaux non configures (Parametres > Cout de revient).' };
+  }
+  var pire = (c === 'rouge' || m === 'rouge') ? 'rouge'
+           : ((c === 'orange' || m === 'orange') ? 'orange' : 'vert');
+  return { coefficient: c, marge: m, global: pire, bloquant: (pire === 'rouge') };
+}
+
+// --- Arbitrage aerien / maritime (§6) ---------------------------------------
+// Recommande l'aerien par defaut : sur un instrument unitaire, le minimum de
+// taxation LCL (1 m3 pour 0,072 m3 reels) annule tout gain et coute 3-4 semaines.
+function lcModeRecommande(poids, params){
+  var P = lcParams(params);
+  var bascule = (poids.poids_taxable_kg > P.seuil_bascule_maritime_kg)
+             || (poids.volume_m3 > P.seuil_bascule_maritime_m3);
+  return {
+    mode: bascule ? 'MARITIME_LCL' : 'AERIEN',
+    motif: bascule
+      ? 'Volume ou poids au-dela du seuil de bascule : comparer le maritime LCL.'
+      : 'Colis unitaire : l\'aerien reste optimal (minimum LCL 1 m3 penalisant).'
+  };
+}
+
+// --- Calcul complet d'un dossier --------------------------------------------
+function lcCalculDossier(e){
+  var poids = lcPoidsTaxable(e);
+  var douane = lcChaineDouaniere(e);
+  var transit = lcFactureTransitaire({
+    douane: douane, fret_aud: e.fret_aud, fret_xpf: e.fret_xpf,
+    taux_douanier: e.taux_douanier, exoneration_tgc: e.exoneration_tgc,
+    params: e.params
+  });
+  var cr = lcCoutRevient({
+    montant_aud: e.montant_aud, taux_douanier: e.taux_douanier,
+    taux_reglement_reel: e.taux_reglement_reel, transit: transit,
+    cout_livraison_xpf: e.cout_livraison_xpf, prix_vente_xpf: e.prix_vente_xpf
+  });
+  return {
+    poids: poids, douane: douane, transit: transit, marge: cr,
+    mode: lcModeRecommande(poids, e.params),
+    verdict: lcVerdict(cr.realise.coefficient, cr.realise.taux_marge, e.params)
+  };
+}
+
+// --- Simulateur : prix de vente cible (remplace le x1.2) --------------------
+function lcPrixVenteCible(e){
+  var P = lcParams(e.params);
+  var cible = (e.taux_marge_cible != null) ? e.taux_marge_cible : P.taux_marge_cible;
+  var r = lcCalculDossier({
+    montant_aud: e.montant_aud, fret_aud: e.fret_aud,
+    assurance_xpf: e.assurance_xpf,
+    taux_douanier: e.taux_douanier, taux_reglement_reel: e.taux_reglement_reel,
+    poids_brut_kg: e.poids_brut_kg, dimensions_cm: e.dimensions_cm,
+    taux_dd: e.taux_dd, exoneration_tgc: e.exoneration_tgc,
+    cout_livraison_xpf: e.cout_livraison_xpf, prix_vente_xpf: 0, params: P
+  });
+  var revient = r.marge.realise.cout_revient_xpf;
+  var pv = Math.ceil(revient / (1 - cible));
+  return {
+    cout_revient_xpf: revient, prix_vente_cible_xpf: pv,
+    coefficient_implique: r.marge.realise.cout_marchandise_xpf
+      ? pv / r.marge.realise.cout_marchandise_xpf : 0,
+    detail: r
+  };
+}
+
+if (typeof module !== 'undefined') module.exports = {
+  LC_PARAMS_PUBLICS, lcParams, lcParamsCommerciaux, lcPoidsTaxable, lcChaineDouaniere, lcFactureTransitaire,
+  lcCoutRevient, lcVerdict, lcModeRecommande, lcCalculDossier, lcPrixVenteCible
+};
+
+
 // ===== INIT =====
 document.addEventListener('DOMContentLoaded',function(){
   // Build client selects on load
