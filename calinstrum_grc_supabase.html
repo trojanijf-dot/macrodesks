@@ -5846,12 +5846,46 @@ function nxt(t, prefix){
   }
 
   if(t==='bl'){
-    // Format BL : BL{DDMMYYYY}/{NNN}
-    var reBL=/BL\d{8}\/(\d+)/i;
-    var n=scanMax(DB.bls||[], reBL)+1;
+    // =========================================================================
+    // SERIE PAR CLIENT — corrige le 17/08/2026
+    // =========================================================================
+    // AVANT : scanMax global sur DB.bls avec /BL\d{8}\/(\d+)/. DEUX defauts :
+    //   1. aucun filtre par client -> un BL PRNC heritait du compteur SLN
+    //      (constate : BL17082026/111 au lieu de 043) ;
+    //   2. la regex exigeait le prefixe "BL", or les BL PRNC historiques sont
+    //      numerotes "13072026/42" SANS ce prefixe -> ils n'etaient meme pas
+    //      comptes, donc la serie PRNC serait repartie de 1 meme apres filtrage.
+    // Les devis, factures et avoirs etaient deja par client ; seuls BC et BL
+    // avaient un compteur global.
+    //
+    // NOUVEAU FORMAT : PFX-BL{DDMMYYYY}/{NNN} (ex. PRNC-BL17082026/043), le
+    // client devant comme sur les devis et factures. Sans lui, deux clients
+    // pouvaient produire un numero identique le meme jour.
+    //
+    // On compte les DEUX formats, mais l'ancien UNIQUEMENT si l'entree
+    // appartient au client demande -- les anciens numeros ne portant pas le
+    // prefixe, seul le champ client permet de les rattacher a une serie.
+    var escB=pfx.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    var reBLnew=new RegExp('^'+escB+'-BL\\d{8}[\\s\\/](\\d+)','i');
+    var reBLold=/^(?:BL)?\d{8}[\s\/](\d+)/i;
+    var maxBL=0;
+    (DB.bls||[]).forEach(function(x){
+      var num=(x&&x.num)?String(x.num):'';
+      if(!num) return;
+      var m=num.match(reBLnew);
+      if(!m){
+        // Ancien format : rattachement par le CLIENT, pas par le numero.
+        var pfxItem=(typeof getClientPrefix==='function')?getClientPrefix(x.client||''):'';
+        if(pfxItem!==pfx) return;
+        m=num.match(reBLold);
+      }
+      if(m){ var v=parseInt(m[1],10); if(v>maxBL) maxBL=v; }
+    });
+    var n=maxBL+1;
+    DB.nid['bl_'+pfx]=n;
     DB.nid.bl=Math.max(DB.nid.bl||0, n);
     saveDB();
-    return 'BL'+dd+mm+yy+'/'+pad(n);
+    return pfx+'-BL'+dd+mm+yy+'/'+pad(n);
   }
 
   if(t==='av'){
