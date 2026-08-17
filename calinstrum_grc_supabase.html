@@ -12044,8 +12044,35 @@ function syncBCToFacture(bc){
     }
     objet='Fourniture matériel BC '+(bc.num||'');
   }
-  // Chercher facture existante (par num OU par lien _fromBC)
-  var existing=(DB.factures||[]).find(function(f){return f._fromBC===bc.id||(f.num||'').toLowerCase()===faNum.toLowerCase();});
+  // Chercher facture existante : d'abord par lien EXPLICITE (_fromBC), ensuite
+  // seulement par numero.
+  var existing=(DB.factures||[]).find(function(f){return f._fromBC===bc.id;});
+  if(!existing){
+    var _parNum=(DB.factures||[]).find(function(f){return (f.num||'').toLowerCase()===faNum.toLowerCase();});
+    if(_parNum){
+      // ⚠⚠ GARDE ANTI-ECRASEMENT INTER-CLIENTS — ne pas retirer.
+      // buildFactureNumFromBC() code en dur le prefixe 'SLN-F' QUEL QUE SOIT le
+      // client du BC. Un BC PRNC vise donc SLN-Fnnn. Constate sur l'export du
+      // 01/06 : les BC PRNC 29012026/081 et 02012026/079 pointent vers SLN-F081
+      // et SLN-F079, deux factures appartenant a d'AUTRES clients SLN (Yohann
+      // DOUEPERE, Norbert PATCHE). Sans cette garde, passer un de ces BC en
+      // « Confirme » ecrasait les lignes d'une facture etrangere au dossier :
+      // ni _manuallyEditedAt ni les versements ne l'auraient empeche si la
+      // facture etait encore vierge.
+      // Le rapprochement par _fromBC reste autorise (lien explicite, voulu) ;
+      // seul le rapprochement PAR NUMERO exige que le client corresponde.
+      var _pfxAttendu=(typeof getClientPrefix==='function')?getClientPrefix(clientShort):String(clientShort||'').trim();
+      var _pfxTrouve=(typeof getClientPrefix==='function')?getClientPrefix(_parNum.client||''):String(_parNum.client||'').trim();
+      if(_pfxAttendu && _pfxTrouve && _pfxAttendu!==_pfxTrouve){
+        console.warn('[syncBCToFacture] ABANDON : le BC '+(bc.num||'?')+' ('+_pfxAttendu+
+          ') calcule le numero '+faNum+', deja porte par une facture '+_pfxTrouve+
+          ' ('+(_parNum.client||'?')+'). Aucune modification faite.');
+        return {action:'noop', reason:'conflit de client sur '+faNum+' ('+_pfxAttendu+' vs '+_pfxTrouve+')',
+                faNum:faNum};
+      }
+      existing=_parNum;
+    }
+  }
   if(existing){
     // === MISE À JOUR (idempotente) ===
     // Plusieurs niveaux de protection contre l'écrasement involontaire :
