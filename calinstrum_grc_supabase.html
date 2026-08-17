@@ -11882,10 +11882,58 @@ function suggestPONumber(){
 }
 
 // Construit le N° facture cible à partir d'un BC : "<date>/098" → "SLN-F098"
+// ---------------------------------------------------------------------------
+// _faPrefixForBC(bc) — le prefixe de numerotation des factures du client du BC.
+//
+// ⚠ Ne PAS deduire le prefixe du seul nom du client : certains clients utilisent
+// une ABREVIATION dans leurs numeros de facture (« ENERCAL NEPOUI » -> ENN-F004,
+// numerote a la main, aucune table de correspondance n'existe dans le code).
+// On lit donc le prefixe REELLEMENT employe par les factures deja emises pour ce
+// client, et on ne retombe sur getClientPrefix() que si le client n'a encore
+// aucune facture.
+// ---------------------------------------------------------------------------
+function _faPrefixForBC(bc){
+  // Client de reference : celui du devis lie (le plus fiable), sinon le
+  // clientFinal du BC.
+  var cli='';
+  var _ids=(typeof getBCsDevisIds==='function')?getBCsDevisIds(bc):[];
+  for(var _i=0;_i<_ids.length && !cli;_i++){
+    var _d=(DB.devis||[]).find(function(x){return x.id===_ids[_i];});
+    if(_d&&_d.client) cli=_d.client;
+  }
+  if(!cli) cli=(bc&&bc.clientFinal)||'';
+  var pf=(typeof getClientPrefix==='function')?getClientPrefix(cli):String(cli||'').trim();
+  if(!pf) return 'SLN';
+  // Prefixe deja en usage sur les factures de ce meme client ?
+  var vu=null;
+  (DB.factures||[]).forEach(function(f){
+    if(vu) return;
+    var pcli=(typeof getClientPrefix==='function')?getClientPrefix(f.client||''):'';
+    if(pcli!==pf) return;
+    var m=String(f.num||'').match(/^(.+?)-F\d+/i);
+    if(m) vu=m[1];
+  });
+  return vu||pf;
+}
+
+// Numero de la facture qu'un BC « verrouille » : prefixe du client + suffixe du BC.
+//
+// ⚠⚠ BUG CORRIGE LE 18/08/2026. Le code renvoyait 'SLN-F'+pad(n) EN DUR, quel que
+// soit le client. Consequences mesurees sur l'export du 18/08 :
+//   - les 4 BC PRNC (042, 043, 044, 045) cherchaient SLN-F0xx, inexistant, alors
+//     que PRNC-F042/043/044/045 existent et sont les bonnes factures. Ne trouvant
+//     rien, syncBCToFacture CREAIT une facture neuve a ce numero : c'est ainsi
+//     qu'une facture « SLN-F042 » portant un client PRNC etait apparue. Le BC
+//     07052026/042 etant deja en « Confirme », elle allait etre RECREEE.
+//   - 2 BC PRNC (079, 081) tombaient sur des factures SLN d'AUTRES clients
+//     (Norbert PATCHE, Yohann DOUEPERE) — cf la garde anti-ecrasement dans
+//     syncBCToFacture, qui reste en place comme seconde barriere.
+// Le verrou ne fonctionnait donc que pour SLN, par coincidence de prefixe.
+// Rien ne change pour les 23 BC SLN.
 function buildFactureNumFromBC(bc){
   var n=parsePOSuffix(bc.num);
   if(n===null)return null;
-  return 'SLN-F'+pad(n);
+  return _faPrefixForBC(bc)+'-F'+pad(n);
 }
 
 // Synchronise un BC Emerson vers une facture pré-facturée.
