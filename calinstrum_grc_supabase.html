@@ -11955,7 +11955,37 @@ function syncBCToFacture(bc){
   // PRIORITÉ 1 : lignes du devis lié (vrai prix de vente avec marge déjà appliquée)
   // PRIORITÉ 2 : lignes du BC converties en XPF (placeholder, marge à ajouter manuellement)
   var dvLie=null;
-  if(bc.devisLieId)dvLie=(DB.devis||[]).find(function(d){return d.id===bc.devisLieId;});
+  // ⚠⚠ RÉSOLUTION DU DEVIS — TOUJOURS via getBCsDevisIds(), JAMAIS par comparaison directe.
+  //
+  // BUG CORRIGÉ LE 17/08/2026 (dossier SLN-F111). Le code faisait :
+  //     if(bc.devisLieId) dvLie = DB.devis.find(d => d.id === bc.devisLieId);
+  // Or getBC() écrit `devisLieId: String(devisIdsArr[0])` et la cascade REAPPRO
+  // écrit `devisLieId: String(devisId)` : une CHAÎNE. `devis.id` est un NOMBRE
+  // (newId() = nowBase+seq). Le === strict était donc TOUJOURS faux.
+  //
+  // Conséquence : le devis n'était JAMAIS retrouvé, la fonction tombait dans la
+  // branche PRIORITÉ 2 (copyBCLinesToFacture) et écrasait la facture avec le
+  // PRIX D'ACHAT Emerson × taux, SANS MARGE. Silencieux : aucune erreur, une
+  // facture d'apparence normale. Mesuré sur SLN-F111 : 1 124 206 XPF facturés
+  // au lieu de 1 770 191, soit 645 985 XPF perdus. Vérifié sur l'export du
+  // 01/06 : les 22 BC sur 22 stockent devisLieId en chaîne — donc TOUTES les
+  // factures issues d'un BC étaient concernées, pas un cas particulier.
+  //
+  // getBCsDevisIds() normalise les deux formats (devisLieIds[] et devisLieId
+  // legacy) et coerce en nombre via +x. C'est la seule porte d'entrée correcte.
+  var _dvIds=(typeof getBCsDevisIds==='function')?getBCsDevisIds(bc):[];
+  _dvIds.some(function(_id){
+    dvLie=(DB.devis||[]).find(function(d){return d.id===_id;});
+    return !!dvLie;
+  });
+  // Multi-devis (1 BC sur 22 dans l'export du 01/06) : on garde volontairement
+  // la sémantique historique — le PREMIER devis résolu fournit les lignes. On
+  // n'agrège PAS les devis : si chacun porte déjà sa propre facture, agréger
+  // double-facturerait. On le signale pour que ce soit vérifiable.
+  if(_dvIds.length>1){
+    console.warn('[syncBCToFacture] BC '+(bc.num||'?')+' lié à '+_dvIds.length+
+      ' devis — seul '+((dvLie&&dvLie.num)||'?')+' alimente la facture. À vérifier.');
+  }
   var ttc=0;
   var faLines=[];
   if(dvLie){
