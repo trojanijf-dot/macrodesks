@@ -4640,6 +4640,49 @@ function saveDB(){
   try{ if(typeof _supaSyncSchedule==='function') _supaSyncSchedule(); }catch(e){ console.warn('supabase schedule failed:',e); }
 }
 
+// =============================================================================
+// _preserveHiddenFields(reconstruit, existant) — ANTI-EFFACEMENT SILENCIEUX
+// =============================================================================
+// ⚠ CLASSE DE DÉFAUT, pas un cas particulier. getFA(), getBL() et getBC() ne
+// LISENT PAS l'enregistrement existant : ils RECONSTRUISENT un objet neuf à
+// partir des champs du formulaire. Puis saveXX() fait DB.xxx[i] = <objet neuf>.
+// Conséquence : tout champ métier qui n'a PAS de champ de formulaire était
+// effacé au premier enregistrement, sans erreur ni indice.
+//
+// Champs concernés — tous posés par du code, jamais par un input :
+//   facture.linkedBCs        (linkBCToInvoice)  → coût Emerson, marge nette
+//   facture._linkedBLId      (cascade REAPPRO)
+//   BL._linkedFactureId      (cascade REAPPRO)  → traçabilité BL → facture
+//   BL._linkedBCCaliId       (cascade REAPPRO)
+//   BC.paidEmerson/-Date     (togglePaidEmerson) → trésorerie
+//
+// 🛑 POURQUOI C'EST RESTÉ INVISIBLE SI LONGTEMPS. Quand linkedBCs disparaît,
+// getLinkedBCs() renvoie [] → getCoutEmerson() = 0 → la marge nette affichée
+// devient le montant facturé ENTIER. La perte de donnée se présentait comme un
+// excellent résultat. Jamais vert par absence de donnée.
+//
+// Le motif avait déjà été rencontré : getBL() rattrape _sourceDevisIds à la
+// main (cf getBL), et getFA() rattrape 18 champs un par un via preservedFlags.
+// Une liste de champs ne tient pas : chaque champ ajouté plus tard est oublié.
+// D'où cette règle générique — tout champ futur est protégé sans rien ajouter.
+//
+// RÈGLE : on ne restaure QUE les clés ABSENTES de l'objet reconstruit. Une
+// valeur produite par le formulaire prime toujours, même vide — sinon on
+// remplacerait une perte de donnée par l'impossibilité de vider un champ.
+// (`k in obj` est vrai pour une clé posée à undefined : un champ que le
+// formulaire efface volontairement, comme bc.tauxAUD, reste donc effacé.)
+//
+// Vérifié par ...\CLAUDE\GRC\test-persistance\test_persistance_liens.js
+// (10 assertions en échec avant ce correctif, dont la marge à 100 %).
+// =============================================================================
+function _preserveHiddenFields(reconstruit, existant){
+  if(!reconstruit || !existant) return reconstruit;
+  Object.keys(existant).forEach(function(k){
+    if(!(k in reconstruit)) reconstruit[k]=existant[k];
+  });
+  return reconstruit;
+}
+
 // ===== GLOBAL UNDO SYSTEM =====
 // Pile d'undo unifiée pour toute l'app. Chaque entrée = {label, revert, ts}.
 var undoStack=[];
@@ -28737,7 +28780,10 @@ function getFA(){
       delete fa._bcConsumptionIncludesMajorees;
     }
   }
-  return fa;
+  // ⚠ Restaure les champs posés par du code et absents du formulaire
+  // (linkedBCs, _linkedBLId…). Sans ceci, ils étaient effacés au 1er save et la
+  // marge affichée devenait le montant facturé entier. Cf _preserveHiddenFields.
+  return _preserveHiddenFields(fa, eFAid?(DB.factures||[]).find(function(x){return x.id===eFAid;}):null);
 }
 
 // === HISTORIQUE DU DÉLAI DE PAIEMENT ===
@@ -32370,11 +32416,15 @@ function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot
   // conservé en sortie = 1er ID, pour ne pas casser les anciens reads sur DB.bcs.
   var devisIdsArr = (_bcSelectedDevisIds||[]).slice();
   var devisIdLegacy = devisIdsArr.length > 0 ? String(devisIdsArr[0]) : '';
-  return{id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),calContact:gvg('bc-cal-contact'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieIds:devisIdsArr,devisLieId:devisIdLegacy,lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
+  var _bc={id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),calContact:gvg('bc-cal-contact'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieIds:devisIdsArr,devisLieId:devisIdLegacy,lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
   tauxAUD:(tauxNum!==null&&!isNaN(tauxNum)&&tauxNum>0)?tauxNum:undefined,
   fraisXPF:(fraisNum!==null&&!isNaN(fraisNum)&&fraisNum>=0)?fraisNum:undefined,
   fraisNote:gvg('bc-fraisNote')||''
-  };}
+  };
+  // ⚠ Restaure les champs posés par du code et absents du formulaire
+  // (paidEmerson, paidEmersonDate → trésorerie). Cf _preserveHiddenFields.
+  return _preserveHiddenFields(_bc, eBCid?(DB.bcs||[]).find(function(x){return x.id===eBCid;}):null);
+  }
 function populateBCDevisSelect(){
   var sel=document.getElementById('bc-devis-lie');
   if(!sel)return;
@@ -39309,7 +39359,7 @@ function getBL(){
   if(_blPendingSourceDevisIds && _blPendingSourceDevisIds.length){
     sourceIds = _blPendingSourceDevisIds.slice();
   }
-  return {
+  var _bl = {
     id: eBLid||Date.now(),
     num: gvg('bl-num'),
     date: gvg('bl-date'),
@@ -39329,6 +39379,11 @@ function getBL(){
     lines: JSON.parse(JSON.stringify(blL)),
     total: tot
   };
+  // ⚠ Restaure les champs posés par du code et absents du formulaire
+  // (_linkedFactureId, _linkedBCCaliId…). Cf _preserveHiddenFields.
+  // Le rattrapage manuel de _sourceDevisIds ci-dessus est conservé : il doit
+  // primer, car il gère aussi l'injection depuis _blPendingSourceDevisIds.
+  return _preserveHiddenFields(_bl, eBLid?(DB.bls||[]).find(function(x){return x.id===eBLid;}):null);
 }
 async function saveBL(){
   // PHASE 2 (warning conflit) : check Supabase avant écrasement. Cf _supaCheckAndPromptConflict.
