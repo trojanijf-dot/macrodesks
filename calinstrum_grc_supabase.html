@@ -30018,19 +30018,179 @@ function syncFactureToSuivi(f){
   // Mettre à jour la variable globale invoices (utilisée par renderSuivi)
   invoices=DB.invoices;
 }
-// Stockage des mères dépliées (persisté en localStorage pour survivre aux re-renders)
-var faExpandedParents = (function(){
-  try { return new Set(JSON.parse(localStorage.getItem('faExpanded')||'[]')); }
+// =============================================================================
+// SUIVI EN CASCADE — le dossier déplié sous une ligne de la page Factures
+// =============================================================================
+// UN DOSSIER = UNE PRÉ-FACTURE. Le n° de facture est réservé à l'acceptation du
+// devis (cf saveFA : devis.linkFactureId + devis.status='Facturé'), par client,
+// et ne bouge plus. C'est l'ancre autour de laquelle tout le dossier s'organise :
+// pour une prestation il aboutit sur la facture, pour une fourniture il porte le
+// BC Emerson puis le BL.
+//
+// ⚠ AUCUNE MIGRATION DE DONNÉES. Les liens BC→facture et BL→facture n'existaient
+// pas (le BC ne portait qu'une étiquette texte `linkFacture`, le BL un champ posé
+// à un seul endroit du code). Ils sont DÉRIVÉS via le devis :
+//     BC.devisLieIds[] ─┐                    ┌─ devis.linkFactureId
+//                       ├─→ devis.id ────────┤
+//     BL._sourceDevisIds[] ─┘                └─ facture.devisLieId
+// Le champ direct `factureId` est LU s'il est présent (raccourci), mais n'est
+// volontairement écrit nulle part par cette fonctionnalité : un devis peut porter
+// PLUSIEURS factures (acompte + solde, cf parentId/acompteType), donc
+// devis.linkFactureId ne désigne pas toujours la bonne — l'estampiller figerait
+// un lien faux, alors que la dérivation gère la multiplicité sans rien décider.
+//
+// AFFICHAGE : PHASES_META seul (la timeline détaillée du devis, via phaseHistory).
+// PHASES et son flag `billed` continuent de tourner en interne pour le
+// pré-facturé — on ne les affiche pas ici pour ne pas montrer deux vérités.
+//
+// VERROUS : on AVERTIT, on ne bloque pas (décision 17/08). Une phase posée sans
+// son fait déclencheur reste possible — sinon un BL saisi après coup bloquerait
+// le dossier — mais elle est signalée comme incohérente.
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// _dossierId(inv) — l'identifiant du dossier pour UNE ligne de la page Factures.
+// ⚠ SOURCE UNIQUE, utilisée à la fois par le chevron (qui écrit dans
+// _dossierOuverts) et par _dossierRowHtml (qui y lit). Si les deux calculaient
+// l'id chacun de leur côté, une ligne Suivi sans _factureId mais dont le numéro
+// correspond à une facture GRC donnerait deux ids différents : le clic
+// enregistrerait une ouverture que le rendu ne verrait jamais.
+// ---------------------------------------------------------------------------
+function _dossierId(inv){
+  if(!inv) return null;
+  var id=inv._factureId||inv.grcFactureId;
+  if(!id && inv.num){
+    var f=(DB.factures||[]).find(function(x){return (x.num||'').toLowerCase()===(inv.num||'').toLowerCase();});
+    if(f) id=f.id;
+  }
+  return id||inv.id;
+}
+
+// Dossiers dépliés (persisté pour survivre aux re-renders de renderFA)
+var _dossierOuverts = (function(){
+  try { return new Set(JSON.parse(localStorage.getItem('grcDossiersOuverts')||'[]')); }
   catch(e) { return new Set(); }
 })();
-function saveFaExpanded(){
-  try { localStorage.setItem('faExpanded', JSON.stringify(Array.from(faExpandedParents))); } catch(e){}
-}
-function toggleFaParent(parentId){
-  if(faExpandedParents.has(parentId)) faExpandedParents.delete(parentId);
-  else faExpandedParents.add(parentId);
-  saveFaExpanded();
+function _dossierToggle(faId){
+  if(_dossierOuverts.has(faId)) _dossierOuverts.delete(faId);
+  else _dossierOuverts.add(faId);
+  try { localStorage.setItem('grcDossiersOuverts', JSON.stringify(Array.from(_dossierOuverts))); } catch(e){}
   renderFA();
+}
+
+// Règles de verrouillage : une phase n'est atteignable que si le fait qui la
+// justifie est enregistré. La phase devient la CONSÉQUENCE d'un fait, pas une
+// case qu'on coche. `besoin` est le message affiché, `ok(dos)` le test.
+var DOSSIER_VERROUS={
+  'po_emerson':  {besoin:'un BC Emerson émis', ok:function(d){return d.bcs.length>0;}},
+  'livre_client':{besoin:'un BL émis',         ok:function(d){return d.bls.length>0;}},
+  'facture':     {besoin:'la facture émise',   ok:function(d){return !!(d.facture && d.facture.date && !d.prefacturee);}}
+};
+
+// ---------------------------------------------------------------------------
+// _dossierFromFacture(inv) — assemble le dossier complet à partir d'une ligne
+// de la page Factures (item Suivi virtuel ou entrée DB.factures).
+// Retourne null si on ne retrouve aucune facture GRC (ligne purement Suivi).
+// ---------------------------------------------------------------------------
+function _dossierFromFacture(inv){
+  if(!inv) return null;
+  var fid=inv._factureId||inv.grcFactureId||inv.id;
+  var fa=(DB.factures||[]).find(function(x){return x.id===fid;});
+  if(!fa && inv.num){
+    fa=(DB.factures||[]).find(function(x){return (x.num||'').toLowerCase().trim()===(inv.num||'').toLowerCase().trim();});
+  }
+  if(!fa) return null;
+
+  // --- le devis d'origine : lien descendant puis lien remontant ---
+  var dv=null;
+  if(fa.devisLieId) dv=(DB.devis||[]).find(function(x){return x.id===fa.devisLieId;});
+  if(!dv) dv=(DB.devis||[]).find(function(x){return x.linkFactureId===fa.id;});
+  if(!dv && fa.dvlie){
+    dv=(DB.devis||[]).find(function(x){return (x.num||'')===fa.dvlie;});
+  }
+
+  // --- BC Emerson : lien direct, lien facture->BC, ou dérivation par le devis ---
+  var bcs=(DB.bcs||[]).filter(function(b){
+    if(b.factureId && b.factureId===fa.id) return true;
+    if(Array.isArray(fa.linkedBCs) && fa.linkedBCs.indexOf(b.id)>=0) return true;
+    if(dv && typeof getBCsDevisIds==='function' && getBCsDevisIds(b).indexOf(dv.id)>=0) return true;
+    return false;
+  });
+
+  // --- BL : lien direct, lien REAPPRO, ou dérivation par le devis ---
+  var bls=(DB.bls||[]).filter(function(b){
+    if(b.factureId && b.factureId===fa.id) return true;
+    if(b._linkedFactureId && b._linkedFactureId===fa.id) return true;
+    if(dv && Array.isArray(b._sourceDevisIds) && b._sourceDevisIds.indexOf(dv.id)>=0) return true;
+    return false;
+  });
+
+  var typeTxt=String(fa.type||(dv&&dv.type)||'Fourniture');
+  var estPresta=(typeTxt.indexOf('Prestation')>=0 && typeTxt.indexOf('Fourniture')<0);
+
+  return {
+    facture: fa,
+    devis: dv||null,
+    bcs: bcs,
+    bls: bls,
+    // N° du BC CLIENT (celui que le client nous envoie), à ne pas confondre avec
+    // le BC Emerson : la section BC du GRC, ce sont les BC CALINSTRUM → EMERSON.
+    bcClient: fa.bcClientSLN||fa._importPONum||(dv&&dv.bcClientSLN)||'',
+    prefacturee: (typeof isPrebilled==='function') ? isPrebilled(fa) : false,
+    estPresta: estPresta,
+    typeTxt: typeTxt,
+    // Amorçage : par le BC client (cas SLN cadre) ou par le devis (défaut).
+    // Ce n'est pas une exception, juste une variante d'entrée sur le même rail.
+    amorce: (fa._fromBCReappro||(dv&&dv._fromBCReappro)) ? 'bc_client' : 'devis'
+  };
+}
+
+// ---------------------------------------------------------------------------
+// _dossierPhases(dos) — la timeline PHASES_META applicable au dossier, chaque
+// étape enrichie de son état : done / now / lock / skip, et de l'incohérence
+// éventuelle (phase atteinte sans le fait qui la justifie).
+// ---------------------------------------------------------------------------
+function _dossierPhases(dos){
+  if(!dos) return [];
+  var dv=dos.devis;
+  // Type au sens PHASES_META ('Fourniture' | 'Prestation' | 'Mixte')
+  var t=dos.typeTxt;
+  if(t.indexOf('Prestation')>=0 && t.indexOf('Fourniture')>=0) t='Mixte';
+  else if(t.indexOf('Prestation')>=0) t='Prestation';
+  else t='Fourniture';
+
+  // Historique réel : phaseHistory du devis (source de vérité de PHASES_META).
+  var hist=(dv && Array.isArray(dv.phaseHistory)) ? dv.phaseHistory : [];
+  var datesParPhase={};
+  hist.forEach(function(h){ if(h && h.phase) datesParPhase[h.phase]=h.date||''; });
+  var courante=(typeof _getCurrentPhase==='function' && dv) ? _getCurrentPhase(dv) : null;
+  var clefCourante=courante?courante.phase:'';
+  var idxCourant=(PHASES_META[clefCourante]||{}).idx||0;
+
+  return Object.keys(PHASES_META).filter(function(k){
+    var m=PHASES_META[k];
+    if(m._deprecated) return false;                       // jamais proposées à l'UI
+    return (m.applicableTo||[]).indexOf(t)>=0;
+  }).sort(function(a,b){return PHASES_META[a].idx-PHASES_META[b].idx;})
+    .map(function(k){
+      var m=PHASES_META[k];
+      var atteinte=Object.prototype.hasOwnProperty.call(datesParPhase,k);
+      var verrou=DOSSIER_VERROUS[k];
+      var faitPresent=verrou?verrou.ok(dos):true;
+      var etat;
+      if(atteinte) etat=(k===clefCourante)?'now':'done';
+      else if(!faitPresent) etat='lock';
+      else if(m.idx<idxCourant) etat='skip';             // sautée
+      else etat='todo';
+      return {
+        cle:k, label:m.label, color:m.color, idx:m.idx,
+        date:datesParPhase[k]||'', etat:etat,
+        besoin:(verrou&&!faitPresent)?verrou.besoin:'',
+        // ⚠ INCOHÉRENCE : la phase est atteinte alors que le fait manque.
+        // On avertit, on ne bloque pas (cf en-tête de section).
+        incoherente:(atteinte && !faitPresent)
+      };
+    });
 }
 
 // =============================================================================
@@ -30049,6 +30209,105 @@ function toggleFaParent(parentId){
 // Tri : window._faSort = {key, dir}
 // Onglet client actif : géré par getHgrState('fa').activeClient (même mécanisme
 // que pour les autres pages, partagé entre Devis/Factures/BC/BL).
+// ---------------------------------------------------------------------------
+// _dossierRowHtml(inv) — la ligne <tr> dépliée sous la facture. Chaîne vide si
+// le dossier n'est pas ouvert ou si la ligne n'a pas de facture GRC derrière.
+// ---------------------------------------------------------------------------
+function _dossierRowHtml(inv){
+  if(!_dossierOuverts.has(_dossierId(inv))) return '';
+  var dos=_dossierFromFacture(inv);
+  if(!dos){
+    return '<tr class="dossier-row"><td colspan="11" style="padding:10px 16px;color:var(--muted);font-size:11px;font-style:italic">'+
+      'Aucune facture GRC derrière cette ligne (entrée Suivi historique) — pas de dossier à afficher.</td></tr>';
+  }
+
+  // ---- le rail de documents ----
+  function carte(k,valeur,detail,etat){
+    // etat : 'ok' | 'wait' | 'vide' | 'na'
+    var vide=(etat==='vide'||etat==='na');
+    var dot=etat==='ok'?'var(--green)':(etat==='wait'?'var(--amber)':'var(--muted-soft)');
+    return '<div style="flex:1;min-width:120px;position:relative;padding:8px 10px;border-radius:6px;'+
+      'background:'+(vide?'transparent':'var(--bg1)')+';border:1px '+(vide?'dashed rgba(255,255,255,.13)':'solid var(--border)')+'">'+
+      '<span style="position:absolute;top:8px;right:9px;width:6px;height:6px;border-radius:50%;background:'+dot+'"></span>'+
+      '<div style="font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-soft);font-weight:700">'+esc(k)+'</div>'+
+      '<div style="font-family:var(--mono);font-size:11px;margin-top:3px;font-weight:600;'+
+        (vide?'color:var(--muted-soft);font-style:italic':'color:var(--text)')+'">'+esc(valeur)+'</div>'+
+      '<div style="font-size:9px;color:var(--muted-soft);margin-top:2px">'+esc(detail||'—')+'</div>'+
+    '</div>';
+  }
+  var cartes=[];
+  if(dos.amorce==='bc_client'){
+    cartes.push(carte('BC client', dos.bcClient||'—', dos.bcClient?'amorce du dossier':'', dos.bcClient?'ok':'vide'));
+  }
+  cartes.push(dos.devis
+    ? carte('Devis', dos.devis.num||'—', dos.devis.status||'', 'ok')
+    : carte('Devis','non lié','','vide'));
+  cartes.push(carte('Pré-facture', dos.facture.num||'—',
+    dos.prefacturee?'n° réservé, non émise':('émise le '+(dos.facture.date?fD(dos.facture.date):'?')),
+    dos.prefacturee?'wait':'ok'));
+  if(dos.estPresta){
+    cartes.push(carte('BC Emerson','sans objet','prestation','na'));
+    cartes.push(carte('BL','sans objet','prestation','na'));
+  } else {
+    cartes.push(dos.bcs.length
+      ? carte('BC Emerson', dos.bcs.map(function(b){return b.num||'?';}).join(', '),
+              dos.bcs.length>1?(dos.bcs.length+' BC'):(dos.bcs[0].status||''), 'ok')
+      : carte('BC Emerson','à créer','','vide'));
+    cartes.push(dos.bls.length
+      ? carte('BL', dos.bls.map(function(b){return b.num||'?';}).join(', '),
+              dos.bls.length>1?(dos.bls.length+' BL'):(dos.bls[0].status||''), 'ok')
+      : carte('BL','à créer','','vide'));
+  }
+
+  // ---- la timeline de phases ----
+  var phases=_dossierPhases(dos);
+  var incoherentes=phases.filter(function(p){return p.incoherente;});
+  var phasesHtml=phases.map(function(p){
+    var bg='var(--bg1)', bd='var(--border)', col='var(--muted-soft)', mark='', extra='';
+    if(p.etat==='done'){ bg='rgba(16,185,129,.07)'; bd='rgba(16,185,129,.28)'; col='var(--green)'; mark='✓ '; }
+    else if(p.etat==='now'){ bg='rgba(251,191,36,.1)'; bd='rgba(251,191,36,.45)'; col='var(--amber)'; mark='● '; }
+    else if(p.etat==='lock'){ bd='rgba(255,255,255,.11)'; mark='🔒 ';
+      extra='<div style="font-size:8.5px;color:var(--red);margin-top:3px;line-height:1.3">requiert '+esc(p.besoin)+'</div>'; }
+    else if(p.etat==='skip'){ mark='— '; }
+    if(p.incoherente){ bd='rgba(244,63,94,.5)'; col='var(--red)'; mark='⚠ ';
+      extra='<div style="font-size:8.5px;color:var(--red);margin-top:3px;line-height:1.3">sans '+esc(p.besoin)+'</div>'; }
+    return '<div style="flex:1;min-width:94px;padding:7px 8px;border-radius:6px;background:'+bg+';border:1px '+
+      (p.etat==='lock'?'dashed':'solid')+' '+bd+'">'+
+      '<div style="font-size:10px;font-weight:700;line-height:1.25;color:'+col+'">'+mark+esc(p.label)+'</div>'+
+      '<div style="font-size:9px;color:var(--muted-soft);margin-top:2px;font-family:var(--mono)">'+(p.date?fD(p.date):'—')+'</div>'+
+      extra+'</div>';
+  }).join('');
+
+  // ---- bandeaux d'avertissement (on avertit, on ne bloque pas) ----
+  var bandeaux='';
+  if(incoherentes.length){
+    bandeaux+='<div style="margin-top:10px;padding:8px 12px;border-radius:6px;background:rgba(244,63,94,.07);'+
+      'border:1px solid rgba(244,63,94,.26);font-size:11px;color:#fecdd3">⚠ <b style="color:var(--red)">Dossier incohérent :</b> '+
+      incoherentes.map(function(p){return '« '+esc(p.label)+' » est atteinte sans '+esc(p.besoin);}).join(' · ')+
+      '. <span style="color:var(--muted)">La phase reste modifiable — corrige le document manquant quand tu peux.</span></div>';
+  }
+  var bloquantes=phases.filter(function(p){return p.etat==='lock';});
+  if(bloquantes.length && !incoherentes.length){
+    var pr=bloquantes[0];
+    bandeaux+='<div style="margin-top:10px;padding:8px 12px;border-radius:6px;background:rgba(56,189,248,.06);'+
+      'border:1px solid rgba(56,189,248,.22);font-size:11px;color:#bae6fd">→ Prochaine étape bloquée : <b>'+esc(pr.label)+
+      '</b> requiert '+esc(pr.besoin)+'.</div>';
+  }
+  if(dos.amorce==='bc_client'){
+    bandeaux+='<div style="margin-top:8px;font-size:10.5px;color:var(--muted)">◈ Dossier amorcé par le BC client — '+
+      'il rejoint le rail commun dès la pré-facture.</div>';
+  }
+
+  return '<tr class="dossier-row"><td colspan="11" style="padding:0 14px 14px;background:rgba(255,255,255,.012)">'+
+    '<div style="border-left:2px solid rgba(45,212,191,.35);padding:10px 0 2px 12px">'+
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch">'+cartes.join('')+'</div>'+
+      '<div style="font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted-soft);font-weight:700;margin:12px 0 7px">'+
+        'Phases — '+esc(dos.estPresta?'prestation':'fourniture')+'</div>'+
+      '<div style="display:flex;gap:5px;flex-wrap:wrap">'+phasesHtml+'</div>'+
+      bandeaux+
+    '</div></td></tr>';
+}
+
 var _faSort={key:'dateEnvoi',dir:-1}; // tri par défaut : date d'envoi décroissante
 function sortFABy(key){
   if(_faSort.key===key)_faSort.dir*=-1;
@@ -30333,8 +30592,16 @@ function renderFA(){
     // (select phase, boutons d'action) ont déjà event.stopPropagation() pour ne pas
     // déclencher l'ouverture par accident.
     var rowOpenFn = grcId ? ('openFA('+grcId+')') : ('openSUIVI('+i.id+')');
+    // Chevron de dépliage du DOSSIER (cascade devis → BC → BL → facture).
+    // stopPropagation obligatoire : la ligne entière ouvre déjà la modale facture.
+    var dosId = _dossierId(i);   // même résolution que _dossierRowHtml, cf _dossierId
+    var dosOuvert = _dossierOuverts.has(dosId);
+    var chevron = '<span onclick="event.stopPropagation();_dossierToggle('+dosId+')" '+
+      'title="'+(dosOuvert?'Replier':'Déplier')+' le dossier (devis, BC, BL, phases)" '+
+      'style="display:inline-block;width:14px;cursor:pointer;color:'+(dosOuvert?'var(--teal)':'var(--muted-soft)')+
+      ';font-size:10px;user-select:none">'+(dosOuvert?'▾':'▸')+'</span>';
     return '<tr class="hgr-data-row" style="'+rs+';cursor:pointer" onclick="'+rowOpenFn+'">'+
-      '<td><span style="font-weight:700;color:var(--teal)">'+esc(i.num||'')+'</span>'+grcBadge+'</td>'+
+      '<td>'+chevron+'<span style="font-weight:700;color:var(--teal)">'+esc(i.num||'')+'</span>'+grcBadge+'</td>'+
       '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(i.intitule||'')+'">'+esc(i.intitule||'')+(faPdfBadges?' '+faPdfBadges:'')+'</td>'+
       typCell+
       '<td style="font-weight:700">'+fN(i.montant)+' XPF</td>'+
@@ -30346,7 +30613,10 @@ function renderFA(){
       delaiCell+
       '<td class="no-print" style="white-space:nowrap">'+
         prvBtn+editBtn+' '+delBtn+
-      '</td></tr>';
+      '</td></tr>'+
+      // renderHierarchicalRows concatène le retour de renderDataRow : on peut
+      // donc rendre DEUX <tr>. La 2e n'existe que si le dossier est déplié.
+      _dossierRowHtml(i);
   }
 
   // === RENDU HIÉRARCHIQUE ===
