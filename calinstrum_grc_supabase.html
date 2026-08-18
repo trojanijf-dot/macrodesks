@@ -3638,7 +3638,11 @@ function admPreviewPrint(){
         <option value="emerson">🏭 Backlog Emerson AUS (matériel pas encore expédié)</option>
         <option value="transit">✈️ Transit Aus → Nouméa (en mer/avion)</option>
         <option value="douane">🛃 Dédouanement ACT (à Nouméa, en cours)</option>
-        <option value="livre">🚚 Livré client (matériel reçu par SLN — facture émise)</option>
+        <!-- Libellé NEUTRE par défaut : il est réécrit avec l'entité du client par
+             _siSyncPhaseLabels() à chaque ouverture de la modale. Ne pas y remettre
+             un nom de client en dur (il y avait « SLN », faux sur toute facture
+             PRNC / AEI SNC / ENERCAL — constaté le 18/08/2026 sur PRNC-F039). -->
+        <option value="livre">🚚 Livré client (matériel reçu par le client — facture émise)</option>
         <option value="chantier_attente">🛠 Chantier non démarré (prestation)</option>
         <option value="chantier_cours">🔧 Chantier en cours (prestation)</option>
         <option value="recu">✅ Réceptionné PV (prestation terminée — facture émise)</option>
@@ -9429,9 +9433,38 @@ function renderTable(){
   }).join('');
 }
 var eSUIVIid=null;
+// ---------------------------------------------------------------------------
+// _siSyncPhaseLabels(inv) — le libellé de la phase « Livré client » nommait SLN
+// EN DUR (« matériel reçu par SLN »), y compris sur une facture PRNC, AEI SNC ou
+// ENERCAL. Constaté le 18/08/2026 sur PRNC-F039. C'était une <option> figée dans
+// le HTML de la modale Suivi (#si-phase).
+//
+// On réécrit le libellé avec l'entité réellement concernée. Si le client n'est
+// pas identifiable, on retombe sur une formulation NEUTRE (« le client ») plutôt
+// que sur un nom : un libellé faux est pire qu'un libellé générique.
+// ---------------------------------------------------------------------------
+function _siSyncPhaseLabels(inv){
+  var sel=document.getElementById('si-phase');
+  if(!sel) return;
+  var opt=sel.querySelector('option[value="livre"]');
+  if(!opt) return;
+  var cli=(inv&&inv.client)||'';
+  if(!cli && inv){
+    // Entrée Suivi sans champ client : retrouver la facture GRC derrière.
+    var fid=inv._factureId||inv.grcFactureId;
+    var fa=fid?(DB.factures||[]).find(function(x){return x.id===fid;}):null;
+    if(!fa && inv.num){
+      fa=(DB.factures||[]).find(function(x){return (x.num||'').toLowerCase()===(inv.num||'').toLowerCase();});
+    }
+    if(fa) cli=fa.client||'';
+  }
+  var pf=cli?((typeof getClientPrefix==='function')?getClientPrefix(cli):String(cli).trim()):'';
+  opt.textContent='🚚 Livré client (matériel reçu par '+(pf||'le client')+' — facture émise)';
+}
 function openSUIVI(id){
   eSUIVIid=id;
   var inv=invoices.find(function(x){return x.id===id;});if(!inv)return;
+  _siSyncPhaseLabels(inv);   // le libellé « Livré client » suit le client, cf ci-dessus
   gv('si-num',inv.num);gv('si-mont',inv.montant);gv('si-title',inv.intitule);
   gv('si-envoi',inv.dateEnvoi||'');gv('si-butoir',inv.dateButoir||'');
   gv('si-statut',inv.statut||'pending');gv('si-pct',inv.pct||0);
@@ -9444,6 +9477,7 @@ function openSUIVI(id){
 }
 function addSUIVI(){
   eSUIVIid=null;
+  _siSyncPhaseLabels(null);   // nouvelle facture : aucun client connu → libellé neutre
   ['si-num','si-title','si-envoi','si-butoir','si-po','si-comment'].forEach(function(i){gv(i,'');});
   gv('si-mont',0);gv('si-pct',0);gv('si-statut','pending');gv('si-type','Fourniture');
   // Phase par défaut pour une nouvelle facture Fourniture : 'livre' (matériel reçu = facture émise)
