@@ -12090,13 +12090,12 @@ function syncBCToFacture(bc){
     // Pas de devis lié : copier la structure BC en convertissant les prix
     faLines=copyBCLinesToFacture(bc);
     // Recalculer le TTC à partir des lignes converties (somme des qte*pu, hors headers)
-    ttc=faLines.reduce(function(s,l){
+    ttc=faLines.reduce(function(s,l,idx){
       if(!l||l.type==='header')return s;
       // Pour KIT : compter la ligne principale (qte*pu = prix global du KIT)
-      // Pour TASK : compter les subLines (qte*pu de chaque sub) car la mère a qte=0
-      if(l._isTaskMain&&Array.isArray(l.subLines)){
-        return s+l.subLines.reduce(function(s2,sl){return s2+(Number(sl.qte)||0)*(Number(sl.pu)||0);},0);
-      }
+      // Pour TASK : compter les subLines car la mère a qte=0.
+      // ⚠ Même règle que cFAtot — cf _isTaskCarrier.
+      if(_isTaskCarrier(faLines,idx)) return s+_taskSubTotal(l);
       return s+(Number(l.qte)||0)*(Number(l.pu)||0);
     },0);
     ttc=Math.round(ttc);
@@ -20408,6 +20407,60 @@ function isTaskMainLine(arr,idx){
   return false;
 }
 
+// =============================================================================
+// _isTaskCarrier(arr, idx) — LA RÈGLE UNIQUE « cette ligne est-elle une porteuse
+// TÂCHE dont le prix vit dans ses sous-lignes ? »
+// =============================================================================
+// ⚠⚠ POSÉE LE 18/08/2026 parce qu'il existait TROIS règles concurrentes pour un
+// seul concept, et qu'elles ne donnaient pas le même total :
+//   1. cDVtot (devis)         → remontée au header  (isTaskMainLine)     ✅
+//   2. cFAtot (total facture) → `_isTaskMain` seul                        ❌
+//      _faTgcParTaux, syncBCToFacture, recalcul devis→facture : idem      ❌
+//   3. modale facture (badge TÂCHE + total de ligne) → flag OU heuristique
+//
+// Conséquence mesurée sur SLN-DV168 / SLN-F107 : lignes IDENTIQUES au caractère
+// près, devis 429 100 XPF, facture 403 100 XPF. La ligne « Prise de photos /
+// rapport » (4 × 6 500 = 26 000) porte des subLines mais PAS le flag
+// `_isTaskMain` : le devis la comptait, la facture non. Et la modale l'affichait
+// bien en TÂCHE avec son sous-total — d'où des lignes qui semblent justes sous
+// un total faux. **26 000 XPF non facturés.**
+//
+// ORDRE DES CRITÈRES — il compte :
+//   1. Un header en amont fait AUTORITÉ. C'est ce qui rejette les flags
+//      `_isTaskMain` ORPHELINS collés sur une ligne KIT par d'anciens imports
+//      (bug SLN-DV163 : 120 000 du KIT disparaissaient du HT). Ne jamais
+//      inverser cet ordre.
+//   2. Aucun header en amont (lignes importées / legacy à plat) → on retombe
+//      sur le flag, puis sur l'heuristique qu'utilisait déjà l'affichage :
+//      ligne mère sans prix propre ET au moins une sous-ligne chiffrée.
+//
+// VÉRIFIÉ sur l'export du 18/08 avant d'être posée : **0 devis sur 74 change de
+// total**, et **1 seule facture sur 65** (SLN-F107, +26 000). Aucun document
+// contractuel n'est modifié par cette unification.
+// =============================================================================
+function _isTaskCarrier(arr, idx){
+  if(!Array.isArray(arr) || idx<0 || idx>=arr.length) return false;
+  var l=arr[idx];
+  if(!l || l.type==='header' || l.type==='section_banner') return false;
+  if(!Array.isArray(l.subLines) || !l.subLines.length) return false;
+  for(var k=idx-1;k>=0;k--){
+    var p=arr[k];
+    if(p && (p.type==='header' || p.type==='section_banner')) return p.mode==='task';
+  }
+  if(l._isTaskMain) return true;
+  return (Number(l.qte)||0)*(Number(l.pu)||0)===0 &&
+         l.subLines.some(function(s){return (Number(s.pu)||0)>0;});
+}
+
+// Somme des sous-lignes d'une porteuse TÂCHE (source unique, évite de réécrire
+// la boucle à chaque appelant).
+function _taskSubTotal(l){
+  if(!l || !Array.isArray(l.subLines)) return 0;
+  return l.subLines.reduce(function(s,sub){
+    return s + (Number(sub.qte)||0)*(Number(sub.pu)||0);
+  },0);
+}
+
 // Calcule le sous-total d'une tâche groupée à partir de ses sous-lignes (qte × pu × (1+tgc/100))
 function computeTaskTotal(taskMainLine){
   // ⚠ SÉMANTIQUE (fix 13/07/2026) : tout « TOTAL HT » de ligne = qte × pu HORS TAXE.
@@ -21514,12 +21567,11 @@ function propagateDevisLinesToFacture(d){
   if(JSON.stringify(f.lines||[])===JSON.stringify(faLines)) return;
   var br=_faTgcParTaux(faLines);
   var ht=0;
-  faLines.forEach(function(l){
+  faLines.forEach(function(l,idx){
     if(!l||l.type==='header'||l.type==='section_banner')return;
-    if(l._isTaskMain&&Array.isArray(l.subLines)){
-      l.subLines.forEach(function(s){ht+=(Number(s.qte)||0)*(Number(s.pu)||0);});
-      return;
-    }
+    // ⚠ Même règle que cFAtot — cf _isTaskCarrier. Sans elle, la propagation
+    // devis→facture réintroduisait l'écart qu'elle est censée supprimer.
+    if(_isTaskCarrier(faLines,idx)){ ht+=_taskSubTotal(l); return; }
     ht+=(Number(l.qte)||0)*(Number(l.pu)||0);
   });
   f.lines=faLines;
@@ -28490,11 +28542,10 @@ function _updateFALineTotal(tb, idx, subIdx){
     if(subCell) subCell.textContent=fN(subT);
     // Si la mère est une TASK, sa cellule total = somme des sub-lignes chiffrées
     var hasSubs=Array.isArray(l.subLines)&&l.subLines.length>0;
-    var isTaskMain = !!l._isTaskMain ||
-      (hasSubs && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
-       l.subLines.some(function(s){return (Number(s.pu)||0)>0;}));
+    // Meme regle que cFAtot pour que l'affichage et le total ne divergent jamais.
+    var isTaskMain = _isTaskCarrier(faL, idx);
     if(isTaskMain){
-      var motherTot=l.subLines.reduce(function(s,sb){return s+(Number(sb.qte)||0)*(Number(sb.pu)||0);},0);
+      var motherTot=_taskSubTotal(l);
       var motherCell=tb.querySelector('[data-line-total="'+idx+'"]');
       if(motherCell) motherCell.textContent=fN(Math.round(motherTot));
     }
@@ -28502,13 +28553,10 @@ function _updateFALineTotal(tb, idx, subIdx){
   }
   // Cas LIGNE PRINCIPALE : KIT principale OU ligne normale (TASK ne devrait pas
   // arriver ici car ses qte/pu sont read-only, mais on gère par sécurité).
-  var hasSubs2=Array.isArray(l.subLines)&&l.subLines.length>0;
-  var isTaskMain2 = !!l._isTaskMain ||
-    (hasSubs2 && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
-     l.subLines.some(function(s){return (Number(s.pu)||0)>0;}));
+  var isTaskMain2 = _isTaskCarrier(faL, idx);   // meme regle que cFAtot
   var tot;
   if(isTaskMain2){
-    tot=l.subLines.reduce(function(s,sb){return s+(Number(sb.qte)||0)*(Number(sb.pu)||0);},0);
+    tot=_taskSubTotal(l);
   } else {
     tot=(Number(l.qte)||0)*(Number(l.pu)||0);
   }
@@ -28537,11 +28585,12 @@ function rFAlines(){
     var tgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(l.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
     var uteOpts=_uteOpts(l.unite);
     var hasSubLines=Array.isArray(l.subLines)&&l.subLines.length>0;
-    // Détection TASK : flag _isTaskMain OU (subLines présentes ET ligne mère sans prix ET sub-lignes chiffrées).
+    // Détection TASK : _isTaskCarrier(), la MÊME règle que cFAtot.
+    // ⚠ Avant le 18/08/2026 ce badge utilisait une heuristique différente du
+    // calcul : la ligne s'affichait « TÂCHE » avec son sous-total pendant que le
+    // total de la facture l'ignorait. Des lignes justes sous un total faux.
     // KIT : ligne mère porte le prix global, sub-lignes à pu=0 et descriptives.
-    var isTaskMain = !!l._isTaskMain ||
-      (hasSubLines && (Number(l.qte)||0)===0 && (Number(l.pu)||0)===0 &&
-       l.subLines.some(function(sub){return (Number(sub.pu)||0)>0;}));
+    var isTaskMain = _isTaskCarrier(faL, i);
     var typeBadgeColor = isTaskMain ? '#a78bfa' : (hasSubLines ? '#3b82f6' : null);
     var typeBadgeLabel = isTaskMain ? 'TÂCHE' : (hasSubLines ? 'KIT' : null);
     var typeBadge = typeBadgeLabel ? ' <span style="display:inline-block;background:rgba('+(isTaskMain?'167,139,250':'59,130,246')+',.15);color:'+typeBadgeColor+';padding:1px 5px;border-radius:3px;font-size:8.5px;font-weight:700">'+typeBadgeLabel+'</span>' : '';
@@ -28689,10 +28738,12 @@ function rFAlines(){
 }
 function cFAtot(){
   var ht=0,tgcTotal=0;
-  faL.forEach(function(l){
+  faL.forEach(function(l,idx){
     if(!l||l.type==='header')return; // les bandeaux de section ne comptent pas
-    // Pour TASK : la ligne porteuse a qte=0, le total vient des subLines
-    if(l._isTaskMain&&Array.isArray(l.subLines)){
+    // Pour TASK : la ligne porteuse a qte=0, le total vient des subLines.
+    // ⚠ _isTaskCarrier() et NON `l._isTaskMain` : une porteuse peut ne pas
+    // porter le flag (cf SLN-F107, 26 000 XPF perdus). Cf _isTaskCarrier.
+    if(_isTaskCarrier(faL,idx)){
       l.subLines.forEach(function(sub){
         var h=(Number(sub.qte)||0)*(Number(sub.pu)||0);
         ht+=h;tgcTotal+=h*(Number(sub.tgc)||0)/100;
@@ -43712,16 +43763,18 @@ function buildTotalsHtml(d,isExo){
 function _faTgcParTaux(lines){
   var t6=0,t11=0,t22=0;
   function acc(h,rate){rate=Number(rate)||0;if(rate===6)t6+=h*0.06;else if(rate===11)t11+=h*0.11;else if(rate===22)t22+=h*0.22;}
-  function one(l){
+  // ⚠ Même règle que cFAtot : _isTaskCarrier(), jamais `l._isTaskMain` seul —
+  // sinon la ventilation TGC diverge du total affiché. Cf _isTaskCarrier.
+  function one(arr){return function(l,idx){
     if(!l||l.type==='header'||l.type==='section_banner')return;
-    if(l._isTaskMain&&Array.isArray(l.subLines)){
+    if(_isTaskCarrier(arr,idx)){
       l.subLines.forEach(function(s){acc((Number(s.qte)||0)*(Number(s.pu)||0),s.tgc);});
       return;
     }
     acc((Number(l.qte)||0)*(Number(l.pu)||0),l.tgc);
-  }
-  if(Array.isArray(lines)){lines.forEach(one);}
-  else if(lines&&typeof lines==='object'){['fourniture','service','fret'].forEach(function(sec){(lines[sec]||[]).forEach(one);});}
+  };}
+  if(Array.isArray(lines)){lines.forEach(one(lines));}
+  else if(lines&&typeof lines==='object'){['fourniture','service','fret'].forEach(function(sec){var a=lines[sec]||[];a.forEach(one(a));});}
   return {t6:t6,t11:t11,t22:t22,total:t6+t11+t22};
 }
 
