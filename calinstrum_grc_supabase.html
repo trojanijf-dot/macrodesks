@@ -4093,7 +4093,15 @@ function admPreviewPrint(){
 <div class="modal">
   <div class="modal-header"><h3 id="mCLtitle">Nouveau client</h3><button class="modal-close" onclick="cm('mCL')">✕</button></div>
   <div class="modal-body">
-    <div class="form-group"><label>Société <span class="req">*</span></label><input class="form-input" id="cl-nom"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Société <span class="req">*</span></label><input class="form-input" id="cl-nom" oninput="_clPrefixeHint()"></div>
+      <div class="form-group" style="flex:0 0 210px">
+        <label>Préfixe documents <span style="color:var(--muted);font-weight:400;font-size:10px">(vide = déduit auto)</span></label>
+        <input class="form-input" id="cl-prefixe" placeholder="ex. EPE" maxlength="20"
+               style="font-family:var(--mono);text-transform:uppercase" oninput="_clPrefixeHint()">
+        <div id="cl-prefixe-hint" style="font-size:10.5px;margin-top:5px;line-height:1.45"></div>
+      </div>
+    </div>
     <div class="form-row">
       <div class="form-group"><label>Contact principal</label><input class="form-input" id="cl-contact" oninput="_clCivauto()"></div>
       <div class="form-group"><label>Civilité <span style="color:var(--muted);font-weight:400;font-size:10px">(auto-détectée, modifiable — sur les documents)</span></label>
@@ -5922,7 +5930,7 @@ function nxt(t, prefix){
       var m=num.match(reBLnew);
       if(!m){
         // Ancien format : rattachement par le CLIENT, pas par le numero.
-        var pfxItem=(typeof getClientPrefix==='function')?getClientPrefix(x.client||''):'';
+        var pfxItem=(typeof getClientNumPrefix==='function')?getClientNumPrefix(x.client||''):'';
         if(pfxItem!==pfx) return;
         m=num.match(reBLold);
       }
@@ -6409,6 +6417,74 @@ function getClientPrefix(clientName){
 }
 
 // =============================================================================
+// getClientNumPrefix(clientName) — le préfixe qui NUMÉROTE les documents
+// =============================================================================
+// ⚠⚠ À NE PAS CONFONDRE avec getClientPrefix() juste au-dessus, qui reste le
+// préfixe d'AFFICHAGE (onglets clients, regroupements, filtres, libellés).
+// Numéroter et regrouper sont deux besoins différents : les confondre est
+// exactement le défaut qui a coûté la journée du 18/08 (cf buildFactureNumFromBC
+// qui codait 'SLN-F' en dur, et cFAtot vs cDVtot).
+//
+// POURQUOI. Certains clients numérotent avec une ABRÉVIATION que leur raison
+// sociale ne donne pas : « ENERCAL NEPOUI » → ENN-DV009 / ENN-F004,
+// « ENERCAL-PRONY » → EPE-DV003. Sans ça, nxt('dv','ENERCAL NEPOUI') cherchait
+// ^ENERCAL NEPOUI-DV(\d+), ne trouvait rien, et REPARTAIT À 001 alors que
+// ENN-DV009 existe déjà — le bug des BL du 17/08, à l'identique.
+//
+// TROIS NIVEAUX, le premier qui répond gagne :
+//   1. le préfixe saisi sur la FICHE CLIENT (DB.clients[].prefixe) → autorité,
+//      c'est la décision de l'utilisateur et rien ne la contredit ;
+//   2. sinon le préfixe déjà porté par les DOCUMENTS de ce client (le plus
+//      fréquent) → ENERCAL NEPOUI retombe sur ENN sans aucune saisie ;
+//   3. sinon getClientPrefix() → comportement historique, strictement inchangé
+//      pour SLN, PRNC et AEI SNC (vérifié sur l'export réel avant livraison).
+//
+// ⛔ AUCUN nom de client codé en dur, ici ni ailleurs — ni « ENN », ni « EPE »,
+// ni table de correspondance. Le prochain client se règle depuis sa fiche.
+// =============================================================================
+function getClientNumPrefix(clientName){
+  var raw=String(clientName||'').trim();
+  if(!raw) return 'SLN';
+  var base=getClientPrefix(raw);
+
+  // 1) Préfixe saisi sur la fiche client.
+  var fiche=(DB.clients||[]).find(function(c){
+    return c && (String(c.nom||'').trim()===raw || getClientPrefix(c.nom||'')===base);
+  });
+  if(fiche && String(fiche.prefixe||'').trim()) return String(fiche.prefixe).trim();
+
+  // 2) Préfixe déjà employé par les documents de ce client, le plus fréquent.
+  //    ⚠ Les BC sont volontairement EXCLUS : leur numéro (DDMMYYYY/NNN) ne porte
+  //    aucun préfixe, ils n'ont donc rien à dire ici.
+  var compte={};
+  [['devis',/^(.+?)-DV/i],['factures',/^(.+?)-F\d/i],['bls',/^(.+?)-BL/i]].forEach(function(p){
+    (DB[p[0]]||[]).forEach(function(d){
+      if(!d || getClientPrefix(d.client||'')!==base) return;
+      var mm=String(d.num||'').match(p[1]);
+      if(mm && mm[1]) compte[mm[1]]=(compte[mm[1]]||0)+1;
+    });
+  });
+  var meilleur=null, max=0;
+  Object.keys(compte).forEach(function(k){ if(compte[k]>max){ max=compte[k]; meilleur=k; } });
+  if(meilleur) return meilleur;
+
+  // 3) Comportement historique.
+  return base;
+}
+
+// Caractères qui cassent la relecture d'un numéro de document. Le champ reste
+// LIBRE (décision utilisateur du 18/08) : on avertit, on ne bloque pas.
+function _prefixeAvertissement(p){
+  var v=String(p||'').trim();
+  if(!v) return '';
+  if(/[\/\\]/.test(v))      return 'Le / et le \\ séparent déjà les numéros — à éviter.';
+  if(/-\s*$|^\s*-/.test(v)) return 'Un tiret en début ou fin sera collé au reste du numéro.';
+  if(v.length>10)           return 'Très long : le numéro deviendra difficile à lire.';
+  if(/\d$/.test(v))         return 'Se termine par un chiffre : risque de confusion avec la séquence.';
+  return '';
+}
+
+// =============================================================================
 // CIVILITÉ M. / Mme (sur les documents)
 // -----------------------------------------------------------------------------
 // Réglée sur la fiche client (client.civilite = 'M'|'Mme'), défaut auto-détecté
@@ -6476,7 +6552,7 @@ function fillCCFromSelect(pfx){
   // Uniquement pour un NOUVEAU devis (eDVid null), pour ne pas écraser un N°
   // déjà figé sur un devis existant. Le préfixe est déduit du nom client.
   if(pfx==='dv' && v && typeof eDVid!=='undefined' && !eDVid){
-    var clientPrefix=getClientPrefix(v);
+    var clientPrefix=getClientNumPrefix(v);   // numerotation, cf getClientNumPrefix
     var numField=document.getElementById('dv-num');
     if(numField){
       numField.value=nxt('dv',clientPrefix);
@@ -6484,7 +6560,7 @@ function fillCCFromSelect(pfx){
   }
   // === Idem pour facture créée manuellement (pas via "depuis devis") ===
   if(pfx==='fa' && v && typeof eFAid!=='undefined' && !eFAid){
-    var clientPrefixFA=getClientPrefix(v);
+    var clientPrefixFA=getClientNumPrefix(v); // numerotation, cf getClientNumPrefix
     var numFieldFA=document.getElementById('fa-num');
     if(numFieldFA){
       numFieldFA.value=nxt('fa',clientPrefixFA);
@@ -11936,7 +12012,7 @@ function _faPrefixForBC(bc){
     if(_d&&_d.client) cli=_d.client;
   }
   if(!cli) cli=(bc&&bc.clientFinal)||'';
-  var pf=(typeof getClientPrefix==='function')?getClientPrefix(cli):String(cli||'').trim();
+  var pf=(typeof getClientNumPrefix==='function')?getClientNumPrefix(cli):String(cli||'').trim();
   if(!pf) return 'SLN';
   // Prefixe deja en usage sur les factures de ce meme client ?
   var vu=null;
@@ -21619,7 +21695,7 @@ function generateFactureFromDV(){
   // Le préfixe de la facture suit celui du devis source (SLN, PRNC, ENN, etc.).
   var faDraft={
     id:Date.now(),
-    num:nxt('fa', getClientPrefix(d.client)),
+    num:nxt('fa', getClientNumPrefix(d.client)),   // numerotation
     date:td(),
     client:d.client,
     contact:d.contact||'',
@@ -25713,7 +25789,7 @@ function onEmersonDevisClientChange(){
     // Le N° est "auto" si la valeur actuelle correspond au data-auto-value mémorisé
     if(autoVal && currentVal===autoVal){
       var clientName=sel.value||'';
-      var newPrefix=(typeof getClientPrefix==='function')?getClientPrefix(clientName):'SLN';
+      var newPrefix=(typeof getClientNumPrefix==='function')?getClientNumPrefix(clientName):'SLN';
       var newNum=nxt('dv', newPrefix);
       numInp.value=newNum;
       numInp.setAttribute('data-auto-value', newNum);
@@ -28096,7 +28172,7 @@ function openFA(id,fromDV,preSelectedClient){
       setTimeout(function(){if(typeof renderFADelaiHistory==='function')renderFADelaiHistory();},50);
     }
   } else if(fromDV){
-    gv('fa-num',nxt('fa', getClientPrefix(fromDV.client||'')));gv('fa-date',td());
+    gv('fa-num',nxt('fa', getClientNumPrefix(fromDV.client||'')));gv('fa-date',td());
     buildClientOptions('fa-client',fromDV.client||'');
     gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');
     // Email facture : on NE reprend PAS fromDV.email (qui est le contact technique du devis).
@@ -28125,7 +28201,7 @@ function openFA(id,fromDV,preSelectedClient){
     // === NOUVELLE FACTURE (création) ===
     // preSelectedClient est passé depuis le picker → on incrémente le N° sur le
     // bon préfixe via fillCCFromSelect (qui appelle nxt('fa', clientPrefix)).
-    var faPfx=preSelectedClient?getClientPrefix(preSelectedClient):'SLN';
+    var faPfx=preSelectedClient?getClientNumPrefix(preSelectedClient):'SLN';
     gv('fa-num',nxt('fa',faPfx));gv('fa-date',td());gv('fa-contact','');
     gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');_faDvlieInit('');gv('fa-dvlie-print','');
     // Email vide → dropdown initialisé avec valeur courante = ''
@@ -39748,7 +39824,7 @@ function openBL(id, opts){
   } else if(opts && opts.fromDevisIds){
     // === Création depuis "Créer BL depuis devis" ===
     // On récupère les infos des devis source pour pré-remplir client/contact/adresse/PO
-    gv('bl-num', nxt('bl', getClientPrefix(opts.client||'')));
+    gv('bl-num', nxt('bl', getClientNumPrefix(opts.client||'')));
     gv('bl-date', td());
     gv('bl-lieu', 'NOUMEA');
     buildClientOptions('bl-client', opts.client || '');
@@ -41901,7 +41977,7 @@ function ptFactGenerate(){
   // CAS B : pas encore de facture → brouillon lié au devis (créé au save, n° réservé).
   var faDraft={
     id:Date.now(),
-    num:nxt('fa',getClientPrefix(d.client)),
+    num:nxt('fa',getClientNumPrefix(d.client)),   // numerotation, cf getClientNumPrefix
     date:td(),client:d.client,contact:d.contact||'',email:d.email||'',adresse:d.adresse||'',
     objet:objet,type:d.type||'Prestation de service',
     devisLieId:d.id,dvlie:d.num||'',
@@ -42665,18 +42741,59 @@ var eCLid=null;
 var _clCivManual=false;
 // Auto-détecte la civilité quand on tape le contact (tant que non forcée à la main).
 function _clCivauto(){ if(_clCivManual)return; gv('cl-civilite',_detectCivilite(gvg('cl-contact'))); }
+// _clPrefixeHint() — sous le champ Préfixe : montre le préfixe RÉELLEMENT retenu
+// (donc le niveau de la cascade qui a répondu) et le prochain numéro de devis.
+// Le champ est LIBRE : un caractère gênant produit un avertissement, jamais un
+// blocage (décision utilisateur du 18/08).
+function _clPrefixeHint(){
+  var box=document.getElementById('cl-prefixe-hint');
+  if(!box) return;
+  var nom=gvg('cl-nom')||'';
+  var saisi=String(gvg('cl-prefixe')||'').trim();
+  if(!nom){ box.innerHTML='<span style="color:var(--muted-soft)">Renseigne la société d\'abord.</span>'; return; }
+  // On simule la fiche telle qu'elle sera enregistrée pour que l'aperçu dise vrai.
+  var avant=null, i=(DB.clients||[]).findIndex(function(c){return c && c.id===eCLid;});
+  if(i>=0){ avant=DB.clients[i].prefixe; DB.clients[i].prefixe=saisi; }
+  var eff, suivant;
+  try{
+    eff=getClientNumPrefix(nom);
+    // ⚠ NE PAS appeler nxt('dv',…) ici : il fait saveDB() (localStorage + push
+    // Supabase debounce). Un aperçu qui se déclenche à chaque frappe ne doit
+    // RIEN persister. On refait donc le scan à la main, en lecture seule.
+    var esc2=eff.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    var re=new RegExp('^'+esc2+'-DV(\\d+)','i'), mx=0;
+    (DB.devis||[]).forEach(function(d){
+      var mm=String((d&&d.num)||'').match(re);
+      if(mm){ var n=parseInt(mm[1],10); if(n>mx) mx=n; }
+    });
+    suivant=eff+'-DV'+pad(mx+1);
+  }catch(e){ eff=saisi||nom; suivant=''; }
+  if(i>=0) DB.clients[i].prefixe=avant;
+
+  var origine = saisi ? 'saisi ici'
+    : (eff!==getClientPrefix(nom) ? 'déduit de ses documents' : 'déduit du nom');
+  var avert=_prefixeAvertissement(saisi);
+  box.innerHTML =
+    '<span style="color:var(--muted-soft)">Préfixe retenu : </span>'+
+    '<b style="font-family:var(--mono);color:var(--teal)">'+esc(eff)+'</b>'+
+    '<span style="color:var(--muted-soft)"> ('+origine+')</span>'+
+    (suivant?'<br><span style="color:var(--muted-soft)">Prochain devis : </span>'+
+      '<span style="font-family:var(--mono);color:var(--teal)">'+esc(suivant)+'</span>':'')+
+    (avert?'<br><span style="color:var(--amber)">⚠ '+esc(avert)+'</span>':'');
+}
+
 function openCL(id){
   eCLid=id||null;
   if(id){
     var c=DB.clients.find(function(x){return x.id===id;});
-    if(c){gv('cl-nom',c.nom);gv('cl-contact',c.contact||'');gv('cl-email',c.email||'');gv('cl-tel',c.tel||'');gv('cl-exo',c.exo||'non');gv('cl-addr',c.adresse||'');gv('cl-notes',c.notes||'');document.getElementById('cl-priority').checked=!!c.priority;
+    if(c){gv('cl-nom',c.nom);gv('cl-prefixe',c.prefixe||'');gv('cl-contact',c.contact||'');gv('cl-email',c.email||'');gv('cl-tel',c.tel||'');gv('cl-exo',c.exo||'non');gv('cl-addr',c.adresse||'');gv('cl-notes',c.notes||'');document.getElementById('cl-priority').checked=!!c.priority;
       // Civilité : valeur enregistrée (=manuelle) sinon détection auto.
       _clCivManual=(c.civilite==='M'||c.civilite==='Mme');
       gv('cl-civilite', _clCivManual?c.civilite:_detectCivilite(c.contact));
-      sv('mCLtitle','Modifier '+c.nom);}
+      sv('mCLtitle','Modifier '+c.nom);_clPrefixeHint();}
   } else {
-    ['cl-nom','cl-contact','cl-email','cl-tel','cl-addr','cl-notes'].forEach(function(i){gv(i,'');});
-    gv('cl-exo','non');gv('cl-civilite','M');_clCivManual=false;document.getElementById('cl-priority').checked=false;sv('mCLtitle','Nouveau client');
+    ['cl-nom','cl-prefixe','cl-contact','cl-email','cl-tel','cl-addr','cl-notes'].forEach(function(i){gv(i,'');});
+    gv('cl-exo','non');gv('cl-civilite','M');_clCivManual=false;document.getElementById('cl-priority').checked=false;sv('mCLtitle','Nouveau client');_clPrefixeHint();
   }
   om('mCL');
 }
@@ -42690,7 +42807,15 @@ async function saveCL(){
   var c={id:eCLid||Date.now(),nom:gvg('cl-nom'),contact:gvg('cl-contact'),email:gvg('cl-email'),
     tel:gvg('cl-tel'),tel2:'',exo:gvg('cl-exo'),adresse:gvg('cl-addr'),notes:gvg('cl-notes'),
     civilite:gvg('cl-civilite')||'M',
+    // Prefixe de numerotation. Vide = deduit automatiquement, cf getClientNumPrefix.
+    prefixe:String(gvg('cl-prefixe')||'').trim(),
     priority:priorityChk};
+  // Meme protection que getFA/getBL/getBC : saveCL reconstruit la fiche depuis le
+  // formulaire, donc tout champ metier pose ailleurs par du code disparaitrait.
+  // Cf _preserveHiddenFields (bug du 17/08 sur linkedBCs / paidEmerson).
+  if(eCLid && typeof _preserveHiddenFields==='function'){
+    _preserveHiddenFields(c,(DB.clients||[]).find(function(x){return x.id===eCLid;}));
+  }
   if(!c.nom){alert('Nom obligatoire');return;}
   // Avertissement (non bloquant) si plus de 5 clients prioritaires : la barre d'import
   // dans le modal Facture ne reste lisible qu'avec ~5 menus déroulants côte à côte.
