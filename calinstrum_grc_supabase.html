@@ -3119,6 +3119,10 @@ function admPreviewPrint(){
       <button class="tab" onclick="st('fat','lignes')">Lignes</button>
       <button class="tab" onclick="st('fat','paie')">Paiement</button>
     </div>
+    <!-- Garde-fou des totaux : HORS des onglets, sinon il resterait invisible.
+         La modale s'ouvre sur « Informations » alors que les totaux vivent dans
+         « Lignes » : place la-bas, l'alerte n'aurait jamais ete vue. -->
+    <div id="fa-garde-fou"></div>
     <div class="tab-pane active" id="fat-info">
       <div class="form-row">
         <div class="form-group"><label>N° Facture <span class="req">*</span></label><input class="form-input" id="fa-num"></div>
@@ -3820,6 +3824,7 @@ function admPreviewPrint(){
             </div>
           </div>
           <div class="t-row t-total"><span id="bcDeviseLbl">Total Amount (AUD)</span><span id="bcTT">0</span></div>
+          <div id="bc-garde-fou"></div>
         </div>
       </div>
     </div>
@@ -28812,6 +28817,137 @@ function rFAlines(){
   });
   cFAtot();
 }
+// =============================================================================
+// GARDE-FOU DES TOTAUX — l'app se controle elle-meme
+// =============================================================================
+// Pose le 18/08/2026, apres quatre bugs de facturation trouves en deux jours,
+// tous SILENCIEUX : SLN-F111 facturee au prix d'ACHAT (645 985 XPF perdus),
+// SLN-F107 amputee d'une ligne TACHE (26 000 XPF). Aucun ne levait d'erreur,
+// tous produisaient des documents d'apparence normale. L'utilisateur ne peut pas
+// les voir a l'oeil, et ce n'est pas son travail de les chercher.
+//
+// PRINCIPES :
+//   - il N'EMPECHE JAMAIS d'enregistrer : il signale, l'utilisateur decide ;
+//   - il CHIFFRE toujours (les deux montants + l'ecart), jamais un vague
+//     « incoherence detectee » ;
+//   - il SE TAIT sur un document sain. Aucun badge « verifie » : sinon l'absence
+//     d'alerte ne voudrait plus rien dire ;
+//   - il REUTILISE les fonctions de l'app (cFAtot, _isTaskCarrier, bcLineExtended)
+//     et n'en reecrit AUCUNE. Reecrire la regle, c'est fabriquer l'ecart qu'on
+//     pretend detecter — 6,1 M XPF de faux positif le 18/08 pour l'avoir oublie.
+//
+// EXCLUSIONS — un garde-fou qui crie au loup finit ignore, donc inutile.
+// Ne JAMAIS alerter sur : acompte/solde (parentId, acompteType), facturation
+// partielle (pctOfBC<100), facturation periodique (_bcConsumption : les factures
+// AEI SNC sur devis-bareme), plusieurs factures sur un meme devis, facture deja
+// Payee (document clos).
+// =============================================================================
+
+// Somme des lignes d'un devis, via la MEME regle TACHE que le reste de l'app.
+function _gfTotalDevis(dv){
+  if(!dv) return 0;
+  var L=dv.lines||{};
+  var arr=Array.isArray(dv.lines)?dv.lines:[].concat(L.fourniture||[],L.service||[],L.fret||[]);
+  var ht=0;
+  arr.forEach(function(l,i){
+    if(!l||l.type==='header'||l.type==='section_banner')return;
+    if(typeof _isTaskCarrier==='function' && _isTaskCarrier(arr,i)){ ht+=_taskSubTotal(l); return; }
+    ht+=(Number(l.qte)||0)*(Number(l.pu)||0);
+  });
+  return ht;
+}
+
+// La facture DOIT-elle egaler son devis ? Cf exclusions en tete de section.
+function _gfComparableAuDevis(f){
+  if(!f || !f.devisLieId) return false;
+  if(f.parentId || f.acompteType) return false;
+  if(typeof f.pctOfBC==='number' && f.pctOfBC<100) return false;
+  if(Array.isArray(f._bcConsumption) && f._bcConsumption.length) return false;
+  if(f.status==='Payee' || f.status==='Pay\u00e9e') return false;
+  var soeurs=(DB.factures||[]).filter(function(g){return g && g.devisLieId===f.devisLieId;});
+  if(soeurs.length>1) return false;
+  return true;
+}
+
+function _gfBandeau(couleur, ico, titre, corps){
+  var c = (couleur==='red')
+    ? {bg:'rgba(244,63,94,.08)',bd:'rgba(244,63,94,.32)',tx:'#fecdd3',ac:'var(--red)'}
+    : {bg:'rgba(251,191,36,.08)',bd:'rgba(251,191,36,.3)',tx:'#fde68a',ac:'var(--amber)'};
+  return '<div style="margin-top:10px;padding:9px 12px;border-radius:6px;background:'+c.bg+
+    ';border:1px solid '+c.bd+';font-size:11px;line-height:1.55;color:'+c.tx+';text-align:left">'+
+    '<b style="color:'+c.ac+'">'+ico+' '+esc(titre)+'</b><br>'+corps+'</div>';
+}
+function _gfChiffre(k,v,rouge){
+  return '<span style="color:var(--muted-soft)">'+esc(k)+' </span>'+
+    '<b style="font-family:var(--mono)'+(rouge?';color:var(--red)':'')+'">'+esc(v)+'</b>';
+}
+
+// Appele en fin de cFAtot : donc a l'ouverture de la facture ET a chaque
+// modification de ligne. L'ecart se voit AVANT d'enregistrer.
+function _faGardeFou(tot){
+  var box=document.getElementById('fa-garde-fou');
+  if(!box) return;
+  box.innerHTML='';
+  if(typeof eFAid==='undefined' || !eFAid) return;   // brouillon : rien a comparer
+  var f=(DB.factures||[]).find(function(x){return x.id===eFAid;});
+  if(!f) return;
+  // ⛔ DOCUMENT CLOS : des qu'il y a activite financiere (Payee, Partiel, ou un
+  // versement enregistre), on se TAIT completement. Inviter a « enregistrer pour
+  // figer la valeur correcte » sur une facture deja reglee reviendrait a pousser
+  // l'utilisateur a modifier le montant d'un document paye. Meme notion que le
+  // garde-fou de syncBCToFacture (hasFinancialActivity) — regle reutilisee, pas
+  // reecrite.
+  if(f.status==='Payée' || f.status==='Partiel' ||
+     (Array.isArray(f.versements) && f.versements.length)) return;
+  var html='';
+
+  // 1. Le total ENREGISTRE ne correspond plus aux lignes.
+  var stocke=Number(f.ttc)||0, calcule=Math.round((tot&&tot.ttc)||0);
+  if(Math.abs(stocke-calcule)>1){
+    html+=_gfBandeau('amber','\u26a0','Le total a été recalculé',
+      _gfChiffre('en base :',fN(stocke)+' XPF',true)+' &nbsp;\u00b7&nbsp; '+
+      _gfChiffre('recalculé :',fN(calcule)+' XPF')+
+      '<br><span style="color:var(--muted)">Enregistre pour figer la valeur correcte. '+
+      'Tes lignes n\'ont pas été modifiées.</span>');
+  }
+
+  // 2. Ecart avec le devis lie, uniquement quand la facture doit l'egaler.
+  if(_gfComparableAuDevis(f)){
+    var dv=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
+    if(dv){
+      var td=_gfTotalDevis(dv), ecart=td-calcule;
+      if(Math.abs(ecart)>1){
+        html+=_gfBandeau('red','\u26d4','Écart avec le devis lié',
+          _gfChiffre('devis '+(dv.num||'')+' :',fN(td)+' XPF')+' &nbsp;\u00b7&nbsp; '+
+          _gfChiffre('facture :',fN(calcule)+' XPF',true)+' &nbsp;\u00b7&nbsp; '+
+          _gfChiffre(ecart>0?'manque :':'en trop :',fN(Math.abs(ecart))+' XPF',true)+
+          '<br><span style="color:var(--muted)">Cette facture doit couvrir la totalité du devis. '+
+          'Rien ne bloque l\'enregistrement.</span>');
+      }
+    }
+  }
+  box.innerHTML=html;
+}
+
+// Appele en fin de cBCtot. Le total stocke doit egaler la somme des lignes,
+// mode KIT compris : bcLineExtended renvoie le prix du LOT sans multiplier.
+function _bcGardeFou(total){
+  var box=document.getElementById('bc-garde-fou');
+  if(!box) return;
+  box.innerHTML='';
+  if(typeof eBCid==='undefined' || !eBCid) return;
+  var bc=(DB.bcs||[]).find(function(x){return x.id===eBCid;});
+  if(!bc) return;
+  var stocke=Number(bc.total)||0, calcule=Math.round(Number(total)||0);
+  if(Math.abs(stocke-calcule)<=1) return;
+  var dev=gvg('bc-devise')||bc.devise||'AUD';
+  box.innerHTML=_gfBandeau('amber','\u26a0','Le total a été recalculé',
+    _gfChiffre('en base :',fN(stocke)+' '+dev,true)+' &nbsp;\u00b7&nbsp; '+
+    _gfChiffre('recalculé :',fN(calcule)+' '+dev)+
+    '<br><span style="color:var(--muted)">Vérifie contre le PO avant d\'enregistrer : '+
+    'c\'est ce total qui sert de coût dans le calcul de marge.</span>');
+}
+
 function cFAtot(){
   var ht=0,tgcTotal=0;
   faL.forEach(function(l,idx){
@@ -28832,6 +28968,7 @@ function cFAtot(){
   });
   sv('faTHT',fN(ht)+' XPF');sv('faTGC',fN(tgcTotal)+' XPF');sv('faTTTC',fN(ht+tgcTotal)+' XPF');
   var r=document.getElementById('faRowTGC');if(r)r.style.display=tgcTotal>0?'flex':'none';
+  try{ _faGardeFou({ht:ht,tgc:tgcTotal,ttc:ht+tgcTotal}); }catch(e){ console.warn('_faGardeFou:',e); }
   rVersements();
   return{ht:ht,tgc:tgcTotal,ttc:ht+tgcTotal};
 }
@@ -32941,6 +33078,7 @@ function cBCtot(){
   sv('bcShipAmt',ship>0?fN(ship)+' '+dv:'—');
   sv('bcTT',fN(total)+' '+dv);
   sv('bcDeviseLbl','Total Amount ('+dv+')');
+  try{ _bcGardeFou(total); }catch(e){ console.warn('_bcGardeFou:',e); }
   // Si la modale BC est ouverte avec la section Coût réel, rafraîchir son preview
   // (sans boucle : updateCoutReelPreview ne modifie que #bc-cout-reel-preview, pas #bcTT)
   if(typeof updateCoutReelPreview==='function'){
