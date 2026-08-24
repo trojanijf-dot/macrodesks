@@ -44135,12 +44135,23 @@ function bDV(d){
     // ce qui permet de détecter les blocs TÂCHE 2+ (sans header juste avant), tout en
     // ignorant les flags _isTaskMain orphelins qui pollueraient la ligne KIT.
     var prevIsKitHeader=(i>0 && allL[i-1] && allL[i-1].type==='header' && allL[i-1].mode==='kit');
-    // Helper inline : remonte vers le header le plus proche pour décider TASK
+    // Helper inline : remonte vers le header le plus proche pour décider TASK.
+    //
+    // ⚠⚠ LA REMONTÉE S'ARRÊTE À LA FRONTIÈRE DE SECTION — corrigé le 24/08/2026.
+    // Même garde-fou que buildPaginatedDV : `allL` concatène les sections dans
+    // l'ordre ['service','fourniture','fret'], donc sans cette borne une ligne de
+    // FOURNITURE placée après une main d'œuvre terminée par un bloc TÂCHE était
+    // prise pour une porteuse et DISPARAISSAIT du rendu (SLN-DV169).
+    //
+    // ⛔ bDV() (aperçu) et buildPaginatedDV() (impression) sont DEUX rendus
+    // parallèles du même devis : toute règle corrigée ici doit l'être là-bas, et
+    // réciproquement. Le premier correctif du 24/08 n'avait touché que
+    // l'impression — l'aperçu montrait encore la ligne manquante.
     var isTaskMain=(function(){
       for(var k=i-1;k>=0;k--){
-        if(allL[k] && allL[k].type==='header'){
-          return allL[k].mode==='task';
-        }
+        if(!allL[k]) continue;
+        if(allL[k]._sec!==l._sec) return false;   // on a quitté la section
+        if(allL[k].type==='header') return allL[k].mode==='task';
       }
       return false;
     })();
