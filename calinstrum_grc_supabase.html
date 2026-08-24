@@ -20525,8 +20525,14 @@ function _isTaskCarrier(arr, idx){
   if(!l || l.type==='header' || l.type==='section_banner') return false;
   if(!Array.isArray(l.subLines) || !l.subLines.length) return false;
   for(var k=idx-1;k>=0;k--){
-    var p=arr[k];
-    if(p && (p.type==='header' || p.type==='section_banner')) return p.mode==='task';
+    var pr=arr[k];
+    if(!pr) continue;
+    // ⚠ FRONTIERE DE SECTION. faL est plat et melange fourniture/service/fret via
+    // `_sec`. Sans ce garde-fou, une ligne de fourniture placee apres une section
+    // service terminee par un bloc TACHE serait prise pour une porteuse — c'est le
+    // bug qui faisait DISPARAITRE la ligne fourniture du PDF (SLN-DV169, 24/08).
+    if(pr._sec && l._sec && pr._sec!==l._sec) return false;
+    if(pr.type==='header' || pr.type==='section_banner') return pr.mode==='task';
   }
   if(l._isTaskMain) return true;
   return (Number(l.qte)||0)*(Number(l.pu)||0)===0 &&
@@ -28847,12 +28853,20 @@ function rFAlines(){
 function _gfTotalDevis(dv){
   if(!dv) return 0;
   var L=dv.lines||{};
-  var arr=Array.isArray(dv.lines)?dv.lines:[].concat(L.fourniture||[],L.service||[],L.fret||[]);
+  // ⚠ SECTION PAR SECTION, jamais une concatenation : la detection de porteuse
+  // TACHE remonte vers le bandeau le plus proche, et concatener lui ferait
+  // traverser la frontiere entre service et fourniture. C'est exactement le bug
+  // qui faisait disparaitre la ligne fourniture du PDF (SLN-DV169, 24/08).
+  // cDVtot procede de la meme facon : on reste aligne sur lui.
+  var sections=Array.isArray(dv.lines)?[dv.lines]
+              :[L.fourniture||[], L.service||[], L.fret||[]];
   var ht=0;
-  arr.forEach(function(l,i){
-    if(!l||l.type==='header'||l.type==='section_banner')return;
-    if(typeof _isTaskCarrier==='function' && _isTaskCarrier(arr,i)){ ht+=_taskSubTotal(l); return; }
-    ht+=(Number(l.qte)||0)*(Number(l.pu)||0);
+  sections.forEach(function(arr){
+    arr.forEach(function(l,i){
+      if(!l||l.type==='header'||l.type==='section_banner')return;
+      if(typeof _isTaskCarrier==='function' && _isTaskCarrier(arr,i)){ ht+=_taskSubTotal(l); return; }
+      ht+=(Number(l.qte)||0)*(Number(l.pu)||0);
+    });
   });
   return ht;
 }
@@ -45066,12 +45080,22 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
     }
     var prevIsKitHeader=(i>0 && allL[i-1] && allL[i-1].type==='header' && allL[i-1].mode==='kit');
     // Détection TASK robuste : remonte vers le header (gère les blocs TÂCHE 2+ et ignore
-    // les flags _isTaskMain orphelins qui auraient pu être collés sur une ligne KIT)
+    // les flags _isTaskMain orphelins qui auraient pu être collés sur une ligne KIT).
+    //
+    // ⚠⚠ LA REMONTÉE S'ARRÊTE À LA FRONTIÈRE DE SECTION — corrigé le 24/08/2026.
+    // `allL` est la CONCATÉNATION des sections dans l'ordre ['service','fourniture',
+    // 'fret']. Sans ce garde-fou, une ligne de FOURNITURE placée après une section
+    // MAIN D'ŒUVRE se terminant par un bloc TÂCHE remontait jusqu'au bandeau TÂCHE
+    // du service, était prise pour une porteuse de tâche, et — n'ayant pas de
+    // subLines — sortait de la fonction SANS RIEN ÉMETTRE : la ligne disparaissait
+    // du PDF. Constaté sur SLN-DV169 : total 395 800 mais détail imprimé 385 800,
+    // les 10 000 de visserie envolés. Le total, lui, restait juste (cDVtot itère
+    // section par section) → un document dont le détail ne totalise pas son total.
     var isTaskMain=(function(){
       for(var k=i-1;k>=0;k--){
-        if(allL[k] && allL[k].type==='header'){
-          return allL[k].mode==='task';
-        }
+        if(!allL[k]) continue;
+        if(allL[k].sec!==l.sec) return false;   // on a quitté la section : pas une TÂCHE
+        if(allL[k].type==='header') return allL[k].mode==='task';
       }
       return false;
     })();
