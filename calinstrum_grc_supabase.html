@@ -9058,10 +9058,207 @@ function getAlertData(){
   var deduped=Object.keys(seen).map(function(k){return seen[k];});
   return deduped.sort(function(a,b){var o={late:0,today:1,soon:2};return o[a.type]-o[b.type];});
 }
+
+// =============================================================================
+// DELAI CONTRACTUEL -- echeance de livraison et exposition a la penalite
+// =============================================================================
+// [27/08/2026] La specification prevoyait de calculer le retard sur la PHASE du
+// devis. Mesure faite avant d'ecrire une ligne : cette alerte tirait 8 fois sur 8,
+// parce que la phase du devis N'EST PAS MAINTENUE -- age median 67 jours, record
+// 229 jours, et surtout les trois quarts des dossiers marques « en cours »
+// portaient DEJA une facture emise. Un signal qui se declenche toujours n'est pas
+// un signal, c'est du bruit, et on cesse de le regarder.
+//
+// (=X=) LE CRITERE DE CLOTURE EST LA FACTURE EMISE, PAS LA PHASE.
+// (=X=) PAS DE VERT PAR ABSENCE DE DONNEE : un dossier sans delai renseigne est
+//       compte A PART, jamais range avec les dossiers a l'heure.
+// (=X=) AVERTIR, PAS BLOQUER : rien n'empeche d'enregistrer ni d'imprimer.
+// (=X=) La penalite de 5 % est un ORDRE DE GRANDEUR affiche comme tel. L'app ne
+//       connait pas les clauses de chaque contrat client -- ne jamais l'appeler
+//       « penalite due ».
+
+var DL_SEUIL_PROCHE_J = 7;      // « echeance proche » : moins de 7 jours
+var DL_TAUX_PENALITE  = 0.05;   // ordre de grandeur, cf ci-dessus
+
+// --- Lecture du delai contractuel (texte libre) -----------------------------
+// Le champ Delai n'a jamais ete structure : « 7 a 8 semaines livre sur site »,
+// « 5 semaines a compter de la reception du bon de commande », « 1/2 journee »...
+// Mesure du 27/08 : 32 des 33 delais renseignes sont lisibles par ce parseur ; le
+// seul qui resiste est une clause Incoterm, pas un delai.
+// (=X=) Sur une fourchette on retient TOUJOURS LE PIRE CAS (« 7 a 8 » -> 8) :
+//       c'est celui qui engage vis-a-vis du client.
+function dlParseDelai(txt){
+  var t=String(txt||'').toLowerCase().replace(/,/g,'.').trim();
+  if(!t)return null;
+  var u=function(n,unite,plage){
+    var mult=(unite.indexOf('semaine')===0)?7:(unite.indexOf('mois')===0?30:1);
+    return {jours:Math.round(n*mult),unite:unite,plage:!!plage};
+  };
+  // (=X=) L'ORDRE DES MOTIFS COMPTE, du plus specifique au plus general.
+  //       « 1/2 journee » place APRES le motif generique etait lu 2 JOURS : le
+  //       motif « nombre + unite » attrapait le 2 de « 1/2 » suivi de « journee ».
+  if(/\b1\s*\/\s*2\s*journ/.test(t))return u(0.5,'jour',false);
+  var m=t.match(/(\d+(?:\.\d+)?)\s*(?:a|\u00e0|-)\s*(\d+(?:\.\d+)?)\s*(semaines?|jours?|mois)/);
+  if(m)return u(parseFloat(m[2]),m[3],true);
+  m=t.match(/(\d+(?:\.\d+)?)\s*(semaines?|jours?|mois)/);
+  if(m)return u(parseFloat(m[1]),m[2],false);
+  m=t.match(/^(\d+(?:\.\d+)?)\s*j\b/);
+  if(m)return u(parseFloat(m[1]),'jour',false);
+  return null;
+}
+
+// --- Le devis est-il clos ? -------------------------------------------------
+// TROIS marqueurs, parce qu'aucun n'est fiable seul -- constate sur l'export :
+//   - une facture porte le lien `dvlie` vers ce devis (`dvlie` peut contenir
+//     PLUSIEURS numeros separes par , ; / + -- meme decoupage que le reste de l'app) ;
+//   - le devis porte un linkFactureId ;
+//   - le STATUT du devis dit « Facturé ». Sans ce troisieme marqueur, un devis
+//     dont le lien dvlie est casse ressortait en retard de 203 jours alors qu'il
+//     etait factur\u00e9 depuis fevrier. Il y a d'ailleurs un outil « Réparer liens
+//     DV/FA » dans l'app : c'est bien que ces liens cassent.
+function dlEstFacture(d){
+  if(!d)return false;
+  if(d.linkFactureId)return true;
+  if(String(d.status||'').trim()==='Factur\u00e9')return true;
+  var num=String(d.num||'').trim().toUpperCase();
+  if(!num)return false;
+  return (DB.factures||[]).some(function(f){
+    if(!f||!f.dvlie)return false;
+    return String(f.dvlie).toUpperCase().split(/[,;\/+]/).some(function(x){
+      return x.trim()===num;
+    });
+  });
+}
+
+// --- Echeance contractuelle -------------------------------------------------
+// Point de depart : la date du BC CLIENT. C'est ce que disent les formulations
+// elles-memes (« apres reception du BC Client », « des reception du PO »).
+// Sans BC client, le delai n'a pas commence a courir : le dossier n'est pas
+// engage, il n'entre pas dans le calcul.
+// Les durees sont comptees en jours CALENDAIRES. Pour un delai exprime en jours
+// il s'agit probablement de jours ouvres ; l'ecart est de quelques jours sur des
+// delais courts, et l'alerte est indicative -- on ne bricole pas un calendrier.
+function dlEcheance(d){
+  var p=dlParseDelai(d&&d.delai);
+  var ancre=(d&&(d.bcClientDate||d.bcClientSLNDate))||'';
+  if(!p||!ancre)return null;
+  var e=new Date(ancre);
+  if(isNaN(e.getTime()))return null;
+  e.setDate(e.getDate()+p.jours);
+  return {echeance:e,ancre:ancre,duree:p};
+}
+
+// --- Bilan sur toute la base ------------------------------------------------
+// Population : devis ENGAGES (une date de BC client) et NON CLOS (aucune facture).
+// Les statuts morts sont exclus.
+function dlBilan(auj){
+  var AUJ=auj?new Date(auj):new Date();
+  AUJ.setHours(0,0,0,0);
+  var MORTS=['Obsolète','Obsolete','Refusé','Refuse','Brouillon'];
+  var r={retard:[],proche:[],ok:[],sansDelai:[],phaseFigee:[],penalite:0,montant:0};
+  (DB.devis||[]).forEach(function(d){
+    if(!d)return;
+    if(MORTS.indexOf(String(d.status||'').trim())>=0)return;
+    // Une revision remplacee ne doit compter qu'une fois : c'est la revision
+    // vivante qui porte l'engagement. On s'appuie sur le helper de l'app, pas sur
+    // une heuristique de statut -- le modele de revisions est un sujet recurrent
+    // de bugs, on ne le reimplemente pas ici.
+    if(typeof _dvIsSuperseded==='function'&&_dvIsSuperseded(d))return;
+    var clos=dlEstFacture(d);
+    var ancre=d.bcClientDate||d.bcClientSLNDate;
+    // Signal B : la phase du devis n'a pas suivi la facturation. Ce n'est PAS un
+    // retard -- c'est une donnee perimee. Les deux ne doivent jamais etre fondus.
+    var EN_COURS=['bc_recu','po_emerson','production','debut_chantier','fin_chantier_pv'];
+    if(clos&&EN_COURS.indexOf(d.phase)>=0)r.phaseFigee.push({d:d,phase:d.phase,depuis:d.phaseDate});
+    if(clos||!ancre)return;                      // clos, ou delai pas encore engage
+    var e=dlEcheance(d);
+    if(!e){r.sansDelai.push({d:d});return;}      // engage mais aucun delai lisible
+    var reste=Math.round((e.echeance-AUJ)/86400000);
+    var ht=Number(d.ht)||0;
+    var o={d:d,echeance:e.echeance,reste:reste,ht:ht,
+           penalite:Math.round(ht*DL_TAUX_PENALITE),duree:e.duree,ancre:e.ancre};
+    if(reste<0){r.retard.push(o);r.penalite+=o.penalite;r.montant+=ht;}
+    else if(reste<=DL_SEUIL_PROCHE_J)r.proche.push(o);
+    else r.ok.push(o);
+  });
+  r.retard.sort(function(a,b){return a.reste-b.reste;});
+  r.proche.sort(function(a,b){return a.reste-b.reste;});
+  return r;
+}
+
+// --- Rendu ------------------------------------------------------------------
+function dlRenderBloc(){
+  var b=dlBilan();
+  var fd=function(dt){return fD(dt.toISOString().slice(0,10));};
+  var carte=function(coul,fond,bord,titre,corps){
+    return '<div style="background:'+fond+';border:1px solid '+bord+';border-radius:8px;padding:11px 13px;margin-bottom:9px">'+
+      '<div style="font-weight:700;font-size:12px;color:'+coul+';margin-bottom:'+(corps?'8px':'0')+'">'+titre+'</div>'+corps+'</div>';
+  };
+  var lignes=function(arr,coul,suffixe){
+    return '<table style="width:100%;border-collapse:collapse;font-size:11.5px">'+
+      arr.map(function(o){
+        return '<tr>'+
+          '<td style="padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.04)">'+esc(o.d.num||'')+
+            '<div style="font-size:9.5px;color:var(--muted-soft)">'+esc(String(o.d.client||'').slice(0,34))+'</div></td>'+
+          '<td style="padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.04);color:var(--muted);font-size:10.5px">'+
+            '\u00e9ch. '+fd(o.echeance)+'<div style="font-size:9.5px;color:var(--muted-soft)">'+esc(String(o.duree.plage?'au plus tard ':'')+String(o.d.delai||'').slice(0,40))+'</div></td>'+
+          '<td style="padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.04);text-align:right;font-family:var(--mono);color:'+coul+';font-weight:700">'+
+            Math.abs(o.reste)+' j'+suffixe+'</td>'+
+          '<td style="padding:4px 6px;border-bottom:1px solid rgba(255,255,255,.04);text-align:right;font-family:var(--mono);color:var(--muted)">'+
+            fN(o.ht)+'<div style="font-size:9.5px;color:'+coul+'">~'+fN(o.penalite)+' \u00e0 5 %</div></td>'+
+        '</tr>';
+      }).join('')+'</table>';
+  };
+
+  var html='';
+  if(b.retard.length){
+    html+=carte('var(--red)','rgba(244,63,94,.10)','rgba(244,63,94,.4)',
+      '\ud83d\uded1 '+b.retard.length+' dossier'+(b.retard.length>1?'s':'')+' au-del\u00e0 de l\'\u00e9ch\u00e9ance contractuelle'+
+      ' <span style="font-weight:400;color:var(--muted);font-size:10.5px">\u00b7 exposition ~'+fN(b.penalite)+' XPF \u00e0 5 %</span>',
+      lignes(b.retard,'var(--red)',' de retard'));
+  }
+  if(b.proche.length){
+    html+=carte('var(--amber)','rgba(251,191,36,.08)','rgba(251,191,36,.32)',
+      '\u23f0 '+b.proche.length+' dossier'+(b.proche.length>1?'s':'')+' \u00e0 moins de '+DL_SEUIL_PROCHE_J+' jours de l\'\u00e9ch\u00e9ance',
+      lignes(b.proche,'var(--amber)',' restant'+(b.proche.length>1?'s':'')));
+  }
+  if(b.sansDelai.length){
+    // Ni vert ni rouge : on ne SAIT PAS. Un dossier sans delai n'est pas un
+    // dossier a l'heure -- le dire est le seul comportement honnete.
+    html+=carte('var(--muted)','rgba(148,163,184,.06)','rgba(148,163,184,.22)',
+      '\ud83d\udd73 '+b.sansDelai.length+' dossier'+(b.sansDelai.length>1?'s':'')+' engag\u00e9'+(b.sansDelai.length>1?'s':'')+' sans d\u00e9lai contractuel lisible',
+      '<div style="font-size:11px;color:var(--muted)">Aucune \u00e9ch\u00e9ance calculable : ils sont <strong style="color:var(--text)">invisibles au radar</strong>. '+
+      'Renseigne le champ <em>D\u00e9lai</em> du devis pour les y faire entrer.<div style="margin-top:6px;font-size:10.5px;color:var(--muted-soft)">'+
+      b.sansDelai.slice(0,12).map(function(o){return esc(o.d.num||'');}).join(' \u00b7 ')+
+      (b.sansDelai.length>12?' \u00b7 \u2026':'')+'</div></div>');
+  }
+  if(b.phaseFigee.length){
+    html+=carte('var(--muted)','rgba(167,139,250,.07)','rgba(167,139,250,.26)',
+      '\ud83d\uddc2 '+b.phaseFigee.length+' dossier'+(b.phaseFigee.length>1?'s':'')+' dont la phase n\'a pas suivi la facturation',
+      '<div style="font-size:11px;color:var(--muted)">Ce n\'est <strong style="color:var(--text)">pas un retard</strong> : une facture est \u00e9mise, mais le devis est rest\u00e9 sur une phase de production. '+
+      'Aucun retard n\'est calcul\u00e9 dessus.<div style="margin-top:6px;font-size:10.5px;color:var(--muted-soft)">'+
+      b.phaseFigee.slice(0,12).map(function(o){return esc(o.d.num||'');}).join(' \u00b7 ')+
+      (b.phaseFigee.length>12?' \u00b7 \u2026':'')+'</div></div>');
+  }
+  if(!html){
+    html=carte('var(--green)','rgba(16,185,129,.07)','rgba(16,185,129,.3)',
+      '\u2713 Aucun d\u00e9passement d\'\u00e9ch\u00e9ance sur les dossiers engag\u00e9s','');
+  }
+  return '<div style="margin-bottom:14px">'+
+    '<div style="font-size:11px;font-weight:700;color:var(--teal);letter-spacing:.4px;text-transform:uppercase;margin-bottom:8px">D\u00e9lais contractuels</div>'+
+    html+
+    '<div style="font-size:10px;color:var(--muted-soft);margin-top:2px">La p\u00e9nalit\u00e9 de 5 % est un <strong>ordre de grandeur</strong>, pas un montant d\u00fb : elle d\u00e9pend du contrat de chaque client. '+
+    'Un dossier est consid\u00e9r\u00e9 clos d\u00e8s qu\'une facture est \u00e9mise dessus.</div></div>';
+}
+
 function renderAlertes(){
   var alerts=getAlertData(),list=document.getElementById('alertes-list');if(!list)return;
-  if(!alerts.length){list.innerHTML='<div style="font-size:10px;color:var(--muted);text-align:center;padding:16px;background:var(--bg3);border-radius:8px">✓ Aucune alerte</div>';return;}
-  list.innerHTML=alerts.map(function(a){
+  // Les DELAIS CONTRACTUELS sont une famille distincte des echeances de paiement :
+  // bloc separe, en tete, jamais fondu dans le meme compteur.
+  var enTete=(typeof dlRenderBloc==='function')?dlRenderBloc():'';
+  var _set=function(h){list.innerHTML=enTete+h;};
+  if(!alerts.length){_set('<div style="font-size:10px;color:var(--muted);text-align:center;padding:16px;background:var(--bg3);border-radius:8px">✓ Aucune alerte</div>');return;}
+  _set(alerts.map(function(a){
     var cls=a.type==='late'?'late':a.type==='today'?'today':'soon';
     var icon=a.type==='late'?'🚨':a.type==='today'?'⚡':'⏰';
     var col=a.type==='late'?'var(--red)':a.type==='today'?'var(--amber)':'var(--blue)';
@@ -9069,7 +9266,7 @@ function renderAlertes(){
       '<div><div style="font-size:11px;font-weight:700">'+icon+' '+a.num+' — '+esc(a.intitule.substring(0,55))+'</div>'+
       '<div style="font-size:9px;color:var(--muted);margin-top:2px">'+a.message+'</div></div>'+
       '<div style="text-align:right;flex-shrink:0"><div style="font-size:12px;font-weight:700;color:'+col+'">'+fN(a.montant)+' XPF</div></div></div>';
-  }).join('');
+  }).join(''));
 }
 function renderUrgent(){
   var alerts=getAlertData().slice(0,5),el=document.getElementById('urgent-list');if(!el)return;
