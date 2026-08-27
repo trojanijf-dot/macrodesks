@@ -3014,6 +3014,38 @@ function admPreviewPrint(){
       <table class="items-tbl"><thead><tr><th>#</th><th>Réf.</th><th style="min-width:150px">Désignation</th><th>TGC%</th><th>Uté</th><th>Qté</th><th>PU(XPF)</th><th>Total HT</th><th></th></tr></thead>
       <tbody id="dvFR"></tbody></table>
 
+      <!-- ===== DOSSIER IMPORT — cout de revient debarque (moteur lc*) =====
+           Replie par defaut, affiche seulement quand le devis contient au moins une
+           ligne fourniture portant un prix Emerson AUD. Le x1,2 s'applique PAR LIGNE
+           alors que le fret, la douane et les forfaits transitaire portent sur
+           l'EXPEDITION : ces entrees se saisissent donc une seule fois, ici. -->
+      <div id="dv-dossier-import" style="display:none;margin:10px 0 14px;padding:12px 13px;background:rgba(45,212,191,0.05);border:1px solid rgba(45,212,191,0.22);border-radius:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="lcDvToggle()">
+          <div><span style="font-weight:700;color:var(--teal);font-size:12px">&#9992; Dossier import &mdash; co&ucirc;t de revient d&eacute;barqu&eacute;</span>
+          <span id="lc-dv-resume" style="font-size:10.5px;color:var(--muted);margin-left:8px"></span></div>
+          <span id="lc-dv-chevron" style="color:var(--teal);font-size:13px">&#9662;</span>
+        </div>
+        <div id="lc-dv-corps" style="display:none;margin-top:11px">
+          <div class="form-row">
+            <div class="form-group"><label>Fret <span style="color:var(--muted);font-weight:400;font-size:10px">(AUD)</span></label>
+              <input class="form-input" type="number" id="lc-dv-fret" min="0" step="0.01" placeholder="ex: 584.00" oninput="lcDvSync()"></div>
+            <div class="form-group"><label>Assurance <span style="color:var(--muted);font-weight:400;font-size:10px">(XPF)</span></label>
+              <input class="form-input" type="number" id="lc-dv-assur" min="0" step="1" placeholder="ex: 3528" oninput="lcDvSync()"></div>
+            <div class="form-group"><label>Poids brut <span style="color:var(--muted);font-weight:400;font-size:10px">(kg)</span></label>
+              <input class="form-input" type="number" id="lc-dv-poids" min="0" step="0.1" placeholder="ex: 5.0" oninput="lcDvSync()"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>Dimensions <span style="color:var(--muted);font-weight:400;font-size:10px">(L x l x h cm)</span></label>
+              <input class="form-input" type="text" id="lc-dv-dims" placeholder="ex: 53 x 39 x 35" oninput="lcDvSync()"></div>
+            <div class="form-group"><label>Droits de douane <span style="color:var(--muted);font-weight:400;font-size:10px">(%)</span></label>
+              <input class="form-input" type="number" id="lc-dv-dd" min="0" step="0.1" placeholder="10" oninput="lcDvSync()"></div>
+            <div class="form-group"><label>Livraison finale <span style="color:var(--muted);font-weight:400;font-size:10px">(XPF, ce dossier)</span></label>
+              <input class="form-input" type="number" id="lc-dv-livr" min="0" step="1" placeholder="0" oninput="lcDvSync()"></div>
+          </div>
+          <div id="lc-dv-verdict" style="margin-top:10px"></div>
+        </div>
+      </div>
+
       <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 4px;flex-wrap:wrap;gap:6px">
         <div class="sec" style="margin:0">Main oeuvre</div>
         <div style="display:flex;gap:5px">
@@ -19825,6 +19857,7 @@ function openDV(id, preSelectedClient){
       gv('dv-status',d.status||'Brouillon');gv('dv-validite',d.validite||'1 mois');gv('dv-delai',d.delai||'');
       gv('dv-paiement',d.paiement||'100% à la réception de la marchandise');gv('dv-notes',d.notes||'');
       gv('dv-tgc-mention',d.tgcM||'506-2');gv('dv-link-emerson',d.linkEmerson||'');gv('dv-link-bc',d.linkBC||'');gv('dv-link-po',d.linkPO||'');gv('dv-link-other',d.linkOther||'');
+      lcDvRemplir(d);
       gv('dv-bc-client-sln',d.bcClientSLN||'');gv('dv-bc-client-sln-date',d.bcClientSLNDate||'');
       gv('dv-cadre-ref',d.cadreRef||'');gv('dv-cadre-start',d.cadreStart||'');
       // Bloc Traçabilité — 8 champs pour le cycle de vie (cf. PHASES_META)
@@ -19902,6 +19935,7 @@ function openDV(id, preSelectedClient){
     gv('dv-contact','');gv('dv-email','');gv('dv-adresse','');gv('dv-objet','');
     gv('dv-incoterms','');gv('dv-transport','');gv('dv-freight','');gv('dv-danger','Non');
     gv('dv-status','Brouillon');gv('dv-validite','1 mois');gv('dv-delai','');gv('dv-notes','');gv('dv-tgc-mention','506-2');gv('dv-link-emerson','');gv('dv-link-bc','');gv('dv-link-po','');gv('dv-link-other','');
+    lcDvRemplir(null);
     gv('dv-bc-client-sln','');gv('dv-bc-client-sln-date','');
     gv('dv-cadre-ref','');gv('dv-cadre-start','');
     // Bloc Traçabilité — 8 champs vides pour nouveau devis
@@ -20741,8 +20775,10 @@ function rDVlines(){
             '<input type="number" step="0.01" value="'+audRate+'" data-field="audRate" data-sec="'+sec+'" data-idx="'+i+'" style="width:55px;background:rgba(0,0,0,0.3);border:1px solid rgba(45,212,191,0.25);border-radius:3px;padding:2px 5px;color:var(--text);font-size:10px"></td>'+
           '<td style="padding:3px 4px 5px"><span style="font-size:9px;color:var(--muted)">Marge</span><br>'+
             '<input type="number" step="0.01" value="'+audMargin+'" data-field="audMargin" data-sec="'+sec+'" data-idx="'+i+'" style="width:50px;background:rgba(0,0,0,0.3);border:1px solid rgba(45,212,191,0.25);border-radius:3px;padding:2px 5px;color:var(--text);font-size:10px"></td>'+
+          '<td style="padding:3px 4px 5px;font-size:9px;color:var(--muted)">'+
+            '<label title="Cette ligne ne supporte pas de transit (achat local, reprise...) : elle sort du perimetre du cout de revient debarque." style="display:flex;gap:3px;align-items:center;cursor:pointer;white-space:nowrap">'+
+            '<input type="checkbox" data-field="_horsImport" data-sec="'+sec+'" data-idx="'+i+'"'+(l._horsImport?' checked':'')+' style="margin:0">hors import</label></td>'+
           '<td style="padding:3px 4px 5px;font-size:10px;color:var(--teal);font-weight:700"><span style="color:var(--muted);font-weight:400">PU: </span>'+(audUnit!=='—'?fN(audUnit)+' XPF':audUnit)+'<br><span style="color:var(--muted);font-weight:400">Tot: </span>'+(audTotal!=='—'?fN(audTotal)+' XPF':audTotal)+'</td>'+
-          '<td></td>'+
           '</tr>';
       }
 
@@ -20850,6 +20886,9 @@ function rDVlines(){
     });
 
     tb.innerHTML=html;
+    // Recalcul du dossier import a CHAQUE rendu de lignes : un seul point
+    // d'accroche, donc aucun chemin de modification ne peut l'oublier.
+    if(typeof lcDvSync==='function')lcDvSync();
 
     // Listeners pour les inputs principaux (data-field)
     // BUG FIX : inclure 'textarea' en plus de 'input' et 'select' — la Désignation des
@@ -20860,6 +20899,12 @@ function rDVlines(){
       inp.addEventListener('input',function(){
         var sec2=this.getAttribute('data-sec'),idx=parseInt(this.getAttribute('data-idx')),field=this.getAttribute('data-field');
         if(sec2&&!isNaN(idx)&&field){
+          // La case « hors import » n'est pas un champ texte : elle se lit sur .checked.
+          if(field==='_horsImport'){
+            dvL[sec2][idx]._horsImport=!!el.checked;
+            if(typeof lcDvSync==='function')lcDvSync();
+            return;
+          }
           var numFields=['tgc','qte','pu','audPrice','audRate','audMargin'];
           dvL[sec2][idx][field]=numFields.indexOf(field)>=0?+this.value:this.value;
           // Logique AUD calculator (uniquement sur lignes normales / KIT principale, pas sur header)
@@ -21094,6 +21139,7 @@ function getDV(){
     quoteEmersonRef:gvg('dv-quote-emerson-ref'),quoteEmersonDate:gvg('dv-quote-emerson-date'),
     linkFactureId:existing?existing.linkFactureId:undefined, // préserver si déjà créée
     linkEmerson:gvg('dv-link-emerson'),linkBC:gvg('dv-link-bc'),linkPO:gvg('dv-link-po'),linkOther:gvg('dv-link-other'),
+    dossierImport:lcDvLire(),
     lines:JSON.parse(JSON.stringify(dvL)),ht:t.ht,t11:t.t11,t22:t.t22,t6:t.t6,fr:t.fr,ttc:t.ttc};
   // Réinjecter les flags préservés
   Object.assign(result,preservedFlags);
@@ -48579,6 +48625,209 @@ function saveCoutRevient(){
   _lcDossierColle=null;
   saveDB();
   renderCoutRevient();
+}
+
+
+
+// =============================================================================
+// ETAPE 2 -- PRIX DE VENTE CIBLE SUR LE DEVIS FOURNITURE
+// =============================================================================
+// Le x1,2 historique s'applique PAR LIGNE. Le cout de revient debarque, lui, est
+// PAR DOSSIER : fret, douane et forfaits transitaire portent sur l'expedition
+// entiere. On saisit donc le dossier une fois, le moteur en deduit le coefficient
+// a appliquer, et un COEFFICIENT UNIFORME repartit exactement au prorata de la
+// valeur AUD -- ce qui tombe juste par construction.
+//
+// (=X=) RIEN D'AUTOMATIQUE. Le coefficient ne s'applique que sur clic. Un devis
+//       rouvert n'est jamais reecrit tout seul.
+// (=X=) Le verdict rouge n'empeche NI d'enregistrer NI d'imprimer. On avertit.
+
+// --- Perimetre import -------------------------------------------------------
+// Les lignes FOURNITURE qui portent un prix Emerson AUD et ne sont pas marquees
+// « hors import ». Pourquoi pas « tout le devis » : le cout de revient debarque ne
+// concerne que la marchandise importee ; y melanger de la main d'oeuvre ou un
+// achat local donnerait une marge fausse. Mesure du 27/08 : sur les lignes
+// fourniture existantes, deux tiers n'ont AUCUN prix AUD -- melange d'achats
+// locaux et d'articles saisis directement en XPF. Le prix AUD est donc le seul
+// marqueur fiable de « cette ligne est passee par l'import ».
+function _lcDvPerimetre(){
+  var r={lignes:[],montantAud:0,pvXpf:0,sansAud:0,exclues:0,tauxSomme:0,nbTaux:0};
+  var arr=(typeof dvL!=='undefined'&&dvL&&dvL.fourniture)||[];
+  arr.forEach(function(l,i){
+    if(!l||l.type==='header')return;
+    var ap=parseFloat(l.audPrice)||0;
+    if(!ap){r.sansAud++;return;}
+    if(l._horsImport){r.exclues++;return;}
+    var qte=Number(l.qte)||0;
+    r.lignes.push({idx:i,l:l});
+    r.montantAud+=ap*qte;
+    r.pvXpf+=Math.round((Number(l.pu)||0)*qte);
+    r.tauxSomme+=parseFloat(l.audRate)||74.5;r.nbTaux++;
+  });
+  r.tauxMoyen=r.nbTaux?(r.tauxSomme/r.nbTaux):74.5;
+  return r;
+}
+
+// --- Lecture du panneau -----------------------------------------------------
+// Rend undefined si rien n'est saisi : un dossier vide ne doit pas etre stocke,
+// sinon tous les devis porteraient un objet inutile.
+function lcDvLire(){
+  var n=function(id){var v=gvg(id);if(v===''||v==null)return undefined;
+    var x=Number(String(v).replace(/,/g,'.'));return isFinite(x)&&x>=0?x:undefined;};
+  var o={fretAUD:n('lc-dv-fret'),assuranceXPF:n('lc-dv-assur'),poidsKg:n('lc-dv-poids'),
+    dimsCm:(gvg('lc-dv-dims')||'').trim()||undefined,tauxDDpct:n('lc-dv-dd'),
+    livraisonXPF:n('lc-dv-livr')};
+  var vide=Object.keys(o).every(function(k){return o[k]===undefined;});
+  return vide?undefined:o;
+}
+
+// --- Remplissage a l'ouverture ---------------------------------------------
+// Priorite : ce que le devis a deja enregistre, puis le BC Emerson lie s'il en
+// existe un. Mesure du 27/08 : la moitie des devis fourniture n'ont AUCUN BC lie
+// -- c'est normal, le devis precede la commande. Le pre-remplissage est donc un
+// confort, jamais une garantie.
+function lcDvRemplir(d){
+  var src=(d&&d.dossierImport)?d.dossierImport:null;
+  var origine='';
+  if(!src&&d&&d.id!=null){
+    var bc=(DB.bcs||[]).find(function(b){
+      if(!b)return false;
+      var ids=(b.devisLieIds||[]).map(String);
+      if(b.devisLieId)ids.push(String(b.devisLieId));
+      return ids.indexOf(String(d.id))>=0
+        && (b.fretAUD!=null||b.poidsKg!=null||(b.dimsCm||'').trim()!=='');
+    });
+    if(bc){src={fretAUD:bc.fretAUD,poidsKg:bc.poidsKg,dimsCm:bc.dimsCm};origine=bc.num||'';}
+  }
+  var v=function(id,x){gv(id,(x===undefined||x===null)?'':x);};
+  v('lc-dv-fret',src&&src.fretAUD); v('lc-dv-assur',src&&src.assuranceXPF);
+  v('lc-dv-poids',src&&src.poidsKg); v('lc-dv-dims',src&&src.dimsCm);
+  v('lc-dv-dd',src&&src.tauxDDpct);  v('lc-dv-livr',src&&src.livraisonXPF);
+  _lcDvOrigine=origine;
+  var c=document.getElementById('lc-dv-corps');
+  if(c)c.style.display='none';
+  var ch=document.getElementById('lc-dv-chevron');
+  if(ch)ch.textContent='\u25be';
+  lcDvSync();
+}
+var _lcDvOrigine='';
+
+function lcDvToggle(){
+  var c=document.getElementById('lc-dv-corps'); if(!c)return;
+  var ouvert=(c.style.display!=='none');
+  c.style.display=ouvert?'none':'block';
+  var ch=document.getElementById('lc-dv-chevron');
+  if(ch)ch.textContent=ouvert?'\u25be':'\u25b4';
+}
+
+// --- Construction de l'entree du moteur -------------------------------------
+function _lcDvDossier(per){
+  var o=lcDvLire()||{};
+  var dims=(typeof _bcParseDims==='function')?_bcParseDims(o.dimsCm):null;
+  return {
+    montant_aud:per.montantAud,
+    fret_aud:o.fretAUD||0,
+    assurance_xpf:o.assuranceXPF||0,
+    taux_douanier:per.tauxMoyen,
+    poids_brut_kg:o.poidsKg||0,
+    dimensions_cm:dims||[0,0,0],
+    taux_dd:(o.tauxDDpct!=null)?(o.tauxDDpct/100):undefined,
+    exoneration_tgc:isClientExo(gvg('dv-client')),
+    cout_livraison_xpf:o.livraisonXPF||0,
+    prix_vente_xpf:per.pvXpf
+  };
+}
+
+// --- Recalcul + rendu -------------------------------------------------------
+function lcDvSync(){
+  var pan=document.getElementById('dv-dossier-import'); if(!pan)return;
+  var per=_lcDvPerimetre();
+  // Le panneau n'existe que s'il y a de la marchandise importee a chiffrer.
+  if(!per.lignes.length&&!per.exclues){pan.style.display='none';return;}
+  pan.style.display='block';
+
+  var res=document.getElementById('lc-dv-resume');
+  var vd=document.getElementById('lc-dv-verdict');
+  var o=lcDvLire();
+  var manque=[];
+  if(!o||!o.fretAUD)manque.push('fret');
+  if(!o||!o.poidsKg)manque.push('poids');
+  if(!o||!o.dimsCm)manque.push('dimensions');
+
+  var etiq=per.lignes.length+' ligne'+(per.lignes.length>1?'s':'')+' import'+
+    (per.exclues?' \u00b7 '+per.exclues+' hors import':'')+
+    (per.sansAud?' \u00b7 '+per.sansAud+' sans prix AUD':'');
+
+  if(manque.length){
+    if(res)res.textContent=etiq+' \u00b7 \u00e0 renseigner : '+manque.join(', ');
+    if(vd)vd.innerHTML='<div style="font-size:11.5px;color:var(--muted);background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:6px;padding:9px 11px">'+
+      '\u26a0\ufe0f Renseigne <strong style="color:var(--text)">'+manque.join(', ')+'</strong> pour chiffrer le transit. '+
+      'Sans ces valeurs le co\u00fbt de revient ne peut pas \u00eatre calcul\u00e9 \u2014 le moteur le dit plut\u00f4t que de l\'inventer.'+
+      (_lcDvOrigine?'':'')+'</div>';
+    return;
+  }
+
+  var d=_lcDvDossier(per), r, cible;
+  try{ r=lcCalculDossier(d); cible=lcPrixVenteCible(Object.assign({},d,{prix_vente_xpf:0})); }
+  catch(e){ if(vd)vd.innerHTML='<div style="font-size:11.5px;color:var(--red)">Calcul impossible : '+esc(e.message)+'</div>'; return; }
+
+  var m=r.marge.realise, v=r.verdict.global;
+  var coul={vert:'var(--green)',orange:'var(--amber)',rouge:'var(--red)'}[v]||'var(--muted)';
+  var fond={vert:'rgba(16,185,129,.09)',orange:'rgba(251,191,36,.08)',rouge:'rgba(244,63,94,.10)'}[v]||'rgba(255,255,255,.03)';
+  var bord={vert:'rgba(16,185,129,.34)',orange:'rgba(251,191,36,.32)',rouge:'rgba(244,63,94,.4)'}[v]||'var(--border)';
+
+  if(res)res.textContent=etiq+' \u00b7 revient '+fN(m.cout_revient_xpf)+' F'+
+    (v==='non-configure'?'':' \u00b7 marge '+(m.taux_marge*100).toFixed(1)+' %');
+
+  // Coefficient a appliquer : ARRONDI VERS LE HAUT.
+  // Arrondi au plus proche, il passe SOUS la cible d'un cheveu et le verdict vire
+  // a l'orange sur un dossier pourtant correct. Constate le 27/08 sur le dossier
+  // de reference : 1,67319 -> 1,673 donnait 1,67300, juste sous la cible.
+  var coefApp=Math.ceil((cible.coefficient_implique||0)*1000)/1000;
+  var peutAppliquer=per.lignes.length>0&&coefApp>0&&isFinite(coefApp);
+
+  var kpi=function(k,val,sub,col){return '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 10px">'+
+    '<div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">'+k+'</div>'+
+    '<div style="font-family:var(--mono);font-size:15px;margin-top:2px;color:'+(col||'var(--text)')+'">'+val+'</div>'+
+    '<div style="font-size:9px;color:var(--muted);margin-top:1px">'+sub+'</div></div>';};
+
+  var html='<div style="background:'+fond+';border:1px solid '+bord+';border-radius:7px;padding:10px 12px">'+
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">'+
+      kpi('Co\u00fbt de revient',fN(m.cout_revient_xpf),'marchandise '+fN(m.cout_marchandise_xpf)+' + transit '+fN(r.transit.total_ttc_xpf))+
+      kpi('P\u00e9rim\u00e8tre import',fN(per.pvXpf),per.lignes.length+' ligne'+(per.lignes.length>1?'s':''))+
+      kpi('Marge',(v==='non-configure'?'\u2014':fN(m.marge_brute_xpf)),(v==='non-configure'?'seuils non configur\u00e9s':(m.taux_marge*100).toFixed(2)+' %'),coul)+
+      kpi('Verdict',String(v).toUpperCase(),'coefficient '+(m.coefficient||0).toFixed(3)+' (indicatif)',coul)+
+    '</div>'+
+    '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">'+
+      '<span style="font-size:11.5px;color:var(--muted);margin-right:auto">Prix de vente cible : '+
+        '<strong style="color:var(--green);font-family:var(--mono)">'+fN(cible.prix_vente_cible_xpf)+' XPF</strong>'+
+        (_lcDvOrigine?' <span style="color:var(--muted);font-size:10px">\u00b7 pr\u00e9-rempli depuis le BC '+esc(_lcDvOrigine)+'</span>':'')+'</span>'+
+      (peutAppliquer?'<button class="btn btn-teal btn-sm" onclick="lcDvAppliquer('+coefApp+')">Appliquer \u00d7'+coefApp.toFixed(3).replace('.',',')+' aux '+per.lignes.length+' ligne'+(per.lignes.length>1?'s':'')+'</button>':'')+
+    '</div>'+
+    (per.sansAud?'<div style="font-size:10.5px;color:var(--muted);margin-top:7px">'+
+      per.sansAud+' ligne'+(per.sansAud>1?'s':'')+' fourniture sans prix Emerson AUD : hors calcul et non modifi\u00e9'+(per.sansAud>1?'es':'e')+' par le bouton.</div>':'')+
+  '</div>';
+  if(vd)vd.innerHTML=html;
+}
+
+// --- Application du coefficient ---------------------------------------------
+// Ecrit le coefficient dans le champ « Marge » de chaque ligne du perimetre, puis
+// recalcule le PU par la formule DEJA en place (audPrice x audRate x audMargin).
+// (=X=) Ne pas recalculer le PU autrement ici : ce serait une deuxieme ecriture
+//       de la meme regle, et c'est la classe de bug la plus couteuse du projet.
+function lcDvAppliquer(coef){
+  var per=_lcDvPerimetre();
+  if(!per.lignes.length)return;
+  if(!confirm('Remplacer la marge de '+per.lignes.length+' ligne'+(per.lignes.length>1?'s':'')+
+    ' par \u00d7'+String(coef).replace('.',',')+' ?\n\nLes prix unitaires seront recalcul\u00e9s.'))return;
+  per.lignes.forEach(function(o){
+    var l=o.l;
+    l.audMargin=coef;
+    var ap=parseFloat(l.audPrice)||0, ar=parseFloat(l.audRate)||74.5;
+    l.pu=Math.round(ap*ar*coef);
+  });
+  rDVlines();
+  if(typeof cDVtot==='function')cDVtot();
 }
 
 // --- Contrôle : rejoue le dossier de reference A TRAVERS LE MOTEUR ----------
