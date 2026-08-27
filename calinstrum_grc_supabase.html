@@ -3873,6 +3873,31 @@ function admPreviewPrint(){
           <div style="font-size:9.5px;color:var(--muted);margin-top:3px">Cumul fret international + douane + transit local + assurance + frais ACT.</div>
         </div>
       </div>
+      <!-- ===== EXPEDITION : les 3 entrees du cout de revient debarque =====
+           Mesure du 27/08 : ni le poids, ni les dimensions, ni le montant du fret
+           n'existaient nulle part dans l'app -- le champ `fret` porte un incoterm
+           (« Collect »), pas un montant. Sans ces trois valeurs, le moteur lc* ne
+           peut pas chiffrer le transit, qui pese jusqu'a un tiers du cout de revient.
+           Elles se saisissent ICI, une fois, au moment ou la facture du transitaire
+           est sous les yeux -- et le devis les reprendra. -->
+      <div style="margin:12px 0;padding:11px 12px;background:rgba(45,212,191,0.05);border:1px solid rgba(45,212,191,0.22);border-radius:7px">
+        <div style="font-weight:700;color:var(--teal);margin-bottom:3px;font-size:11.5px">✈️ Expédition</div>
+        <div style="font-size:9.5px;color:var(--muted);margin-bottom:9px">Entrées du coût de revient débarqué. Laisser vide si inconnu — le moteur le dira plutôt que d'inventer.</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Fret <span style="color:var(--muted);font-weight:400;font-size:10px">(montant, en AUD)</span></label>
+            <input class="form-input" type="number" id="bc-fretAUD" min="0" step="0.01" placeholder="ex: 584.00">
+          </div>
+          <div class="form-group">
+            <label>Poids brut <span style="color:var(--muted);font-weight:400;font-size:10px">(kg)</span></label>
+            <input class="form-input" type="number" id="bc-poidsKg" min="0" step="0.1" placeholder="ex: 5.0">
+          </div>
+          <div class="form-group">
+            <label>Dimensions <span style="color:var(--muted);font-weight:400;font-size:10px">(L × l × h, en cm)</span></label>
+            <input class="form-input" type="text" id="bc-dimsCm" placeholder="ex: 53 x 39 x 35">
+          </div>
+        </div>
+      </div>
       <div class="form-group">
         <label>📝 Détail / note frais <span style="color:var(--muted);font-weight:400;font-size:10px">(optionnel — ex: ventilation par poste, n° devis ACT…)</span></label>
         <textarea class="form-textarea" id="bc-fraisNote" rows="2" placeholder="ex: Fret ACT facture 2024-XXX : 1 200 000 + douane 350 000 + manutention 50 000 + assurance 250 000"></textarea>
@@ -32687,6 +32712,9 @@ function openBC(id){
     gv('bc-tauxAUD',b.tauxAUD!==undefined&&b.tauxAUD!==null?b.tauxAUD:'');
     gv('bc-fraisXPF',b.fraisXPF!==undefined&&b.fraisXPF!==null?b.fraisXPF:'');
     gv('bc-fraisNote',b.fraisNote||'');
+    gv('bc-fretAUD',b.fretAUD!==undefined&&b.fretAUD!==null?b.fretAUD:'');
+    gv('bc-poidsKg',b.poidsKg!==undefined&&b.poidsKg!==null?b.poidsKg:'');
+    gv('bc-dimsCm',b.dimsCm||'');
     bindCoutReelLive();updateCoutReelPreview();
     sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
@@ -32698,6 +32726,9 @@ function openBC(id){
     _bcLinkBCclientIsAuto = true; // champ vide → on autorise l'auto-fill au 1er devis lié
     // Nouveaux champs Coût réel : vides = utiliser défauts
     gv('bc-tauxAUD','');gv('bc-fraisXPF','');gv('bc-fraisNote','');
+    // Les champs d'expedition se reinitialisent AUSSI : sans ca, le poids et les
+    // dimensions du BC precedemment ouvert resteraient colles sur le nouveau.
+    gv('bc-fretAUD','');gv('bc-poidsKg','');gv('bc-dimsCm','');
     bindCoutReelLive();updateCoutReelPreview();
     sv('mBCtitle','Nouveau BC — Emerson');
   }
@@ -33107,6 +33138,27 @@ function cBCtot(){
   }
   return{sub:sub,disc:discAmt,sales:salesAmt,other:other,ship:ship,total:total};
 }
+// Lit un champ numerique de la modale BC. Rend `undefined` -- pas 0 -- quand le
+// champ est vide : zero kilo et « poids inconnu » ne veulent pas dire la meme
+// chose pour le moteur de cout de revient.
+function _bcNumChamp(id){
+  var v=gvg(id);
+  if(v===''||v==null)return undefined;
+  var n=Number(String(v).replace(/,/g,'.'));
+  return (isFinite(n)&&n>=0)?n:undefined;
+}
+
+// « 53 x 39 x 35 », « 53*39*35 », « 53 × 39 × 35 » -> [53,39,35].
+// Rend null si les trois cotes ne sont pas lisibles : le moteur prefere ignorer
+// le poids volumetrique plutot que de le calculer sur une saisie a moitie comprise.
+function _bcParseDims(txt){
+  var t=String(txt||'').replace(/,/g,'.');
+  var m=t.match(/(\d+(?:\.\d+)?)\s*[x\u00d7*]\s*(\d+(?:\.\d+)?)\s*[x\u00d7*]\s*(\d+(?:\.\d+)?)/i);
+  if(!m)return null;
+  var d=[Number(m[1]),Number(m[2]),Number(m[3])];
+  return d.every(function(n){return isFinite(n)&&n>0;})?d:null;
+}
+
 function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot;ensurePropIds();
   // Lire les nouveaux champs Coût réel (taux + frais)
   var tauxStr=gvg('bc-tauxAUD');
@@ -33121,6 +33173,11 @@ function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot
   var devisIdLegacy = devisIdsArr.length > 0 ? String(devisIdsArr[0]) : '';
   var _bc={id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),calContact:gvg('bc-cal-contact'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieIds:devisIdsArr,devisLieId:devisIdLegacy,lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
   tauxAUD:(tauxNum!==null&&!isNaN(tauxNum)&&tauxNum>0)?tauxNum:undefined,
+  // Expedition — entrees du cout de revient debarque. `undefined` quand le champ
+  // est vide : le moteur doit pouvoir distinguer « non renseigne » de « zero ».
+  fretAUD:_bcNumChamp('bc-fretAUD'),
+  poidsKg:_bcNumChamp('bc-poidsKg'),
+  dimsCm:(gvg('bc-dimsCm')||'').trim()||undefined,
   fraisXPF:(fraisNum!==null&&!isNaN(fraisNum)&&fraisNum>=0)?fraisNum:undefined,
   fraisNote:gvg('bc-fraisNote')||''
   };
@@ -48279,21 +48336,36 @@ function lcCoutRevient(o){
 }
 
 // --- Verdict (seuils du §5) --------------------------------------------------
+// [27/08/2026] LE VERDICT SUIT LE TAUX DE MARGE, PAS LE COEFFICIENT.
+//
+// Le coefficient etait au depart le critere principal. Mesure faite le 27/08 sur
+// les dossiers reels portant des frais de transit SAISIS : le ratio
+// frais/marchandise va de 9 % a 35 % et DECROIT quand le dossier grossit -- c'est
+// mecanique, les forfaits fixes du transitaire se diluent dans le volume.
+//
+// Consequence : a taux de marge IDENTIQUE (la cible), le coefficient implique
+// s'etale de 1,36 a 1,69 selon la taille du dossier. Avec un seuil unique, les
+// gros dossiers tombaient en ROUGE BLOQUANT alors qu'ils etaient exactement a la
+// marge visee -- un quart des dossiers mesures. Un rouge injustifie sur un dossier
+// sain, c'est ce qui fait qu'on cesse de regarder les alertes.
+//
+// Le TAUX DE MARGE est invariant d'echelle : 20 % reste 20 % a toute taille.
+// (=X=) NE PAS remettre le coefficient dans le verdict global. Il reste calcule et
+//       renvoye a titre INFORMATIF (reperage rapide), jamais decisionnel.
 function lcVerdict(coefficient, taux_marge, params){
   var P = lcParams(params);
+  if (!P._commercial_configure) {
+    // Aucun verdict invente : sans seuils configures, on le DIT.
+    return { coefficient: 'non-configure', marge: 'non-configure',
+      global: 'non-configure', bloquant: false, pilote_par: 'marge',
+      message: 'Seuils commerciaux non configures (Parametres > Cout de revient).' };
+  }
   var c = (coefficient >= P.coefficient_cible) ? 'vert'
         : (coefficient >= P.coefficient_plancher ? 'orange' : 'rouge');
   var m = (taux_marge >= P.taux_marge_cible) ? 'vert'
         : (taux_marge >= P.taux_marge_alerte ? 'orange' : 'rouge');
-  if (!P._commercial_configure) {
-    // Aucun verdict invente : sans seuils configures, on le DIT.
-    return { coefficient: 'non-configure', marge: 'non-configure',
-      global: 'non-configure', bloquant: false,
-      message: 'Seuils commerciaux non configures (Parametres > Cout de revient).' };
-  }
-  var pire = (c === 'rouge' || m === 'rouge') ? 'rouge'
-           : ((c === 'orange' || m === 'orange') ? 'orange' : 'vert');
-  return { coefficient: c, marge: m, global: pire, bloquant: (pire === 'rouge') };
+  return { coefficient: c, marge: m, global: m, bloquant: (m === 'rouge'),
+           pilote_par: 'marge' };
 }
 
 // --- Arbitrage aerien / maritime (§6) ---------------------------------------
