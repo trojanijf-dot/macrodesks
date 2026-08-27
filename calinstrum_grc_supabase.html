@@ -30134,9 +30134,10 @@ function bAvoir(av){
   var isExo=isClientExo(av.client);
   var clientDetail=getClientDetail(av.client);
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
-  var adr=(av.adresse||'').replace(/\n/g,'<br>');
-  var cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
-  var cliTel=clientDetail.tel||'';
+  // Adresse + téléphone du client : RÈGLE UNIQUE, cf _cliCoords().
+  var _cc=_cliCoords(clientDetail,av.adresse);
+  var cliAddr=_cc.adr;
+  var cliTel=_cc.tel;
   var cliEmail=(av.email&&av.email.trim())?av.email:(clientDetail.email||'');
   var rows=(av.lines||[]).map(function(l,i){
     var tot=Math.round((l.qte||0)*(l.pu||0));
@@ -44091,6 +44092,42 @@ function getClientDetail(clientNom){
   return DB.clients.find(function(x){return x.nom===clientNom;})||{};
 }
 
+// === COORDONNÉES CLIENT SUR UN DOCUMENT — RÈGLE UNIQUE [27/08/2026] ===
+// Source unique de l'ADRESSE et du TÉLÉPHONE du client imprimés sur un document.
+// Branchée sur les SIX constructeurs : bFA / buildPaginatedFA (facture),
+// bDV / buildPaginatedDV (devis), bAvoir, bBL.
+//
+// Pourquoi une fonction : cette logique était recopiée six fois. Les deux constructeurs
+// de FACTURE portaient en plus une branche codée en dur pour un client (raison sociale,
+// adresse et téléphone figés dans le source) qui ignorait purement et simplement la fiche :
+// la majorité des factures la traversaient et imprimaient le téléphone d'un autre contact
+// que celui de la facture. Une logique écrite six fois finit toujours par diverger, et
+// rien ne lève d'erreur — la facture fausse a l'air d'une facture normale.
+//
+// ⛔ NE JAMAIS coder l'adresse ou le téléphone d'un client dans le code : ça se règle
+//    depuis sa fiche, et le prochain client doit fonctionner sans intervention.
+// ⛔ NE PAS recopier ce bloc dans un nouveau constructeur : appeler _cliCoords().
+function _cliAdrHtml(txt){
+  // trim + écrasement des lignes vides : un '\n' final produit sinon un <br> orphelin,
+  // c.-à-d. un trou visuel entre l'adresse et la ligne Tél/email.
+  return escNL(String(txt||'').trim().replace(/\n{2,}/g,'\n'));
+}
+function _cliTelTxt(tel){
+  // Certaines fiches portent déjà le préfixe DANS le champ (« Tél: … Mob : … » saisi
+  // à la main) et le rendu en ajoute un second → « Tél: Tél: » sur le papier.
+  // On retire celui du champ À L'AFFICHAGE SEULEMENT — la fiche n'est pas modifiée.
+  // Le séparateur '.' ou ':' est EXIGÉ : sans lui, un numéro commençant par des lettres
+  // (Telecom…) serait tronqué.
+  return String(tel||'').trim().replace(/^t[ée]l(?:[ée]phone)?\s*[.:]\s*/i,'').trim();
+}
+function _cliCoords(clientDetail,adresseDuDocument){
+  var cd=clientDetail||{};
+  // La FICHE prime ; à défaut on retombe sur l'adresse figée sur le document lui-même
+  // (documents anciens dont le champ client ne retrouve plus sa fiche).
+  var src=(cd.adresse&&String(cd.adresse).trim())?cd.adresse:(adresseDuDocument||'');
+  return{adr:_cliAdrHtml(src),tel:_cliTelTxt(cd.tel)};
+}
+
 function bDV(d){
   var isExo=isClientExo(d.client);
   var clientDetail=getClientDetail(d.client);
@@ -44219,18 +44256,13 @@ function bDV(d){
       });
     }
   });
-  var adr=(d.adresse||'').trim().replace(/\n{2,}/g,'\n').replace(/\n/g,'<br>');
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   var mention=getMention(isExo?d.tgcM:'tgc');
-  // Client address: prefer detail from DB
-  // .trim() + replace \n{2,} → \n : éliminer les sauts de ligne parasites en début/fin
-  // et les lignes vides intermédiaires (sinon <br><br> crée un trou visuel entre l'adresse
-  // et la ligne Tél/email qui suit).
-  var cliAddr=clientDetail.adresse
-    ? clientDetail.adresse.trim().replace(/\n{2,}/g,'\n').replace(/\n/g,'<br>')
-    : adr;
+  // Adresse + téléphone du client : RÈGLE UNIQUE, cf _cliCoords().
+  var _cc=_cliCoords(clientDetail,d.adresse);
+  var cliAddr=_cc.adr;
+  var cliTel=_cc.tel;
   var cliEmail=clientDetail.email||d.email||'';
-  var cliTel=clientDetail.tel||'';
   return'<div class="doc">'+
     '<div class="doc-head">'+
       '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
@@ -44427,43 +44459,32 @@ function bFA(f){
   // tbodiesHtml = juste le contenu (compat avec le reste de la fonction)
   var tbodiesHtml='<tbody>'+rows+'</tbody>';
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
-  // === ADRESSE CLIENT — règle spéciale SLN ===
-  // Pour le client SLN (Société Le Nickel - ERAMET), on utilise toujours l'adresse
-  // achats générique de Doniambo + l'email du service achats SLN, AVEC le contact
-  // dynamique de la facture (CONTACT, Prenom NOM, Prenom NOM...).
-  //
-  // Détection multi-critères très tolérante : on examine TOUS les champs de la facture
-  // (client, contact, adresse, email, objet) — si l'un d'eux contient "SLN", "ERAMET",
-  // "Le Nickel" ou un email @eramet-sln.com, c'est une facture SLN.
+  // === COORDONNÉES CLIENT — lues sur la FICHE, jamais codées en dur ===
+  // [27/08/2026] Il y avait ici une branche codée en dur pour un client : dès qu'une
+  // facture contenait certains mots-clés n'importe où (client, contact, objet, email…),
+  // elle imprimait une raison sociale, une adresse et un téléphone FIGÉS DANS LE SOURCE,
+  // en ignorant la fiche du client. Mesuré sur un export réel : la majorité des factures
+  // traversaient cette branche et imprimaient le téléphone d'un autre contact.
+  // Le devis, lui, lisait déjà la fiche — c'est exactement la divergence silencieuse
+  // entre bFA et bDV que _cliCoords() rend désormais impossible.
+  // ⛔ Ne jamais recoder ici l'adresse ou le téléphone d'un client : ça se règle sur sa fiche.
   var clientStr=String(f.client||'').trim();
-  var ctxStr=(clientStr+' '+(f.contact||'')+' '+(f.adresse||'')+' '+(f.email||'')+' '+(f.objet||'')).toLowerCase();
-  var isSLN=/(\bsln\b|\beramet\b|le\s+nickel|@eramet-sln\.com)/i.test(ctxStr);
-  // Extraire un éventuel contact embarqué dans le champ client (héritage : "SLN - Prenom NOM")
+  // Contact de secours : hérité des documents où le contact vivait dans le champ client
+  // (« PRÉFIXE - Prénom NOM »). Motif GÉNÉRIQUE — aucun nom de client dedans.
   var contactFromClient='';
-  if(isSLN&&!f.contact){
-    var mC=clientStr.match(/^SLN\s*[-\s]\s*(.+)$/i);
+  if(!f.contact){
+    var mC=clientStr.match(/^[^-]+\s-\s(.+)$/);
     if(mC)contactFromClient=mC[1].trim();
   }
   var displayContact=f.contact||contactFromClient||'';
-  var cliAddr,cliTel,cliEmail,cliCompany;
-  if(isSLN){
-    cliCompany='SOCIETE LE NICKEL — ERAMET-SLN';
-    cliAddr='Magasin Général, 2 Rue Desjardins<br>Doniambo BP E5 98845 NOUMEA CEDEX<br>NOUVELLE-CALÉDONIE';
-    cliTel='+687 245446';
-    // Email comptabilité : on respecte le choix utilisateur (f.email = valeur du dropdown
-    // "Email comptabilité" dans la modal Facture). Si vide, fallback sur l'email SLN par défaut.
-    cliEmail=(f.email&&f.email.trim())?f.email:'';
-  } else {
-    var adr=(f.adresse||'').replace(/\n/g,'<br>');
-    cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
-    cliTel=clientDetail.tel||'';
-    // Email comptabilité : f.email PRIME (= choix utilisateur dans le dropdown de la modal).
-    // C'est l'email du SERVICE COMPTABILITÉ (PRNC-Compta@…, comptabilite-aei@…, rgtfactures@…).
-    // On NE prend PAS clientDetail.email (qui est l'email du contact technique, ex:
-    // contact@client) — celui-ci serait erroné pour une facture.
-    cliEmail=(f.email&&f.email.trim())?f.email:(clientDetail.email||'');
-    cliCompany='';
-  }
+  var _cc=_cliCoords(clientDetail,f.adresse);
+  var cliAddr=_cc.adr;
+  var cliTel=_cc.tel;
+  // Email comptabilité : f.email PRIME (= choix du menu déroulant de la modale facture).
+  // C'est l'email du SERVICE COMPTABILITÉ (PRNC-Compta@…, comptabilite-aei@…, rgtfactures@…).
+  // Règle unifiée le 27/08 avec celle de l'ancienne branche : mesuré sur un export réel,
+  // aucune facture ne change d'email.
+  var cliEmail=(f.email&&f.email.trim())?f.email:(clientDetail.email||'');
   // Recalculate TTC with exo flag applied
   var ttcDisp=isExo?(f.ht||0):(f.ttc||0);
   // === BLOC PARTIES (CALINSTRUM + CLIENT) ===
@@ -44505,7 +44526,7 @@ function bFA(f){
       '<div class="doc-party">'+
         '<h4>CLIENT</h4>'+
         '<p>'+
-          (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>'+_civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>':_civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>')+
+          _civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>'+
           cliAddr+'<br>'+
           (cliTel?'Tél: '+esc(cliTel)+'<br>':'')+
           esc(cliEmail)+
@@ -44853,10 +44874,12 @@ function bBL(b){
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   // Build destination details from client DB + form fields
   var destNom=b.client||'';
-  var destAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):(b.adrdest||'').replace(/\n/g,'<br>');
+  // Adresse + téléphone du destinataire : RÈGLE UNIQUE, cf _cliCoords().
+  var _cc=_cliCoords(clientDetail,b.adrdest);
+  var destAddr=_cc.adr;
   var destContact=b.contact||clientDetail.contact||'';
   var destEmail=b.emaildest||clientDetail.email||'';
-  var destTel=clientDetail.tel||'';
+  var destTel=_cc.tel;
   return'<div class="doc">'+
     '<div class="doc-head" style="align-items:flex-end">'+
       '<div><div style="font-size:22px;font-weight:900;color:#1e3a5f">Bon de livraison</div></div>'+
@@ -45156,13 +45179,11 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
     }
   });
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
-  // .trim() + replace \n{2,} → \n : éviter le <br> orphelin créant un trou entre adresse
-  // client et ligne Tél/email (cf bug observé sur SLN-DV164 zone rouge).
-  var cliAddr=clientDetail.adresse
-    ? clientDetail.adresse.trim().replace(/\n{2,}/g,'\n').replace(/\n/g,'<br>')
-    : (d.adresse||'').trim().replace(/\n{2,}/g,'\n').replace(/\n/g,'<br>');
+  // Adresse + téléphone du client : RÈGLE UNIQUE, cf _cliCoords().
+  var _cc=_cliCoords(clientDetail,d.adresse);
+  var cliAddr=_cc.adr;
+  var cliTel=_cc.tel;
   var cliEmail=clientDetail.email||d.email||'';
-  var cliTel=clientDetail.tel||'';
   var mention=getMention(isExo?d.tgcM:'tgc');
   // Zone A4 utile (marges 10/12/16/12mm) ≈ 703×1024px
   // Footer par page (bar + mention) ≈ 45px
@@ -45638,30 +45659,33 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       l.subLines.forEach(function(sub){lineData.push({isSubLine:true,sub:sub});});
     }
   });
-  // === Adresse Client — règle spéciale SLN (héritée de bFA) ===
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
+  // === COORDONNÉES CLIENT — lues sur la FICHE, jamais codées en dur ===
+  // [27/08/2026] Il y avait ici une branche codée en dur pour un client : dès qu'une
+  // facture contenait certains mots-clés n'importe où (client, contact, objet, email…),
+  // elle imprimait une raison sociale, une adresse et un téléphone FIGÉS DANS LE SOURCE,
+  // en ignorant la fiche du client. Mesuré sur un export réel : la majorité des factures
+  // traversaient cette branche et imprimaient le téléphone d'un autre contact.
+  // Le devis, lui, lisait déjà la fiche — c'est exactement la divergence silencieuse
+  // entre bFA et bDV que _cliCoords() rend désormais impossible.
+  // ⛔ Ne jamais recoder ici l'adresse ou le téléphone d'un client : ça se règle sur sa fiche.
   var clientStr=String(f.client||'').trim();
-  var ctxStr=(clientStr+' '+(f.contact||'')+' '+(f.adresse||'')+' '+(f.email||'')+' '+(f.objet||'')).toLowerCase();
-  var isSLN=/(\bsln\b|\beramet\b|le\s+nickel|@eramet-sln\.com)/i.test(ctxStr);
+  // Contact de secours : hérité des documents où le contact vivait dans le champ client
+  // (« PRÉFIXE - Prénom NOM »). Motif GÉNÉRIQUE — aucun nom de client dedans.
   var contactFromClient='';
-  if(isSLN&&!f.contact){
-    var mC=clientStr.match(/^SLN\s*[-\s]\s*(.+)$/i);
+  if(!f.contact){
+    var mC=clientStr.match(/^[^-]+\s-\s(.+)$/);
     if(mC)contactFromClient=mC[1].trim();
   }
   var displayContact=f.contact||contactFromClient||'';
-  var cliAddr,cliTel,cliEmail,cliCompany;
-  if(isSLN){
-    cliCompany='SOCIETE LE NICKEL — ERAMET-SLN';
-    cliAddr='Magasin Général, 2 Rue Desjardins<br>Doniambo BP E5 98845 NOUMEA CEDEX<br>NOUVELLE-CALÉDONIE';
-    cliTel='+687 245446';
-    cliEmail=(f.email&&f.email.trim())?f.email:'';
-  } else {
-    var adr=(f.adresse||'').replace(/\n/g,'<br>');
-    cliAddr=clientDetail.adresse?(clientDetail.adresse.replace(/\n/g,'<br>')):adr;
-    cliTel=clientDetail.tel||'';
-    cliEmail=(f.email&&f.email.trim())?f.email:(clientDetail.email||'');
-    cliCompany='';
-  }
+  var _cc=_cliCoords(clientDetail,f.adresse);
+  var cliAddr=_cc.adr;
+  var cliTel=_cc.tel;
+  // Email comptabilité : f.email PRIME (= choix du menu déroulant de la modale facture).
+  // C'est l'email du SERVICE COMPTABILITÉ (PRNC-Compta@…, comptabilite-aei@…, rgtfactures@…).
+  // Règle unifiée le 27/08 avec celle de l'ancienne branche : mesuré sur un export réel,
+  // aucune facture ne change d'email.
+  var cliEmail=(f.email&&f.email.trim())?f.email:(clientDetail.email||'');
   var ttcDisp=isExo?(f.ht||0):(f.ttc||0);
   var mention=getMention(isExo?f.tgcM:'tgc');
 
@@ -45887,7 +45911,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CALINSTRUM SARL</h4><p style="font-size:13px;line-height:1.6;color:#333;margin:0">RIDET: '+CI.ridet+'<br>'+ci_adr+'<br>Tél: '+CI.tel+'<br>'+CI.email+'</p></div>'+
         '<div><h4 style="font-size:12px;font-weight:700;text-transform:uppercase;color:#1e3a5f;margin-bottom:3px;border-bottom:1px solid #ddd;padding-bottom:2px">CLIENT</h4>'+
           '<p style="font-size:13px;line-height:1.6;color:#333;margin:0">'+
-            (isSLN?'<strong>'+esc(cliCompany)+'</strong><br>'+_civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>':_civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>')+
+            _civPrefix(f.client,displayContact,f.civilite)+'<strong>'+esc(displayContact)+'</strong><br>'+
             cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+
           '</p></div>'+
       '</div>'+
