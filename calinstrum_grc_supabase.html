@@ -3556,7 +3556,7 @@ function admPreviewPrint(){
         <div class="form-group">
           <label>Client émetteur de l'avis</label>
           <select class="form-select" id="avisreg-client">
-            <option value="SLN">SLN — Société Le Nickel (ERAMET)</option>
+            <option value="SLN">SLN</option>
             <option value="auto">🔍 Détection automatique</option>
           </select>
         </div>
@@ -10683,7 +10683,10 @@ function _validerCascadeReappro(){
     lieu: 'NOUMEA',
     client: 'SLN - ' + (parsed.acheteur || ''),
     contact: parsed.acheteur || 'CONTACT',
-    adrdest: 'Magasin Général, 2 Rue Desjardins, Doniambo BP E5 98845 NOUMEA CEDEX',
+    // Adresse de livraison LUE SUR LA FICHE, plus ecrite en dur (donnee metier,
+    // depot public). Si aucune fiche ne repond, on laisse vide : bBL passe de toute
+    // facon par _cliCoords(), qui prefere la fiche a ce champ.
+    adrdest: (function(){var f=_ficheClientParPrefixe('SLN');return f&&f.adresse?String(f.adresse).trim():'';})(),
     emaildest: '',
     po: parsed.num,
     emis: 'Fabrice RIZZO',
@@ -11656,7 +11659,9 @@ function avisRegParseText(){
 function avisRegProcessText(text){
   var clientSel=gvg('avisreg-client')||'SLN';
   if(clientSel==='auto'){
-    if(/SOCIETE LE NICKEL|ERAMET|SLN|RIDET\s+0500540002/i.test(text))clientSel='SLN';
+    // Le n° d'identification du client a ete retire d'ici : donnee metier, depot public.
+    // Il etait de toute facon redondant avec les mots-cles qui precedent.
+    if(/SOCIETE LE NICKEL|ERAMET|SLN/i.test(text))clientSel='SLN';
     else{
       avisRegSetStatus('Client non détecté automatiquement. Sélectionnez-le manuellement.','var(--amber)');
       return;
@@ -27716,13 +27721,11 @@ var eFAid=null,faL=[];
 
 // Retourne l'email de comptabilité par défaut pour un client donné (nom court tel que stocké).
 function defaultBillingEmailForClient(clientNom){
-  var n=(clientNom||'').toLowerCase();
-  // Préfixes/inclusions caractéristiques
-  if(/^sln\b|^sln\s|eramet|le\s*nickel/.test(n)) return '';
-  if(/^prnc\b|^prnc\s|prony\s*resour/.test(n)) return '';
-  if(/cockerill|aei/.test(n)) return '';
-  if(/pacific\s*energy|^p\.energy|@p\.energy/.test(n)) return '';
-  return ''; // pas de mapping — l'utilisateur choisira manuellement
+  // Les mappings par client ont ete vides lors du nettoyage de fuite (08/2026) :
+  // toutes les branches renvoyaient deja ''. Il ne restait donc que des raisons
+  // sociales de clients dans un depot PUBLIC, pour zero comportement.
+  // L'email de comptabilite se choisit dans le menu deroulant de la modale facture.
+  return '';
 }
 
 // (Re)construit le <select> #fa-email avec la liste DB.factureBillingEmails.
@@ -38949,7 +38952,10 @@ function parseBCClientPdfItems(items){
 //   • Date d'émission = sous 'Date d'émission' (header)
 //   • Devis lié : 'DEVIS N°SLN-DVxxx' ou 'VOTRE DEVIS N°SLN-DVxxx' dans le corps
 function _parseBCSLN(rawLines, lineGroups, fullText, result){
-  result.client = 'SOCIETE LE NICKEL - SLN';
+  // Prefixe d'entite seul : la raison sociale du client n'a pas a figurer dans le
+  // source (depot public). Le rapprochement avec les fiches se fait plus loin et
+  // se comporte a l'identique avec le prefixe.
+  result.client = 'SLN';
 
   // --- N° BC : pattern "00XXXXXX-XX-XX" (les BC SLN ont ce format strict) ---
   // Trois variantes : 00728195-01- (trailing dash), 00730482-05-43, 00740704-05-37
@@ -39155,7 +39161,10 @@ function _parseBCSLN(rawLines, lineGroups, fullText, result){
 //   • Date format JJ/MM/AA (sans siècle)
 //   • Devis lié : "Selon devis n° PRNC-DVxxx" ou "Devis PRNC-DVxxx" dans la description
 function _parseBCPRNC(rawLines, lineGroups, fullText, result){
-  result.client = 'PRNC - Prony Resources';
+  // Prefixe d'entite seul : la raison sociale du client n'a pas a figurer dans le
+  // source (depot public). Meme regle que l'autre parser de BC — les deux vont
+  // TOUJOURS ensemble, c'est la classe de bug des constructeurs jumeaux.
+  result.client = 'PRNC';
 
   // --- N° BC : "LXXXXX / XXXX" ---
   var mNum = fullText.match(/\b(L\d{5,6})\s*\/\s*(\d{4})\b/);
@@ -44119,6 +44128,20 @@ function _cliTelTxt(tel){
   // Le séparateur '.' ou ':' est EXIGÉ : sans lui, un numéro commençant par des lettres
   // (Telecom…) serait tronqué.
   return String(tel||'').trim().replace(/^t[ée]l(?:[ée]phone)?\s*[.:]\s*/i,'').trim();
+}
+// Retrouve une FICHE client a partir d'un prefixe d'entite ("SLN", "PRNC"...).
+// Sert a ne jamais ecrire de raison sociale ni d'adresse client dans le source :
+// ces informations vivent dans les fiches, donc HORS du depot public.
+// La fiche la plus renseignee gagne (adresse la plus longue).
+function _ficheClientParPrefixe(prefixe){
+  var p=String(prefixe||'').trim().toLowerCase();
+  if(!p)return null;
+  var l=(DB.clients||[]).filter(function(c){
+    var n=String(c.nom||'').trim().toLowerCase();
+    return n===p||n.indexOf(p+' ')===0||n.indexOf(p+'-')===0;
+  });
+  l.sort(function(a,b){return String(b.adresse||'').length-String(a.adresse||'').length;});
+  return l[0]||null;
 }
 function _cliCoords(clientDetail,adresseDuDocument){
   var cd=clientDetail||{};
