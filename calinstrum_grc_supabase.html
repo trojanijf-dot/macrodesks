@@ -1044,6 +1044,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="nav('administratif');renderAdmin()" title="Administratif · export annuel CA/TGC/masse salariale pour l'expert-comptable"><span class="ico"><span class="ico-classic">📊</span><i class="ti ti-report-money ico-pro"></i></span>Administratif</button>
   <div class="sb-sec">Paramètres</div>
   <button class="sb-item" onclick="nav('params');renderParams()" title="Listes déroulantes · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">⚙️</span><i class="ti ti-list ico-pro"></i></span>Listes déroulantes</button>
+  <button class="sb-item" onclick="nav('coutrevient');renderCoutRevient()" title="Coût de revient débarqué · seuils commerciaux et forfaits transitaire du moteur landed cost"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-calculator ico-pro"></i></span>Coût de revient</button>
   <div class="sb-sec">Données</div>
   <button class="sb-item" onclick="exportJSON()"><span class="ico"><span class="ico-classic">💾</span><i class="ti ti-download ico-pro"></i></span>Exporter JSON</button>
   <button class="sb-item" onclick="document.getElementById('impFile').click()"><span class="ico"><span class="ico-classic">📁</span><i class="ti ti-upload ico-pro"></i></span>Importer JSON</button>
@@ -6879,7 +6880,8 @@ function nav(p){
   // le seul endroit où il était mis à jour).
   if(typeof _refreshAlertPill==='function') _refreshAlertPill();
   var T={dashboard:'Dashboard',devis:'Devis',factures:'Factures',suivi:'Suivi Factures',
-    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue',administratif:'Administratif'};
+    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue',administratif:'Administratif',
+    params:'Paramètres — Listes déroulantes',coutrevient:'Paramètres — Coût de revient'};
   sv('topTitle',T[p]||p);
   // Sous-titre informatif (visible uniquement en mode pro via CSS)
   var fy=(typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear();
@@ -6894,7 +6896,8 @@ function nav(p){
     clients:'Annuaire clients',
     historique:'Historique des modifications',
     catalogue:'Articles et tarifs',
-    administratif:'Export annuel CA / TGC / masse salariale pour l\'expert-comptable'
+    administratif:'Export annuel CA / TGC / masse salariale pour l\'expert-comptable',
+    coutrevient:'Seuils commerciaux et forfaits transitaire du moteur de coût de revient débarqué'
   };
   var subEl=document.getElementById('topSubtitle');
   if(subEl) subEl.textContent=sub[p]||'';
@@ -48356,6 +48359,225 @@ if (typeof module !== 'undefined') module.exports = {
   lcCoutRevient, lcVerdict, lcModeRecommande, lcCalculDossier, lcPrixVenteCible
 };
 
+// =============================================================================
+// ECRAN PARAMETRES > COUT DE REVIENT -- saisie de DB.paramsCoutRevient
+// =============================================================================
+// Seul endroit ou les parametres COMMERCIAUX du moteur lc* sont renseignes.
+// (=X=) Aucune valeur par defaut commerciale ici, et aucun montant reel : ce
+//       fichier est publie. Non configure => lcVerdict() repond 'non-configure'.
+
+// Champs a taux : saisis en POURCENTAGE, stockes en FRACTION.
+// C'est le piege principal de cet ecran : quelqu'un qui saisit 0,20 en croyant
+// ecrire 20 % obtiendrait une marge cible de 0,2 % -- donc un verdict VERT sur
+// un dossier a perte. L'unite est affichee a cote du champ et la conversion est
+// faite par le code, jamais par l'utilisateur.
+var LC_UI_SEUILS = [
+  {id:'lc-coef-cible',    cle:'coefficient_cible',   u:'\u00d7', type:'coef',
+   lib:'Coefficient cible',        aide:'prix de vente \u00f7 co\u00fbt marchandise \u2014 au-dessus : vert'},
+  {id:'lc-coef-plancher', cle:'coefficient_plancher',u:'\u00d7', type:'coef',
+   lib:'Coefficient plancher',     aide:'en dessous : rouge'},
+  {id:'lc-marge-cible',   cle:'taux_marge_cible',    u:'%',      type:'pct',
+   lib:'Taux de marge cible',      aide:'marge brute \u00f7 prix de vente'},
+  {id:'lc-marge-alerte',  cle:'taux_marge_alerte',   u:'%',      type:'pct',
+   lib:'Taux de marge d\'alerte',  aide:'en dessous : rouge'},
+  {id:'lc-had',           cle:'taux_had_ad_valorem', u:'%',      type:'pct',
+   lib:'Taux HAD ad valorem',      aide:'honoraires du transitaire sur la valeur'}
+];
+// Cles imposees par lcFactureTransitaire() -- ne pas les renommer.
+var LC_UI_FORFAITS = [
+  {id:'lc-f-aero', cle:'frais_aeroportuaires', lib:'Frais a\u00e9roportuaires'},
+  {id:'lc-f-doss', cle:'frais_dossier',        lib:'Frais de dossier'},
+  {id:'lc-f-fid',  cle:'fid',                  lib:'FID'},
+  {id:'lc-f-cdou', cle:'cautionnement_douane', lib:'Cautionnement douane'},
+  {id:'lc-f-cfrt', cle:'cautionnement_frt',    lib:'Cautionnement fret'},
+  {id:'lc-f-liv',  cle:'livraison_aerienne',   lib:'Livraison a\u00e9rienne'},
+  {id:'lc-f-fuel', cle:'fuel_routier',         lib:'Fuel routier'},
+  {id:'lc-f-exo',  cle:'exo_sln',              lib:'Traitement exon\u00e9ration', aide:'dossier Lp 506-2'}
+];
+
+// Lecture d'un nombre tape au clavier francais : virgule decimale, espaces
+// (y compris insecable et fine insecable, produits par toLocaleString('fr-FR')).
+function lcUiNum(v){
+  var t=String(v==null?'':v).replace(/[\s\u00a0\u202f]/g,'').replace(/,/g,'.');
+  if(!t)return null;
+  var n=Number(t);
+  return isFinite(n)?n:null;
+}
+function lcUiFmt(n,dec){
+  if(n==null||!isFinite(n))return '';
+  return Number(n).toLocaleString('fr-FR',{minimumFractionDigits:dec||0,maximumFractionDigits:dec==null?0:dec});
+}
+function lcUiLigne(c,val){
+  return '<div style="display:grid;grid-template-columns:1fr 120px;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)">'+
+    '<div><div style="font-size:12px">'+esc(c.lib)+'</div>'+
+      (c.aide?'<div style="font-size:10px;color:var(--muted-soft);margin-top:1px">'+esc(c.aide)+'</div>':'')+
+    '</div>'+
+    '<div style="display:flex;align-items:center;background:var(--bg3);border:1px solid var(--border);border-radius:5px">'+
+      '<input id="'+c.id+'" value="'+esc(val)+'" style="flex:1;min-width:0;background:transparent;border:0;color:var(--text);font-family:var(--mono);font-size:12.5px;text-align:right;padding:6px 7px;outline:none">'+
+      '<span style="font-size:10.5px;color:var(--muted-soft);padding:0 7px 0 0;font-family:var(--mono)">'+(c.u||'F')+'</span>'+
+    '</div></div>';
+}
+
+function renderCoutRevient(){
+  var p=(typeof DB!=='undefined'&&DB&&DB.paramsCoutRevient)?DB.paramsCoutRevient:null;
+  var F=(p&&p.forfaits_act_xpf)?p.forfaits_act_xpf:{};
+  var g1=document.getElementById('lc-grp-seuils');
+  if(g1)g1.innerHTML=LC_UI_SEUILS.map(function(c){
+    var v=p?p[c.cle]:null;
+    // fraction -> pourcentage a l'affichage
+    if(v!=null&&c.type==='pct')v=Math.round(v*10000)/100;
+    return lcUiLigne(c, v==null?'':lcUiFmt(v,c.type==='coef'?3:2));
+  }).join('');
+  var g2=document.getElementById('lc-grp-forfaits');
+  if(g2)g2.innerHTML=LC_UI_FORFAITS.map(function(c){
+    var v=F[c.cle];
+    return lcUiLigne(c, v==null?'':lcUiFmt(v,0));
+  }).join('');
+  lcRenderEtat();
+  lcRenderControle();
+}
+
+function lcRenderEtat(){
+  var el=document.getElementById('lc-etat'); if(!el)return;
+  var ok=lcParams()._commercial_configure;
+  el.innerHTML = ok
+    ? '<div style="background:rgba(16,185,129,.09);border:1px solid rgba(16,185,129,.32);border-radius:8px;padding:11px 14px;font-size:12.5px;color:var(--muted)">'+
+      '\u2705 <strong style="color:var(--text)">Configur\u00e9.</strong> Le moteur rend un verdict. Le contr\u00f4le ci-dessous est rejou\u00e9 \u00e0 chaque enregistrement : si un seuil est saisi de travers, \u00e7a se voit ici, pas trois devis plus tard.</div>'
+    : '<div style="background:rgba(244,63,94,.09);border:1px solid rgba(244,63,94,.35);border-radius:8px;padding:11px 14px;font-size:12.5px;color:var(--muted)">'+
+      '\u26d4 <strong style="color:var(--text)">Volet commercial non configur\u00e9.</strong> Le moteur calcule la cha\u00eene douani\u00e8re et la facture transitaire, mais <strong style="color:var(--text)">ne rend aucun verdict</strong> : sans seuils, il refuse d\'en inventer un.</div>';
+}
+
+function lcToggleJson(){
+  var z=document.getElementById('lc-json-zone');
+  if(z)z.style.display=(z.style.display==='none'?'block':'none');
+}
+
+// Remplit les champs depuis un JSON colle. N'ENREGISTRE PAS : l'utilisateur
+// relit puis clique Enregistrer. Un _dossierControle eventuel est memorise
+// jusqu'a l'enregistrement.
+var _lcDossierColle=null;
+function lcAppliquerJson(){
+  var ta=document.getElementById('lc-json'); if(!ta)return;
+  var o; try{ o=JSON.parse(ta.value); }catch(e){ alert('JSON illisible : '+e.message); return; }
+  if(!o||typeof o!=='object'){ alert('JSON illisible.'); return; }
+  var F=o.forfaits_act_xpf||{};
+  LC_UI_SEUILS.forEach(function(c){
+    var el=document.getElementById(c.id); if(!el)return;
+    var v=o[c.cle]; if(v==null)return;
+    if(c.type==='pct')v=Math.round(v*10000)/100;
+    el.value=lcUiFmt(v,c.type==='coef'?3:2);
+  });
+  LC_UI_FORFAITS.forEach(function(c){
+    var el=document.getElementById(c.id); if(!el)return;
+    if(F[c.cle]==null)return;
+    el.value=lcUiFmt(F[c.cle],0);
+  });
+  _lcDossierColle=o._dossierControle||null;
+  lcToggleJson();
+  alert('Champs remplis. Relis les valeurs, puis clique Enregistrer.');
+}
+
+function saveCoutRevient(){
+  var p={}, F={}, manquants=[];
+  LC_UI_SEUILS.forEach(function(c){
+    var el=document.getElementById(c.id);
+    var n=lcUiNum(el?el.value:'');
+    if(n==null){ manquants.push(c.lib); return; }
+    p[c.cle]=(c.type==='pct')?(n/100):n;   // % saisi -> fraction stockee
+  });
+  LC_UI_FORFAITS.forEach(function(c){
+    var el=document.getElementById(c.id);
+    var n=lcUiNum(el?el.value:'');
+    F[c.cle]=(n==null?0:n);
+  });
+  if(manquants.length){
+    alert('Ces seuils sont vides ou illisibles :\n\u2022 '+manquants.join('\n\u2022 ')+
+      '\n\nTant qu\'ils manquent, le moteur restera non configur\u00e9.');
+    return;
+  }
+  if(p.coefficient_plancher>p.coefficient_cible)
+    alert('Attention : le coefficient plancher est SUP\u00c9RIEUR au coefficient cible. Enregistr\u00e9 quand m\u00eame, mais v\u00e9rifie.');
+  if(p.taux_marge_alerte>p.taux_marge_cible)
+    alert('Attention : la marge d\'alerte est SUP\u00c9RIEURE \u00e0 la marge cible. Enregistr\u00e9 quand m\u00eame, mais v\u00e9rifie.');
+  p.forfaits_act_xpf=F;
+  var ancien=(DB.paramsCoutRevient||{});
+  var dossier=_lcDossierColle||ancien._dossierControle||null;
+  if(dossier)p._dossierControle=dossier;
+  DB.paramsCoutRevient=p;
+  _lcDossierColle=null;
+  saveDB();
+  renderCoutRevient();
+}
+
+// --- Contrôle : rejoue le dossier de reference A TRAVERS LE MOTEUR ----------
+// (=X=) Ne JAMAIS recalculer ces chiffres a la main ici : on appelle
+//       lcCalculDossier / lcPrixVenteCible, sinon on audite sa propre erreur.
+// Le dossier vit dans DB.paramsCoutRevient._dossierControle, pas dans le code :
+// il porte des montants reels, et ce fichier est publie.
+function lcRenderControle(){
+  var el=document.getElementById('lc-controle'); if(!el)return;
+  var p=(typeof DB!=='undefined'&&DB&&DB.paramsCoutRevient)?DB.paramsCoutRevient:null;
+  var d=p?p._dossierControle:null;
+  var boite=function(html){return '<div class="card" style="padding:16px">'+
+    '<div style="font-weight:700;color:var(--teal);margin-bottom:4px;font-size:13px">\ud83e\uddea Contr\u00f4le sur le dossier de r\u00e9f\u00e9rence</div>'+
+    '<div style="font-size:10.5px;color:var(--muted-soft);margin-bottom:12px">Recalcul\u00e9 par le moteur, jamais recopi\u00e9.</div>'+html+'</div>';};
+  if(!lcParams()._commercial_configure){
+    el.innerHTML=boite('<div style="font-size:12px;color:var(--muted)">Renseigne les seuils ci-dessus pour activer le contr\u00f4le.</div>');
+    return;
+  }
+  if(!d){
+    el.innerHTML=boite('<div style="font-size:12px;color:var(--muted)">Aucun dossier de contr\u00f4le enregistr\u00e9. Ajoute une cl\u00e9 <code>_dossierControle</code> dans le JSON coll\u00e9 pour que cet \u00e9cran v\u00e9rifie tes seuils sur un cas r\u00e9el.</div>');
+    return;
+  }
+  var r,c;
+  try{
+    r=lcCalculDossier(d);
+    c=lcPrixVenteCible(Object.assign({},d,{prix_vente_xpf:0}));
+  }catch(e){
+    el.innerHTML=boite('<div style="font-size:12px;color:var(--red)">Le dossier de contr\u00f4le est inexploitable : '+esc(e.message)+'</div>');
+    return;
+  }
+  var v=r.verdict.global;
+  var coul={vert:'var(--green)',orange:'var(--amber)',rouge:'var(--red)'}[v]||'var(--muted)';
+  var kpi=function(k,val,sub,col){return '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:10px 11px">'+
+    '<div style="font-size:10px;color:var(--muted-soft);text-transform:uppercase;letter-spacing:.5px">'+k+'</div>'+
+    '<div style="font-family:var(--mono);font-size:17px;margin-top:3px;color:'+(col||'var(--text-strong)')+'">'+val+'</div>'+
+    '<div style="font-size:10px;color:var(--muted-soft);margin-top:2px">'+sub+'</div></div>';};
+  var lg=function(l,n,note){return '<tr><td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04)">'+l+'</td>'+
+    '<td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04);text-align:right;font-family:var(--mono);color:var(--text-strong)">'+fN(n)+'</td>'+
+    '<td style="padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;color:var(--muted-soft)">'+(note||'')+'</td></tr>';};
+  var m=r.marge.realise;
+  var html=
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">'+
+      kpi('Co\u00fbt de revient',fN(m.cout_revient_xpf),'XPF, tout d\u00e9barqu\u00e9')+
+      kpi('Coefficient',lcUiFmt(m.coefficient,3),'cible '+lcUiFmt(lcParams().coefficient_cible,3),coul)+
+      kpi('Taux de marge',lcUiFmt(m.taux_marge*100,2)+'\u00a0%','cible '+lcUiFmt(lcParams().taux_marge_cible*100,0)+'\u00a0%',coul)+
+      kpi('Verdict','<span style="font-size:13px;font-weight:700;letter-spacing:.5px">'+String(v).toUpperCase()+'</span>',
+          r.verdict.bloquant?'bloquant':'non bloquant',coul)+
+    '</div>'+
+    '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:14px">'+
+      lg('Marchandise',m.cout_marchandise_xpf,'convertie au taux douanier')+
+      lg('Facture transitaire TTC',r.transit.total_ttc_xpf,'d\u00e9bours + prestations + TGC')+
+      lg('<strong>Co\u00fbt de revient d\u00e9barqu\u00e9</strong>',m.cout_revient_xpf,'ce que le dossier co\u00fbte r\u00e9ellement')+
+      lg('CAF douanier',r.douane.caf_xpf,'conversion tronqu\u00e9e')+
+      lg('Droits de douane',r.douane.droits_douane_xpf,'base \u00e0 la centaine inf\u00e9rieure')+
+      lg('TGC d\'import \u00e9vit\u00e9e',r.douane.tgc_import_evitee_xpf,r.douane.tgc_import_evitee_xpf?'exon\u00e9ration':'')+
+      '<tr><td style="padding:5px 8px">Mode recommand\u00e9</td>'+
+      '<td style="padding:5px 8px;text-align:right;font-family:var(--mono);color:var(--text-strong)">'+esc(r.mode.mode)+'</td>'+
+      '<td style="padding:5px 8px;font-size:11px;color:var(--muted-soft)">'+lcUiFmt(r.poids.poids_taxable_kg,1)+'\u00a0kg taxables</td></tr>'+
+    '</table>'+
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px">'+
+      kpi('Prix de vente cible',fN(c.prix_vente_cible_xpf),'marge '+lcUiFmt(lcParams().taux_marge_cible*100,0)+'\u00a0% vis\u00e9e','var(--green)')+
+      (d.prix_vente_xpf?kpi('Prix r\u00e9ellement pratiqu\u00e9',fN(d.prix_vente_xpf),
+        '\u00e9cart '+fN(Math.abs(d.prix_vente_xpf-c.prix_vente_cible_xpf))+'\u00a0F'):'')+
+      kpi('Ancienne r\u00e8gle \u00d71,2',fN(Math.floor((Number(d.montant_aud)||0)*(Number(d.taux_douanier)||0)*1.2)),
+        'sans le transit',
+        (Math.floor((Number(d.montant_aud)||0)*(Number(d.taux_douanier)||0)*1.2)<m.cout_revient_xpf)?'var(--red)':null)+
+    '</div>';
+  el.innerHTML=boite(html);
+}
+
+
 
 // =============================================================================
 // parseEmersonDescriptifs — descriptif technique des articles d'un devis Emerson
@@ -49312,6 +49534,69 @@ function critProceed(){
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- =========================================================================
+     PARAMETRES > COUT DE REVIENT DEBARQUE
+     Saisit DB.paramsCoutRevient, seule source des parametres COMMERCIAUX du
+     moteur lc*. Les formules restent dans le code (regles douanieres et IATA,
+     publiables) ; le coefficient cible, la marge visee et les tarifs negocies
+     n'y sont PAS -- ils exposeraient la politique de marge dans un depot public.
+     (=X=) NE JAMAIS ecrire ici une valeur par defaut commerciale ni un montant
+           reel : tant que rien n'est saisi, le moteur DIT qu'il n'est pas
+           configure au lieu d'inventer un verdict.
+     ========================================================================= -->
+<div class="page" id="page-coutrevient">
+  <div class="flex-between mb12 no-print">
+    <h2 style="font-family:var(--display);color:var(--teal);font-size:18px">Paramètres — Coût de revient débarqué</h2>
+  </div>
+
+  <div id="lc-etat" style="margin-bottom:14px"></div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px">
+
+    <div class="card" style="padding:16px">
+      <div style="font-weight:700;color:var(--teal);margin-bottom:4px;font-size:13px">🎯 Seuils commerciaux</div>
+      <div style="font-size:10.5px;color:var(--muted-soft);margin-bottom:12px">Ce qui déclenche vert / orange / rouge.</div>
+      <div id="lc-grp-seuils"></div>
+    </div>
+
+    <div class="card" style="padding:16px">
+      <div style="font-weight:700;color:var(--teal);margin-bottom:4px;font-size:13px">🚢 Forfaits transitaire</div>
+      <div style="font-size:10.5px;color:var(--muted-soft);margin-bottom:12px">Montants négociés, en XPF.</div>
+      <div id="lc-grp-forfaits"></div>
+    </div>
+
+  </div>
+
+  <div style="background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.3);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12px;color:var(--muted)">
+    🔐 <strong style="color:var(--text)">Ces valeurs ne quittent jamais ton navigateur.</strong>
+    Elles vivent dans tes données, avec tes devis et tes factures — jamais dans le dépôt public.
+    Les formules douanières, elles, restent dans le code : calculer un CAF n'apprend rien à personne,
+    ton coefficient de marge si.
+  </div>
+
+  <div id="lc-json-zone" style="display:none;margin-bottom:12px">
+    <textarea id="lc-json" class="form-input" rows="6" style="width:100%;font-family:var(--mono);font-size:11px" placeholder='Colle ici un objet JSON de paramètres. Il peut aussi porter un dossier de contrôle sous la clé _dossierControle.'></textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+      <button class="btn btn-sm" style="background:var(--bg4);color:var(--muted)" onclick="lcToggleJson()">Fermer</button>
+      <button class="btn btn-teal btn-sm" onclick="lcAppliquerJson()">Remplir les champs</button>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:18px">
+    <button class="btn btn-sm" style="background:var(--bg4);color:var(--muted)" onclick="lcToggleJson()">Coller un JSON…</button>
+    <button class="btn btn-sm" style="background:var(--bg4);color:var(--muted)" onclick="renderCoutRevient()">Annuler</button>
+    <button class="btn btn-teal btn-sm" onclick="saveCoutRevient()">✓ Enregistrer</button>
+  </div>
+
+  <div id="lc-controle"></div>
+
+  <div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:8px;padding:11px 14px;margin-top:14px;font-size:12px;color:var(--muted)">
+    ⚠️ <strong style="color:var(--text)">Cet écran configure le moteur, rien de plus.</strong>
+    Le devis Fourniture applique toujours le ×1,2 : le branchement du prix de vente cible est
+    l'étape suivante. Aucun document existant n'est touché.
   </div>
 </div>
 
