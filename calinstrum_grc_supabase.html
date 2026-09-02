@@ -6786,11 +6786,21 @@ function applyStamp(){
     if(c.toDataURL()!==blank.toDataURL()) sigSrc=c.toDataURL();
   }
 
-  // Place signature in CALINSTRUM sign box: dans la zone ds-siglot (réservée pour alignement)
+  // Cible : la boite marquee data-sig="calinstrum", dans la zone ds-siglot.
+  // (=X=) NE PAS revenir a une comparaison sur le LIBELLE AFFICHE. C'est ce qui
+  //       faisait echouer la signature sur les BL, en silence : leur boite
+  //       s'appelle « Visa du fournisseur », pas « CALINSTRUM ». Un libelle est
+  //       du texte destine au client, il peut etre reformule ; un marqueur, non.
+  //       Le test sur le libelle est conserve en REPLI pour les documents qui
+  //       n'auraient pas encore l'attribut.
+  var posees=0;
   var signBoxes=pb.querySelectorAll('.doc-sign-box');
   signBoxes.forEach(function(box){
-    var dsl=box.querySelector('.dsl');
-    if(!dsl||dsl.textContent.trim()!=='CALINSTRUM')return;
+    var marque=(box.getAttribute('data-sig')||'')==='calinstrum';
+    if(!marque){
+      var dsl=box.querySelector('.dsl');
+      if(!dsl||dsl.textContent.trim()!=='CALINSTRUM')return;
+    }
 
     // Remove any previous signature image / stamp
     var prev=box.querySelector('.sig-img');if(prev)prev.remove();
@@ -6806,6 +6816,7 @@ function applyStamp(){
       sigImg.className='sig-img';
       sigImg.src=sigSrc;
       slot.appendChild(sigImg);
+      posees++;
     } else {
       // Fallback ancienne structure : insertion avant dsline
       var dsline=box.querySelector('.dsline');
@@ -6815,6 +6826,7 @@ function applyStamp(){
       sigImg2.src=sigSrc;
       sigImg2.style.cssText='max-height:55px;max-width:150px;display:block;margin:0 auto 4px';
       dsline.parentNode.insertBefore(sigImg2, dsline);
+      posees++;
     }
   });
 
@@ -6858,7 +6870,19 @@ function applyStamp(){
   }
 
   cm('mSTAMP');
-  if(sigSrc) showBCSaveToast('✓ Signature apposée sur l\'aperçu');
+  // (=X=) NE JAMAIS annoncer un succes sans avoir verifie qu'une image a ete
+  //       posee. L'ancien code fermait la modale et affichait « Signature
+  //       apposee » meme quand il n'avait trouve aucune cible -- l'utilisateur a
+  //       reessaye cinq fois avant de comprendre que rien ne se passait.
+  if(!sigSrc){
+    alert('Aucune signature s\u00e9lectionn\u00e9e : choisis une signature enregistr\u00e9e, charge une image, ou dessine-la.');
+    return;
+  }
+  if(posees>0){
+    showBCSaveToast('\u2713 Signature apposée sur l\'aperçu');
+  } else {
+    alert('La signature n\'a pas pu être apposée : ce document n\'a pas de zone de signature CALINSTRUM.\\n\\nSignale-le — c\'est un défaut du modèle de document, pas une fausse manœuvre de ta part.');
+  }
 }
 
 // Alias rétro-compatible (au cas où d'anciens appels existent)
@@ -40283,7 +40307,14 @@ function openBL(id, opts){
       buildClientOptions('bl-client',b.client||'');
       gv('bl-contact',b.contact||'');gv('bl-adrdest',b.adrdest||'');gv('bl-emaildest',b.emaildest||'');gv('bl-po',b.po||'');gv('bl-emis',b.emis||'');gv('bl-status',b.status||'En préparation');
       gv('bl-dvlie', b.dvlie || (b._sourceDevisNums||[]).join(', '));
-      blL=JSON.parse(JSON.stringify(b.lines||[]));sv('mBLtitle','Modifier BL — '+b.num);
+      blL=JSON.parse(JSON.stringify(b.lines||[]));
+      // Le formulaire affiche EXACTEMENT ce que le document imprimera : on y
+      // reporte la reference et la designation resolues. Sans ca, l'utilisateur
+      // verrait le code client dans le champ Ref pendant que le BL imprime la
+      // reference constructeur -- et un simple enregistrement aurait fige la
+      // mauvaise valeur. Meme fonction que le rendu, jamais une seconde lecture.
+      blL.forEach(function(l){ if(!l)return; l.ref=_blRef(l); l.desc=_blDesc(l); });
+      sv('mBLtitle','Modifier BL — '+b.num);
       blColis=b.colisage?JSON.parse(JSON.stringify(b.colisage)):null;
     }
   } else if(opts && opts.fromDevisIds){
@@ -44622,7 +44653,7 @@ function bDV(d){
     bankHtml()+
     '<div class="doc-sign">'+
       '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de la mention manuscrite "lu et approuvé"</p></div></div>'+
-      '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature</p></div></div>'+
+      '<div class="doc-sign-box" data-sig="calinstrum"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature</p></div></div>'+
     '</div>'+
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
     '<p class="doc-legal">'+mention+'</p>'+
@@ -44878,7 +44909,7 @@ function bFA(f){
     bankHtml()+
     '<div class="doc-sign">'+
       '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de "lu et approuvé"</p></div></div>'+
-      '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature</p></div></div>'+
+      '<div class="doc-sign-box" data-sig="calinstrum"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature</p></div></div>'+
     '</div>'+
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
     '<p class="doc-legal">'+getMention(isExo?f.tgcM:'tgc')+'</p>'+
@@ -45191,11 +45222,56 @@ function bBC(b){
   '</div>';
 }
 
+// =============================================================================
+// LIGNES DE BL -- quelle reference et quelle designation imprimer. REGLE UNIQUE.
+// =============================================================================
+// [02/09/2026] Audit des BL existants : 8 sur 14 imprimaient le CODE ARTICLE DU
+// CLIENT dans la colonne « Ref. produit », et la moitie n'avaient AUCUNE
+// designation. La donnee n'etait pas perdue -- elle etait dans d'autres champs.
+// Trois formes coexistent dans la base, aucune n'est fausse, elles sont juste
+// differentes :
+//   A. `refConstructeur` + `designation` renseignes, `ref` porte le code client
+//      et `desc` est vide  -> BL crees depuis un BC (reappro ou GMAO) ;
+//   B. `desc` contient la designation SUIVIE de « Ref.constructeur : XXX », et
+//      ni `refConstructeur` ni `designation` -> BL les plus anciens ;
+//   C. `ref` = reference constructeur et `desc` = designation -> saisie manuelle.
+//
+// (=X=) NE PAS « reparer » les donnees : c'est une regle de LECTURE qui manquait.
+//       Les trois formes restent valides, le document les lit toutes.
+// (=X=) UN SEUL couple de fonctions, appele par le RENDU et par le FORMULAIRE.
+//       Deux lectures separees finiraient par diverger -- c'est la classe de bug
+//       la plus couteuse de ce projet.
+// (=X=) Sans donnee exploitable, on n'invente rien : chaine vide.
+var _BL_RE_REF_DANS_DESC = /^([\s\S]*?)\s*R[\u00e9e]f\.?\s*constructeur\s*:\s*(\S+)\s*$/i;
+
+function _blRef(l){
+  if(!l)return '';
+  var rc=String(l.refConstructeur||'').trim();
+  if(rc)return rc;                                   // A
+  var m=String(l.desc||'').match(_BL_RE_REF_DANS_DESC);
+  if(m&&m[2])return String(m[2]).trim();             // B
+  return String(l.ref||'').trim();                   // C
+}
+function _blDesc(l){
+  if(!l)return '';
+  var dg=String(l.designation||'').trim();
+  if(dg)return dg;                                   // A
+  var d=String(l.desc||'');
+  var m=d.match(_BL_RE_REF_DANS_DESC);
+  if(m)return String(m[1]||'').trim();               // B -- suffixe retire
+  return d.trim();                                   // C
+}
+
 function bBL(b){
   var rows=(b.lines||[]).map(function(l){
-    return'<tr><td>'+escNL(l.ref||'')+'</td><td>'+escNL(l.desc||'')+'</td>'+
+    return'<tr><td>'+escNL(_blRef(l))+'</td><td>'+escNL(_blDesc(l))+'</td>'+
       '<td style="text-align:center">'+(l.qte||0)+'</td><td style="text-align:right;font-weight:700">'+fN(l.pu||0)+'</td></tr>';
   }).join('');
+  // Date du JOUR D'EDITION / D'IMPRESSION, a deux endroits : l'en-tete et
+  // « Livre le : ». Un bon de livraison se remet le jour ou on l'imprime -- c'est
+  // cette date-la qui fait foi pour le client, pas celle de creation du brouillon.
+  // (=X=) Consequence assumee : reimprimer un ancien BL le redate du jour.
+  var _blDateJour=fD(td());
   var clientDetail=getClientDetail(b.client);
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   // Build destination details from client DB + form fields
@@ -45215,7 +45291,7 @@ function bBL(b){
       '<div class="doc-party"><p>'+ci_adr+'<br>Tél : '+CI.tel+'</p>'+
         '<div style="background:#f0f4f8;padding:8px;border-radius:3px;margin-top:8px;font-size:10px;line-height:1.9">'+
           '<div><strong>BL N° :</strong> '+esc(b.num||'')+'</div>'+
-          '<div><strong>Date :</strong> '+fD(b.date)+'</div>'+
+          '<div><strong>Date :</strong> '+_blDateJour+'</div>'+
           '<div><strong>Lieu :</strong> '+esc(b.lieu||'NOUMEA')+'</div>'+
           '<div><strong>N° commande :</strong> '+esc(b.po||'—')+'</div>'+
           '<div><strong>Émis par :</strong> '+esc(b.emis||'Fabrice RIZZO')+'</div>'+
@@ -45234,7 +45310,7 @@ function bBL(b){
     '</table>'+
     '<div class="doc-sign">'+
       '<div class="doc-sign-box"><div class="dsl">Visa du client</div><div class="dsline" style="height:46px"></div><p>Reçu le :<br>Nom / Prénom :<br>Signature :</p></div>'+
-      '<div class="doc-sign-box"><div class="dsl">Visa du fournisseur</div><div class="dsline" style="height:46px"></div><p>Livré le :</p></div>'+
+      '<div class="doc-sign-box" data-sig="calinstrum"><div class="dsl">Visa du fournisseur</div><div class="ds-siglot"></div><div class="dsline" style="height:46px"></div><p>Livré le : '+_blDateJour+'</p></div>'+
     '</div>'+
     '<hr style="margin:12px 0;border-color:#e5e7eb">'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:10px">'+
@@ -45838,7 +45914,7 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
         bankHtml()+
         '<div class="doc-sign">'+
           '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de la mention manuscrite "lu et approuvé"</p></div></div>'+
-          '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot">'+
+          '<div class="doc-sign-box" data-sig="calinstrum"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot">'+
             (sigSrc?'<img src="'+sigSrc+'">':'')+'</div><div class="dsline"></div><p>Signature</p></div></div>'+
         '</div>'+
         '</div>';
@@ -46279,7 +46355,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         bankHtml()+
         '<div class="doc-sign">'+
           '<div class="doc-sign-box"><div class="dsl">Le Client</div><div class="ds-bottom"><div class="ds-siglot"></div><div class="dsline"></div><p>Signature précédée de "lu et approuvé"</p></div></div>'+
-          '<div class="doc-sign-box"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot">'+
+          '<div class="doc-sign-box" data-sig="calinstrum"><div class="dsl">CALINSTRUM</div><div class="ds-bottom"><div class="ds-siglot">'+
             (sigSrc?'<img src="'+sigSrc+'">':'')+'</div><div class="dsline"></div><p>Signature</p></div></div>'+
         '</div>'+
         '</div>';
