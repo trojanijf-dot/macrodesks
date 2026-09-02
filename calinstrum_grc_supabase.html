@@ -45267,11 +45267,18 @@ function bBL(b){
     return'<tr><td>'+escNL(_blRef(l))+'</td><td>'+escNL(_blDesc(l))+'</td>'+
       '<td style="text-align:center">'+(l.qte||0)+'</td><td style="text-align:right;font-weight:700">'+fN(l.pu||0)+'</td></tr>';
   }).join('');
-  // Date du JOUR D'EDITION / D'IMPRESSION, a deux endroits : l'en-tete et
-  // « Livre le : ». Un bon de livraison se remet le jour ou on l'imprime -- c'est
-  // cette date-la qui fait foi pour le client, pas celle de creation du brouillon.
-  // (=X=) Consequence assumee : reimprimer un ancien BL le redate du jour.
-  var _blDateJour=fD(td());
+  // DATE DE LIVRAISON -- affichee a DEUX endroits : l'en-tete « Date : » et le pied
+  // « Livre le : ». C'est le CHAMP DATE DU FORMULAIRE qui la pilote.
+  //
+  // [02/09/2026] Premiere version : la date du jour d'impression etait imposee.
+  // Trop absolu -- les BL se preparent la VEILLE et s'impriment pour partir en
+  // livraison le lendemain matin. Forcer le jour d'impression enlevait a
+  // l'utilisateur le controle de la date qu'il venait justement de saisir.
+  // (=X=) La date SAISIE fait foi. Le jour meme n'est qu'un REPLI, quand le champ
+  //       est vide. Ce n'est pas une regression : le formulaire pre-remplit deja
+  //       la date du jour sur un nouveau BL, donc « imprime aujourd'hui » reste le
+  //       comportement par defaut, sans aucune action.
+  var _blDateJour=fD(b.date||td());
   var clientDetail=getClientDetail(b.client);
   var ci_adr=CI.adresse.replace(/\n/g,'<br>');
   // Build destination details from client DB + form fields
