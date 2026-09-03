@@ -3198,7 +3198,7 @@ function admPreviewPrint(){
           <!-- Container chips qui ressemble à un input bordé -->
           <div id="fa-dvlie-chips-wrap" class="form-input" style="display:flex;flex-wrap:wrap;gap:5px;padding:4px 6px;min-height:36px;cursor:text;align-items:center" onclick="(document.getElementById('fa-dvlie-input')||{}).focus&&document.getElementById('fa-dvlie-input').focus()">
             <!-- Chips peuplés par JS au render -->
-            <input id="fa-dvlie-input" list="fa-dvlie-datalist" placeholder="ex: SLN-DV143-CADRE-2026" autocomplete="off" style="flex:1;min-width:140px;border:none;outline:none;background:transparent;color:var(--text);font-size:13px;padding:3px 2px;font-family:inherit">
+            <input id="fa-dvlie-input" list="fa-dvlie-datalist" placeholder="ex: XXX-DV000-CADRE-2026" autocomplete="off" style="flex:1;min-width:140px;border:none;outline:none;background:transparent;color:var(--text);font-size:13px;padding:3px 2px;font-family:inherit">
           </div>
           <!-- Champ caché qui contient la valeur CSV finale, lu par getFA() -->
           <input type="hidden" id="fa-dvlie">
@@ -3216,7 +3216,7 @@ function admPreviewPrint(){
         <div class="form-group"><label>📋 N° PO Client <span style="color:var(--muted);font-weight:400;font-size:10px">(synchronisé avec le N° PO du Suivi Factures)</span></label><input class="form-input" id="fa-po" placeholder="ex: 28042026/97 ou 00734811-01" title="Numéro de bon de commande du client final (SLN, PRNC...). Format Calinstrum interne : DDMMYYYY/NNN. Champ unifié avec le N° PO du Suivi Factures."></div>
         <div class="form-group">
           <label>🖨 Devis à IMPRIMER sur le PDF <span style="color:var(--muted);font-weight:400;font-size:10px">(si différent du devis de suivi GRC ci-dessus)</span></label>
-          <input class="form-input" id="fa-dvlie-print" placeholder="ex: SLN-DV143-CADRE-2026" title="Laisse vide pour imprimer le devis de suivi GRC (Devis liés, ci-dessus). Utile pour les factures REAPPRO dont le devis GRC est un devis-miroir auto-généré (SLN-DV-BCGMAO-...) : le PDF envoyé au client doit référencer le vrai devis cadre.">
+          <input class="form-input" id="fa-dvlie-print" placeholder="ex: XXX-DV000-CADRE-2026" title="Laisse vide pour imprimer le devis de suivi GRC (Devis liés, ci-dessus). Utile pour les factures REAPPRO dont le devis GRC est un devis-miroir auto-généré (SLN-DV-BCGMAO-...) : le PDF envoyé au client doit référencer le vrai devis cadre.">
         </div>
       </div>
       <div class="form-row">
@@ -14023,7 +14023,7 @@ function _dvlieWithRev(dvlieStr){
 // et buildPaginatedFA() (impression). Le correctif dvliePrint du 11/08 n'avait
 // été greffé que sur la copie de l'aperçu : l'impression affichait donc le
 // devis-miroir interne (SLN-DV-BCGMAO-…) au lieu du devis cadre applicable au
-// client (SLN-DV143-CADRE-2026). L'aperçu et le document imprimé mentaient
+// client (son devis CADRE). L'aperçu et le document imprimé mentaient
 // l'un sur l'autre, sur un champ contractuel.
 // ⛔ TOUT nouveau rendu de facture DOIT appeler cette fonction. Ne JAMAIS
 //    recopier ce calcul : c'est précisément la duplication qui a créé le bug.
@@ -14031,6 +14031,28 @@ function _dvlieWithRev(dvlieStr){
 //   1) f.dvliePrint — devis à IMPRIMER (champ dédié, modale « Devis à imprimer »)
 //   2) f.dvlie      — devis de suivi GRC, enrichi de sa dernière révision
 //   3) f.devisLieId — résolution par identifiant si dvlie est vide
+// Un devis « MIROIR » est une ecriture purement INTERNE : il ne sert qu'a
+// verrouiller un numero de BC pour le suivi GRC. Le client ne l'a jamais vu et ne
+// peut le rapprocher de rien.
+function _faDevisEstMiroir(num){ return /BCGMAO/i.test(String(num||'')); }
+
+// Devis CADRE du client : celui dont le statut est « Cadre ».
+// (=X=) Detection sur le STATUT et le CLIENT, JAMAIS sur un nom de client code en
+//       dur. La version precedente testait le NOM d'un client : elle ne
+//       protegeait qu'un seul client, et c'est un interdit du projet (depot
+//       public, et le client suivant n'en beneficiait pas).
+function _faDevisCadreClient(f){
+  if(!f||!f.client) return '';
+  var c=String(f.client).trim();
+  var l=(DB.devis||[]).filter(function(d){
+    return d && String(d.status||'').trim()==='Cadre' && String(d.client||'').trim()===c;
+  });
+  if(!l.length) return '';
+  // Le plus recent fait foi si le client en a plusieurs (grille annuelle).
+  l.sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));});
+  return String(l[0].num||'').trim();
+}
+
 function _faDevisNumAffiche(f){
   if(!f) return '';
   // 1) Le devis à imprimer prime TOUJOURS sur le devis de suivi interne.
@@ -14042,6 +14064,17 @@ function _faDevisNumAffiche(f){
     var dv=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
     if(dv) n=(dv.num||'')+(dv.rev?' '+String(dv.rev).toUpperCase():'');
   }
+  // 4) [02/09/2026] Un devis MIROIR ne sort jamais sur un document client.
+  //    On lui substitue le devis CADRE du client, et A DEFAUT ON N'AFFICHE RIEN
+  //    (decision utilisateur) : mieux vaut aucune reference qu'une reference que
+  //    le client ne peut pas rapprocher -- son BC figure dans la case voisine.
+  //
+  //    (=X=) CETTE REGLE S'APPLIQUE A LA LECTURE, pas seulement a l'enregistrement.
+  //          La version precedente ne s'appliquait qu'au save : mesure du 02/09,
+  //          12 factures sur 65 imprimaient encore le miroir, faute d'avoir ete
+  //          re-sauvegardees. Une regle qui protege un document et qui ne tourne
+  //          qu'a l'ecriture ne protege que ce qu'on a retouche.
+  if(_faDevisEstMiroir(n)) return _faDevisCadreClient(f);
   return n||'';
 }
 
@@ -14850,7 +14883,7 @@ function _buildReconciliation(opts){
 
   // === PASS 8 : CIRCUIT CADRE via BC CALINSTRUM ===========================
   // Cas du circuit officiel "Cadre" (facturation récurrente sur grille) :
-  //   Devis Cadre (SLN-DV143-CADRE-2026, grille tarifaire annuelle)
+  //   Devis Cadre (grille tarifaire annuelle du client)
   //     ↓ référence prix
   //   BC Client SLN (le client commande sur la grille)
   //     ↓ génère
@@ -28301,7 +28334,7 @@ function _faDvlieBindListeners(){
 //     que les devis SLN (ou Cadre SLN).
 //   - Statuts pertinents : Cadre, Accepté, Facturé, Envoyé (on exclut Brouillon/Refusé/Obsolète).
 //   - Devis Cadre toujours en TÊTE de liste (pour qu'ils soient suggérés en priorité
-//     dans les cas fourniture récurrente type SLN-DV143-CADRE-2026).
+//     dans les cas de fourniture récurrente sur devis cadre).
 //   - Tri secondaire : par date décroissante (devis récents d'abord).
 // Le datalist HTML5 propose automatiquement les options qui matchent ce que l'utilisateur tape.
 // =============================================================================
@@ -28430,10 +28463,12 @@ function openFA(id,fromDV,preSelectedClient){
       // enregistrement les fige a nouveau.
       gv('fa-objet',_faObjetClient(f.objet,f));
       gv('fa-dvlie',f.dvlie||'');_faDvlieInit(f.dvlie||'');
-      // [11/08/2026] REAPPRO PAKORO : pré-affiche le devis cadre à l'OUVERTURE
+      // REAPPRO : pré-affiche le devis cadre à l'OUVERTURE
       // (pas seulement à l'enregistrement) pour que le champ soit déjà correct
       // à l'écran, sans ressaisie manuelle à chaque facture.
-      gv('fa-dvlie-print', f.dvliePrint || (/PAKORO/i.test(f.client||'') ? PAKORO_CADRE_DEVIS : ''));
+      // Le champ montre ce que le document imprimera : meme regle, pas une seconde
+      // lecture. Vide si le client n'a pas de devis cadre.
+      gv('fa-dvlie-print', f.dvliePrint || (_faDevisEstMiroir(f.dvlie) ? _faDevisCadreClient(f) : ''));
       gv('fa-type',f.type||'Fourniture');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
       gv('fa-notes',f.notes||'');
@@ -30490,10 +30525,11 @@ function bAvoir(av){
 // IMPORTANT : ne touche QUE le champ f.objet (visible dans la modale). Le titre du
 // PDF généré reste inchangé (généré par d'autres fonctions à partir d'autres sources).
 // =============================================================================
-// Devis cadre réel de PAKORO (grille tarifaire annuelle) — à distinguer du
-// devis-miroir SLN-DV-BCGMAO-xxxxx (fictif, sert uniquement à verrouiller le
-// N° de BC pour le suivi GRC interne). Utilisé pour pré-remplir f.dvliePrint.
-var PAKORO_CADRE_DEVIS='SLN-DV143-CADRE-2026';
+// Le devis CADRE d'un client (grille tarifaire annuelle) se distingue du
+// devis-miroir interne, qui ne sert qu'a verrouiller un N° de BC pour le suivi.
+// (=X=) Il n'est plus code en dur : il se trouve par son STATUT « Cadre » et son
+//       client, via _faDevisCadreClient(). Un numero de devis et un nom de client
+//       ecrits dans le source, c'est de la donnee metier dans un depot PUBLIC.
 // =============================================================================
 // OBJET D'UNE FACTURE -- ce que le CLIENT a le droit de lire. REGLE UNIQUE.
 // =============================================================================
@@ -30578,7 +30614,7 @@ function _buildFAFournitureObjet(f){
   // references internes, elles n'ont rien a faire sur un document remis au client.
   //
   // (=X=) La version courte etait auparavant conditionnee sur
-  //       `/PAKORO/i.test(f.client)` -- UN NOM DE CLIENT CODE EN DUR. Elle ne
+  //       un test sur LE NOM DU CLIENT, code en dur. Elle ne
   //       s'appliquait donc qu'a un seul client, et c'est un interdit du projet :
   //       depot public, et le client suivant n'en beneficiait pas.
   //       NE JAMAIS reintroduire de condition sur le nom d'un client ici.
@@ -30631,11 +30667,13 @@ async function saveFA(){
   if(f.type==='Fourniture'){
     f.objet=_buildFAFournitureObjet(f);
   }
-  // [11/08/2026] REAPPRO PAKORO : auto-remplit le devis à IMPRIMER (cadre réel,
-  // distinct du devis-miroir de suivi GRC) s'il n'a pas déjà été saisi/modifié
-  // manuellement — ne jamais écraser une valeur que l'utilisateur a lui-même posée.
-  if(!f.dvliePrint && /PAKORO/i.test(f.client||'') && f.type==='Fourniture'){
-    f.dvliePrint=PAKORO_CADRE_DEVIS;
+  // Auto-remplit le devis à IMPRIMER (le cadre réel, distinct du devis-miroir de
+  // suivi) s'il n'a pas déjà été saisi manuellement — ne jamais écraser une valeur
+  // que l'utilisateur a lui-même posée.
+  // (=X=) Detection sur le DOSSIER, jamais sur le nom du client.
+  if(!f.dvliePrint && _faDevisEstMiroir(f.dvlie)){
+    var _cadre=_faDevisCadreClient(f);
+    if(_cadre) f.dvliePrint=_cadre;
   }
   if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
   // Suivi BC hebdomadaire : getFA() a DÉJÀ appliqué _faPendingBcConsumption sur
