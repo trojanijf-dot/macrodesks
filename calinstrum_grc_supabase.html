@@ -28425,7 +28425,10 @@ function openFA(id,fromDV,preSelectedClient){
       // Email comptabilité : on construit le dropdown avec la valeur stockée (qui peut être custom).
       // rebuildFaEmailOptions ajoutera l'email courant aux options s'il n'est pas dans la liste.
       rebuildFaEmailOptions(f.email||'');
-      gv('fa-objet',f.objet||'');
+      // Le champ montre EXACTEMENT ce que le document imprimera : sans ca,
+      // l'utilisateur relit les references internes dans la modale et un simple
+      // enregistrement les fige a nouveau.
+      gv('fa-objet',_faObjetClient(f.objet,f));
       gv('fa-dvlie',f.dvlie||'');_faDvlieInit(f.dvlie||'');
       // [11/08/2026] REAPPRO PAKORO : pré-affiche le devis cadre à l'OUVERTURE
       // (pas seulement à l'enregistrement) pour que le champ soit déjà correct
@@ -30491,6 +30494,58 @@ function bAvoir(av){
 // devis-miroir SLN-DV-BCGMAO-xxxxx (fictif, sert uniquement à verrouiller le
 // N° de BC pour le suivi GRC interne). Utilisé pour pré-remplir f.dvliePrint.
 var PAKORO_CADRE_DEVIS='SLN-DV143-CADRE-2026';
+// =============================================================================
+// OBJET D'UNE FACTURE -- ce que le CLIENT a le droit de lire. REGLE UNIQUE.
+// =============================================================================
+// [02/09/2026] L'objet auto-genere exposait deux references purement INTERNES :
+//   - le PO CALINSTRUM envoye au fournisseur : le client n'a pas a savoir aupres
+//     de qui ni sous quelle reference on s'approvisionne ;
+//   - le numero de devis GRC, qui est un devis-MIROIR interne (il ne sert qu'a
+//     verrouiller un numero de BC pour le suivi) et que le client n'a jamais vu.
+//     Le vrai devis client figure deja dans l'info-bar « DEVIS N° » du document.
+//
+// (=X=) POURQUOI IL FAUT NETTOYER A L'AFFICHAGE, et pas seulement corriger le
+//       generateur : l'objet est STOCKE sur la facture. Une correction du seul
+//       generateur ne change RIEN aux factures deja enregistrees -- c'est
+//       exactement pour ca que le probleme a semble « revenir » apres une
+//       premiere demande. Le nettoyage a l'affichage est retroactif et ne demande
+//       aucune ressaisie.
+// (=X=) On coupe sur les separateurs EXACTS « / PO » et « / REF DEVIS », jamais
+//       sur le premier « / » venu : un numero de BC client peut en contenir un
+//       (« BC L72923/0001 »), et le tronquer fausserait la reference.
+// (=X=) Un objet saisi a la main n'est PAS touche.
+// Le dossier est-il un REAPPROVISIONNEMENT ? Deduit du DOSSIER, jamais du nom du
+// client : un devis-miroir de reappro porte le marqueur BCGMAO / REAPPRO dans son
+// numero, ou le BC lie est issu d'un import de BC de reappro.
+// (=X=) REGLE UNIQUE : appelee par le generateur ET par le nettoyeur. Deux
+//       detections separees finiraient par diverger.
+function _faEstReappro(f){
+  if(!f)return false;
+  if(/BCGMAO|REAPPRO/i.test(String(f.dvlie||'')))return true;
+  return Array.isArray(DB.bcs) && DB.bcs.some(function(b){
+    return b && b.linkFactureId===f.id && b._fromBCReappro;
+  });
+}
+
+function _faObjetClient(objet,f){
+  var t=String(objet||'');
+  t=t.replace(/\s*\/\s*PO\b[\s\S]*$/i,'');
+  t=t.replace(/\s*\/\s*REF\s*DEVIS\b[\s\S]*$/i,'');
+  t=t.trim();
+  // Reformulation « REAPPRO ». Le simple decoupage laisse « Fourniture Materiel
+  // BC X » sur les factures deja enregistrees ; sur un dossier de reappro le
+  // libelle attendu est « Fourniture REAPPRO BC X ». On le corrige a l'affichage
+  // plutot que d'exiger une regeneration facture par facture.
+  // (=X=) UNIQUEMENT sur un objet manifestement AUTO-GENERE (il commence par
+  //       « Fourniture Materiel BC »). Un objet saisi a la main n'est jamais
+  //       reformule -- ce serait ecraser ce que l'utilisateur a ecrit.
+  if(f&&_faEstReappro(f)){
+    var m=t.match(/^Fourniture\s+Mat[ée]riel\s+BC\s+([\s\S]*)$/i);
+    if(m)return 'Fourniture REAPPRO BC '+String(m[1]).trim();
+  }
+  return t;
+}
+
 function _buildFAFournitureObjet(f){
   if(!f) return '';
   // 1) BC Client : priorité au champ explicite, fallback sur les alias
@@ -30518,14 +30573,20 @@ function _buildFAFournitureObjet(f){
   }
   // 3) Devis lié
   var dvNum=String(f.dvlie||'').trim();
-  // [11/08/2026] Cas REAPPRO PAKORO (demande explicite utilisateur) : le devis
-  // GRC est un devis-miroir auto-généré (verrouillage de N° de BC uniquement),
-  // sans intérêt pour le client final. Format simplifié, pas de PO/REF DEVIS.
-  if(/PAKORO/i.test(f.client||'')){
-    return 'REAPPRO Fourniture Matériel BC '+(bcClient||'?');
-  }
-  // Construction avec placeholders pour les champs manquants
-  return 'Fourniture Matériel BC '+(bcClient||'?')+' / PO '+(poCalinstrum||'?')+' / REF DEVIS '+(dvNum||'?');
+  // [02/09/2026] Le PO CALINSTRUM et le devis GRC ne sortent PLUS, pour AUCUN
+  // client. Ce ne sont pas des preferences propres a un client : ce sont des
+  // references internes, elles n'ont rien a faire sur un document remis au client.
+  //
+  // (=X=) La version courte etait auparavant conditionnee sur
+  //       `/PAKORO/i.test(f.client)` -- UN NOM DE CLIENT CODE EN DUR. Elle ne
+  //       s'appliquait donc qu'a un seul client, et c'est un interdit du projet :
+  //       depot public, et le client suivant n'en beneficiait pas.
+  //       NE JAMAIS reintroduire de condition sur le nom d'un client ici.
+  //
+  // Le mot REAPPRO se deduit du DOSSIER, pas du client : un devis-miroir de
+  // reapprovisionnement porte le marqueur BCGMAO / REAPPRO dans son numero.
+  if(_faEstReappro(f)) return 'Fourniture REAPPRO BC '+(bcClient||'?');
+  return 'Fourniture Matériel BC '+(bcClient||'?');
 }
 
 // _refreshFAObjet — bouton "Régénérer" dans la modale facture.
@@ -44890,7 +44951,7 @@ function bFA(f){
         '</p>'+
       '</div>'+
     '</div>'+
-    '<p style="font-size:13px;margin-bottom:8px"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+
+    '<p style="font-size:13px;margin-bottom:8px"><strong>Objet :</strong> '+esc(_faObjetClient(f.objet,f))+'</p>'+
     '<table class="doc-tbl" style="page-break-inside:auto">'+
     '<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>'+
     '<thead>'+
@@ -46333,7 +46394,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
             cliAddr+'<br>'+(cliTel?'Tél: '+esc(cliTel)+'<br>':'')+esc(cliEmail)+
           '</p></div>'+
       '</div>'+
-      '<p style="font-size:13px;margin-bottom:8px;margin-top:0"><strong>Objet :</strong> '+esc(f.objet||'')+'</p>'+_acRecap;
+      '<p style="font-size:13px;margin-bottom:8px;margin-top:0"><strong>Objet :</strong> '+esc(_faObjetClient(f.objet,f))+'</p>'+_acRecap;
   }
   var pagesHTML='',cumulSub=0;
   pages.forEach(function(pageRows,pi){
