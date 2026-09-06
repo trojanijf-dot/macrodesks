@@ -17898,6 +17898,7 @@ function renderDVPro(){
         '</td>';
       // Actions (avec bouton REV conditionnel)
       rowHtml+='<td style="padding:12px 14px;vertical-align:top;text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+
+        ((typeof _dvBLBtnHtml==='function')?_dvBLBtnHtml(d):'')+
         '<button class="btn btn-ghost btn-sm" onclick="openDV('+d.id+')" title="Éditer" style="padding:5px 8px;border:0.5px solid var(--border)"><i class="ti ti-pencil" style="font-size:12px"></i></button>'+
         revBtnHtml+
         ' <button class="btn btn-ghost btn-sm" onclick="deleteDV('+d.id+')" title="Supprimer ce devis (annulable via Ctrl+Z)" style="padding:5px 8px;border:0.5px solid rgba(239,68,68,.3);color:#ef4444"><i class="ti ti-trash" style="font-size:12px"></i></button>'+
@@ -27153,6 +27154,7 @@ function renderDV(){
       '<td style="font-weight:700;color:var(--teal)">'+fN(getDvTTC(x))+' XPF</td>'+
       '<td><span class="badge '+(sm[x.status]||'b-draft')+'">'+esc(x.status||'')+'</span></td>'+
       '<td class="no-print" style="white-space:nowrap">'+
+        ((typeof _dvBLBtnHtml==='function')?_dvBLBtnHtml(x):'')+
         '<button class="btn btn-ghost btn-sm" onclick="prvDV('+x.id+')">👁</button> '+
         '<button class="btn btn-ghost btn-sm" onclick="openDV('+x.id+')">✏️</button> '+
         revButton+
@@ -39949,18 +39951,91 @@ function _confirmBCClientImport(){
 // }
 var _blFromDVState = { selectedDevisIds: [], linesData: {} };
 
+// =============================================================================
+// ELIGIBILITE D'UN DEVIS A UN BON DE LIVRAISON -- REGLE UNIQUE
+// =============================================================================
+// [06/09/2026] Cette regle etait ecrite DEUX FOIS, a l'identique, dans
+// openBLFromDVPicker() et _renderBLFromDVList(). Ajouter un troisieme point
+// d'entree (le bouton sur la ligne de devis) sans factoriser aurait fait trois
+// copies -- c'est exactement le motif qui a coute cher sur bDV/buildPaginatedDV,
+// bFA/buildPaginatedFA et les deux copies du moteur de cout de revient : une
+// copie diverge, et rien ne leve d'erreur.
+// (=X=) NE PAS recopier ce test ailleurs : appeler _dvLivrableBL().
+//
+// Statuts retenus : Accepte ET Facture (decision utilisateur du 06/09). La
+// facture part souvent AVANT la livraison ; s'en tenir a « Accepte » rendrait
+// injoignables les dossiers factures non livres.
+function _dvLivrableBL(d){
+  if(!d) return false;
+  var st=String(d.status||'').toLowerCase();
+  if(st!=='accepté' && st!=='accepte' && st!=='facturé' && st!=='facture') return false;
+  var four=(d.lines && d.lines.fourniture) || [];
+  // Un BL livre de la MATIERE : il faut au moins une ligne chiffree. Un sous-titre
+  // ou une ligne a zero ne rend pas un devis livrable.
+  return four.some(function(l){
+    return l && l.type!=='header' && (Number(l.qte)||0)>0 && (Number(l.pu)||0)>0;
+  });
+}
+
+// Un BL existe-t-il deja pour ce devis ? `dvlie` peut porter PLUSIEURS numeros
+// separes par , ; / + -- meme decoupage que partout ailleurs dans l'app.
+function _dvADejaBL(d){
+  if(!d) return false;
+  var num=String(d.num||'').trim().toUpperCase();
+  if(!num) return false;
+  return (DB.bls||[]).some(function(b){
+    if(!b||!b.dvlie) return false;
+    return String(b.dvlie).toUpperCase().split(/[,;\/+]/).some(function(x){
+      return x.trim()===num;
+    });
+  });
+}
+
+// Le bouton (ou le badge) affiche sur une ligne de devis.
+// (=X=) UN SEUL helper, appele par les DEUX rendus de la liste -- renderDVPro()
+//       (theme pro) et renderDV() (classique). Deux libelles ecrits separement
+//       finiraient par diverger.
+// (=X=) Un devis qui a deja un BL affiche un BADGE, il ne disparait pas : masquer
+//       empecherait de distinguer « BL deja fait » de « devis non livrable ».
+function _dvBLBtnHtml(d){
+  if(!_dvLivrableBL(d)) return '';
+  if(_dvADejaBL(d)){
+    return '<span data-blfromdv-done="'+d.id+'" title="Un bon de livraison existe déjà pour ce devis" '+
+      'style="display:inline-block;padding:4px 8px;margin-right:4px;border-radius:5px;font-size:10px;'+
+      'font-weight:700;background:rgba(148,163,184,.10);border:1px solid rgba(148,163,184,.28);'+
+      'color:var(--muted-soft);white-space:nowrap">\u2713 BL</span> ';
+  }
+  return '<button data-blfromdv="'+d.id+'" class="btn btn-ghost btn-sm" '+
+    'onclick="event.stopPropagation();openBLFromDV('+d.id+')" '+
+    'title="Créer un bon de livraison à partir de ce devis" '+
+    'style="padding:5px 8px;margin-right:4px;border:0.5px solid rgba(45,212,191,.5);'+
+    'color:var(--teal);font-weight:700;font-size:10px;white-space:nowrap">\U0001f4e6 BL</button> ';
+}
+
+// Point d'entree depuis une ligne de devis : on saute l'ecran de selection des
+// devis (inutile, on en vise un precis) et on ouvre directement l'etape des
+// quantites a livrer. Meme parcours que depuis la page Bons de livraison.
+// (=X=) RIEN N'EST CREE ICI : l'utilisateur valide les quantites avant toute
+//       ecriture. Passer un devis en Accepte ne genere aucun BL tout seul.
+function openBLFromDV(devisId){
+  var d=(DB.devis||[]).find(function(x){return x.id===devisId;});
+  if(!d){alert('Devis introuvable.');return;}
+  if(!_dvLivrableBL(d)){
+    alert('Ce devis n\'est pas livrable : il doit être Accepté ou Facturé et contenir au moins une ligne fourniture chiffrée.');
+    return;
+  }
+  openBLFromDVPicker();                       // construit la modale, reinitialise l'etat
+  if(!document.getElementById('mBLFromDV')) return;
+  _blFromDVState.selectedDevisIds=[devisId];
+  _openBLFromDVStep2();
+}
+
 // ---- ÉTAPE 1 : modale de sélection des devis ----
 function openBLFromDVPicker(){
   // Filtrer les devis "valides pour BL" :
   //   - Status Accepté OU Facturé (les autres ne sont pas censés générer une livraison)
   //   - Au moins 1 ligne dans la section fourniture (BL = matière livrée physique)
-  var allDevis = (DB.devis||[]).filter(function(d){
-    var status = (d.status||'').toLowerCase();
-    var validStatus = status === 'accepté' || status === 'accepte' || status === 'facturé' || status === 'facture';
-    if(!validStatus) return false;
-    var four = (d.lines && d.lines.fourniture) || [];
-    return four.some(function(l){ return l && l.type !== 'header' && (Number(l.qte)||0) > 0 && (Number(l.pu)||0) > 0; });
-  });
+  var allDevis = (DB.devis||[]).filter(_dvLivrableBL);   // REGLE UNIQUE, cf _dvLivrableBL()
 
   if(allDevis.length === 0){
     alert('⚠ Aucun devis fourniture validé disponible.\n\nUn devis doit être en status "Accepté" ou "Facturé" ET contenir au moins une ligne fourniture chiffrée pour être éligible à la création de BL.');
@@ -40037,13 +40112,7 @@ function _renderBLFromDVList(){
   var clientFilter = (document.getElementById('blfdv-client-filter')||{}).value || '';
   var search = ((document.getElementById('blfdv-search')||{}).value || '').toLowerCase().trim();
 
-  var allDevis = (DB.devis||[]).filter(function(d){
-    var status = (d.status||'').toLowerCase();
-    var validStatus = status === 'accepté' || status === 'accepte' || status === 'facturé' || status === 'facture';
-    if(!validStatus) return false;
-    var four = (d.lines && d.lines.fourniture) || [];
-    return four.some(function(l){ return l && l.type !== 'header' && (Number(l.qte)||0) > 0 && (Number(l.pu)||0) > 0; });
-  });
+  var allDevis = (DB.devis||[]).filter(_dvLivrableBL);   // REGLE UNIQUE, cf _dvLivrableBL()
 
   // Appliquer filtres
   var filtered = allDevis.filter(function(d){
