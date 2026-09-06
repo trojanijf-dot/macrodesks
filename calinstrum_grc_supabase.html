@@ -5871,6 +5871,26 @@ function commitInvoiceChange(inv){
 
 // ===== UTILS =====
 function pad(n,l){return String(n).padStart(l||3,'0');}
+// =============================================================================
+// NUMERO DE DOCUMENT -- jamais d'espace parasite
+// =============================================================================
+// [06/09/2026] Le devis « SLN-DV126 » portait un ESPACE DE FIN. L'effet est
+// silencieux mais reel : un numero sert de CLE DE RAPPROCHEMENT entre devis,
+// factures et BL, et toute recherche par numero EXACT rate le document --
+// `DB.devis.find(d => d.num === 'SLN-DV126')` ne le trouvait pas, alors qu'il
+// s'affiche normalement a l'ecran. Un caractere invisible casse des liens sans
+// jamais lever d'erreur.
+//
+// (=X=) On coupe UNIQUEMENT aux extremites. Les espaces INTERNES sont
+//       legitimes : un numero de BC client peut en contenir (« BC L79870 / 0001 »),
+//       les ecraser fausserait la reference.
+// (=X=) L'espace INSECABLE (U+00A0) et l'espace fine (U+202F) sont vises
+//       explicitement : ce sont eux qui arrivent par copier-coller depuis un PDF
+//       ou un tableur, et ils sont invisibles a l'ecran.
+function _numPropre(v){
+  return String(v==null?'':v).replace(/^[\s\u00a0\u202f]+|[\s\u00a0\u202f]+$/g,'');
+}
+
 function td(){
   // Date du jour en timezone locale (et non UTC, qui décale d'un jour pour Nouméa = UTC+11).
   // Format YYYY-MM-DD compatible avec <input type="date">.
@@ -21375,7 +21395,7 @@ function getDV(){
       preservedFlags._renewalCreatedAt=td();
     }
   }
-  var result={id:eDVid||Date.now(),num:gvg('dv-num'),rev:gvg('dv-rev'),date:gvg('dv-date'),type:gvg('dv-type'),
+  var result={id:eDVid||Date.now(),num:_numPropre(gvg('dv-num')),rev:gvg('dv-rev'),date:gvg('dv-date'),type:gvg('dv-type'),
     client:gvg('dv-client'),contact:gvg('dv-contact'),email:gvg('dv-email'),adresse:gvg('dv-adresse'),
     objet:gvg('dv-objet'),incoterms:gvg('dv-incoterms'),transport:gvg('dv-transport'),freight:gvg('dv-freight'),
     danger:gvg('dv-danger'),status:gvg('dv-status'),validite:gvg('dv-validite'),delai:gvg('dv-delai'),
@@ -29496,7 +29516,7 @@ function getFA(){
       }
     }
   }
-  var fa={id:eFAid||Date.now(),num:gvg('fa-num'),date:gvg('fa-date'),client:gvg('fa-client'),
+  var fa={id:eFAid||Date.now(),num:_numPropre(gvg('fa-num')),date:gvg('fa-date'),client:gvg('fa-client'),
     contact:gvg('fa-contact'),adresse:gvg('fa-adresse'),email:gvg('fa-email'),objet:gvg('fa-objet'),
     dvlie:gvg('fa-dvlie'),dvliePrint:gvg('fa-dvlie-print'),type:gvg('fa-type')||'Fourniture',status:gvg('fa-status'),tgcM:gvg('fa-tgc-mention'),
     delai:gvg('fa-delai'),paye:totVerse,versements:JSON.parse(JSON.stringify(faVersements)),notes:gvg('fa-notes'),
@@ -33539,7 +33559,7 @@ function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot
   // conservé en sortie = 1er ID, pour ne pas casser les anciens reads sur DB.bcs.
   var devisIdsArr = (_bcSelectedDevisIds||[]).slice();
   var devisIdLegacy = devisIdsArr.length > 0 ? String(devisIdsArr[0]) : '';
-  var _bc={id:eBCid||Date.now(),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),calContact:gvg('bc-cal-contact'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieIds:devisIdsArr,devisLieId:devisIdLegacy,lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
+  var _bc={id:eBCid||Date.now(),num:_numPropre(gvg('bc-num')),date:gvg('bc-date'),devise:gvg('bc-devise'),calContact:gvg('bc-cal-contact'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieIds:devisIdsArr,devisLieId:devisIdLegacy,lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
   tauxAUD:(tauxNum!==null&&!isNaN(tauxNum)&&tauxNum>0)?tauxNum:undefined,
   // Expedition — entrees du cout de revient debarque. `undefined` quand le champ
   // est vide : le moteur doit pouvoir distinguer « non renseigne » de « zero ».
@@ -40584,7 +40604,7 @@ function getBL(){
   }
   var _bl = {
     id: eBLid||Date.now(),
-    num: gvg('bl-num'),
+    num: _numPropre(gvg('bl-num')),
     date: gvg('bl-date'),
     lieu: gvg('bl-lieu'),
     client: gvg('bl-client'),
