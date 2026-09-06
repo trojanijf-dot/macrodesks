@@ -39969,12 +39969,27 @@ function _dvLivrableBL(d){
   if(!d) return false;
   var st=String(d.status||'').toLowerCase();
   if(st!=='accepté' && st!=='accepte' && st!=='facturé' && st!=='facture') return false;
-  var four=(d.lines && d.lines.fourniture) || [];
+  var chiffree=function(l){
+    return l && l.type!=='header' && (Number(l.qte)||0)>0 && (Number(l.pu)||0)>0;
+  };
+  // [06/09/2026] UN DEVIS DE CHANTIER NE SE LIVRE PAS. Des qu'il y a de la main
+  // d'oeuvre, la fourniture est achetee POUR le chantier : elle y est consommee,
+  // elle ne part pas en livraison chez le client.
+  //
+  // (=X=) C'est la PRESENCE DE MAIN D'OEUVRE CHIFFREE qui decide, PAS l'etiquette
+  //       `type`. Mesure du 06/09 sur la base : un devis etiquete « Fourniture »
+  //       portait 4 lignes de main d'oeuvre -- un chantier de fait -- tandis que
+  //       deux devis etiquetes « Prestation de service » n'avaient QUE de la
+  //       marchandise et sont bel et bien livrables. L'etiquette se saisit a la
+  //       main, les lignes decrivent le travail reel.
+  if(((d.lines && d.lines.service) || []).some(chiffree)) return false;
+  // Second filet : un mixte DECLARE dont la main d'oeuvre n'est pas encore
+  // chiffree reste un chantier.
+  var t=String(d.type||'');
+  if(/fourniture/i.test(t) && /prestation/i.test(t)) return false;
   // Un BL livre de la MATIERE : il faut au moins une ligne chiffree. Un sous-titre
   // ou une ligne a zero ne rend pas un devis livrable.
-  return four.some(function(l){
-    return l && l.type!=='header' && (Number(l.qte)||0)>0 && (Number(l.pu)||0)>0;
-  });
+  return ((d.lines && d.lines.fourniture) || []).some(chiffree);
 }
 
 // Un BL existe-t-il deja pour ce devis ? `dvlie` peut porter PLUSIEURS numeros
