@@ -3984,7 +3984,18 @@ function admPreviewPrint(){
     <button class="btn btn-ghost btn-sm mb8" onclick="addBLL()">+ Ajouter ligne</button>
     <table class="items-tbl"><thead><tr><th>Réf. produit</th><th style="min-width:170px">Description</th><th>Qtés</th><th>Unité(XPF)</th><th></th></tr></thead>
     <tbody id="blLN"></tbody></table>
-    <div class="items-total"><div class="t-row t-total"><span>TOTAL (XPF)</span><span id="blTT">0</span></div></div>
+    <!-- (=X=) TROIS LIGNES, comme au pied du devis : marchandise, fret, total du.
+         `blTT` garde son sens d'origine -- la MARCHANDISE SEULE -- parce qu'il
+         alimente b.total, deja lu par le tableau de bord, la cascade et le
+         miroir Supabase. Le fret vit a cote, jamais dedans. -->
+    <div class="items-total">
+      <div class="t-row"><span>Total marchandises (XPF)</span><span id="blTT">0</span></div>
+      <div class="t-row"><span>Fret / frais locaux (XPF)</span>
+        <input class="form-input" id="bl-fret" type="number" step="1" min="0" value="0" oninput="cBLtot()"
+               title="Repris du devis. Un fret ne se facture qu'une fois : sur un 2e BL du meme devis il est propose a 0."
+               style="width:130px;text-align:right;padding:2px 6px;font-size:12px"></div>
+      <div class="t-row t-total"><span>TOTAL (XPF)</span><span id="blTTG">0</span></div>
+    </div>
     <hr class="sep">
     <!-- ===== LISTE DE COLISAGE (Packing List fournisseur) =====
          Carte rendue par renderBLColisageCard() : état 1 = zone de dépôt,
@@ -40014,6 +40025,30 @@ function _dvLivrableBL(d){
 
 // Un BL existe-t-il deja pour ce devis ? `dvlie` peut porter PLUSIEURS numeros
 // separes par , ; / + -- meme decoupage que partout ailleurs dans l'app.
+// =============================================================================
+// LE FRET D'UN DEVIS
+// =============================================================================
+// [07/09/2026] Le BL cree depuis PRNC-DV028 REV2 affichait 423 512 quand le
+// devis en vaut 521 410. L'ecart -- 97 898 -- etait la section
+// « FRET / FRAIS DIVERS » du devis, que le BL ne reprenait nulle part.
+//
+// Mesure du jour : 8 devis livrables sur 31 portent du fret, 1 941 881 XPF au
+// total. Aucun des 14 BL deja emis n'etait concerne (tous issus de devis
+// SLN/BCGMAO a fret nul) -- l'ecart est donc reste invisible jusqu'a ce que le
+// point d'entree « BL depuis devis » touche un devis PRNC en DDP.
+//
+// (=X=) MEME FILTRE QUE LES LIGNES LIVRABLES : on ignore les en-tetes de section
+//       et les lignes non chiffrees. Une section fret peut contenir un header
+//       « FRET » decoratif et des lignes a zero laissees en place.
+function _blFretDevis(d){
+  if(!d) return 0;
+  return ((d.lines && d.lines.fret) || []).reduce(function(s,l){
+    if(!l || l.type==='header') return s;
+    var q=Number(l.qte)||0, pu=Number(l.pu)||0;
+    return s + (q>0 && pu>0 ? q*pu : 0);
+  }, 0);
+}
+
 function _dvADejaBL(d){
   if(!d) return false;
   var num=String(d.num||'').trim().toUpperCase();
@@ -40267,6 +40302,13 @@ function _openBLFromDVStep2(){
   // Construire le state lignes : pour chaque devis, ses lignes fourniture éligibles
   // avec calcul du "déjà livré" via BL existants liés.
   _blFromDVState.linesData = {};
+  // (=X=) UN FRET NE SE FACTURE QU'UNE FOIS. Il est porte en entier sur le
+  //       PREMIER BL du devis ; des qu'un BL existe deja, on propose 0 -- une
+  //       livraison partielle ne refacture pas le transport. Reste editable.
+  _blFromDVState.fretData = {};
+  devis.forEach(function(d){
+    _blFromDVState.fretData[d.id] = _dvADejaBL(d) ? 0 : _blFretDevis(d);
+  });
   devis.forEach(function(d){
     var four = (d.lines && d.lines.fourniture) || [];
     var fourLines = four.filter(function(l){ return l && l.type !== 'header' && (Number(l.qte)||0) > 0 && (Number(l.pu)||0) > 0; });
@@ -40365,10 +40407,36 @@ function _renderBLFromDVStep2Content(){
         }).join('')+
         '</tbody>'+
       '</table>'+
+      // ---- FRET / FRAIS DIVERS -------------------------------------------
+      // Affiche des que le devis en porte, meme propose a 0 : l'utilisateur doit
+      // VOIR qu'un fret existe et qu'il a deja ete facture sur un BL precedent.
+      // Un montant qui disparait sans explication est pire qu'un zero affiche.
+      (function(){
+        var fretDevis = _blFretDevis(d);
+        if(fretDevis <= 0) return '';
+        var val = _blFromDVState.fretData[devisId];
+        if(val == null) val = fretDevis;
+        var deja = _dvADejaBL(d);
+        return '<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)">'+
+          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#fbbf24;font-weight:700;margin-bottom:5px">Fret / frais divers</div>'+
+          '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">'+
+            '<div style="font-size:11px;color:var(--muted);flex:1">'+
+              esc((((d.lines&&d.lines.fret)||[]).filter(function(l){return l&&l.type!=='header'&&(Number(l.pu)||0)>0;})[0]||{}).designation||'Fret / frais locaux')+
+              (deja?'<br><span style="color:#fbbf24;font-size:10px">⚠ Un BL existe déjà sur ce devis : le fret y a été porté, il est proposé à 0.</span>':'')+
+            '</div>'+
+            '<input type="number" min="0" step="1" value="'+val+'" onchange="_updateBLFromDVFret('+devisId+',this.value)" '+
+              'style="width:110px;text-align:right;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.15);border-radius:3px;padding:3px 5px;color:var(--text)">'+
+          '</div></div>';
+      })()+
     '</div>';
   }).join('');
 
   contentEl.innerHTML = html;
+}
+
+function _updateBLFromDVFret(devisId, val){
+  if(!_blFromDVState.fretData) _blFromDVState.fretData = {};
+  _blFromDVState.fretData[devisId] = Math.max(0, Number(val)||0);
 }
 
 function _toggleBLFromDVLine(devisId, lineIdx, checked){
@@ -40438,8 +40506,16 @@ function _commitBLFromDV(){
   var adrdest = (clientObj && clientObj.adresse) || firstDV.adresse || '';
 
   // Fermer le picker et ouvrir la modale BL avec prefill
+  // Fret consolide : la somme de ce qui est propose sur chaque devis retenu.
+  var fretTotal = 0;
+  ids.forEach(function(devisId){
+    var v = (_blFromDVState.fretData||{})[devisId];
+    fretTotal += (v == null ? 0 : (Number(v)||0));
+  });
+
   cm('mBLFromDV');
   openBL(null, {
+    fret: fretTotal,
     fromDevisIds: ids,
     prefillLines: prefillLines,
     poConsolide: poConsolide,
@@ -40510,6 +40586,7 @@ function openBL(id, opts){
       buildClientOptions('bl-client',b.client||'');
       gv('bl-contact',b.contact||'');gv('bl-adrdest',b.adrdest||'');gv('bl-emaildest',b.emaildest||'');gv('bl-po',b.po||'');gv('bl-emis',b.emis||'');gv('bl-status',b.status||'En préparation');
       gv('bl-dvlie', b.dvlie || (b._sourceDevisNums||[]).join(', '));
+      gv('bl-fret', Number(b.fret)||0);
       blL=JSON.parse(JSON.stringify(b.lines||[]));
       // Le formulaire affiche EXACTEMENT ce que le document imprimera : on y
       // reporte la reference et la designation resolues. Sans ca, l'utilisateur
@@ -40534,6 +40611,7 @@ function openBL(id, opts){
     gv('bl-emis', 'Fabrice RIZZO');
     gv('bl-status', 'En préparation');
     gv('bl-dvlie', opts.dvliesNumStr || '');
+    gv('bl-fret', Number(opts.fret)||0);
     // Pré-remplir les lignes
     blL = (opts.prefillLines || []).map(function(l){
       return { ref: l.ref || '', desc: l.desc || '', qte: Number(l.qte)||1, pu: Number(l.pu)||0 };
@@ -40542,7 +40620,7 @@ function openBL(id, opts){
     _blPendingSourceDevisIds = (opts.fromDevisIds||[]).slice();
     sv('mBLtitle', 'Nouveau BL depuis devis');
   } else {
-    gv('bl-num',nxt('bl'));gv('bl-date',td());gv('bl-lieu','NOUMEA');gv('bl-contact','');gv('bl-adrdest','');gv('bl-emaildest','');gv('bl-po','');gv('bl-emis','Fabrice RIZZO');gv('bl-status','En préparation');gv('bl-dvlie','');sv('mBLtitle','Nouveau Bon de Livraison');
+    gv('bl-num',nxt('bl'));gv('bl-date',td());gv('bl-lieu','NOUMEA');gv('bl-contact','');gv('bl-adrdest','');gv('bl-emaildest','');gv('bl-po','');gv('bl-emis','Fabrice RIZZO');gv('bl-status','En préparation');gv('bl-dvlie','');gv('bl-fret',0);sv('mBLtitle','Nouveau Bon de Livraison');
     _blPendingSourceDevisIds = null;
   }
   rBLlines();renderBLColisageCard();om('mBL');
@@ -40586,7 +40664,16 @@ function rBLlines(){
   });
   cBLtot();
 }
-function cBLtot(){var tot=blL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0);},0);sv('blTT',fN(tot)+' XPF');return tot;}
+// Le fret saisi dans le formulaire BL. Champ absent ou vide = 0.
+function _blFretForm(){var e=document.getElementById('bl-fret');return e?(Number(e.value)||0):0;}
+// (=X=) RENVOIE LA MARCHANDISE SEULE -- c'est ce que b.total signifie depuis
+//       toujours. Le grand total n'est qu'un AFFICHAGE.
+function cBLtot(){
+  var tot=blL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0);},0);
+  sv('blTT',fN(tot)+' XPF');
+  sv('blTTG',fN(tot+_blFretForm())+' XPF');
+  return tot;
+}
 function getBL(){
   var tot=cBLtot();
   // Pour la traçabilité Devis → BL (livraisons partielles, groupage) :
@@ -40620,7 +40707,10 @@ function getBL(){
     // null si aucune — les BL existants restent inchangés.
     colisage: blColis?JSON.parse(JSON.stringify(blColis)):null,
     lines: JSON.parse(JSON.stringify(blL)),
-    total: tot
+    total: tot,
+    // Fret / frais locaux, SEPARE du total marchandises. Absent = 0 : les BL
+    // deja enregistres restent strictement inchanges.
+    fret: _blFretForm()
   };
   // ⚠ Restaure les champs posés par du code et absents du formulaire
   // (_linkedFactureId, _linkedBCCaliId…). Cf _preserveHiddenFields.
@@ -45470,6 +45560,31 @@ function bBL(b){
     return'<tr><td>'+escNL(_blRef(l))+'</td><td>'+escNL(_blDesc(l))+'</td>'+
       '<td style="text-align:center">'+(l.qte||0)+'</td><td style="text-align:right;font-weight:700">'+fN(l.pu||0)+'</td></tr>';
   }).join('');
+  // ---- FRET / FRAIS LOCAUX --------------------------------------------------
+  // [07/09/2026] Le BL s'arretait a la marchandise ; le fret du devis n'etait
+  // repris nulle part, et le total ne se rapprochait d'aucun montant du devis.
+  // (=X=) TOUT CE BLOC EST CONDITIONNE A fret > 0. Un BL sans fret -- les 14
+  //       deja emis, tous issus de devis SLN/BCGMAO a fret nul -- imprime
+  //       exactement comme avant, au caractere pres.
+  // (=X=) MEME PRESENTATION QUE LE DEVIS : sections FOURNITURE puis
+  //       FRET / FRAIS DIVERS, et le meme pied.
+  // (=X=) LA MAIN D'OEUVRE N'EST JAMAIS SORTIE. Sur PRNC-DV028 REV2 la pose est
+  //       volontairement fondue dans le PU de la marchandise (decision client) :
+  //       le BL recopie la fourniture telle qu'elle est chiffree, il ne
+  //       redecoupe rien.
+  var _blFret=Number(b.fret)||0;
+  var _blMarch=Number(b.total)||0;
+  if(_blFret>0){
+    rows='<tr><td colspan="4" class="doc-sec-head">FOURNITURE</td></tr>'+rows+
+      '<tr><td colspan="4" class="doc-sec-head">FRET / FRAIS DIVERS</td></tr>'+
+      '<tr><td>FRET</td><td>Fret, assurance et frais locaux</td>'+
+      '<td style="text-align:center">1</td><td style="text-align:right;font-weight:700">'+fN(_blFret)+'</td></tr>';
+  }
+  var _blFoot=(_blFret>0)
+    ? '<tr><td colspan="3" style="text-align:right;font-size:11px;color:#475569">Total marchandises (XPF)</td><td style="text-align:right;font-weight:700;font-size:11px;color:#475569">'+fN(_blMarch)+'</td></tr>'+
+      '<tr><td colspan="3" style="text-align:right;font-size:11px;color:#475569">Fret / frais locaux</td><td style="text-align:right;font-weight:700;font-size:11px;color:#475569">'+fN(_blFret)+'</td></tr>'+
+      '<tr><td colspan="3" style="text-align:right;font-weight:800;font-size:12px">TOTAL (XPF)</td><td style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f">'+fN(_blMarch+_blFret)+'</td></tr>'
+    : '<tr><td colspan="3" style="text-align:right;font-weight:800;font-size:12px">TOTAL</td><td style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f">'+fN(_blMarch)+'</td></tr>';
   // DATE DE LIVRAISON -- affichee a DEUX endroits : l'en-tete « Date : » et le pied
   // « Livre le : ». C'est le CHAMP DATE DU FORMULAIRE qui la pilote.
   //
@@ -45516,7 +45631,7 @@ function bBL(b){
     '</div>'+
     '<table class="doc-tbl"><thead><tr><th>Réf. produit</th><th>Description</th><th>Quantités</th><th style="text-align:right">Unité (XPF)</th></tr></thead>'+
     '<tbody>'+rows+'</tbody>'+
-    '<tfoot><tr><td colspan="3" style="text-align:right;font-weight:800;font-size:12px">TOTAL</td><td style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f">'+fN(b.total||0)+'</td></tr></tfoot>'+
+    '<tfoot>'+_blFoot+'</tfoot>'+
     '</table>'+
     '<div class="doc-sign">'+
       // (=X=) LES DEUX BOITES DOIVENT AVOIR LA MEME STRUCTURE AU-DESSUS DU TRAIT :
