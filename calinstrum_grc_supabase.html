@@ -22193,6 +22193,83 @@ function flashSaveBtn(modalId){
   });
 }
 
+// =============================================================================
+// PRE-FACTURE AUTOMATIQUE — devis Accepte + BC client recu
+// =============================================================================
+// [07/09/2026] Regle metier posee par l'utilisateur : « des que le devis passe
+// en accepte et que j'ai joint le BC Client, la pre-facture doit etre generee
+// automatiquement pour verrouiller le numero ». Sa logique : un BC recu est une
+// COMMANDE FERME -- la facturation aura lieu, la pre-facture n'a donc rien de
+// speculatif, et le numero peut etre reserve sans risque de trou dans la serie.
+//
+// (=X=) CE N'EST PAS UNE CONTRADICTION AVEC LA DECISION DE JUIN 2026 (« Bug B »,
+//       la facture n'est creee qu'au clic Enregistrer). Cette decision protegeait
+//       des factures FANTOMES nees d'un simple clic sur un devis quelconque. Ici
+//       il y a un bon de commande signe en main : le declencheur n'est pas un
+//       clic, c'est un fait commercial.
+//
+// (=X=) LE MECANISME « PRE-FACTUREE » EXISTE DEJA, on ne le reinvente pas : une
+//       facture dont la PHASE porte billed:false est deja traitee partout comme
+//       « numero reserve, pas encore emise au client » -- filtre « Pre-facturees »,
+//       compteur Backlog, delai de paiement N/A, et dateEnvoi laissee vide par
+//       getSuiviSource() (ce qui la sort des montants emis). Il suffit de CREER
+//       la facture dans une phase non facturee.
+//
+// (=X=) LE STATUT DU DEVIS NE PASSE PAS A « FACTURE ». Le numero est reserve, la
+//       facture n'est pas emise : le devis reste Accepte.
+function _prefactureAuto(d){
+  if(!d) return null;
+  // Commande ferme : Accepte ET un numero de BC client connu -- quel que soit le
+  // champ qui le porte (cf _dvBCClientNum : le PDF joint suffit).
+  var st=String(d.status||'').toLowerCase();
+  if(st!=='accepté' && st!=='accepte') return null;
+  var bc=(typeof _dvBCClientNum==='function')?_dvBCClientNum(d):String(d.bcClientSLN||'').trim();
+  if(!bc) return null;
+  // (=X=) UNE REVISION REMPLACEE NE SE FACTURE PAS. Un devis revise garde son
+  //       statut Accepte alors qu'une revision ulterieure l'a remplace : sans ce
+  //       garde-fou, chaque revision de la cascade reserverait son propre numero.
+  //       Cf _dvIsSuperseded, la regle unique des revisions.
+  if(typeof _dvIsSuperseded==='function' && _dvIsSuperseded(d)) return null;
+  // Idempotence : une facture liee existe deja -> on ne recree rien.
+  if(d.linkFactureId && (DB.factures||[]).some(function(f){return f && f.id===d.linkFactureId;})) return null;
+  // Filet supplementaire : une facture pointant deja ce devis (lien pose ailleurs).
+  var deja=(DB.factures||[]).find(function(f){return f && f.devisLieId===d.id;});
+  if(deja){ d.linkFactureId=deja.id; return null; }
+
+  // Phase NON FACTUREE, choisie selon le type : c'est elle qui dit « numero
+  // reserve, pas encore emis ». Fourniture -> le materiel est encore chez
+  // Emerson ; Prestation -> le chantier n'a pas demarre.
+  var type=String(d.type||'Fourniture');
+  var phase=/prestation/i.test(type) && !/fourniture/i.test(type) ? 'chantier_attente' : 'emerson';
+
+  var fa={
+    id:Date.now()+Math.floor(Math.random()*1000),
+    num:nxt('fa', getClientNumPrefix(d.client)),
+    date:td(),
+    client:d.client, contact:d.contact||'', email:d.email||'', adresse:d.adresse||'',
+    objet:d.objet||'', type:type,
+    devisLieId:d.id, dvlie:d.num||'',
+    bcClientSLN:bc, bcClientSLNDate:d.bcClientSLNDate||d.bcClientDate||'',
+    dateReceptionBC:d.bcClientSLNDate||d.bcClientDate||'',
+    phase:phase,
+    status:'En attente', statut:'pending',
+    tgcM:d.tgcM||'506-2',
+    delai:'Paiement sous 30 jours à reception de la facture',
+    pctOfBC:100,
+    _prefactureAuto:true,          // trace : creee sans intervention humaine
+    lines:(typeof _buildFALinesFromDevis==='function')?_buildFALinesFromDevis(d):[],
+    versements:[]
+  };
+  // Totaux : on reprend ceux du devis, recalcules a l'ouverture de la facture.
+  fa.ht=Number(d.ht)||0; fa.tgc=0; fa.ttc=Number(d.ttc)||Number(d.ht)||0;
+
+  DB.factures.push(fa);
+  d.linkFactureId=fa.id;
+  var i=(DB.devis||[]).findIndex(function(x){return x && x.id===d.id;});
+  if(i>=0) DB.devis[i]=d;
+  return fa;
+}
+
 async function saveDV(){
   // PHASE 2 (warning conflit) : avant tout, vérifier si quelqu'un a modifié
   // ce devis côté Supabase pendant qu'on l'éditait. Si oui, mConflict s'affiche
@@ -22223,7 +22300,16 @@ async function saveDV(){
   if(typeof propagateDevisLinesToFacture==='function'){
     try{ propagateDevisLinesToFacture(d); }catch(e){console.warn('propagateDevisLinesToFacture (saveDV):',e);}
   }
+  // ⭐ PRE-FACTURE AUTOMATIQUE — devis Accepte + BC client recu (cf _prefactureAuto).
+  //    Idempotente : ne fait rien si une facture est deja liee.
+  var _pf=null;
+  if(typeof _prefactureAuto==='function'){
+    try{ _pf=_prefactureAuto(d); }catch(e){console.warn('_prefactureAuto (saveDV):',e);}
+  }
   saveDB();renderDV();rDash();renderHist();
+  if(_pf && typeof showBCSaveToast==='function'){
+    try{ showBCSaveToast('📦 Pré-facture '+_pf.num+' créée — numéro réservé, pas encore émise'); }catch(e){}
+  }
   // Rafraîchir Factures + Suivi pour refléter la propagation Devis → Facture
   if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
   if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
