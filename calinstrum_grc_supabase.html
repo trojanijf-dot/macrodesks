@@ -6197,6 +6197,60 @@ function normalizeAllBCs(){
 //   6. "740704-05-37"                               → "740704-05-37"  (déjà propre)
 //   7. "743380"                                     → "743380"  (déjà propre)
 // =============================================================================
+// =============================================================================
+// LE N° DE BON DE COMMANDE CLIENT — trois regles, une seule fois chacune
+// =============================================================================
+// [07/09/2026] L'utilisateur joint le PDF du BC Client, la date s'inscrit bien,
+// puis « Generer la facture automatiquement » repond « Vous n'avez pas saisi le
+// N° BC Client SLN ». Cause : DEUX CHAMPS POUR LE MEME NUMERO.
+//   - `bcClientRef`  (References externes) : la valeur BRUTE extraite du PDF ;
+//     c'est le SEUL champ que l'auto-remplissage ecrivait ;
+//   - `bcClientSLN`  (haut de l'ecran)     : la valeur CANONIQUE, celle que lit
+//     la generation de facture -- et que l'auto-remplissage n'ecrivait JAMAIS.
+//
+// (=X=) LA REGLE S'APPLIQUE A LA LECTURE. Corriger le seul remplissage
+//       laisserait sans effet tous les devis deja saisis. Meme lecon que l'objet
+//       de facture et le n° de devis affiche.
+
+// Cle de COMPARAISON de deux numeros de BC.
+// (=X=) « 00738479-01 » et « 738479-01 » sont LE MEME bon de commande : l'un
+//       vient du PDF, l'autre a ete saisi a la main sans les zeros de tete.
+//       Mesure du 07/09 : sur les 32 devis portant les deux champs, 14 ne
+//       different QUE par cette forme. Comparer les chaines brutes revient a
+//       declarer differents deux numeros identiques.
+function _bcNumKey(v){
+  return String(v==null?'':v)
+    .toUpperCase()
+    .replace(/\s+/g,'')          // « L72923 / 0001 » == « L72923/0001 »
+    .replace(/0*(\d+)/g,'$1');   // « 00738479-01 »   == « 738479-1 »
+}
+
+// LECTURE : le numero de BC client d'un devis, quel que soit le champ qui le
+// porte. Le canonique gagne quand les deux existent -- c'est lui qui sert de
+// cle de rapprochement facture <-> BC <-> devis.
+function _dvBCClientNum(d){
+  if(!d) return '';
+  var t=function(v){ return String(v==null?'':v).trim(); };
+  return t(d.bcClientSLN) || t(d.bcClientPRNC) || t(d.bcClientRef) || '';
+}
+
+// ECRITURE : renseigne le champ canonique depuis un numero extrait d'un PDF.
+// (=X=) UNIQUEMENT SI LE CHAMP EST VIDE. bcClientSLN est une CLE DE
+//       RAPPROCHEMENT : l'ecraser avec la forme brute du PDF (« 00738479-01 »
+//       la ou la base porte « 738479-01 ») casserait des liens existants. Si le
+//       champ est deja rempli avec le meme numero sous une autre forme, il n'y
+//       a rien a corriger ; s'il porte un AUTRE numero, c'est une decision
+//       humaine, pas celle d'un parseur.
+function _remplirBCClientCanonique(numExtrait){
+  var el=document.getElementById('dv-bc-client-sln');
+  if(!el) return false;
+  var num=String(numExtrait==null?'':numExtrait).trim();
+  if(!num) return false;
+  if(String(el.value||'').trim()) return false;   // deja renseigne : on n'y touche pas
+  el.value=num;
+  return true;
+}
+
 function cleanBcClientNum(s){
   if(!s) return '';
   var orig=String(s).trim();
@@ -22049,8 +22103,14 @@ function generateFactureFromDV(){
       return;
     }
   }
-  // Vérifier qu'il y a un BC Client SLN saisi
-  var bcSLN=gvg('dv-bc-client-sln').trim();
+  // Vérifier qu'il y a un BC Client SLN saisi.
+  // (=X=) ON LIT LES DEUX CHAMPS. Le numero peut n'exister que dans la Réf.
+  //       extraite du PDF joint : avertir « vous n'avez pas saisi le N° » alors
+  //       que le document est attaché et le numero connu, c'est crier a tort --
+  //       et l'utilisateur finit par valider les avertissements sans les lire.
+  var bcSLN=gvg('dv-bc-client-sln').trim()
+         || gvg('dv-bc-client-ref').trim()
+         || _dvBCClientNum(d);
   if(!bcSLN){
     if(!confirm('⚠ Vous n\'avez pas saisi le N° BC Client SLN.\n\nC\'est recommandé pour la traçabilité (le BC envoyé par SLN en réponse à votre devis).\n\nGénérer la facture quand même ?')){
       return;
@@ -30631,7 +30691,7 @@ function _buildFAFournitureObjet(f){
       return dnNoRev===dvUpNoRev;
     });
     if(dvFound){
-      bcClient=String(dvFound.bcClientSLN||dvFound.bcClientPRNC||dvFound.bcClientRef||'').trim();
+      bcClient=_dvBCClientNum(dvFound);   // règle unique, cf _dvBCClientNum
     }
   }
   // 2) PO Calinstrum : recherche dans DB.bcs par linkFactureId === f.id
@@ -36919,6 +36979,12 @@ function _autoFillFromAttachedPdf(bytes,kind,force){
       // num = "00730482-05-43" (SLN) ou "L72923 / 0001" (PRNC)
       refValue=h.num||'';
       refDate=h.date||''; // déjà ISO depuis parseBCClientPdfItems
+      // (=X=) ALIMENTER AUSSI LE CHAMP CANONIQUE, sans quoi le numero reste
+      //       invisible pour la generation de facture. Le helper ne remplit que
+      //       si le champ est VIDE : bcClientSLN est une cle de rapprochement.
+      if(refValue && typeof _remplirBCClientCanonique==='function'){
+        _remplirBCClientCanonique(cleanBcClientNum(refValue));
+      }
     } else if(kind==='quote_emerson'){
       // Même structure qu'Emerson (parseEmersonQuoteText) car c'est le même format de PDF
       // Pour la Quote, on a "NUM Ver V" comme l'Emerson devis
@@ -47023,6 +47089,35 @@ function printPreviewBC(){
 
   var useTheadStrategy=headHtml.length>0;
 
+  // ===========================================================================
+  // CALE DE PIED DE PAGE — reserve la bande occupee par le bandeau fixe
+  // ===========================================================================
+  // [07/09/2026] Le bandeau bleu recouvrait le bas du document. Cause : il est
+  // en `position:fixed; bottom:8mm`, et un position:fixed en media pagine
+  // s'ancre sur la ZONE DE CONTENU de la page -- PAS sur le bord physique de la
+  // feuille, contrairement a ce qu'affirmait le commentaire d'origine plus bas.
+  // Verifie contre une impression reelle : bandeau a ~29 mm du bord bas =
+  // 22 mm de marge basse + 8 mm. Il mangeait donc les ~54 derniers px de la zone
+  // de contenu de CHAQUE page, sans que rien ne reserve cette place.
+  //
+  // (=X=) LA CALE VA DANS UN <tfoot>, PAS AILLEURS. Chrome repete un <tfoot> en
+  //       bas de CHAQUE page imprimee -- meme mecanisme que le sous-total par
+  //       page (`tfoot.doc-tbl-running`) deja utilise dans ce fichier. Une cale
+  //       vide y reserve la bande sur TOUTES les pages ; un simple
+  //       padding-bottom sur le document ne l'aurait reservee que sur la
+  //       derniere.
+  //
+  // (=X=) ON NE DEPLACE PAS LE BANDEAU DANS LE tfoot. Un tfoot se dessine juste
+  //       apres la fin du contenu sur la derniere page, pas en bas de la
+  //       feuille : le bandeau remonterait au milieu de la page sur tout
+  //       document court, c'est-a-dire sur la quasi-totalite des BL et des BC.
+  //       Il reste en position:fixed et se dessine desormais sur du vide.
+  //
+  // 62 px = 8mm (30 px) + hauteur du bandeau (~24 px) + une marge de securite.
+  var caleHtml='<tfoot class="print-footer-tfoot"><tr><td style="padding:0;border:0">'+
+    '<div class="print-footer-spacer" aria-hidden="true" style="height:62px"></div>'+
+    '</td></tr></tfoot>';
+
   var docHtml;
   if(useTheadStrategy){
     docHtml=
@@ -47030,11 +47125,17 @@ function printPreviewBC(){
         '<table class="print-wrapper" role="presentation">'+
           '<thead><tr><td>'+headHtml+'</td></tr></thead>'+
           '<tbody><tr><td>'+bodyHtml+'</td></tr></tbody>'+
+          caleHtml+
         '</table>'+
       '</div>'+
       fixedFooterHtml;
   } else {
-    docHtml=src.innerHTML+fixedFooterHtml;
+    // Pas de tableau d'impression ici : la cale ne peut pas se repeter par page.
+    // On reserve au moins la bande en fin de flux, ce qui couvre le cas courant
+    // du document d'une seule page.
+    docHtml=src.innerHTML+
+      '<div class="print-footer-spacer" aria-hidden="true" style="height:62px"></div>'+
+      fixedFooterHtml;
   }
 
   var printCss=
@@ -47077,12 +47178,22 @@ function printPreviewBC(){
       '.print-wrapper{width:100%!important;border-collapse:collapse!important;border-spacing:0!important;margin:0!important;padding:0!important;border:0!important;}'+
       '.print-wrapper>thead{display:table-header-group!important;}'+
       '.print-wrapper>tbody{display:table-row-group!important;}'+
+      // (=X=) table-footer-group : c'est CE display qui fait repeter la cale en
+      //       bas de chaque page. Sans lui, elle ne vaudrait que pour la
+      //       derniere -- et le bandeau recouvrirait encore les pages 1..n-1.
+      '.print-wrapper>tfoot{display:table-footer-group!important;}'+
+      '.print-footer-spacer{visibility:hidden!important;}'+
       // === Bandeau bleu CALINSTRUM répété en bas de chaque page imprimée ===
       // Approche : <div class="doc-fixed-footer"> avec position:fixed bottom:8mm.
-      // Le viewport print de Chrome inclut la zone marge @page, donc bottom:0 s'ancre
-      // au bord physique de la feuille. On utilise bottom:8mm pour positionner le bandeau
-      // 8mm au-dessus du bord (juste au-dessus du n° de page qui est en @bottom-right).
-      // Le contenu paginé s'arrête à la marge basse (22mm), donc aucun chevauchement.
+      // (=X=) [07/09/2026] LE COMMENTAIRE PRECEDENT ETAIT FAUX et disait exactement
+      //       l'inverse de la realite : « le viewport print de Chrome inclut la zone
+      //       marge @page, donc bottom:0 s'ancre au bord physique de la feuille [...]
+      //       aucun chevauchement ». En media pagine, un position:fixed s'ancre a la
+      //       ZONE DE CONTENU de la page. Le bandeau mange donc les ~54 derniers px
+      //       (8mm + sa hauteur) de la zone de contenu de CHAQUE page et se dessine
+      //       PAR-DESSUS le flux. Mesure sur une impression reelle : bandeau a ~29 mm
+      //       du bord bas de la feuille = 22 mm de marge + 8 mm.
+      //       La place est desormais reservee par une cale en <tfoot> (cf caleHtml).
       '.doc-fixed-footer{position:fixed!important;bottom:8mm!important;left:0!important;right:0!important;display:flex!important;flex-direction:column!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
       // Référence SLN-DV163 : bandeau bleu CALINSTRUM SARL EN PREMIER (order:1),
       // puis phrase rouge EN DESSOUS (order:2), puis n° de page Chrome en @bottom-right.
