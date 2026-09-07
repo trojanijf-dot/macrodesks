@@ -22021,6 +22021,37 @@ function renderPhaseHistoryTable(){
 // (évite les lignes fantômes dans l'éditeur facture) : les bandeaux de section du PDF
 // sont synthétisés par bFA() via le fallback _sec (cf ≈ ligne "Fallback compat").
 // Partagé par la génération de facture (brouillon) ET la propagation devis→facture.
+// =============================================================================
+// LES TOTAUX D'UNE FACTURE — une seule regle
+// =============================================================================
+// (=X=) `ht` D'UNE FACTURE INCLUT LE FRET. C'est la difference de fond avec le
+//       DEVIS, qui porte le fret A PART (champ `fr`) et dont le `ht` l'exclut.
+//       Mesure du 07/09 sur les 7 factures reelles qui portent du fret :
+//       ht = somme de TOUTES les lignes, fret compris -- PRNC-F044 affiche
+//       ht = 521 410 = 423 512 de marchandise + 97 898 de fret.
+//       Recopier tel quel le `ht` d'un devis dans une facture produit un
+//       document qui SE CONTREDIT : pour un client exonere, le montant en
+//       lettres est calcule sur `ht` alors que le montant a payer vient d'
+//       ailleurs -- « TROIS CENT SOIXANTE-HUIT MILLE CENT FRANCS » sous un
+//       « Montant a payer 522 625 ». Constate le 07/09 sur la premiere
+//       pre-facture generee.
+// (=X=) LA REGLE N'EST ECRITE QU'ICI. Elle etait deja dupliquee de fait entre
+//       cFAtot et la propagation devis->facture ; toute nouvelle copie
+//       finirait par diverger, comme les deux copies d'isPrebilled.
+function _faCalcTotaux(faLines){
+  var lignes=faLines||[];
+  var br=_faTgcParTaux(lignes);
+  var ht=0;
+  lignes.forEach(function(l,idx){
+    if(!l||l.type==='header'||l.type==='section_banner')return;
+    // Meme regle que cFAtot -- cf _isTaskCarrier. Sans elle, la propagation
+    // devis->facture reintroduisait l'ecart qu'elle est censee supprimer.
+    if(_isTaskCarrier(lignes,idx)){ ht+=_taskSubTotal(l); return; }
+    ht+=(Number(l.qte)||0)*(Number(l.pu)||0);
+  });
+  return {ht:ht, t6:br.t6, t11:br.t11, t22:br.t22, tgc:br.total, ttc:ht+br.total};
+}
+
 function _buildFALinesFromDevis(d){
   var faLines=[];
   ['fourniture','service','fret'].forEach(function(sec){
@@ -22071,17 +22102,9 @@ function propagateDevisLinesToFacture(d){
   var faLines=_buildFALinesFromDevis(d);
   // Si les lignes sont identiques à celles déjà en facture → rien à propager.
   if(JSON.stringify(f.lines||[])===JSON.stringify(faLines)) return;
-  var br=_faTgcParTaux(faLines);
-  var ht=0;
-  faLines.forEach(function(l,idx){
-    if(!l||l.type==='header'||l.type==='section_banner')return;
-    // ⚠ Même règle que cFAtot — cf _isTaskCarrier. Sans elle, la propagation
-    // devis→facture réintroduisait l'écart qu'elle est censée supprimer.
-    if(_isTaskCarrier(faLines,idx)){ ht+=_taskSubTotal(l); return; }
-    ht+=(Number(l.qte)||0)*(Number(l.pu)||0);
-  });
+  var _t=_faCalcTotaux(faLines);
   f.lines=faLines;
-  f.ht=ht; f.t6=br.t6; f.t11=br.t11; f.t22=br.t22; f.tgc=br.total; f.ttc=ht+br.total;
+  f.ht=_t.ht; f.t6=_t.t6; f.t11=_t.t11; f.t22=_t.t22; f.tgc=_t.tgc; f.ttc=_t.ttc;
   DB.factures[fi]=f;
   if(typeof syncFactureToSuivi==='function'){try{syncFactureToSuivi(f);}catch(e){console.warn('syncFactureToSuivi (propagDVlines):',e);}}
   if(typeof showToast==='function'){try{showToast('✓ Facture '+f.num+' mise à jour depuis le devis','info');}catch(e){}}
@@ -22282,8 +22305,17 @@ function _prefactureAuto(d){
     lines:(typeof _buildFALinesFromDevis==='function')?_buildFALinesFromDevis(d):[],
     versements:[]
   };
-  // Totaux : on reprend ceux du devis, recalcules a l'ouverture de la facture.
-  fa.ht=Number(d.ht)||0; fa.tgc=0; fa.ttc=Number(d.ttc)||Number(d.ht)||0;
+  // (=X=) LES TOTAUX SE CALCULENT SUR LES LIGNES DE LA FACTURE, avec la regle de
+  //       la facture -- JAMAIS en recopiant ceux du devis. Le `ht` d'un devis
+  //       EXCLUT le fret, celui d'une facture l'INCLUT : la recopie produisait un
+  //       montant en lettres qui contredisait le montant a payer.
+  var _tot=(typeof _faCalcTotaux==='function')?_faCalcTotaux(fa.lines):null;
+  if(_tot){
+    fa.ht=_tot.ht; fa.t6=_tot.t6; fa.t11=_tot.t11; fa.t22=_tot.t22;
+    fa.tgc=_tot.tgc; fa.ttc=_tot.ttc;
+  } else {
+    fa.ht=Number(d.ht)||0; fa.tgc=0; fa.ttc=Number(d.ttc)||Number(d.ht)||0;
+  }
 
   DB.factures.push(fa);
   d.linkFactureId=fa.id;
