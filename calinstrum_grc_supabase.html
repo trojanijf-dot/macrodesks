@@ -22230,11 +22230,33 @@ function _prefactureAuto(d){
   //       garde-fou, chaque revision de la cascade reserverait son propre numero.
   //       Cf _dvIsSuperseded, la regle unique des revisions.
   if(typeof _dvIsSuperseded==='function' && _dvIsSuperseded(d)) return null;
-  // Idempotence : une facture liee existe deja -> on ne recree rien.
-  if(d.linkFactureId && (DB.factures||[]).some(function(f){return f && f.id===d.linkFactureId;})) return null;
-  // Filet supplementaire : une facture pointant deja ce devis (lien pose ailleurs).
-  var deja=(DB.factures||[]).find(function(f){return f && f.devisLieId===d.id;});
-  if(deja){ d.linkFactureId=deja.id; return null; }
+  // ---------------------------------------------------------------------------
+  // IDEMPOTENCE — et c'est le point delicat.
+  // (=X=) UNE FACTURE PEUT COUVRIR PLUSIEURS DEVIS. Cas reel du 07/09 : le client
+  //       a emis UN SEUL bon de commande (740704-05-37) pour TROIS devis, et la
+  //       facture SLN-F096 en couvre deux d'un coup -- son lien n'existe que dans
+  //       la liste TEXTE `dvlie` (« SLN-DV126 REV3, SLN-DV128 »), ni dans
+  //       linkFactureId cote devis, ni dans devisLieId cote facture. Un garde-fou
+  //       qui ne regarde que ces deux champs croit le devis non facture et
+  //       reserve un numero de plus : DEUX FACTURES POUR LE MEME TRAVAIL.
+  //       Mesure : 3 numeros de BC couvrent plusieurs devis dans la base.
+  // (=X=) ON REUTILISE _findLinkedFactures, la regle qui sait deja lire les
+  //       quatre formes de lien (id, dvlie, objet, cadreRef). Pas une 4e copie.
+  //       Son sens de l'erreur est le bon : trop large, elle fait manquer une
+  //       pre-facture -- un clic pour l'utilisateur ; trop etroite, elle cree une
+  //       facture en double -- un probleme comptable.
+  if(typeof _findLinkedFactures==='function'){
+    var liens=_findLinkedFactures(d);
+    if(liens && ((liens.factures||[]).length || (liens.invoices||[]).length)){
+      var f0=(liens.factures||[])[0];
+      if(f0 && !d.linkFactureId) d.linkFactureId=f0.id;   // on repare le lien au passage
+      return null;
+    }
+  } else {
+    if(d.linkFactureId && (DB.factures||[]).some(function(f){return f && f.id===d.linkFactureId;})) return null;
+    var deja=(DB.factures||[]).find(function(f){return f && f.devisLieId===d.id;});
+    if(deja){ d.linkFactureId=deja.id; return null; }
+  }
 
   // Phase NON FACTUREE, choisie selon le type : c'est elle qui dit « numero
   // reserve, pas encore emis ». Fourniture -> le materiel est encore chez
