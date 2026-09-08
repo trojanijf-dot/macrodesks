@@ -10894,6 +10894,33 @@ function _previewReapproCascade(parsed, fileName){
 //   - Lien croisé (devis.linkFactureId, facture._cascadeBcReapproId, etc.)
 //
 // Anti-doublon : si SLN-F{NNN} existe déjà, ABORT (sécurité contre double-clic).
+// =============================================================================
+// LA DESIGNATION EMERSON D'UN ARTICLE
+// =============================================================================
+// [09/09/2026] Le BC envoye a Emerson portait « Inline Pressure Transmitter »
+// sur CHAQUE ligne -- la chaine etait ECRITE EN DUR dans la cascade REAPPRO.
+// Sur un support de montage, c'est simplement faux : le fournisseur recoit une
+// commande dont le libelle designe un autre produit.
+//
+// (=X=) LA BONNE VALEUR EST DEJA DANS LE CATALOGUE. Les articles suivent la
+//       convention « <designation FR> / <designation EN Emerson> » -- verifie :
+//       9 articles sur 9. On prend la partie apres le DERNIER « / » entoure
+//       d'espaces.
+// (=X=) LE SEPARATEUR EXIGE DES ESPACES. « Manifold 5 voies 1/4 NPT ATEX »
+//       contient un slash collé qui ne doit PAS couper la designation.
+// (=X=) PAS DE PARTIE ANGLAISE -> ON REND LA DESIGNATION TELLE QUELLE. Un
+//       libelle en francais sur un BC est un detail de forme ; un libelle qui
+//       designe un AUTRE produit est une erreur de commande.
+function _artDescEmerson(art){
+  if(!art) return '';
+  var nom=String(art.nom||art.designation||'').trim();
+  if(!nom) return '';
+  var i=nom.lastIndexOf(' / ');
+  if(i<0) return nom;
+  var en=nom.slice(i+3).trim();
+  return en || nom;
+}
+
 function _validerCascadeReappro(){
   var st = _reapproPreviewState;
   if(!st){alert('⚠ Aucun aperçu cascade actif.');return;}
@@ -10957,6 +10984,17 @@ function _validerCascadeReappro(){
   var seq = 0;
   function newId(){seq++; return nowBase + seq;}
   
+  // ===== Le CLIENT est une FICHE, pas un prefixe =====
+  // [09/09/2026] La cascade ecrivait `client: 'SLN'`. Aucune fiche ne s'appelle
+  // « SLN » -- elles portent « SLN - <contact> ». Le <select> Client du devis ne
+  // trouvait donc aucune option et retombait sur « -- Selectionner -- », obligeant
+  // a re-choisir le client sur un devis pourtant complet.
+  // (=X=) On resout par la FICHE, comme le fait deja le BL (_ficheClientParPrefixe).
+  //       Si aucune fiche ne repond, on garde le prefixe : mieux vaut un devis
+  //       incomplet qu'un devis attribue au mauvais client.
+  var _ficheSLN=(typeof _ficheClientParPrefixe==='function')?_ficheClientParPrefixe('SLN'):null;
+  var clientNom=(_ficheSLN && _ficheSLN.nom) ? _ficheSLN.nom : 'SLN';
+
   // ===== 1. DEVIS SLN-DV-BCGMAO-{numBC} =====
   var devisId = newId();
   var devis = {
@@ -10965,12 +11003,19 @@ function _validerCascadeReappro(){
     rev: '',
     date: parsed.date || st.todayIso,
     type: 'Fourniture',
-    client: 'SLN',
+    client: clientNom,
     contact: parsed.acheteur || '',
     email: '',
     adresse: '',
     objet: 'REAPPRO BC ' + parsed.num,
-    status: 'Facturé',
+    // (=X=) « ACCEPTE », PAS « FACTURE ». La cascade reserve le numero de facture,
+    //       elle n'emet rien : la facture nait en phase NON FACTUREE (le materiel
+    //       est encore chez Emerson, le BC fournisseur part a l'instant meme).
+    //       Marquer le devis « Facture » annoncait au tableau de bord une
+    //       facturation qui n'avait pas eu lieu, et surprenait a juste titre a
+    //       l'ouverture d'un devis qui venait d'etre cree. Il passera « Facture »
+    //       quand la facture sera reellement emise.
+    status: 'Accepté',
     tgcM: '506-2',
     bcClientSLN: parsed.num,
     bcClientSLNDate: parsed.date || '',
@@ -11004,7 +11049,7 @@ function _validerCascadeReappro(){
     id: factureId,
     num: st.numFacture,
     date: st.todayIso,
-    client: 'SLN',
+    client: clientNom,
     contact: parsed.acheteur || '',
     email: '',
     adresse: '',
@@ -11017,6 +11062,11 @@ function _validerCascadeReappro(){
     _importPONum: parsed.num,
     statut: 'En attente',
     status: 'En attente',
+    // (=X=) PHASE NON FACTUREE : le numero est reserve, la facture n'est pas
+    //       emise au client. Sans phase explicite, getPhase() retombait sur
+    //       « Livre client » (billed) et la facture comptait comme emise des sa
+    //       creation. Meme regle que la pre-facture automatique.
+    phase: 'emerson',
     tgcM: '506-2',
     delai: 'Paiement sous 30 jours à reception de la facture',
     lines: faLines,
@@ -11075,7 +11125,9 @@ function _validerCascadeReappro(){
     var puAUD = (art && art.prixAchatAUD) || 0;
     return {
       ref: l.refConstructeur || (art && art.ref) || '',  // ref Emerson
-      desc: 'Inline Pressure Transmitter', // descriptif générique côté Emerson
+      // (=X=) JAMAIS DE LIBELLE EN DUR SUR UN DOCUMENT FOURNISSEUR : c'est la
+      //       designation de l'article commande qui fait foi (cf _artDescEmerson).
+      desc: _artDescEmerson(art) || l.desc || '',
       designation: l.desc || (art && art.nom) || '',
       qte: l.qte || 1,
       pu: puAUD,
@@ -21748,6 +21800,26 @@ function onDVStatusChange(){
       var existing=eDVid?DB.devis.find(function(x){return x.id===eDVid;}):null;
       if(existing&&existing.linkFactureId){
         var fa=DB.factures.find(function(f){return f.id===existing.linkFactureId;});
+        // [09/09/2026] LE LIEN PEUT NE PLUS REPONDRE sans que la facture ait
+        // disparu : id remplace, document recree, resynchronisation. Constate sur
+        // SLN-DV-BCGMAO-758564-01, dont la facture SLN-F113 existait bel et bien.
+        // (=X=) ON REPARE AU LIEU D'AFFICHER UNE IMPASSE. Annoncer « introuvable,
+        //       vous pouvez en generer une nouvelle » devant une facture qui
+        //       existe, c'est inviter a creer un DOUBLON comptable.
+        // (=X=) MEME REGLE DE RAPPROCHEMENT QUE PARTOUT AILLEURS :
+        //       _findLinkedFactures sait lire les quatre formes de lien (id,
+        //       dvlie, objet, cadreRef). Pas une cinquieme copie.
+        if(!fa && typeof _findLinkedFactures==='function'){
+          try{
+            var _l=_findLinkedFactures(existing);
+            var _f0=(_l&&_l.factures||[])[0];
+            if(_f0){
+              fa=_f0;
+              existing.linkFactureId=_f0.id;   // le lien est repare en base
+              if(typeof saveDB==='function'){try{saveDB();}catch(e){}}
+            }
+          }catch(e){console.warn('reparation du lien devis->facture :',e);}
+        }
         if(fa){
           info.innerHTML='✅ Facture déjà créée : <strong style="color:var(--teal)">'+esc(fa.num)+'</strong> (<a href="#" onclick="cm(\'mDV\');setTimeout(function(){openFA('+fa.id+');},200);return false;" style="color:var(--teal);text-decoration:underline">ouvrir</a>)';
         } else {
