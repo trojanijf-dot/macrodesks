@@ -46121,7 +46121,12 @@ function showPrv(title,html){sv('prvTitle',title);var pb=document.getElementById
 function buildBCTitle(b){
   var parts=['CALINSTRUM Purchase Order'];
   if(b&&b.num) parts.push(b.num);
-  var cref=b&&(b.cref2||b.cref)||'';
+  // (=X=) MEME REGLE QUE LE PIED DU DOCUMENT (cf _bcCustomerRefImprimable).
+  //       Ce titre sert AUSSI de nom au PDF : sans filtre, le fichier envoye a
+  //       Emerson s'appelait « ... Customer Ref 00758564-01 », soit le bon de
+  //       commande du client dans le nom de la piece jointe.
+  var cref=(typeof _bcCustomerRefImprimable==='function' && _bcCustomerRefImprimable(b))
+             ? String(b.cref2||b.cref||'') : '';
   if(cref) parts.push('Customer Ref '+cref);
   return parts.join(' ');
 }
@@ -47260,7 +47265,11 @@ function printPreviewBC(){
             var firstPropWithCref=bcRec.props.find(function(p){return p && p.cref;});
             if(firstPropWithCref) bcCref=firstPropWithCref.cref;
           }
-          if(!bcCref) bcCref=bcRec.cref2||bcRec.cref||'';
+          // (=X=) MEME REGLE : un Customer Ref qui n'est que le N° de BC client
+          //       n'a rien a faire dans le NOM DU FICHIER envoye au fournisseur.
+          if(!bcCref && typeof _bcCustomerRefImprimable==='function' && _bcCustomerRefImprimable(bcRec)){
+            bcCref=bcRec.cref2||bcRec.cref||'';
+          }
         }
       }
       // Si la lookup DB a échoué : essayer regex directe sur le titre modal
