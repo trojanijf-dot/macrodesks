@@ -11148,7 +11148,18 @@ function _validerCascadeReappro(){
     fret: 'Collect',
     status: 'En attente',
     clientFinal: 'SLN',
-    cref2: parsed.num, // Customer Ref = N° BC SLN
+    // (=X=) PAS DE CUSTOMER REF SUR UN REAPPRO. `cref2` est le « Customer Ref # »
+    //       imprime sur le PO ENVOYE A EMERSON : c'est une reference EMERSON.
+    //       La cascade y recopiait le N° de bon de commande du CLIENT -- mesure du
+    //       09/09 : 8 BC sur 30 le portaient, et c'etaient EXACTEMENT les 8 issus
+    //       de la cascade ; les 22 BC saisis a la main ont ce champ vide et logent
+    //       la reference Emerson dans `props[].cref`. Le code le dit lui-meme
+    //       ailleurs : « cref2: '' // legacy, on met cref dans props[0] ».
+    //       Un REAPPRO se sert de la grille tarifaire, il n'a aucune proposition
+    //       Emerson : le champ reste VIDE.
+    //       La tracabilite vers le BC client vit dans `linkBCclient` et
+    //       `_bcReapproNum`, qui sont INTERNES et ne s'impriment pas.
+    cref2: '',
     linkDevis: st.numDevis,
     linkBCclient: parsed.num,
     linkFacture: st.numFacture,
@@ -45488,6 +45499,41 @@ function bFA(f){
   '</div>';
 }
 
+// =============================================================================
+// LE « CUSTOMER REF # » IMPRIMABLE SUR UN PO EMERSON
+// =============================================================================
+// [09/09/2026] Le PO envoye a Emerson affichait « Customer Ref #: 00758564-01 »,
+// c'est-a-dire le bon de commande d'un CLIENT de CALINSTRUM. Emerson attend SA
+// reference de devis ; il recevait un numero qui ne lui dit rien, et qui n'a rien
+// a faire sur un document destine a un fournisseur.
+//
+// (=X=) REGLE DE LECTURE, PAS SEULEMENT D'ECRITURE. La cascade a cesse de
+//       remplir le champ, mais 8 BC l'ont deja en base : sans filtre ici, ils
+//       continueraient de l'imprimer a chaque reedition. Meme lecon que l'objet
+//       de facture.
+//
+// (=X=) ON NE VIDE PAS LA DONNEE, ON REFUSE DE L'IMPRIMER. Ecraser `cref2` en
+//       base ferait perdre l'information sans rien apporter ; et un BC historique
+//       peut porter la un VRAI Customer Ref Emerson, qui doit rester imprime.
+//
+// (=X=) COMPARAISON PAR CLE NORMALISEE : « 00758564-01 » et « 758564-01 » sont le
+//       meme numero (cf _bcNumKey).
+function _bcCustomerRefImprimable(b){
+  if(!b) return false;
+  var cref=String(b.cref2||b.cref||'').trim();
+  if(!cref) return false;
+  // Le numero de BC du client, sous toutes les formes ou il est range.
+  var candidats=[b.linkBCclient, b._bcReapproNum, b.linkBCClient];
+  var cle=(typeof _bcNumKey==='function')?_bcNumKey:function(v){return String(v==null?'':v).trim().toUpperCase();};
+  var k=cle(cref);
+  if(!k) return false;
+  for(var i=0;i<candidats.length;i++){
+    var c=String(candidats[i]==null?'':candidats[i]).trim();
+    if(c && cle(c)===k) return false;   // ce n'est pas une reference Emerson
+  }
+  return true;
+}
+
 function bBC(b){
   // Liste des propositions Emerson du BC (nouveau format multi-props)
   var propsList=Array.isArray(b.props)?b.props:[];
@@ -45745,7 +45791,7 @@ function bBC(b){
       propsHtml+='<br>&nbsp;&nbsp;• '+esc(lbl)+amt;
       if(p.cref) propsHtml+='<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#64748b;font-size:9px">Customer Ref #: '+esc(p.cref)+'</span>';
     });
-  } else if(b.cref2||b.cref){
+  } else if(_bcCustomerRefImprimable(b)){
     // Fallback pour BC historiques sans propositions mais avec un ancien Customer Ref global
     propsHtml='<strong>Customer Ref #:</strong> '+esc(b.cref2||b.cref);
   }
