@@ -833,14 +833,17 @@ function renderSpark(hist){
   var y0 = Y(0);
   var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
     '<line x1="0" y1="' + y0 + '" x2="' + W + '" y2="' + y0 + '" stroke="rgba(255,255,250,0.13)" stroke-width="1" stroke-dasharray="3 4"/>' +
-    '<text x="8" y="' + (y0 - 5) + '" fill="#46463f" font-size="9.5" font-family="monospace">0 %</text>';
+    '<text x="8" y="' + (y0 - 5) + '" fill="#46463f" font-size="9.5" font-family="monospace" style="paint-order:stroke;stroke:var(--bg3);stroke-width:3px">0 %</text>';
   if (pts.length > 1){
     var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.v).toFixed(1); }).join(' ');
     svg += '<path d="' + d + '" fill="none" stroke="#5dcaa5" stroke-width="1.8" stroke-linejoin="round"/>';
   }
   var last = pts[pts.length - 1];
+  /* etiquette AU-DESSUS de la ligne (sinon le trace la barre) + halo couleur du fond */
+  var ly = Y(last.v) - 7;
+  if (ly < 12) ly = Y(last.v) + 15;
   svg += '<circle cx="' + X(pts.length - 1) + '" cy="' + Y(last.v) + '" r="3.5" fill="#5dcaa5"/>' +
-    '<text x="' + Math.min(X(pts.length - 1) + 9, W - 130) + '" y="' + (Y(last.v) + 4) + '" fill="#a3a39a" font-size="10" font-family="monospace">' +
+    '<text x="' + Math.min(X(pts.length - 1) + 9, W - 130) + '" y="' + ly + '" fill="#a3a39a" font-size="10" font-family="monospace" style="paint-order:stroke;stroke:var(--bg3);stroke-width:3px">' +
     esc(last.m) + ' · ' + pct(last.v) + '</text></svg>';
   el('spark').innerHTML = svg;
   el('spark-note').textContent = pts.length === 1
