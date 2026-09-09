@@ -11086,7 +11086,11 @@ function _validerCascadeReappro(){
   // (=X=) On resout par la FICHE, comme le fait deja le BL (_ficheClientParPrefixe).
   //       Si aucune fiche ne repond, on garde le prefixe : mieux vaut un devis
   //       incomplet qu'un devis attribue au mauvais client.
-  var _ficheSLN=(typeof _ficheClientParPrefixe==='function')?_ficheClientParPrefixe('SLN'):null;
+  // (=X=) ON PASSE L'ACHETEUR LU SUR LE BC : plusieurs fiches partagent le
+  //       préfixe SLN, et sans lui la cascade rangeait le devis sous le mauvais
+  //       contact -- donc dans un onglet client où l'utilisateur ne le trouvait
+  //       jamais (constaté le 09/09, six manipulations pour rien).
+  var _ficheSLN=(typeof _ficheClientParPrefixe==='function')?_ficheClientParPrefixe('SLN',parsed.acheteur):null;
   var clientNom=(_ficheSLN && _ficheSLN.nom) ? _ficheSLN.nom : 'SLN';
 
   // ===== 1. DEVIS SLN-DV-BCGMAO-{numBC} =====
@@ -45430,13 +45434,46 @@ function _cliTelTxt(tel){
 // Sert a ne jamais ecrire de raison sociale ni d'adresse client dans le source :
 // ces informations vivent dans les fiches, donc HORS du depot public.
 // La fiche la plus renseignee gagne (adresse la plus longue).
-function _ficheClientParPrefixe(prefixe){
+// Mots significatifs d'un libellé, pour rapprocher « PAKORO YANNICK » et
+// « SLN - Yannick PAKORO » : majuscules, accents retirés, ordre indifférent.
+function _motsCles(v){
+  return String(v==null?'':v).toUpperCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g,'')
+    .split(/[^A-Z0-9]+/).filter(function(w){return w.length>2;});
+}
+
+// La fiche client d'un préfixe (SLN, PRNC…).
+// (=X=) LE CONTACT DÉPARTAGE. [09/09/2026] Un client peut avoir PLUSIEURS fiches
+//       sous le même préfixe -- « SLN - Yannick PAKORO », « SLN - Yorik
+//       NIGAILLE ». Sans second critère, cette fonction rendait n'importe
+//       laquelle (tri par longueur d'adresse), et la cascade REAPPRO a rangé un
+//       devis sous le MAUVAIS contact. Effet observé : le devis existait bien en
+//       base -- l'app le confirmait -- mais la liste, filtrée par onglet client,
+//       ne le montrait JAMAIS. L'utilisateur a refait la manipulation six fois.
+//       ⛔ Un document attribué au mauvais contact est INTROUVABLE, pas
+//          seulement mal étiqueté : `filterByActiveClient` s'applique APRÈS la
+//          recherche texte, donc même en tapant le numéro on ne le voit pas.
+function _ficheClientParPrefixe(prefixe,contact){
   var p=String(prefixe||'').trim().toLowerCase();
   if(!p)return null;
   var l=(DB.clients||[]).filter(function(c){
     var n=String(c.nom||'').trim().toLowerCase();
     return n===p||n.indexOf(p+' ')===0||n.indexOf(p+'-')===0;
   });
+  if(!l.length) return null;
+  // Le contact du document, quand on le connaît, désigne LA fiche.
+  var mots=_motsCles(contact);
+  if(mots.length){
+    var exact=l.filter(function(c){
+      var champ=_motsCles(String(c.contact||'')+' '+String(c.nom||''));
+      return mots.every(function(m){return champ.indexOf(m)>=0;});
+    });
+    if(exact.length===1) return exact[0];
+    if(exact.length>1){
+      exact.sort(function(a,b){return String(b.adresse||'').length-String(a.adresse||'').length;});
+      return exact[0];
+    }
+  }
   l.sort(function(a,b){return String(b.adresse||'').length-String(a.adresse||'').length;});
   return l[0]||null;
 }
