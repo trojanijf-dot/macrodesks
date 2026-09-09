@@ -12573,7 +12573,7 @@ function _faPrefixForBC(bc){
 //     qu'une facture « SLN-F042 » portant un client PRNC etait apparue. Le BC
 //     07052026/042 etant deja en « Confirme », elle allait etre RECREEE.
 //   - 2 BC PRNC (079, 081) tombaient sur des factures SLN d'AUTRES clients
-//     (Norbert PATCHE, Yohann DOUEPERE) — cf la garde anti-ecrasement dans
+//     (deux autres interlocuteurs SLN) — cf la garde anti-ecrasement dans
 //     syncBCToFacture, qui reste en place comme seconde barriere.
 // Le verrou ne fonctionnait donc que pour SLN, par coincidence de prefixe.
 // Rien ne change pour les 23 BC SLN.
@@ -12748,8 +12748,8 @@ function syncBCToFacture(bc){
       // buildFactureNumFromBC() code en dur le prefixe 'SLN-F' QUEL QUE SOIT le
       // client du BC. Un BC PRNC vise donc SLN-Fnnn. Constate sur l'export du
       // 01/06 : les BC PRNC 29012026/081 et 02012026/079 pointent vers SLN-F081
-      // et SLN-F079, deux factures appartenant a d'AUTRES clients SLN (Yohann
-      // DOUEPERE, Norbert PATCHE). Sans cette garde, passer un de ces BC en
+      // et SLN-F079, deux factures appartenant a d'AUTRES interlocuteurs SLN.
+      // Sans cette garde, passer un de ces BC en
       // « Confirme » ecrasait les lignes d'une facture etrangere au dossier :
       // ni _manuallyEditedAt ni les versements ne l'auraient empeche si la
       // facture etait encore vierge.
@@ -13776,7 +13776,17 @@ function _buildPhaseHistory(d){
              (f._sourceDevisNum && d.num && f._sourceDevisNum===d.num) ||
              (d.linkFactureId && f.id===d.linkFactureId);
     });
-    if(faLinked && faLinked.date) add('facture',faLinked.date,true);
+    // (=X=) UNE FACTURE QUI EXISTE N'EST PAS UNE FACTURE EMISE. [10/09/2026]
+    //       Depuis la cascade REAPPRO et la pre-facture automatique, une facture
+    //       naît avec son NUMERO RESERVE et une phase NON FACTUREE : rien n'est
+    //       parti au client. Ajouter « Facturé client » sur ce seul motif
+    //       affichait un cycle de vie terminé sur un dossier qui commence -- le
+    //       devis venait d'être créé. Le cycle doit s'arrêter à « PO Emerson
+    //       envoyé ». On s'appuie sur isPrebilled, la règle déjà utilisée
+    //       partout ailleurs pour distinguer « numéro réservé » de « émise ».
+    var _faEmise=faLinked && faLinked.date &&
+                 !((typeof isPrebilled==='function') && isPrebilled(faLinked));
+    if(_faEmise) add('facture',faLinked.date,true);
   }
 
   // Phase legacy d.phase : si elle existe et ne figure pas déjà comme dernière entrée
@@ -45434,8 +45444,8 @@ function _cliTelTxt(tel){
 // Sert a ne jamais ecrire de raison sociale ni d'adresse client dans le source :
 // ces informations vivent dans les fiches, donc HORS du depot public.
 // La fiche la plus renseignee gagne (adresse la plus longue).
-// Mots significatifs d'un libellé, pour rapprocher « PAKORO YANNICK » et
-// « SLN - Yannick PAKORO » : majuscules, accents retirés, ordre indifférent.
+// Mots significatifs d'un libellé, pour rapprocher « NOM Prénom » et
+// « PREFIXE - Prénom NOM » : majuscules, accents retirés, ordre indifférent.
 function _motsCles(v){
   return String(v==null?'':v).toUpperCase()
     .normalize('NFD').replace(/[̀-ͯ]/g,'')
@@ -45444,8 +45454,8 @@ function _motsCles(v){
 
 // La fiche client d'un préfixe (SLN, PRNC…).
 // (=X=) LE CONTACT DÉPARTAGE. [09/09/2026] Un client peut avoir PLUSIEURS fiches
-//       sous le même préfixe -- « SLN - Yannick PAKORO », « SLN - Yorik
-//       NIGAILLE ». Sans second critère, cette fonction rendait n'importe
+//       sous le même préfixe -- une fiche par interlocuteur, dix pour le seul
+//       préfixe SLN. Sans second critère, cette fonction rendait n'importe
 //       laquelle (tri par longueur d'adresse), et la cascade REAPPRO a rangé un
 //       devis sous le MAUVAIS contact. Effet observé : le devis existait bien en
 //       base -- l'app le confirmait -- mais la liste, filtrée par onglet client,
@@ -45473,6 +45483,15 @@ function _ficheClientParPrefixe(prefixe,contact){
       exact.sort(function(a,b){return String(b.adresse||'').length-String(a.adresse||'').length;});
       return exact[0];
     }
+    // (=X=) UN CONTACT CONNU QUI NE CORRESPOND A AUCUNE FICHE -> ON NE DEVINE PAS.
+    //       Retomber sur « la fiche du prefixe a l'adresse la plus longue »
+    //       remplirait le champ avec un AUTRE contact du meme client : le
+    //       document part au mauvais nom sans que rien ne le signale, et il
+    //       devient introuvable dans la liste (filtre par onglet client).
+    //       Mesure du 09/09 : 10 fiches portent le prefixe SLN. Mieux vaut un
+    //       champ VIDE, qui reclame l'attention, qu'un champ FAUX qui n'en
+    //       reclame aucune.
+    return null;
   }
   l.sort(function(a,b){return String(b.adresse||'').length-String(a.adresse||'').length;});
   return l[0]||null;
