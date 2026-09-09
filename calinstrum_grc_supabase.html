@@ -4878,12 +4878,92 @@ function captureDevisDraft(){
   }catch(e){console.warn('captureDevisDraft failed:',e);return null;}
 }
 
+// =============================================================================
+// BROUILLON DE BC — il ne doit rien perdre
+// =============================================================================
+// [09/09/2026] Apres restauration d'un brouillon, le BC avait perdu le contact
+// Emerson, son email, son telephone, l'adresse fournisseur, les devis lies et
+// tous les documents lies. Le brouillon ne sauvait que 8 champs de formulaire
+// sur 24.
+//
+// 🚨 LE DANGER N'EST PAS QUE VISUEL : getBC() relit le FORMULAIRE, et
+//    `_preserveHiddenFields` ne protege que les champs ABSENTS de l'objet. Les
+//    champs vidés y sont PRESENTS et VIDES -- enregistrer un brouillon restaure
+//    ECRASAIT la base.
+//
+// ⭐ LE CODE SE DENONCAIT LUI-MEME juste en dessous : « Devis : utilise
+//    captureDevisDraft qui sauve TOUS les champs (pas seulement num/client) ».
+//    Le brouillon DEVIS avait ete corrige ainsi ; celui du BC, jamais. Meme
+//    classe de defaut, reparee d'un seul cote.
+//
+// (=X=) UNE SEULE LISTE DE CHAMPS, partagee par la capture et la restauration.
+//       Deux listes finiraient par diverger -- c'est exactement ce qui s'est
+//       passe ici entre le formulaire (24 champs) et le brouillon (8).
+var _BC_CHAMPS_BROUILLON={
+  num:'bc-num', date:'bc-date', devise:'bc-devise', calContact:'bc-cal-contact',
+  vcont:'bc-vcont', vemail:'bc-vemail', vphone:'bc-vphone', vaddr:'bc-vaddr',
+  inco:'bc-inco', fret:'bc-fret', status:'bc-status', clientFinal:'bc-client-final',
+  cref2:'bc-cref2', notes:'bc-notes',
+  discount:'bc-discount', salesTax:'bc-sales-tax', otherTax:'bc-other-tax', shipping:'bc-shipping',
+  linkDevis:'bc-link-devis', linkBCclient:'bc-link-bc-client', linkPOcali:'bc-link-po-cali',
+  linkBL:'bc-link-bl', linkFacture:'bc-link-facture', linkEmerson:'bc-link-emerson',
+  linkCR:'bc-link-cr',
+  // Expedition / cout de revient debarque
+  tauxAUD:'bc-tauxAUD', fretAUD:'bc-fretAUD', poidsKg:'bc-poidsKg', dimsCm:'bc-dimsCm',
+  fraisXPF:'bc-fraisXPF', fraisNote:'bc-fraisNote'
+};
+
+// Capture TOUS les champs du formulaire BC. Symetrique de captureDevisDraft.
+function captureBCDraft(){
+  try{
+    var bcOpen=document.getElementById('mBC');
+    if(!bcOpen||!bcOpen.classList.contains('open'))return null;
+    if(typeof bcL==='undefined'||!bcL)return null;
+    if(!bcL.length && !gvg('bc-num'))return null;
+    var d={ts:new Date().toISOString(),id:(typeof eBCid!=='undefined'?eBCid:null),
+           lines:JSON.parse(JSON.stringify(bcL)),
+           props:(typeof bcProps!=='undefined'?JSON.parse(JSON.stringify(bcProps)):[])};
+    Object.keys(_BC_CHAMPS_BROUILLON).forEach(function(k){ d[k]=gvg(_BC_CHAMPS_BROUILLON[k]); });
+    return d;
+  }catch(e){ console.warn('captureBCDraft:',e); return null; }
+}
+
+// Restaure un brouillon SANS rien perdre.
+// (=X=) ON REPART DU DOCUMENT EN BASE, PUIS ON POSE LE BROUILLON PAR-DESSUS.
+//       C'est ce qui repare les brouillons deja ecrits a l'ancien format -- ils
+//       ne portent pas les champs perdus, donc ceux-ci restent ceux de la base
+//       au lieu de partir vides. Et c'est robuste a tout champ ajoute plus tard.
+function restaurerBCDraft(d){
+  if(!d) return;
+  var enBase=(d.id!=null)?(DB.bcs||[]).find(function(x){return x&&x.id===d.id;}):null;
+  if(enBase){ openBC(enBase.id); }                    // le formulaire part de la base
+  else { openBC(null); eBCid=d.id||null; }
+  if(typeof _bcNumIsAuto!=='undefined')_bcNumIsAuto=false;  // garder le N° du brouillon
+  Object.keys(_BC_CHAMPS_BROUILLON).forEach(function(k){
+    if(d[k]===undefined||d[k]===null) return;         // absent du brouillon -> on garde la base
+    gv(_BC_CHAMPS_BROUILLON[k], d[k]);
+  });
+  if(Array.isArray(d.lines)) bcL=JSON.parse(JSON.stringify(d.lines));
+  if(Array.isArray(d.props)&&d.props.length){ bcProps=JSON.parse(JSON.stringify(d.props)); }
+  else if(d.prop2||d.prop){ var pg=parseLegacyProp(d.prop2||d.prop||''); bcProps=[{num:pg.num,ver:pg.ver,amount:0}]; }
+  else if(!enBase){ bcProps=[]; }
+  if(typeof ensurePropIds==='function')ensurePropIds();
+  if(typeof renderEmersonProps==='function')renderEmersonProps();
+  if(typeof populateBCClientFinalSelect==='function')populateBCClientFinalSelect(d.clientFinal||'');
+  if(d.clientFinal!==undefined)gv('bc-client-final',d.clientFinal||'');
+  if(typeof populateBCDevisSelect==='function')populateBCDevisSelect();
+  if(typeof rBClines==='function')rBClines();
+  sv('mBCtitle','Brouillon restauré — '+(d.num||'BC'));
+}
+
 function draftSaveTick(){
   try{
     var bcOpen=document.getElementById('mBC');
     if(bcOpen&&bcOpen.classList.contains('open')&&typeof bcL!=='undefined'&&(bcL.length||gvg('bc-num'))){
-      var draft={ts:new Date().toISOString(),id:(typeof eBCid!=='undefined'?eBCid:null),num:gvg('bc-num'),date:gvg('bc-date'),devise:gvg('bc-devise'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:(typeof bcProps!=='undefined'?JSON.parse(JSON.stringify(bcProps)):[]),notes:gvg('bc-notes'),lines:bcL};
-      localStorage.setItem('ci_grc3_draft_bc',JSON.stringify(draft));
+      // (=X=) TOUS LES CHAMPS, via captureBCDraft. L'ancienne version en sauvait
+      //       8 sur 24 et le reste partait a la trappe.
+      var draft=captureBCDraft();
+      if(draft) localStorage.setItem('ci_grc3_draft_bc',JSON.stringify(draft));
     }
     // Devis : utilise captureDevisDraft qui sauve TOUS les champs (pas seulement num/client)
     var dvDraft=captureDevisDraft();
@@ -4946,21 +5026,10 @@ function checkDraftRecovery(){
         if(confirm(msg)){
           setTimeout(function(){
             try{
-              eBCid=bcDraft.id||null;bcL=bcDraft.lines||[];
-              om('mBC');
-              if(typeof _bcNumIsAuto!=='undefined')_bcNumIsAuto=false; // brouillon : garder son N° PO, pas de renumérotation auto
-              gv('bc-num',bcDraft.num||'');gv('bc-date',bcDraft.date||td());gv('bc-devise',bcDraft.devise||'AUD');
-              gv('bc-status',bcDraft.status||'En attente');populateBCClientFinalSelect(bcDraft.clientFinal||'');gv('bc-client-final',bcDraft.clientFinal||'');
-              gv('bc-cref2',bcDraft.cref2||bcDraft.cref||'');
-              // Restaurer la liste props (ou migration depuis l'ancien prop2/prop)
-              if(Array.isArray(bcDraft.props)&&bcDraft.props.length){bcProps=JSON.parse(JSON.stringify(bcDraft.props));}
-              else if(bcDraft.prop2||bcDraft.prop){var pg=parseLegacyProp(bcDraft.prop2||bcDraft.prop||'');bcProps=[{num:pg.num,ver:pg.ver,amount:0}];}
-              else{bcProps=[];}
-              ensurePropIds();renderEmersonProps();
-              gv('bc-notes',bcDraft.notes||'');
-              if(typeof populateBCDevisSelect==='function')populateBCDevisSelect();
-              rBClines();
-              sv('mBCtitle','Brouillon restauré — '+(bcDraft.num||'BC'));
+              // (=X=) restaurerBCDraft repart du document EN BASE et pose le
+              //       brouillon par-dessus : les champs absents d'un vieux
+              //       brouillon gardent leur valeur au lieu de partir vides.
+              restaurerBCDraft(bcDraft);
             }catch(e){console.warn('Recovery failed:',e);}
           },300);
         } else {
@@ -6315,7 +6384,32 @@ function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;'
 // Variante de esc() qui convertit aussi les \n en <br> pour rendu PDF
 // Utilisée pour les champs où l'utilisateur peut taper Entrée (ref, desc des BC)
 function escNL(s){return esc(s).replace(/\n/g,'<br>');}
-function gv(id,v){var e=document.getElementById(id);if(e)e.value=String(v==null?'':v);}
+// =============================================================================
+// gv(id, valeur) — écrit un champ de formulaire
+// =============================================================================
+// [09/09/2026] ⛔ UN MENU DÉROULANT NE DOIT PAS AVALER UNE VALEUR.
+// Un <select> à qui l'on donne une valeur absente de ses options se met sur
+// RIEN, et gvg() rend '' : ouvrir un document puis l'enregistrer EFFAÇAIT le
+// champ, en silence.
+// Mesure du 09/09 sur les Incoterms : les 4 options codées en dur ne sont
+// JAMAIS utilisées, et 23 BC sur 30 portent une valeur qu'aucune ne propose
+// (« Inco2020: FCA(Bayswater) » ×17, « Inco2020 : DDP (BANKSMEADOW) » ×6) --
+// écrites par le code lui-même, ailleurs.
+// (=X=) ON AJOUTE L'OPTION MANQUANTE plutôt que de perdre la donnée. La valeur
+//       réelle reste visible à l'écran, ce qui renseigne l'utilisateur au lieu
+//       de lui montrer un champ vide. Correction posée ICI, au seul point par
+//       où passe l'écriture de TOUS les champs de TOUS les formulaires.
+function gv(id,v){
+  var e=document.getElementById(id);
+  if(!e)return;
+  var s=String(v==null?'':v);
+  if(e.tagName==='SELECT' && s!==''){
+    var connue=false;
+    for(var i=0;i<e.options.length;i++){ if(e.options[i].value===s){connue=true;break;} }
+    if(!connue){ var o=document.createElement('option'); o.value=s; o.textContent=s; e.appendChild(o); }
+  }
+  e.value=s;
+}
 function gvg(id){var e=document.getElementById(id);return e?e.value:'';}
 function sv(id,v){var e=document.getElementById(id);if(e)e.textContent=String(v==null?'':v);}
 
