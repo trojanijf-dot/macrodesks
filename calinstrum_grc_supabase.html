@@ -4975,6 +4975,25 @@ function restaurerBCDraft(d){
   sv('mBCtitle','Brouillon restauré — '+(d.num||'BC'));
 }
 
+// =============================================================================
+// COPIE DE SECOURS DU BC : seulement s'il y a quelque chose a proteger
+// =============================================================================
+// [11/09/2026] Fausse alerte « Un brouillon de BC non sauvegarde a ete trouve »
+// sur un BC envoye depuis 10 jours et jamais modifie. La copie etait ecrite
+// toutes les 5 s DES QU'UN BC ETAIT OUVERT -- simple consultation comprise -- et
+// n'etait effacee que par « Enregistrer » : fermer ou recharger laissait une
+// copie, que le chargement suivant presentait comme du travail perdu.
+// (=X=) REFERENCE = LE BC TEL QU'OUVERT (_bcDraftBase, pose a la fin d'openBC).
+//       On n'ecrit la copie que si le formulaire s'en ECARTE ; revenu a
+//       l'identique, la copie est retiree. Une vraie modification reste
+//       protegee (fermeture accidentelle, onglet ferme, plantage).
+var _bcDraftBase=null;
+function _bcDraftSig(d){
+  if(!d)return '';
+  var c={};
+  Object.keys(d).forEach(function(k){ if(k!=='ts'&&k!=='_base')c[k]=d[k]; });
+  return JSON.stringify(c);
+}
 function draftSaveTick(){
   try{
     var bcOpen=document.getElementById('mBC');
@@ -4982,7 +5001,16 @@ function draftSaveTick(){
       // (=X=) TOUS LES CHAMPS, via captureBCDraft. L'ancienne version en sauvait
       //       8 sur 24 et le reste partait a la trappe.
       var draft=captureBCDraft();
-      if(draft) localStorage.setItem('ci_grc3_draft_bc',JSON.stringify(draft));
+      if(draft){
+        var sig=_bcDraftSig(draft);
+        if(_bcDraftBase===null){ _bcDraftBase=sig; }
+        else if(sig!==_bcDraftBase){ draft._base=_bcDraftBase; localStorage.setItem('ci_grc3_draft_bc',JSON.stringify(draft)); }
+        else {
+          // Revenu a l'etat d'ouverture : on retire SA copie (jamais celle d'un autre BC).
+          try{ var cur=JSON.parse(localStorage.getItem('ci_grc3_draft_bc')||'null');
+               if(cur && cur.id===draft.id) localStorage.removeItem('ci_grc3_draft_bc'); }catch(e){}
+        }
+      }
     }
     // Devis : utilise captureDevisDraft qui sauve TOUS les champs (pas seulement num/client)
     var dvDraft=captureDevisDraft();
@@ -5035,7 +5063,9 @@ function checkDraftRecovery(){
     if(bcDraftRaw){
       var bcDraft=JSON.parse(bcDraftRaw);
       var age=Math.round((new Date()-new Date(bcDraft.ts))/60000);
-      if(age<60*24*7){
+      // Copie identique au BC tel qu'ouvert : rien de perdu, on la retire sans rien demander.
+      var bcIdentique=!!bcDraft._base && _bcDraftSig(bcDraft)===bcDraft._base;
+      if(age<60*24*7 && !bcIdentique){
         var msg='📋 Un brouillon de BC non sauvegardé a été trouvé :\n\n';
         msg+='• N° : '+(bcDraft.num||'(non défini)')+'\n';
         msg+='• Client : '+(bcDraft.clientFinal||'—')+'\n';
@@ -33625,6 +33655,11 @@ function openBC(id){
   }
   _updateBCNumHint(); // affiche l'aide (nouveau BC) ou la masque (BC existant)
   rBClines();om('mBC');
+  // Reference de la copie de secours : le BC tel qu'il vient d'etre ouvert
+  // (cf _bcDraftBase). Une restauration de brouillon ecrit par-dessus APRES ce
+  // point, et reste donc bien vue comme une modification a proteger.
+  _bcDraftBase=null;
+  try{ var _bcD0=captureBCDraft(); if(_bcD0)_bcDraftBase=_bcDraftSig(_bcD0); }catch(e){}
 }
 
 // Bind les inputs Coût réel pour rafraîchir le preview à la volée (1 seule fois)
@@ -44053,7 +44088,16 @@ function parseBCHebdoPdfItems(items){
   }
   anchors.forEach(function(a,ai){
     var l=a.l;
-    var qte=parseFloat(colText(l,125,160).replace(',','.'))||0;
+    // Quantité — [11/09/2026] deux défauts mesurés sur un vrai PDF :
+    //  1. « 5 200.00 » : l'espace des milliers arrêtait parseFloat ;
+    //  2. le nombre, aligné à droite, déborde dans la colonne Imputation
+    //     (« CODE 5 200.00 ») et la colonne Qté arrive VIDE -> quantité 0.
+    var impTxt=colText(l,40,125), qteTxt=colText(l,125,160);
+    if(!/\d/.test(qteTxt)){
+      var mImp=impTxt.match(/^(\S+)\s+(\d[\d\s]*(?:[.,]\d+)?)$/);
+      if(mImp){impTxt=mImp[1];qteTxt=mImp[2];}
+    }
+    var qte=parseFloat(qteTxt.replace(/\s/g,'').replace(',','.'))||0;
     var puDevise=parseInt(colText(l,320,362).replace(/[^\d]/g,''),10)||0;
     var puRemise=parseInt(colText(l,362,445).replace(/[^\d]/g,''),10)||0;
     var montant=parseInt(colText(l,445,520).replace(/[^\d]/g,''),10)||0;
@@ -44073,7 +44117,7 @@ function parseBCHebdoPdfItems(items){
       if(t)descParts.push(t);
     });
     result.lignes.push({
-      poste:a.poste,imputation:colText(l,40,125),description:descParts.join(' ').replace(/\s+/g,' ').trim(),
+      poste:a.poste,imputation:impTxt,description:descParts.join(' ').replace(/\s+/g,' ').trim(),
       qte:qte,puDevise:puDevise,puRemise:puRemise||puDevise,montant:montant,dateLivraison:dateLivIso
     });
   });
@@ -44111,6 +44155,19 @@ function _bcHebdoInversions(pfx,lignes){
   });
   return out;
 }
+// Cohérence d'une ligne : Qté × PU doit redonner le Montant écrit sur le PDF.
+// [11/09/2026] Aurait signalé le BC importé en prod avec une quantité lue à 0
+// (PU = nombre d'heures, Montant correct) — la garde « tarif » ne pouvait pas le voir.
+function _bcHebdoIncoherences(lignes){
+  var out=[];
+  (lignes||[]).forEach(function(l,i){
+    var m=Number(l.montant)||0;
+    if(m<=0)return;
+    var calc=Math.round((Number(l.qte)||0)*(Number(l.puRemise||l.puDevise)||0));
+    if(Math.abs(calc-m)>1)out.push(i);
+  });
+  return out;
+}
 // Enregistre un BC hebdomadaire lu dans un PDF (séparé de la lecture pdf.js pour
 // être testable). Retourne l'id du BC, ou null si l'utilisateur annule.
 function _bcHebdoEnregistrer(pfx,parsed,f,bytes){
@@ -44121,6 +44178,14 @@ function _bcHebdoEnregistrer(pfx,parsed,f,bytes){
     if(confirm('⚠ Colonnes Qté / PU inversées dans le BC '+parsed.num+' ?\n\n'+det+'\n\nLe PU lu n\'est aucun tarif de vente de '+pfx+', la quantité en est un.\n\nOK = corriger · Annuler = garder tel quel')){
       inv.forEach(function(i){var l=parsed.lignes[i];var q=Number(l.qte),pu=Number(l.puRemise||l.puDevise);l.qte=pu;l.puDevise=q;l.puRemise=q;});
     }
+  }
+  var inc=_bcHebdoIncoherences(parsed.lignes);
+  if(inc.length){
+    var detI=inc.map(function(i){
+      var l=parsed.lignes[i], q=Number(l.qte)||0, pu=Number(l.puRemise||l.puDevise)||0;
+      return '• Ligne '+(i+1)+' : '+fH(q)+' h × '+fN(pu)+' = '+fN(Math.round(q*pu))+' XPF, mais le PDF indique '+fN(l.montant)+' XPF';
+    }).join('\n');
+    if(!confirm('⚠ BC '+parsed.num+' : Qté × PU ≠ Montant\n\n'+detI+'\n\nLa lecture du PDF est probablement fausse : vérifie ce BC (✏️ Vérifier) avant de le rattacher à une facture.\n\nOK = importer quand même · Annuler = ne pas importer'))return null;
   }
   if(!Array.isArray(DB.bcHebdo[pfx]))DB.bcHebdo[pfx]=[];
   var existing=DB.bcHebdo[pfx].find(function(b){return b.num===parsed.num;});
