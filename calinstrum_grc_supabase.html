@@ -46617,7 +46617,6 @@ function bFA(f){
     '</thead>'+
     tbodiesHtml+
     '</table>'+
-    _buildBcTrackHtml(getClientPrefix(f.client||''),f)+
     // Bloc final groupé avec page-break-inside:avoid pour qu'il reste cohérent en bas de la dernière page
     '<div class="doc-final-block">'+
     buildFATotsHtml(f,isExo)+
@@ -46633,6 +46632,12 @@ function bFA(f){
     '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
     '<p class="doc-legal">'+getMention(isExo?f.tgcM:'tgc')+'</p>'+
     '</div>'+ // fin doc-final-block
+    // Suivi des BC : APRÈS la facture complète, présenté comme une page à part —
+    // même règle que l'impression (buildPaginatedFA, [11/09/2026]).
+    (function(h){
+      return h?'<div class="doc-bc-page" style="margin-top:22px;padding-top:14px;border-top:2px dashed #cbd5e1;page-break-before:always;break-before:page">'+
+        '<div style="text-align:right;font-size:13px;font-weight:900;color:#1e3a5f;margin-bottom:10px">FACTURE N° '+esc(f.num||'')+'</div>'+h+'</div>':'';
+    })(_buildBcTrackHtml(getClientPrefix(f.client||''),f))+
   '</div>';
 }
 
@@ -47996,17 +48001,10 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   // Fix : mesurer sa vraie hauteur (comme les lignes) et l'ajouter à LAST_EXTRA,
   // pour que la pagination bascule le trop-plein sur une page suivante plutôt
   // que de le faire déborder de la page fixe.
+  // [11/09/2026] Le suivi des BC a désormais TOUJOURS sa propre page, après la
+  // facture complète (mise en page validée par l'utilisateur) : il n'entre donc
+  // plus dans le budget de la dernière page et n'a plus besoin d'être mesuré.
   var bcTrackHtml=_buildBcTrackHtml(getClientPrefix(f.client||''),f);
-  var bcTrackH=0;
-  if(bcTrackHtml){
-    var bcMeasureDiv=document.createElement('div');
-    bcMeasureDiv.style.cssText='position:absolute;top:-9999px;left:0;width:703px;font-family:Calibri,Arial,sans-serif;font-size:14px;visibility:hidden';
-    bcMeasureDiv.innerHTML=bcTrackHtml;
-    document.body.appendChild(bcMeasureDiv);
-    bcTrackH=bcMeasureDiv.getBoundingClientRect().height;
-    document.body.removeChild(bcMeasureDiv);
-  }
-  var LAST_EXTRA_TOTAL=LAST_EXTRA+bcTrackH;
 
   // === Distribution dans les pages (identique au devis) ===
   var pages=[],currentPage=[],usedHeight=0,budget=PAGE1_BUDGET,SUBTOTAL_H=30;
@@ -48075,8 +48073,11 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   // facture classique, et le suivi BC prend sa PROPRE page à la fin — demande
   // explicite : "plus PRO" d'avoir la facture complète page 1 et le suivi BC
   // seul page 2 plutôt qu'une ligne isolée avant le bloc BC.
+  // [11/09/2026] Plus d'exception pour les factures courtes : même avec un seul
+  // BC, le suivi va sur une page à part — demande utilisateur : « le suivi des BC
+  // ne doit pas être en plein milieu de la facture mais sur une autre page ».
   var totalRowsH=rowItems.reduce(function(s,r){return s+r.height;},0);
-  var singlePageFits=(totalRowsH+LAST_EXTRA_TOTAL<=PAGE1_BUDGET);
+  var singlePageFits=(totalRowsH+LAST_EXTRA<=PAGE1_BUDGET);
   if(singlePageFits){
     pages=[rowItems.slice()];
   } else if(pages.length>=1){
@@ -48095,7 +48096,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
       lastBudget=PAGE_N_BUDGET;
     }
   }
-  var needsBcOwnPage=!!bcTrackHtml && !singlePageFits;
+  var needsBcOwnPage=!!bcTrackHtml;
 
   var isMultiPage=pages.length>1;
   var tblCols='<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>';
