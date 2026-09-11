@@ -2562,6 +2562,7 @@ function admPreviewPrint(){
       <div style="display:flex;gap:8px;align-items:center">
         <label style="font-size:11px;color:var(--muted)">Site / Client :</label>
         <select class="filter-sel" id="ptSite" onchange="ptSetSite(this.value)"></select>
+        <button class="btn btn-ghost btn-sm" onclick="ptImportOuvrir()" title="Importer les heures depuis le fichier Excel de pointage du client (Time Sheet)">📥 Importer Excel</button>
       </div>
     </div>
     <div class="tbl-wrap">
@@ -4108,6 +4109,24 @@ function admPreviewPrint(){
   <div class="modal-footer">
     <button class="btn btn-ghost" onclick="cm('mBCHEBDO')">Annuler</button>
     <button class="btn btn-teal" onclick="saveBcHebdoEdit()">✓ Appliquer</button>
+  </div>
+</div></div>
+
+<!-- ===== IMPORT DU POINTAGE DEPUIS UN FICHIER EXCEL (Time Sheet client) ===== -->
+<div class="modal-overlay" id="mPTIMPORT">
+<div class="modal modal-lg">
+  <div class="modal-header"><h3>📥 Importer un fichier de pointage</h3><button class="modal-close" onclick="cm('mPTIMPORT')">✕</button></div>
+  <div class="modal-body">
+    <div class="form-row3">
+      <div class="form-group"><label>Fichier Excel</label><input type="file" class="form-input" id="ptimp-file" accept=".xlsx,.xls,.xlsm" onchange="ptImportFichier(event)"></div>
+      <div class="form-group"><label>Site / Client</label><select class="form-select" id="ptimp-site" onchange="ptImportRender()"></select></div>
+      <div class="form-group"><label>Feuille lue</label><div id="ptimp-feuille" style="font-size:12px;color:var(--muted);padding-top:9px">—</div></div>
+    </div>
+    <div id="ptimp-body"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mPTIMPORT')">Annuler</button>
+    <button class="btn btn-teal" onclick="ptImportValider()">✓ Importer</button>
   </div>
 </div></div>
 
@@ -22307,6 +22326,11 @@ var _faDraftObj=null, _faDraftSourceDevisId=null, _faDraftBCSLN='', _faDraftBCDa
 // saveFA() puis remise à null. Évite qu'elle "fuite" vers une facture sans rapport
 // si l'utilisateur ouvre/enregistre autre chose entre-temps (reset dans openFA()).
 var _faPendingBcConsumption=null;
+// Facture COMPLÉMENTAIRE (régularisation d'une période déjà facturée, cf
+// _ptFactRegulariser) : id de la facture de base. Même cycle de vie que
+// _faPendingBcConsumption : remis à zéro par openFA, ré-armé juste après,
+// posé par getFA() sur la NOUVELLE facture, vidé par saveFA().
+var _faPendingComplementDe=null;
 
 // Affiche/masque le bandeau "Brouillon" de la modale facture + adapte le titre.
 function _setFADraftBanner(on, dvNum){
@@ -28898,7 +28922,7 @@ function openFA(id,fromDV,preSelectedClient){
   }
   // Reset de l'état brouillon/lien pour toute ouverture normale ; generateFactureFromDV
   // le ré-arme APRÈS son appel à openFA (cf _faDraftSourceDevisId / bandeau).
-  _faDraftSourceDevisId=null;_faDraftBCSLN='';_faDraftBCDate='';_faPendingBcConsumption=null;
+  _faDraftSourceDevisId=null;_faDraftBCSLN='';_faDraftBCDate='';_faPendingBcConsumption=null;_faPendingComplementDe=null;
   _setFADraftBanner(false);
   eFAid=id||null;faL=[];faVersements=[];rebuildAllParamSelects();
   buildClientOptions('fa-client',preSelectedClient||'');
@@ -29982,6 +30006,8 @@ function getFA(){
     lines:JSON.parse(JSON.stringify(faL)),ht:t.ht,tgc:t.tgc,ttc:t.ttc,suiviId:existingSuiviId};
   // Fusionner les flags préservés (écrasement IMPOSSIBLE car on assigne après le fa de base)
   Object.keys(preservedFlags).forEach(function(k){fa[k]=preservedFlags[k];});
+  // Facture complémentaire en cours de création : rattachement à sa facture de base.
+  if(_faPendingComplementDe && !eFAid) fa._complementDe=_faPendingComplementDe;
   // Suivi BC hebdomadaire : appliqué ICI (dans getFA(), pas seulement dans
   // saveFA()) pour que l'APERÇU (previewFA → getFA) reflète aussi une
   // régénération fraîche via ptFactGenerate — sinon "👁 Aperçu" avant
@@ -30852,6 +30878,13 @@ function _avoirRecalcTotal(){
   if(el) el.textContent=fN(total)+' XPF';
 }
 
+// Totaux d'un avoir — UNE seule règle, partagée par l'avoir « prix »
+// (createAvoirFromFA) et l'avoir « quantité » de régularisation du pointage.
+function _avoirTotaux(lines,isExo){
+  var ht=(lines||[]).reduce(function(s,l){return s+Math.round(l.qte*l.pu);},0);
+  var tgc=isExo?0:Math.round((lines||[]).reduce(function(s,l){return s+Math.round(l.qte*l.pu)*(l.tgc||0)/100;},0));
+  return {ht:ht,tgc:tgc,ttc:ht+tgc};
+}
 // Crée l'avoir (lignes cochées uniquement) et le rattache à la facture source.
 // N'affecte JAMAIS f.lines / f._bcConsumption de la facture source (immuable) —
 // et n'affecte pas non plus le suivi des BC : seul le PRIX change, pas les heures
@@ -30870,9 +30903,7 @@ function createAvoirFromFA(){
   var avLines=checked.map(function(l){
     return {ref:l.ref,designation:l.designation,tgc:l.tgc,unite:l.unite,qte:l.qte,pu:(l.puNew-l.puOld),_sec:'service'};
   });
-  var ht=avLines.reduce(function(s,l){return s+Math.round(l.qte*l.pu);},0);
-  var tgc=isExo?0:Math.round(avLines.reduce(function(s,l){return s+Math.round(l.qte*l.pu)*(l.tgc||0)/100;},0));
-  var ttc=ht+tgc;
+  var _avt=_avoirTotaux(avLines,isExo), ht=_avt.ht, tgc=_avt.tgc, ttc=_avt.ttc;
   var av={
     id:Date.now(),
     num:nxt('av',getClientPrefix(f.client||'')),
@@ -31147,6 +31178,7 @@ async function saveFA(){
   // perdre si le save échoue et que l'utilisateur corrige puis ré-enregistre
   // (getFA() le réappliquera identiquement au prochain appel/retry).
   if(_faPendingBcConsumption&&_faPendingBcConsumption.applied) _faPendingBcConsumption=null;
+  _faPendingComplementDe=null;
   // Snapshot pour undo : si on modifie une facture existante, on garde son ancien état
   var prevSnapshot=null;
   var wasNew=!eFAid;
@@ -42522,7 +42554,9 @@ function ptAggregatePeriod(startIso,endIso,opts){
   opts=opts||{};
   var byEmp={},weeksSet={};
   var totals={hnj:0,hs25:0,hs50:0,dim:0,fer:0,nuit:0,totalJour:0,totalNuit:0};
-  (DB.pointages||[]).forEach(function(w){
+  // opts.pointages : semaines à agréger à la place de DB.pointages (aperçu d'un
+  // import Excel AVANT de l'enregistrer — cf _ptImportHT).
+  (opts.pointages||DB.pointages||[]).forEach(function(w){
     if(!w||!w.monday)return;
     if(opts.site && (w.site||'')!==opts.site)return;
     // La semaine chevauche-t-elle la période ? (lundi..dimanche)
@@ -42715,7 +42749,7 @@ function _ptSetCircuit(pfx,val){
   _ensurePointageShape();
   DB.pointageCircuits[pfx]=val||'libre';
   saveDB();
-  ptFactState.start='';ptFactState.end='';ptFactState.weekMonday=null; // reset période si on change de circuit
+  ptFactState.start='';ptFactState.end='';ptFactState.weekMonday=null;ptFactState.weekEndMonday=null; // reset période si on change de circuit
   _ptFactRenderPeriodBox();_ptFactCompute();
 }
 function _pad2(n){return String(n).padStart(2,'0');}
@@ -42800,11 +42834,22 @@ function _ptFactRenderPeriodBox(){
     var woptsS=weeksList.length
       ? weeksList.map(function(mon){return '<option value="'+mon+'"'+(mon===ptFactState.weekMonday?' selected':'')+'>Semaine '+_ptWeekNum(mon)+' · '+fD(mon)+' → '+fD(_ptAddDays(mon,6))+'</option>';}).join('')
       : '<option value="">— Aucune semaine ce mois —</option>';
+    // Semaine de FIN (optionnelle) : une facture peut couvrir plusieurs semaines
+    // (ex. une période de trois semaines). Vide = une seule semaine.
+    var weOpts='<option value="">— la même (1 semaine) —</option>';
+    for(var wi=1;wi<=12;wi++){
+      var monE=_ptAddDays(ptFactState.weekMonday,7*wi);
+      weOpts+='<option value="'+monE+'"'+(monE===ptFactState.weekEndMonday?' selected':'')+'>Semaine '+_ptWeekNum(monE)+' · jusqu\'au '+fD(_ptAddDays(monE,6))+'</option>';
+    }
     box.innerHTML='<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px">Mois civil (concerné)</label>'+
       '<div style="display:flex;gap:6px"><select id="ptFactMonth" onchange="ptFactSemaineSetMonth()" style="padding:6px 8px">'+moptsS+'</select>'+
       '<input type="number" id="ptFactYear" value="'+ptFactState.y+'" onchange="ptFactSemaineSetMonth()" style="width:74px;padding:6px 8px"></div>'+
-      '<label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:8px 0 4px">Semaine (concernée)</label>'+
-      '<select id="ptFactWeek" onchange="ptFactSemaineSetWeek()" style="padding:6px 8px;min-width:230px">'+woptsS+'</select>';
+      '<div style="display:flex;gap:10px;flex-wrap:wrap">'+
+        '<div><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:8px 0 4px">Semaine (concernée)</label>'+
+        '<select id="ptFactWeek" onchange="ptFactSemaineSetWeek()" style="padding:6px 8px;min-width:230px">'+woptsS+'</select></div>'+
+        '<div><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:8px 0 4px">Jusqu\'à la semaine</label>'+
+        '<select id="ptFactWeekEnd" onchange="ptFactSemaineSetWeekEnd()" style="padding:6px 8px;min-width:230px">'+weOpts+'</select></div>'+
+      '</div>';
   } else {
     // mmb ou libre : sélecteur mois
     var lbl=circuit==='mmb'?'Mois MMB <span style="color:#f472b6">(21→20)</span>':'Mois civil';
@@ -42831,19 +42876,25 @@ function ptFactSetDates(){
 function ptFactSemaineSetMonth(){
   ptFactState.m=+document.getElementById('ptFactMonth').value;
   ptFactState.y=+document.getElementById('ptFactYear').value;
-  ptFactState.weekMonday=null;
+  ptFactState.weekMonday=null;ptFactState.weekEndMonday=null;
   _ptFactRenderPeriodBox();
   _ptFactCompute();
 }
 function ptFactSemaineSetWeek(){
   ptFactState.weekMonday=document.getElementById('ptFactWeek').value;
+  if(ptFactState.weekEndMonday&&ptFactState.weekEndMonday<=ptFactState.weekMonday)ptFactState.weekEndMonday=null;
+  _ptFactRenderPeriodBox(); // la liste « Jusqu'à la semaine » part de la nouvelle semaine
+  _ptFactCompute();
+}
+function ptFactSemaineSetWeekEnd(){
+  ptFactState.weekEndMonday=document.getElementById('ptFactWeekEnd').value||null;
   _ptFactCompute();
 }
 // Saut direct vers une période (année/mois) — utilisé par les puces "heures trouvées".
 function ptFactJumpTo(y,m){ptFactState.y=y;ptFactState.m=m;_ptFactRenderPeriodBox();_ptFactCompute();}
 // Idem pour le circuit Semaine : saut direct vers le lundi d'une semaine trouvée.
 function ptFactJumpToWeek(monday){
-  ptFactState.weekMonday=monday;
+  ptFactState.weekMonday=monday;ptFactState.weekEndMonday=null;
   var p=monday.split('-');ptFactState.y=+p[0];ptFactState.m=+p[1];
   _ptFactRenderPeriodBox();_ptFactCompute();
 }
@@ -42914,7 +42965,11 @@ function _ptFactBounds(){
   if(circuit==='mmb'){var b=_ptMMBBounds(ptFactState.y,ptFactState.m);return {start:b.start,end:b.end,circuit:circuit};}
   if(circuit==='semaine'){
     var wm=ptFactState.weekMonday||_ptMondayOf(td());
-    return {start:wm,end:_ptAddDays(wm,6),circuit:circuit};
+    // Semaine de fin optionnelle (plusieurs semaines sur une facture), ignorée si
+    // absente ou pas après le début. Les seuils 39/47 h restent calculés semaine
+    // par semaine : ptAggregatePeriod appelle ptComputeWeek par enregistrement.
+    var we=ptFactState.weekEndMonday;
+    return {start:wm,end:_ptAddDays((we&&we>wm)?we:wm,6),circuit:circuit};
   }
   var b2=_ptMonthBounds(ptFactState.y,ptFactState.m);return {start:b2.start,end:b2.end,circuit:circuit};
 }
@@ -42924,7 +42979,16 @@ function ptFactBuildLines(){
   var pfx=ptFactState.pfx;
   var bd=_ptFactBounds();
   if(!pfx||!bd.start||!bd.end)return null;
-  var agg=ptAggregatePeriod(bd.start,bd.end,{site:pfx});
+  var res=_ptLinesFromAgg(pfx,ptAggregatePeriod(bd.start,bd.end,{site:pfx}));
+  res.bounds=bd;
+  return res;
+}
+// Lignes de facture à partir d'un agrégat ptAggregatePeriod — séparé de
+// ptFactBuildLines pour servir sur une période qui n'est PAS celle de l'écran
+// (régularisation d'une période déjà facturée, aperçu d'un import Excel).
+// Chaque ligne porte key (type d'heure) + base (tarif) : c'est son IDENTITÉ
+// quand on compare le pointage à ce qui a déjà été facturé.
+function _ptLinesFromAgg(pfx,agg){
   var missing=agg.emps.filter(function(e){return _ptTarifFor(pfx,e.id)==null;});
   // Bases distinctes sur TOUTE la facture : si >1 (ex AEI Expert 5600 / Junior 5200),
   // on précise " (base X)" sur CHAQUE ligne pour lever toute ambiguïté (demande utilisateur).
@@ -42946,10 +43010,10 @@ function ptFactBuildLines(){
       var pu=Math.round(base*t.coef);
       var tot=Math.round(pu*g.h);
       totalHT+=tot;
-      lines.push({desc:t.lbl+(multiBase?' (base '+fN(base)+')':''),qte:g.h,pu:pu,total:tot});
+      lines.push({desc:t.lbl+(multiBase?' (base '+fN(base)+')':''),qte:g.h,pu:pu,total:tot,key:t.key,base:base});
     });
   });
-  return {lines:lines,missing:missing,totalHT:totalHT,agg:agg,bounds:bd};
+  return {lines:lines,missing:missing,totalHT:totalHT,agg:agg};
 }
 function _ptFactCompute(){
   var body=document.getElementById('ptFactBody');
@@ -42998,6 +43062,12 @@ function _ptFactCompute(){
       '<td style="text-align:right;font-family:var(--mono);font-weight:700"><span data-money>'+fN(l.total)+'</span></td></tr>';
   });
   html+='</tbody><tfoot><tr style="border-top:2px solid var(--border);font-weight:700"><td colspan="4" style="text-align:right">TOTAL HT (XPF)</td><td style="text-align:right;color:var(--teal)"><span data-money>'+fN(res.totalHT)+'</span></td></tr></tfoot></table></div>';
+  // Période DÉJÀ FACTURÉE par une facture émise (circuit Semaine) : on montre
+  // l'écart pointage / facturé — c'est lui que la génération facturera (écart +)
+  // ou créditera (écart −). La facture émise n'est jamais réécrite.
+  var _rg=(bd.circuit==='semaine')?_ptRegulCalc(pfx,bd):null;
+  var _rgActif=!!(_rg&&_rg.base&&!isPrebilled(_rg.base));
+  if(_rgActif)html+=_ptRegulApercuHtml(_rg);
   // Infos MMB éditables (circuit mmb uniquement) — Demandeur (déroulant contacts) / Désignation / N° PO
   if(bd.circuit==='mmb'){
     var mm=_ptMmbMeta(pfx);var pJs=esc(pfx).replace(/'/g,"\\'");
@@ -43052,7 +43122,7 @@ function _ptFactCompute(){
   }
   html+='</div>';
   body.innerHTML=html;
-  if(btn){btn.style.display='';btn.disabled=false;}
+  if(btn){btn.style.display='';btn.disabled=false;btn.textContent=_rgActif?'🧾 Régulariser (facture complémentaire / avoir)':'🧾 Générer / remplir la facture';}
 }
 function _ptFactDevisInfo(){
   var sel=document.getElementById('ptFactDevis');var info=document.getElementById('ptFactDevisInfo');
@@ -43067,7 +43137,7 @@ function _ptFactDevisInfo(){
     // pas juste la dernière liée au devis.
     var periodStr='du '+fD(bd.start)+' au '+fD(bd.end);
     fa=(DB.factures||[]).find(function(x){
-      return x.devisLieId===d.id && getClientPrefix(x.client||'')===ptFactState.pfx && (x.objet||'').indexOf(periodStr)>=0;
+      return x.devisLieId===d.id && getClientPrefix(x.client||'')===ptFactState.pfx && (x.objet||'').indexOf(periodStr)>=0 && !x._complementDe;
     });
     // Repli : factures générées avant que devisLieId soit systématiquement
     // préservé (cf chantier BC hebdo, 14/07/2026) — devisLieId peut être vide
@@ -43077,13 +43147,15 @@ function _ptFactDevisInfo(){
     // remplacer la bonne facture — cf _ptFactTypes/ptFactGenerate ci-dessous.
     if(!fa){
       fa=(DB.factures||[]).find(function(x){
-        return x.devisLieId!==d.id && getClientPrefix(x.client||'')===ptFactState.pfx && (x.objet||'').indexOf(periodStr)>=0;
+        return x.devisLieId!==d.id && getClientPrefix(x.client||'')===ptFactState.pfx && (x.objet||'').indexOf(periodStr)>=0 && !x._complementDe;
       });
     }
   } else {
     fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
   }
-  info.innerHTML=fa
+  info.innerHTML=(fa && bd.circuit==='semaine' && !isPrebilled(fa))
+    ? 'Période déjà facturée par <b style="color:var(--amber)">'+esc(fa.num)+'</b> (émise) : la génération créera une <b>facture complémentaire</b> et/ou un <b>avoir</b> pour l\'écart, sans modifier '+esc(fa.num)+'.'
+    : fa
     ? 'La génération <b>remplira la pré-facture existante <span style="color:var(--amber)">'+esc(fa.num)+'</span></b> (n° verrouillé) avec les lignes ci-dessus.'
     : 'Aucune facture pour '+(bd.circuit==='semaine'?'cette semaine':'ce devis')+' → la génération <b>créera une '+(bd.circuit==='semaine'?'nouvelle ':'')+'facture</b> (n° '+esc(getClientPrefix(d.client))+'-Fxxx)'+(bd.circuit==='semaine'?' liée au même devis':' et la liera au devis')+'.';
 }
@@ -43136,7 +43208,7 @@ function ptFactGenerate(){
   var existingFa;
   if(bd.circuit==='semaine'){
     existingFa=(DB.factures||[]).find(function(f){
-      return f.devisLieId===d.id && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
+      return f.devisLieId===d.id && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0 && !f._complementDe;
     });
     // Repli : factures générées avant que devisLieId soit systématiquement
     // préservé (cf chantier BC hebdo, 14/07/2026) — devisLieId peut être vide
@@ -43147,16 +43219,22 @@ function ptFactGenerate(){
     // directement la prochaine fois.
     if(!existingFa){
       existingFa=(DB.factures||[]).find(function(f){
-        return f.devisLieId!==d.id && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
+        return f.devisLieId!==d.id && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0 && !f._complementDe;
       });
       if(existingFa) existingFa.devisLieId=d.id;
     }
   } else {
     existingFa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
   }
+  // Période déjà couverte par une facture ÉMISE : jamais de remplacement de ses
+  // lignes — on facture ou on crédite l'ÉCART (cf _ptFactRegulariser).
+  if(existingFa && bd.circuit==='semaine' && !isPrebilled(existingFa)){
+    _ptFactRegulariser(d,bd,existingFa);
+    return;
+  }
   // Garde anti-doublon souple : une AUTRE facture couvre déjà cette période pour ce client ?
   var dup=(DB.factures||[]).find(function(f){
-    return f.id!==(existingFa&&existingFa.id) && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0;
+    return f.id!==(existingFa&&existingFa.id) && getClientPrefix(f.client||'')===ptFactState.pfx && (f.objet||'').indexOf(periodStr)>=0 && !f._complementDe;
   });
   if(dup){
     if(!confirm('⚠ La facture '+dup.num+' semble déjà couvrir la période '+periodStr+' pour '+ptFactState.pfx+'.\n\nContinuer quand même ?'))return;
@@ -43169,21 +43247,8 @@ function ptFactGenerate(){
   var bcIncludeMajorees=(ptFactState.bcIncludeMajorees!==false); // bouton "Heures majorées" — activé par défaut
   if(ptFactState.bcId){
     var rateQtyMap=_bcRateQtyFromAgg(ptFactState.pfx,res.agg,bcIncludeMajorees);
-    var allocRes=_bcAllocate(ptFactState.pfx,ptFactState.bcId,rateQtyMap,existingFa?existingFa.id:null);
-    var unallocKeys=Object.keys(allocRes.unallocated||{});
-    if(unallocKeys.length){
-      // Message distinct selon la cause : un tarif qui n'existe TOTALEMENT dans
-      // aucun BC (même ancien) suggère d'importer un nouveau BC avec ce tarif ;
-      // un tarif présent mais épuisé partout suggère juste d'attendre/relancer AEI.
-      var allBcs=(DB.bcHebdo[ptFactState.pfx]||[]);
-      var unallocTxt=unallocKeys.map(function(r){
-        var hasRateAnywhere=allBcs.some(function(b){return _bcAuthorizedQte(b,r)>0;});
-        var cause=hasRateAnywhere?'BC suivants tous épuisés à ce tarif':'AUCUN BC importé ne porte ce tarif — importe un nouveau BC';
-        return fH(allocRes.unallocated[r])+' h à '+fN(r)+' XPF/h ('+cause+')';
-      }).join(' ; ');
-      if(!confirm('⚠ Le(s) bon(s) de commande sélectionné(s) ne couvrent pas la totalité de cette facture : '+unallocTxt+'.\n\nCes heures resteraient hors suivi BC.\n\nContinuer quand même ?'))return;
-    }
-    bcConsumption=allocRes.alloc;
+    bcConsumption=_ptFactImputerBc(ptFactState.pfx,ptFactState.bcId,rateQtyMap,existingFa?existingFa.id:null);
+    if(bcConsumption===false)return;
   }
   if(existingFa){
     var hadLines=Array.isArray(existingFa.lines)&&existingFa.lines.filter(function(l){return l&&l.type!=='section_banner';}).length>0;
@@ -43202,6 +43267,26 @@ function ptFactGenerate(){
     return;
   }
   // CAS B : pas encore de facture → brouillon lié au devis (créé au save, n° réservé).
+  _ptFactNouveauBrouillon(d,objet,faLines,bcConsumption,bcIncludeMajorees,null);
+}
+
+// =============================================================================
+// RÉGULARISATION D'UNE PÉRIODE DÉJÀ FACTURÉE (circuit Semaine) — 11/09/2026
+// =============================================================================
+// Cas réel (09/2026) : une facture hebdomadaire émise d'après la synthèse d'un
+// Excel client qui sautait un jour — le pointage du GRC, lui, était complet.
+// AVANT : relancer la génération sur la semaine REMPLAÇAIT les lignes de la
+// facture émise.
+// MAINTENANT : si la facture de la période est émise (cf isPrebilled), on compare
+// le pointage à ce qui est déjà facturé — facture de base + ses compléments −
+// ses avoirs de quantité — ligne par ligne (type d'heure × tarif) :
+//   écart + → facture COMPLÉMENTAIRE (nouveau n°, rattachée par _complementDe) ;
+//   écart − → AVOIR en quantité sur la facture de base (_regulQte).
+// Une pré-facture (phase non facturée) reste remplie comme avant (CAS A).
+// Limite connue : un avoir de PRIX (createAvoirFromFA) ne change aucune
+// quantité, il n'entre donc pas dans ce calcul.
+// =============================================================================
+function _ptFactNouveauBrouillon(d,objet,faLines,bcConsumption,includeMajorees,complementDe){
   var faDraft={
     id:Date.now(),
     num:nxt('fa',getClientNumPrefix(d.client)),   // numerotation, cf getClientNumPrefix
@@ -43219,10 +43304,536 @@ function ptFactGenerate(){
     _faDraftObj=faDraft;
     openFA(null);
     _faDraftSourceDevisId=d.id;
-    _faPendingBcConsumption={applied:true,alloc:bcConsumption,includeMajorees:bcIncludeMajorees}; // cf CAS A, même enveloppe
+    _faPendingBcConsumption={applied:true,alloc:bcConsumption,includeMajorees:includeMajorees}; // cf CAS A, même enveloppe
+    _faPendingComplementDe=complementDe||null;
     if(typeof _setFADraftBanner==='function')_setFADraftBanner(true,d.num);
-    if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Brouillon facture '+faDraft.num+' — vérifie puis Enregistre pour créer');
+    if(typeof showBCSaveToast==='function')showBCSaveToast('✓ '+(complementDe?'Facture complémentaire ':'Brouillon facture ')+faDraft.num+' — vérifie puis Enregistre pour créer');
   },80);
+  return faDraft;
+}
+// Imputation sur les BC hebdomadaires : même tarif d'abord (bascule chronologique,
+// _bcAllocate) ; s'il reste des heures sans BC à LEUR tarif, proposition de les
+// imputer sur le solde d'un AUTRE tarif (accord client explicite du 11/09/2026 :
+// heures junior sur le solde senior), mention portée sur le suivi imprimé.
+// Retourne les lignes de consommation, ou false si l'utilisateur annule.
+function _ptFactImputerBc(pfx,bcId,rateQtyMap,excludeFactureId){
+  var allocRes=_bcAllocate(pfx,bcId,rateQtyMap,excludeFactureId);
+  var alloc=allocRes.alloc||[], unalloc=allocRes.unallocated||{};
+  if(Object.keys(unalloc).length){
+    var autre=_bcAllocateAutreTarif(pfx,bcId,unalloc,excludeFactureId,alloc);
+    if(autre.alloc.length){
+      var det=autre.alloc.map(function(c){return '• '+fH(c.imputeDe.qte)+' h à '+fN(c.imputeDe.rate)+' XPF/h → solde à '+fN(c.rate)+' XPF/h de '+c.bcNum+' ('+fN(c.montant)+' XPF HT)';}).join('\n');
+      if(confirm('⚠ Aucun bon de commande n\'a de solde au tarif de ces heures.\n\n'+det+'\n\nLes IMPUTER sur le solde d\'un autre tarif ? La mention figurera sur le suivi du BC imprimé.\n\nOK = imputer · Annuler = les laisser hors suivi BC')){
+        alloc=alloc.concat(autre.alloc);
+        unalloc=autre.unallocated;
+      }
+    }
+  }
+  var unallocKeys=Object.keys(unalloc);
+  if(unallocKeys.length){
+    // Message distinct selon la cause : un tarif qui n'existe TOTALEMENT dans
+    // aucun BC (même ancien) suggère d'importer un nouveau BC avec ce tarif ;
+    // un tarif présent mais épuisé partout suggère juste d'attendre/relancer AEI.
+    var allBcs=(DB.bcHebdo[pfx]||[]);
+    var unallocTxt=unallocKeys.map(function(r){
+      var hasRateAnywhere=allBcs.some(function(b){return _bcAuthorizedQte(b,r)>0;});
+      var cause=hasRateAnywhere?'BC suivants tous épuisés à ce tarif':'AUCUN BC importé ne porte ce tarif — importe un nouveau BC';
+      return fH(unalloc[r])+' h à '+fN(r)+' XPF/h ('+cause+')';
+    }).join(' ; ');
+    if(!confirm('⚠ Le(s) bon(s) de commande sélectionné(s) ne couvrent pas la totalité de cette facture : '+unallocTxt+'.\n\nCes heures resteraient hors suivi BC.\n\nContinuer quand même ?'))return false;
+  }
+  return alloc;
+}
+// Identité d'une ligne d'heures facturée : type (clé _ptFactTypes) + tarif de base.
+// Le tarif vient du libellé « (base X) » ; à défaut, du PU ÷ coefficient — d'abord
+// le coefficient actuel du client, puis le standard si le premier ne tombe sur
+// aucun tarif connu (factures émises avant la majoration réduite).
+// null = ligne qui n'est pas une ligne d'heures (restauration…), ignorée.
+function _ptRegulKey(pfx,desc,pu){
+  var s=String(desc||'').replace(/[  ]/g,' ').trim();
+  var m=s.match(/^(.*?)\s*\(base\s*([\d .]+)\)\s*$/i);
+  var lbl=(m?m[1]:s).trim(), t=null;
+  _ptFactTypes(pfx).forEach(function(x){if(x.lbl===lbl)t=x;});
+  if(!t)return null;
+  var base=m?Number(m[2].replace(/[ .]/g,'')):0;
+  if(!base){
+    var g=(DB.tarifsPointage&&DB.tarifsPointage[pfx])||{};
+    var tarifs=Object.keys(g).map(function(k){return Number(g[k]);});
+    base=Math.round((Number(pu)||0)/t.coef);
+    if(tarifs.length&&tarifs.indexOf(base)<0){
+      var std=null;_ptFactTypes(null).forEach(function(x){if(x.key===t.key)std=x;});
+      var b2=std?Math.round((Number(pu)||0)/std.coef):base;
+      if(tarifs.indexOf(b2)>=0)base=b2;
+    }
+  }
+  return {key:t.key,base:base,id:t.key+'|'+base};
+}
+// Factures d'une période exacte : la facture de BASE (hors compléments) et ses compléments.
+function _ptFactFacturesDeLaPeriode(pfx,bd){
+  var periodStr='du '+fD(bd.start)+' au '+fD(bd.end);
+  var base=(DB.factures||[]).find(function(f){
+    return getClientPrefix(f.client||'')===pfx && (f.objet||'').indexOf(periodStr)>=0 && !f._complementDe;
+  })||null;
+  return {base:base,complements:base?(DB.factures||[]).filter(function(f){return f._complementDe===base.id;}):[]};
+}
+function _ptRegulCalc(pfx,bd){
+  if(!pfx||!bd||!bd.start||!bd.end)return null;
+  var fp=_ptFactFacturesDeLaPeriode(pfx,bd);
+  if(!fp.base)return null;
+  var docs=[fp.base].concat(fp.complements);
+  var eng=_ptLinesFromAgg(pfx,ptAggregatePeriod(bd.start,bd.end,{site:pfx}));
+  var P={},F={},ordre=[];
+  eng.lines.forEach(function(l){
+    var id=l.key+'|'+l.base;
+    if(!P[id]){P[id]={desc:l.desc,qte:0,pu:l.pu,key:l.key,base:l.base};if(ordre.indexOf(id)<0)ordre.push(id);}
+    P[id].qte+=l.qte;
+  });
+  var ajoute=function(l,signe){
+    if(!l||l.type==='section_banner'||l.type==='header')return;
+    var pu=Math.abs(Number(l.pu)||0), k=_ptRegulKey(pfx,l.designation,pu);
+    if(!k)return;
+    if(!F[k.id]){F[k.id]={desc:String(l.designation||''),qte:0,pu:pu,tgc:l.tgc,key:k.key,base:k.base};if(ordre.indexOf(k.id)<0)ordre.push(k.id);}
+    F[k.id].qte+=signe*(Number(l.qte)||0);
+  };
+  docs.forEach(function(f){(Array.isArray(f.lines)?f.lines:[]).forEach(function(l){ajoute(l,1);});});
+  var ids={};docs.forEach(function(f){ids[f.id]=true;});
+  (DB.avoirs||[]).forEach(function(a){if(a&&a._regulQte&&ids[a.avoirOf])(a.lines||[]).forEach(function(l){ajoute(l,-1);});});
+  var detail=[],plus=[],moins=[],htPlus=0,htMoins=0;
+  ordre.forEach(function(id){
+    var p=P[id],f=F[id];
+    var qp=p?Math.round(p.qte*100)/100:0, qf=f?Math.round(f.qte*100)/100:0, ec=Math.round((qp-qf)*100)/100;
+    var src=(ec>0)?p:(f||p);
+    detail.push({desc:(p||f).desc,pointage:qp,facture:qf,ecart:ec,pu:src.pu,montant:Math.round(ec*src.pu)});
+    if(ec>0.001){plus.push({desc:p.desc,qte:ec,pu:p.pu,total:Math.round(ec*p.pu),key:p.key,base:p.base});htPlus+=Math.round(ec*p.pu);}
+    else if(ec<-0.001){moins.push({desc:src.desc,qte:-ec,pu:src.pu,total:Math.round(-ec*src.pu),key:src.key,base:src.base,tgc:(f&&f.tgc!=null)?f.tgc:null});htMoins+=Math.round(-ec*src.pu);}
+  });
+  return {base:fp.base,complements:fp.complements,detail:detail,lignesPlus:plus,lignesMoins:moins,htPlus:htPlus,htMoins:htMoins};
+}
+function _ptRegulApercuHtml(rg){
+  var docs=[rg.base].concat(rg.complements).map(function(f){return esc(f.num);}).join(' + ');
+  var h='<div class="note no-pm-blur" style="margin-top:12px;border-left-color:var(--amber)"><b style="color:var(--amber)">Période déjà facturée : '+docs+' (émise).</b> Ses lignes ne seront jamais remplacées.</div>';
+  if(!rg.lignesPlus.length&&!rg.lignesMoins.length){
+    return h+'<div style="font-size:12px;color:var(--muted);margin-top:6px">Aucun écart : la facturation couvre exactement le pointage.</div>';
+  }
+  h+='<div class="tbl-wrap" style="margin-top:8px"><table><thead class="no-pm-blur"><tr><th>Ligne</th><th style="text-align:right">Pointage (h)</th><th style="text-align:right">Déjà facturé (h)</th><th style="text-align:right">Écart (h)</th><th style="text-align:right">Montant (XPF)</th></tr></thead><tbody>';
+  rg.detail.forEach(function(x){
+    var col=x.ecart>0.001?'#34d399':(x.ecart<-0.001?'var(--red)':'var(--muted)');
+    var nul=Math.abs(x.ecart)<=0.001;
+    h+='<tr><td>'+esc(x.desc)+'</td><td style="text-align:right;font-family:var(--mono)">'+fH(x.pointage)+'</td><td style="text-align:right;font-family:var(--mono)">'+fH(x.facture)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);font-weight:700;color:'+col+'">'+(nul?'0':((x.ecart>0?'+':'−')+fH(Math.abs(x.ecart))))+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono);font-weight:700;color:'+col+'">'+(nul?'—':((x.montant<0?'−':'')+'<span data-money>'+fN(Math.abs(x.montant))+'</span>'))+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  if(rg.lignesPlus.length)h+='<div style="font-size:12px;margin-top:6px">→ Facture complémentaire : <b><span data-money>'+fN(rg.htPlus)+'</span> XPF HT</b></div>';
+  if(rg.lignesMoins.length)h+='<div style="font-size:12px;margin-top:4px">→ Avoir sur '+esc(rg.base.num)+' : <b style="color:var(--red)">−<span data-money>'+fN(rg.htMoins)+'</span> XPF HT</b></div>';
+  return h;
+}
+function _ptFactRegulariser(d,bd,base){
+  var pfx=ptFactState.pfx;
+  var periodStr='du '+fD(bd.start)+' au '+fD(bd.end);
+  var rg=_ptRegulCalc(pfx,bd);
+  var docs=[base.num].concat((rg?rg.complements:[]).map(function(f){return f.num;})).join(' + ');
+  if(!rg||(!rg.lignesPlus.length&&!rg.lignesMoins.length)){
+    alert('Aucun écart : '+docs+' couvre déjà exactement le pointage '+periodStr+'.\n\nRien à facturer ni à créditer.');
+    return;
+  }
+  var rafraichir=function(){
+    if(typeof renderPtBcHebdo==='function')renderPtBcHebdo();
+    if(typeof _ptFactRenderBcBox==='function')_ptFactRenderBcBox();
+    if(typeof _ptFactCompute==='function')_ptFactCompute();
+  };
+  if(rg.lignesMoins.length){
+    var txtM=rg.lignesMoins.map(function(l){return '• '+fH(l.qte)+' h — '+l.desc+' × '+fN(l.pu)+' = −'+fN(l.total)+' XPF';}).join('\n');
+    if(confirm('La période '+periodStr+' est déjà facturée ('+docs+', émise) et le pointage compte MOINS d\'heures :\n\n'+txtM+'\n\nCréer l\'AVOIR sur '+base.num+' (−'+fN(rg.htMoins)+' XPF HT) ?')){
+      var av=_ptRegulCreerAvoir(pfx,base,rg,bd);
+      if(typeof showBCSaveToast==='function')showBCSaveToast('✓ Avoir '+av.num+' créé sur '+base.num+' (−'+fN(rg.htMoins)+' XPF HT)');
+    }
+  }
+  if(!rg.lignesPlus.length){rafraichir();return;}
+  var txtP=rg.lignesPlus.map(function(l){return '• +'+fH(l.qte)+' h — '+l.desc+' × '+fN(l.pu)+' = '+fN(l.total)+' XPF';}).join('\n');
+  if(!confirm('La période '+periodStr+' est déjà facturée ('+docs+', émise) et le pointage compte PLUS d\'heures :\n\n'+txtP+'\n\nPréparer la FACTURE COMPLÉMENTAIRE ('+fN(rg.htPlus)+' XPF HT) ? '+base.num+' ne sera pas modifiée.')){rafraichir();return;}
+  var incMaj=(ptFactState.bcIncludeMajorees!==false);
+  var bcConsumption=null;
+  if(ptFactState.bcId){
+    var map={};
+    rg.lignesPlus.forEach(function(l){if(incMaj||l.key==='hnj')map[l.base]=(map[l.base]||0)+l.qte;});
+    if(Object.keys(map).length){
+      bcConsumption=_ptFactImputerBc(pfx,ptFactState.bcId,map,null);
+      if(bcConsumption===false){rafraichir();return;}
+    }
+  }
+  var objBase=(d&&d.objet&&d.objet.trim())?d.objet.trim():'Prestation de service — Main d\'œuvre';
+  var objet=objBase+' — Complément période du '+fD(bd.start)+' au '+fD(bd.end)+' (facture '+base.num+')';
+  _ptFactNouveauBrouillon(d,objet,_ptFactToFALines({lines:rg.lignesPlus},d.client),bcConsumption,incMaj,base.id);
+}
+// Avoir en QUANTITÉ issu du pointage : lignes au PU déjà facturé, négatif.
+function _ptRegulCreerAvoir(pfx,base,rg,bd){
+  _ensureAvoirShape();
+  var exo=isClientExo(base.client);
+  var lines=rg.lignesMoins.map(function(l){
+    return {ref:'',designation:l.desc,tgc:(l.tgc!=null?l.tgc:(exo?0:6)),unite:'H',qte:l.qte,pu:-l.pu,_sec:'service'};
+  });
+  var t=_avoirTotaux(lines,exo);
+  var incMaj=(base._bcConsumptionIncludesMajorees!==false);
+  var map={};
+  rg.lignesMoins.forEach(function(l){if(incMaj||l.key==='hnj')map[l.base]=(map[l.base]||0)+l.qte;});
+  var av={
+    id:Date.now(),
+    num:nxt('av',getClientPrefix(base.client||'')),
+    date:td(),
+    client:base.client,contact:base.contact||'',email:base.email||'',adresse:base.adresse||'',civilite:base.civilite||'',
+    type:base.type||'Prestation de service',
+    avoirOf:base.id,avoirOfNum:base.num||'',
+    avoirReason:'Régularisation du pointage — période du '+fD(bd.start)+' au '+fD(bd.end),
+    lines:lines,
+    ht:t.ht,tgc:t.tgc,ttc:t.ttc,tgcM:base.tgcM||'tgc',
+    _regulQte:true
+  };
+  var rest=_bcRestitution(pfx,[base].concat(rg.complements),map);
+  if(rest.length)av._bcConsumption=rest;
+  DB.avoirs.push(av);
+  saveDB();
+  return av;
+}
+// Heures RENDUES aux BC par un avoir de quantité : on reprend, du plus récent au
+// plus ancien, les BC que les documents de la période avaient consommés à ce
+// tarif, sans jamais rendre plus que ce qu'ils avaient pris (avoirs antérieurs
+// déduits). Les imputations sur un autre tarif (imputeDe) ne sont pas rendues.
+function _bcRestitution(pfx,docs,rateQtyMap){
+  var ids={};(docs||[]).forEach(function(f){ids[f.id]=true;});
+  var rows=[];
+  Object.keys(rateQtyMap||{}).forEach(function(rk){
+    var r=Number(rk), need=Number(rateQtyMap[rk])||0;
+    var pris={}, ordre=[];
+    (docs||[]).forEach(function(f){(f._bcConsumption||[]).forEach(function(c){
+      if(Number(c.rate)!==r||c.imputeDe)return;
+      if(!pris[c.bcId])pris[c.bcId]={n:0,num:c.bcNum};
+      pris[c.bcId].n+=Number(c.qte)||0;
+      var i=ordre.indexOf(c.bcId);if(i>=0)ordre.splice(i,1);ordre.push(c.bcId);
+    });});
+    (DB.avoirs||[]).forEach(function(a){
+      if(!a||!ids[a.avoirOf])return;
+      (a._bcConsumption||[]).forEach(function(c){if(Number(c.rate)===r&&pris[c.bcId])pris[c.bcId].n+=Number(c.qte)||0;});
+    });
+    for(var i=ordre.length-1;i>=0&&need>0.001;i--){
+      var p=pris[ordre[i]], take=Math.min(need,Math.max(0,p.n));
+      if(take<=0.001)continue;
+      rows.push({bcId:ordre[i],bcNum:p.num,rate:r,qte:-take,montant:-Math.round(take*r)});
+      need-=take;
+    }
+  });
+  return rows;
+}
+
+// =============================================================================
+// IMPORT DU POINTAGE DEPUIS UN FICHIER EXCEL (Time Sheet client) — 11/09/2026
+// =============================================================================
+// Les pointages d'un client arrivent dans un Excel (« TS du … ») jusqu'ici ressaisi à la
+// main. Format lu : une ligne d'en-têtes « HJ / HN » (jour / nuit, 2 colonnes par
+// jour), les DATES sur une ligne au-dessus, puis une ligne par salarié (nom en
+// colonne A) jusqu'à la ligne « TOTAL ».
+// Le « TOTAL HT » écrit par l'Excel est relevé comme TÉMOIN seulement : il s'est
+// trompé deux fois sur le fichier réel (heures majorées junior au tarif senior ;
+// un jour sauté). La vérité reste le moteur du GRC.
+// Une semaine déjà saisie n'est JAMAIS écrasée sans accord explicite.
+// =============================================================================
+function _ptCellIso(v){
+  if(v instanceof Date && !isNaN(v)){
+    // +12 h : une lecture Excel peut rendre 23:59:50 la veille, ou minuit UTC.
+    var t=new Date(v.getTime()+12*3600000);
+    return t.getFullYear()+'-'+_pad2(t.getMonth()+1)+'-'+_pad2(t.getDate());
+  }
+  if(typeof v==='string'){
+    var m=v.match(/^(\d{4})-(\d{2})-(\d{2})/);if(m)return m[1]+'-'+m[2]+'-'+m[3];
+    var m2=v.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);if(m2)return m2[3]+'-'+_pad2(+m2[2])+'-'+_pad2(+m2[1]);
+  }
+  if(typeof v==='number' && v>30000 && v<80000){ // numéro de série Excel
+    var d=new Date(Math.round((v-25569)*86400000));
+    return d.getUTCFullYear()+'-'+_pad2(d.getUTCMonth()+1)+'-'+_pad2(d.getUTCDate());
+  }
+  return '';
+}
+function _ptParseTimesheet(rows){
+  var res={noms:[],semaines:{},totauxHT:{},erreur:''};
+  rows=rows||[];
+  var txt=function(v){return (v==null)?'':String(v).trim();};
+  var rH=-1;
+  for(var r=0;r<rows.length&&rH<0;r++){
+    if((rows[r]||[]).filter(function(v){return txt(v).toUpperCase()==='HJ';}).length>=7)rH=r;
+  }
+  if(rH<0){res.erreur='En-têtes « HJ / HN » introuvables';return res;}
+  var cols=[];
+  (rows[rH]||[]).forEach(function(v,c){
+    if(txt(v).toUpperCase()!=='HJ')return;
+    var iso='';
+    for(var rd=rH-1;rd>=0&&!iso;rd--)iso=_ptCellIso((rows[rd]||[])[c]);
+    if(iso)cols.push({c:c,iso:iso,hn:txt((rows[rH]||[])[c+1]).toUpperCase()==='HN'});
+  });
+  if(!cols.length){res.erreur='Dates introuvables au-dessus des en-têtes';return res;}
+  var num=function(v){var x=Number(v);return (v!==null&&v!==''&&isFinite(x)&&x>0)?x:null;};
+  for(var re=rH+1;re<rows.length;re++){
+    var row=rows[re]||[], nom=txt(row[0]);
+    if(!nom)continue;
+    if(/^TOTAL/i.test(nom))break;
+    if(res.noms.indexOf(nom)<0)res.noms.push(nom);
+    cols.forEach(function(col){
+      var hj=num(row[col.c]), hn=col.hn?num(row[col.c+1]):null;
+      if(hj==null&&hn==null)return;
+      var mon=_ptMondayOf(col.iso);
+      var idx=Math.round((new Date(col.iso+'T12:00:00')-new Date(mon+'T12:00:00'))/86400000);
+      var s=res.semaines[mon]||(res.semaines[mon]={});
+      var e=s[nom]||(s[nom]={jour:[null,null,null,null,null,null,null],nuit:[null,null,null,null,null,null,null]});
+      if(hj!=null)e.jour[idx]=hj;
+      if(hn!=null)e.nuit[idx]=hn;
+    });
+  }
+  // Témoin « TOTAL HT » : libellé posé sous le dimanche de la semaine, valeur =
+  // premier nombre à sa droite (3 colonnes au plus).
+  var dims=cols.filter(function(col){return new Date(col.iso+'T12:00:00').getDay()===0;});
+  rows.forEach(function(row){
+    (row||[]).forEach(function(v,c){
+      if(txt(v).toUpperCase()!=='TOTAL HT')return;
+      var val=null;
+      for(var k=1;k<=3&&val==null;k++){var x=row[c+k];if(x!==null&&x!==undefined&&x!==''&&isFinite(Number(x)))val=Number(x);}
+      if(val==null)return;
+      var best=null;
+      dims.forEach(function(col){if(col.c<=c&&(!best||col.c>best.c))best=col;});
+      if(best)res.totauxHT[_ptMondayOf(best.iso)]=val;
+    });
+  });
+  return res;
+}
+function _ptNormNom(s){
+  return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/[^A-Z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
+}
+function _ptLev(a,b){
+  a=a||'';b=b||'';
+  var d=[];for(var i=0;i<=a.length;i++){d[i]=[i];}
+  for(var j=0;j<=b.length;j++)d[0][j]=j;
+  for(i=1;i<=a.length;i++)for(j=1;j<=b.length;j++)
+    d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+  return d[a.length][b.length];
+}
+// Salarié du GRC correspondant à un nom de l'Excel.
+// exact  = correspondance mémorisée, ou NOM + PRÉNOM identiques ;
+// proche = nom à une faute près (deux si le nom est long) — à confirmer ;
+// ex aequo = aucune proposition (jamais de devinette entre deux salariés).
+function _ptMatchEmploye(nomExcel){
+  _ensurePointageShape();
+  var n=_ptNormNom(nomExcel);
+  if(!n)return {id:null,niveau:null};
+  var emps=(DB.employes||[]).filter(function(e){return e.actif!==false;});
+  var memo=emps.filter(function(e){return (e.nomsImport||[]).indexOf(n)>=0;});
+  if(memo.length===1)return {id:memo[0].id,niveau:'exact'};
+  var ex=emps.filter(function(e){
+    var a=_ptNormNom(e.nom),b=_ptNormNom(e.prenom);
+    return n===(a+' '+b).trim()||n===(b+' '+a).trim();
+  });
+  if(ex.length===1)return {id:ex[0].id,niveau:'exact'};
+  var t=n.split(' ');
+  var best=null,bestS=99,exAequo=false;
+  emps.forEach(function(e){
+    var a=_ptNormNom(e.nom), pre=_ptNormNom(e.prenom).split(' ')[0]||'';
+    var dNom=_ptLev(t[0],a);
+    if(dNom>(a.length>=6?2:1))return;
+    var preOk=t.slice(1).some(function(x){return x===pre||_ptLev(x,pre)<=1;});
+    var s=dNom*2+(preOk?0:1);
+    if(s<bestS){best=e;bestS=s;exAequo=false;}else if(s===bestS)exAequo=true;
+  });
+  if(best&&!exAequo)return {id:best.id,niveau:'proche'};
+  return {id:null,niveau:null};
+}
+function _ptSemaineParId(semaineParNom,mapping){
+  var o={};
+  Object.keys(semaineParNom||{}).forEach(function(nom){var id=mapping&&mapping[nom];if(id)o[String(id)]=semaineParNom[nom];});
+  return o;
+}
+// 'absente' | 'identique' | 'differente' | 'autre-site'
+function _ptImportStatut(pfx,monday,entriesById){
+  _ensurePointageShape();
+  var rec=DB.pointages.find(function(w){return w.monday===monday;});
+  var sept=function(a){var o=[];for(var i=0;i<7;i++)o.push(Number(a&&a[i])||0);return o.join(',');};
+  var aDesHeures=function(e){return !!e&&(sept(e.jour)!=='0,0,0,0,0,0,0'||sept(e.nuit)!=='0,0,0,0,0,0,0');};
+  if(!rec||!Object.keys(rec.entries||{}).some(function(k){return aDesHeures(rec.entries[k]);}))return 'absente';
+  if(rec.site&&rec.site!==pfx)return 'autre-site';
+  var ids={};
+  Object.keys(rec.entries||{}).forEach(function(k){if(aDesHeures(rec.entries[k]))ids[k]=true;});
+  Object.keys(entriesById||{}).forEach(function(k){ids[k]=true;});
+  var diff=Object.keys(ids).some(function(k){
+    var a=rec.entries[k]||{},b=entriesById[k]||{};
+    return sept(a.jour)!==sept(b.jour)||sept(a.nuit)!==sept(b.nuit);
+  });
+  return diff?'differente':'identique';
+}
+// HT que le moteur calculera pour une semaine de l'Excel, SANS l'enregistrer.
+function _ptImportHT(pfx,monday,entriesById){
+  var entries={};
+  Object.keys(entriesById||{}).forEach(function(k){var e=entriesById[k];entries[k]={jour:e.jour,nuit:e.nuit,statut:['','','','','','','']};});
+  var agg=ptAggregatePeriod(monday,_ptAddDays(monday,6),{site:pfx,pointages:[{monday:monday,site:pfx,entries:entries}]});
+  return _ptLinesFromAgg(pfx,agg).totalHT;
+}
+function _ptImportSemaines(pfx,semainesParNom,mapping,mondays,opts){
+  _ensurePointageShape();
+  opts=opts||{};
+  var forcer=opts.forcer||[];
+  var out={crees:[],remplacees:[],ignorees:[]};
+  // Correspondances de noms confirmées : mémorisées sur la fiche salarié.
+  Object.keys(mapping||{}).forEach(function(nom){
+    var emp=(DB.employes||[]).find(function(e){return String(e.id)===String(mapping[nom]);});
+    if(!emp)return;
+    var n=_ptNormNom(nom);
+    if(!Array.isArray(emp.nomsImport))emp.nomsImport=[];
+    if(emp.nomsImport.indexOf(n)<0)emp.nomsImport.push(n);
+  });
+  (mondays||[]).forEach(function(mon){
+    var parId=_ptSemaineParId((semainesParNom||{})[mon],mapping);
+    if(!Object.keys(parId).length){out.ignorees.push({monday:mon,raison:'aucune heure'});return;}
+    var st=_ptImportStatut(pfx,mon,parId);
+    if(st==='identique'){out.ignorees.push({monday:mon,raison:'déjà identique'});return;}
+    if(st==='autre-site'){out.ignorees.push({monday:mon,raison:'semaine saisie pour un autre site'});return;}
+    if(st==='differente'&&forcer.indexOf(mon)<0){out.ignorees.push({monday:mon,raison:'différente — non écrasée'});return;}
+    var rec=_ptGetWeek(mon,true);
+    if(DB.pointages.some(function(w){return w!==rec&&w.id===rec.id;})){
+      rec.id=DB.pointages.reduce(function(mx,w){return Math.max(mx,Number(w.id)||0);},0)+1;
+    }
+    rec.site=pfx;
+    rec.entries={};
+    Object.keys(parId).forEach(function(id){
+      var e=parId[id];
+      rec.entries[id]={jour:(e.jour||[]).slice(0,7),nuit:(e.nuit||[]).slice(0,7),statut:['','','','','','','']};
+    });
+    (st==='differente'?out.remplacees:out.crees).push(mon);
+  });
+  saveDB();
+  return out;
+}
+// ---- UI de l'import (modale mPTIMPORT) ----
+var _ptImp=null;
+function _ptImpBadge(t,c){
+  var col={ok:'#34d399',amb:'#fbbf24',red:'#f87171',blu:'#60a5fa'}[c]||'var(--muted)';
+  return '<span style="display:inline-block;font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:4px;border:1px solid '+col+';color:'+col+';white-space:nowrap">'+esc(t)+'</span>';
+}
+function ptImportOuvrir(){
+  _ptImp=null;
+  var fi=document.getElementById('ptimp-file');if(fi)fi.value='';
+  var s=document.getElementById('ptimp-site');
+  if(s){
+    var rec=_ptGetWeek(ptMonday,false);
+    var def=(rec&&rec.site)||ptFactState.pfx||'';
+    s.innerHTML=_ptSiteOptions(def.indexOf('Atelier')<0?def:'');
+  }
+  sv('ptimp-feuille','—');
+  ptImportRender();
+  om('mPTIMPORT');
+}
+function ptImportFichier(ev){
+  var f=ev&&ev.target&&ev.target.files&&ev.target.files[0];
+  if(!f)return;
+  if(typeof XLSX==='undefined'){alert('❌ Lecteur Excel non chargé. Recharge la page.');return;}
+  var rd=new FileReader();
+  rd.onerror=function(){alert('❌ Lecture du fichier impossible.');};
+  rd.onload=function(e){
+    try{
+      var wb=XLSX.read(new Uint8Array(e.target.result),{type:'array',cellDates:true});
+      var trouve=null;
+      wb.SheetNames.some(function(sn){
+        var rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:null});
+        var px=_ptParseTimesheet(rows);
+        if(!px.erreur&&px.noms.length){trouve={feuille:sn,px:px};return true;}
+        return false;
+      });
+      if(!trouve){alert('⚠ Aucune feuille de pointage reconnue dans ce fichier (en-têtes « HJ / HN », dates au-dessus, un salarié par ligne).');return;}
+      var mapping={},niveaux={};
+      trouve.px.noms.forEach(function(n){var m=_ptMatchEmploye(n);niveaux[n]=m.niveau;if(m.id)mapping[n]=m.id;});
+      _ptImp={nomFichier:f.name,feuille:trouve.feuille,px:trouve.px,mapping:mapping,niveaux:niveaux,coches:null};
+      sv('ptimp-feuille',trouve.feuille);
+      ptImportRender();
+    }catch(err){alert('❌ Lecture impossible : '+err.message);}
+  };
+  rd.readAsArrayBuffer(f);
+}
+function ptImportSetNom(nom,val){
+  if(!_ptImp)return;
+  if(val)_ptImp.mapping[nom]=Number(val);else delete _ptImp.mapping[nom];
+  _ptImp.niveaux[nom]=val?'confirmé':null;
+  ptImportRender();
+}
+function ptImportToggle(mon,on){if(_ptImp&&_ptImp.coches)_ptImp.coches[mon]=!!on;}
+function _ptImportDiffTexte(monday,parId){
+  var rec=DB.pointages.find(function(w){return w.monday===monday;})||{entries:{}};
+  var J=['L','M','M','J','V','S','D'];
+  var fmt=function(e){var a=[];for(var i=0;i<7;i++){var v=Number(e&&e.jour&&e.jour[i])||0;if(v)a.push(J[i]+' '+fH(v));}return a.join(' · ')||'—';};
+  var ids={};
+  Object.keys(rec.entries||{}).forEach(function(k){ids[k]=1;});
+  Object.keys(parId||{}).forEach(function(k){ids[k]=1;});
+  return Object.keys(ids).map(function(k){
+    var a=fmt(parId[k]),g=fmt(rec.entries[k]);
+    if(a===g)return '';
+    var emp=(DB.employes||[]).find(function(e){return String(e.id)===k;});
+    return esc(emp?emp.nom:k)+' — Excel : '+esc(a)+' / GRC : '+esc(g);
+  }).filter(Boolean).join('<br>');
+}
+function ptImportRender(){
+  var body=document.getElementById('ptimp-body');if(!body)return;
+  if(!_ptImp){
+    body.innerHTML='<div style="color:var(--muted);font-size:12px;padding:10px 0">Choisis le fichier Excel du pointage (format Time Sheet : dates, colonnes HJ / HN, une ligne par salarié).</div>';
+    return;
+  }
+  var pfx=gvg('ptimp-site');
+  var emps=(DB.employes||[]).filter(function(e){return e.actif!==false;});
+  var h='<div style="font-weight:700;font-size:12px;margin:6px 0">1 · Les noms <span style="font-weight:400;color:var(--muted);font-size:10.5px">(une correspondance confirmée est mémorisée)</span></div>'+
+    '<div style="overflow-x:auto"><table class="items-tbl"><thead><tr><th>Nom dans l\'Excel</th><th>Salarié du GRC</th><th></th></tr></thead><tbody>';
+  _ptImp.px.noms.forEach(function(n){
+    var cur=_ptImp.mapping[n]||'', niv=_ptImp.niveaux[n];
+    var opts='<option value="">— ignorer —</option>'+emps.map(function(e){return '<option value="'+e.id+'"'+(String(e.id)===String(cur)?' selected':'')+'>'+esc(e.nom+' '+(e.prenom||''))+'</option>';}).join('');
+    var b=(niv==='exact'||niv==='confirmé')?_ptImpBadge(niv,'ok'):(niv==='proche'?_ptImpBadge('à confirmer','amb'):_ptImpBadge('non reconnu','red'));
+    h+='<tr><td>'+esc(n)+'</td><td><select class="form-select" data-nom="'+esc(n)+'" onchange="ptImportSetNom(this.getAttribute(\'data-nom\'),this.value)">'+opts+'</select></td><td>'+b+'</td></tr>';
+  });
+  h+='</tbody></table></div><div style="font-weight:700;font-size:12px;margin:14px 0 6px">2 · Les semaines</div>';
+  if(!pfx){body.innerHTML=h+'<div style="color:var(--amber);font-size:12px">Choisis le site / client.</div>';return;}
+  var init=!_ptImp.coches;
+  if(init)_ptImp.coches={};
+  h+='<div style="overflow-x:auto"><table class="items-tbl"><thead><tr><th></th><th>Semaine</th><th>Dans le GRC</th><th style="text-align:right">HT GRC</th><th style="text-align:right">HT Excel (témoin)</th></tr></thead><tbody>';
+  Object.keys(_ptImp.px.semaines).sort().forEach(function(mon){
+    var parId=_ptSemaineParId(_ptImp.px.semaines[mon],_ptImp.mapping);
+    var vide=!Object.keys(parId).length;
+    var st=vide?'vide':_ptImportStatut(pfx,mon,parId);
+    if(init)_ptImp.coches[mon]=(st==='absente');
+    var ht=vide?0:_ptImportHT(pfx,mon,parId);
+    var hx=_ptImp.px.totauxHT[mon];
+    var eq=(hx==null||vide)?'':(Math.round(hx)===Math.round(ht)?_ptImpBadge('=','ok'):_ptImpBadge('écart '+fN(ht-hx),'amb'));
+    var lab={absente:_ptImpBadge('absente → sera créée','blu'),identique:_ptImpBadge('déjà identique','ok'),
+      differente:_ptImpBadge('différente — cocher pour remplacer','amb'),'autre-site':_ptImpBadge('saisie pour un autre site','red'),vide:_ptImpBadge('aucune heure reconnue','amb')}[st];
+    if(st==='differente'){var dt=_ptImportDiffTexte(mon,parId);if(dt)lab+='<div style="font-size:10.5px;color:var(--muted);margin-top:3px">'+dt+'</div>';}
+    var bloque=(st==='identique'||st==='autre-site'||st==='vide');
+    h+='<tr><td><input type="checkbox"'+(_ptImp.coches[mon]&&!bloque?' checked':'')+(bloque?' disabled':'')+' onchange="ptImportToggle(\''+mon+'\',this.checked)"></td>'+
+      '<td style="white-space:nowrap">Semaine '+_ptWeekNum(mon)+' · '+fD(mon)+' → '+fD(_ptAddDays(mon,6))+'</td><td>'+lab+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+(vide?'—':fN(ht))+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+(hx!=null?fN(hx)+' '+eq:'—')+'</td></tr>';
+  });
+  h+='</tbody></table></div><div style="font-size:10.5px;color:var(--muted);margin-top:6px">Le total HT de l\'Excel est un témoin : en cas d\'écart, c\'est le calcul du GRC qui fait foi.</div>';
+  body.innerHTML=h;
+}
+function ptImportValider(){
+  if(!_ptImp){alert('Choisis d\'abord un fichier.');return;}
+  var pfx=gvg('ptimp-site');
+  if(!pfx){alert('Choisis le site / client.');return;}
+  var mons=Object.keys(_ptImp.coches||{}).filter(function(m){return _ptImp.coches[m];}).sort();
+  if(!mons.length){alert('Aucune semaine cochée.');return;}
+  var nomEmp=function(id){var e=(DB.employes||[]).find(function(x){return String(x.id)===String(id);});return e?(e.nom+' '+(e.prenom||'')):'?';};
+  var aConf=_ptImp.px.noms.filter(function(n){return _ptImp.mapping[n]&&_ptImp.niveaux[n]==='proche';});
+  var ignores=_ptImp.px.noms.filter(function(n){return !_ptImp.mapping[n];});
+  var forcer=mons.filter(function(m){return _ptImportStatut(pfx,m,_ptSemaineParId(_ptImp.px.semaines[m],_ptImp.mapping))==='differente';});
+  var msg='Importer '+mons.length+' semaine(s) de pointage pour '+pfx+' ?';
+  if(forcer.length)msg+='\n\n⚠ '+forcer.length+' semaine(s) déjà saisie(s) seront REMPLACÉES : '+forcer.map(fD).join(', ');
+  if(aConf.length)msg+='\n\nCorrespondances à confirmer :\n'+aConf.map(function(n){return '• '+n+' → '+nomEmp(_ptImp.mapping[n]);}).join('\n');
+  if(ignores.length)msg+='\n\nIgnorés (non reconnus) : '+ignores.join(', ');
+  if(!confirm(msg))return;
+  var r=_ptImportSemaines(pfx,_ptImp.px.semaines,_ptImp.mapping,mons,{forcer:forcer});
+  cm('mPTIMPORT');
+  if(r.crees.length||r.remplacees.length){ptMonday=(r.crees.concat(r.remplacees)).sort()[0];}
+  if(typeof renderPtSaisie==='function')renderPtSaisie();
+  if(typeof showBCSaveToast==='function')showBCSaveToast('📥 Pointage importé : '+r.crees.length+' semaine(s) créée(s)'+(r.remplacees.length?', '+r.remplacees.length+' remplacée(s)':'')+(r.ignorees.length?', '+r.ignorees.length+' ignorée(s)':''));
 }
 
 // =============================================================================
@@ -43475,6 +44086,57 @@ function handleBcHebdoSelected(ev){
   var f=ev&&ev.target&&ev.target.files&&ev.target.files[0];
   if(f)_processBcHebdoPdf(f);
 }
+// Garde « colonnes inversées » (cas réel 08/2026 : ligne lue avec le tarif horaire
+// dans la colonne Qté et le nombre d'heures dans la colonne PU).
+// ⚠ Qté × PU = Montant ne détecte RIEN : le produit est identique dans les deux
+// sens. Le seul repère
+// fiable est le tarif — un PU horaire est l'un des tarifs de vente du client
+// (Salariés › Tarifs). PU hors grille ET quantité dans la grille = inversion.
+// Sans grille pour ce client : aucun avis (jamais de fausse alerte).
+function _bcHebdoInversions(pfx,lignes){
+  var g=(DB.tarifsPointage&&DB.tarifsPointage[pfx])||{};
+  var tarifs=Object.keys(g).map(function(k){return Number(g[k]);}).filter(function(v){return v>0;});
+  if(!tarifs.length)return [];
+  var out=[];
+  (lignes||[]).forEach(function(l,i){
+    var pu=Number(l.puRemise||l.puDevise)||0, q=Number(l.qte)||0;
+    if(tarifs.indexOf(pu)<0&&tarifs.indexOf(q)>=0)out.push(i);
+  });
+  return out;
+}
+// Enregistre un BC hebdomadaire lu dans un PDF (séparé de la lecture pdf.js pour
+// être testable). Retourne l'id du BC, ou null si l'utilisateur annule.
+function _bcHebdoEnregistrer(pfx,parsed,f,bytes){
+  _ensurePointageShape();
+  var inv=_bcHebdoInversions(pfx,parsed.lignes);
+  if(inv.length){
+    var det=inv.map(function(i){var l=parsed.lignes[i];return '• Ligne '+(i+1)+' : Qté '+fN(l.qte)+' · PU '+fN(l.puRemise||l.puDevise)+'  →  '+fH(Number(l.puRemise||l.puDevise))+' h × '+fN(l.qte)+' XPF/h';}).join('\n');
+    if(confirm('⚠ Colonnes Qté / PU inversées dans le BC '+parsed.num+' ?\n\n'+det+'\n\nLe PU lu n\'est aucun tarif de vente de '+pfx+', la quantité en est un.\n\nOK = corriger · Annuler = garder tel quel')){
+      inv.forEach(function(i){var l=parsed.lignes[i];var q=Number(l.qte),pu=Number(l.puRemise||l.puDevise);l.qte=pu;l.puDevise=q;l.puRemise=q;});
+    }
+  }
+  if(!Array.isArray(DB.bcHebdo[pfx]))DB.bcHebdo[pfx]=[];
+  var existing=DB.bcHebdo[pfx].find(function(b){return b.num===parsed.num;});
+  var bcId;
+  if(existing){
+    if(!confirm('Un BC "'+parsed.num+'" existe déjà pour '+pfx+'. Le remplacer par les données de ce PDF ?'))return null;
+    existing.dateEnvoi=parsed.dateEnvoi;existing.heureEnvoi=parsed.heureEnvoi;existing.refClient=parsed.refClient;
+    existing.lignes=parsed.lignes;existing.totalHT=parsed.totalHT;
+    existing.filename=f.name;existing.savedAt=new Date().toISOString();
+    bcId=existing.id;
+  } else {
+    var bcObj={id:Date.now(),num:parsed.num,dateEnvoi:parsed.dateEnvoi,heureEnvoi:parsed.heureEnvoi,
+      refClient:parsed.refClient,lignes:parsed.lignes,totalHT:parsed.totalHT,
+      ajustementInitial:{},filename:f.name,savedAt:new Date().toISOString()};
+    DB.bcHebdo[pfx].push(bcObj);
+    bcId=bcObj.id;
+  }
+  saveDB();
+  if(bytes)_storeBcHebdoPdf(bcId,f.name,bytes);
+  renderPtBcHebdo();_ptFactRenderBcBox();_ptFactRenderBcMajBox();
+  if(typeof showBCSaveToast==='function')showBCSaveToast('📋 BC '+parsed.num+' importé — vérifie les données puis rattache-le à une facture');
+  return bcId;
+}
 function _processBcHebdoPdf(f){
   var pfx=ptFactState.pfx;
   if(!pfx){alert('Choisis d\'abord un client.');return;}
@@ -43505,27 +44167,7 @@ function _processBcHebdoPdf(f){
           var all=[];pages.forEach(function(pp){pp.forEach(function(it){all.push(it);});});
           var parsed=parseBCHebdoPdfItems(all);
           if(!parsed.num){alert('⚠ N° de BC introuvable dans ce PDF — vérifie qu\'il s\'agit bien d\'un Bon de Commande AEI.');return;}
-          _ensurePointageShape();
-          if(!Array.isArray(DB.bcHebdo[pfx]))DB.bcHebdo[pfx]=[];
-          var existing=DB.bcHebdo[pfx].find(function(b){return b.num===parsed.num;});
-          var bcId;
-          if(existing){
-            if(!confirm('Un BC "'+parsed.num+'" existe déjà pour '+pfx+'. Le remplacer par les données de ce PDF ?'))return;
-            existing.dateEnvoi=parsed.dateEnvoi;existing.heureEnvoi=parsed.heureEnvoi;existing.refClient=parsed.refClient;
-            existing.lignes=parsed.lignes;existing.totalHT=parsed.totalHT;
-            existing.filename=f.name;existing.savedAt=new Date().toISOString();
-            bcId=existing.id;
-          } else {
-            var bcObj={id:Date.now(),num:parsed.num,dateEnvoi:parsed.dateEnvoi,heureEnvoi:parsed.heureEnvoi,
-              refClient:parsed.refClient,lignes:parsed.lignes,totalHT:parsed.totalHT,
-              ajustementInitial:{},filename:f.name,savedAt:new Date().toISOString()};
-            DB.bcHebdo[pfx].push(bcObj);
-            bcId=bcObj.id;
-          }
-          saveDB();
-          _storeBcHebdoPdf(bcId,f.name,bytes);
-          renderPtBcHebdo();_ptFactRenderBcBox();_ptFactRenderBcMajBox();
-          if(typeof showBCSaveToast==='function')showBCSaveToast('📋 BC '+parsed.num+' importé — vérifie les données puis rattache-le à une facture');
+          _bcHebdoEnregistrer(pfx,parsed,f,bytes);
         });
       }).catch(function(err){alert('❌ Lecture PDF impossible : '+(err&&err.message?err.message:err));});
     }catch(err){alert('❌ Erreur : '+err.message);}
@@ -43563,7 +44205,15 @@ function _bcConsumedSoFar(pfx,bcId,rate,excludeFactureId){
     f._bcConsumption.forEach(function(c){if(c.bcId===bcId&&Number(c.rate)===r)s+=Number(c.qte)||0;});
     return s;
   },0);
-  return base+fromFactures;
+  // Avoirs de quantité (régularisation du pointage) : lignes NÉGATIVES qui
+  // rendent au BC les heures créditées (cf _bcRestitution).
+  var fromAvoirs=(DB.avoirs||[]).reduce(function(s,a){
+    if(!a||getClientPrefix(a.client||'')!==pfx)return s;
+    if(!Array.isArray(a._bcConsumption))return s;
+    a._bcConsumption.forEach(function(c){if(c.bcId===bcId&&Number(c.rate)===r)s+=Number(c.qte)||0;});
+    return s;
+  },0);
+  return base+fromFactures+fromAvoirs;
 }
 function _bcRemaining(pfx,bc,rate,excludeFactureId){
   return Math.max(0,_bcAuthorizedQte(bc,rate)-_bcConsumedSoFar(pfx,bc.id,rate,excludeFactureId));
@@ -43619,6 +44269,46 @@ function _bcAllocate(pfx,startBcId,rateQtyMap,excludeFactureId){
     if(need>0.001)unallocated[rateKey]=need;
   });
   return {alloc:alloc,unallocated:unallocated};
+}
+
+// Imputation sur le solde d'un AUTRE tarif, pour des heures qu'aucun BC ne couvre
+// à leur tarif (accord client explicite du 11/09/2026 : heures junior sur le solde
+// senior). Imputation en MONTANT : le BC est un budget, les heures junior
+// consomment leur montant sur la ligne senior (donc moins d'heures de cette
+// ligne). Chaque ligne porte imputeDe {rate, qte} pour que
+// le suivi imprimé l'énonce. allocDeja = lignes déjà prises par CETTE facture
+// (même tarif), qui ne sont pas encore en base.
+function _bcAllocateAutreTarif(pfx,startBcId,unallocated,excludeFactureId,allocDeja){
+  var bcs=(DB.bcHebdo[pfx]||[]).slice().sort(function(a,b){
+    return (a.dateEnvoi||'')<(b.dateEnvoi||'')?-1:((a.dateEnvoi||'')>(b.dateEnvoi||'')?1:0);
+  });
+  var startIdx=bcs.findIndex(function(b){return b.id===startBcId;});
+  var alloc=[],reste={};
+  if(startIdx<0)return {alloc:alloc,unallocated:Object.assign({},unallocated)};
+  var pris=function(bcId,rate){
+    return (allocDeja||[]).concat(alloc).reduce(function(s,c){return s+((c.bcId===bcId&&Number(c.rate)===Number(rate))?(Number(c.qte)||0):0);},0);
+  };
+  Object.keys(unallocated||{}).forEach(function(rk){
+    var r=Number(rk), besoin=Math.round((Number(unallocated[rk])||0)*r);
+    for(var i=startIdx;i<bcs.length&&besoin>0.5;i++){
+      var bc=bcs[i];
+      _bcRatesList(bc).forEach(function(r2){
+        if(r2===r||besoin<=0.5)return;
+        var auth=_bcAuthorizedQte(bc,r2);
+        if(auth<=0)return;
+        var avant=_bcConsumedSoFar(pfx,bc.id,r2,excludeFactureId)+pris(bc.id,r2);
+        var resteXpf=Math.max(0,auth-avant)*r2;
+        if(resteXpf<=0.5)return;
+        var montant=Math.min(resteXpf,besoin);
+        alloc.push({bcId:bc.id,bcNum:bc.num,rate:r2,qte:montant/r2,montant:Math.round(montant),
+          authorized:auth,before:avant,bcTotalHT:bc.totalHT,bcDateEnvoi:bc.dateEnvoi,
+          epuiseApres:(montant>=resteXpf-0.5),imputeDe:{rate:r,qte:montant/r}});
+        besoin-=montant;
+      });
+    }
+    if(besoin>0.5)reste[rk]=besoin/r;
+  });
+  return {alloc:alloc,unallocated:reste};
 }
 
 // ---- UI : cartes de suivi + import (onglet Facturation) ----
@@ -43925,7 +44615,7 @@ function _buildBcTrackHtml(pfx,f){
       var barColor=pct>=100?'#f87171':(pct>=85?'#f59e0b':'#2dd4bf');
       var tdN='style="text-align:right;padding:4px 7px"';
       return '<tr>'+
-        '<td '+tdN+'>'+fN(c.rate)+' XPF/h</td><td '+tdN+'>'+fH(authorized)+'</td><td '+tdN+'>'+fH(before)+'</td>'+
+        '<td '+tdN+'>'+fN(c.rate)+' XPF/h'+(c.imputeDe?'<div style="font-size:8.5px;color:#555">heures à '+fN(c.imputeDe.rate)+'</div>':'')+'</td><td '+tdN+'>'+fH(authorized)+'</td><td '+tdN+'>'+fH(before)+'</td>'+
         '<td '+tdN+'>'+fH(c.qte)+'</td><td '+tdN+'>'+fH(cumul)+'</td><td '+tdN+'>'+fH(reste)+'</td>'+
         '<td style="width:110px;padding:4px 7px"><div style="height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;'+PCA+'"><div style="height:100%;width:'+pct+'%;background:'+barColor+';'+PCA+'"></div></div></td>'+
       '</tr>';
@@ -43933,6 +44623,11 @@ function _buildBcTrackHtml(pfx,f){
     // Panneau factuel UNIQUEMENT : constate l'épuisement (et la bascule si
     // applicable), jamais de conseil/action adressé à l'utilisateur CALINSTRUM
     // (ex. "pense à demander un nouveau BC") — ce document part chez le CLIENT.
+    // Imputation sur le solde d'un autre tarif (accord client) : énoncée, factuelle.
+    var imputes=grp.rows.filter(function(c){return c.imputeDe;});
+    var imputeHtml=imputes.length?'<div style="margin-top:6px;font-size:9.8px;color:#1e3a5f">'+imputes.map(function(c){
+      return 'Imputation : '+fH(c.imputeDe.qte)+' h au tarif de '+fN(c.imputeDe.rate)+' XPF/h imputées sur le solde à '+fN(c.rate)+' XPF/h ('+fN(c.montant)+' XPF HT).';
+    }).join('<br>')+'</div>':'';
     var epuise=grp.rows.some(function(c){return c.epuiseApres;});
     var nextBcNum=order[oi+1]?byBc[order[oi+1]].bcNum:null;
     var alertHtml='';
@@ -43957,7 +44652,7 @@ function _buildBcTrackHtml(pfx,f){
           '<th style="background:#eef2f7;color:#1e3a5f;padding:4px 7px;text-align:right;font-size:8.8px;text-transform:uppercase;border-bottom:1px solid #cbd5e1">Consommation</th>'+
         '</tr></thead>'+
         '<tbody>'+rowsHtml+'</tbody>'+
-      '</table>'+alertHtml+
+      '</table>'+imputeHtml+alertHtml+
     '</div>';
   });
   return html;
