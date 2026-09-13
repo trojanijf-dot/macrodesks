@@ -1042,6 +1042,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="nav('catalogue')" title="Catalogue · Alt+W/X pour naviguer · Ctrl+N : nouvel article · Ctrl+F : rechercher"><span class="ico"><span class="ico-classic">🔧</span><i class="ti ti-package ico-pro"></i></span>Catalogue</button>
   <div class="sb-sec">Administratif</div>
   <button class="sb-item" onclick="nav('administratif');renderAdmin()" title="Administratif · export annuel CA/TGC/masse salariale pour l'expert-comptable"><span class="ico"><span class="ico-classic">📊</span><i class="ti ti-report-money ico-pro"></i></span>Administratif</button>
+  <button class="sb-item" onclick="nav('rentabilite');renderRentabilite()" title="Rentabilité Emerson · PO Emerson vs factures CALINSTRUM, bénéfice et marge par affaire"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-chart-donut ico-pro"></i></span>Rentabilité Emerson</button>
   <div class="sb-sec">Paramètres</div>
   <button class="sb-item" onclick="nav('params');renderParams()" title="Listes déroulantes · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">⚙️</span><i class="ti ti-list ico-pro"></i></span>Listes déroulantes</button>
   <button class="sb-item" onclick="nav('coutrevient');renderCoutRevient()" title="Coût de revient débarqué · seuils commerciaux et forfaits transitaire du moteur landed cost"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-calculator ico-pro"></i></span>Coût de revient</button>
@@ -1092,6 +1093,58 @@ body.has-dashboard-bg #page-dashboard .metric{
      UN SEUL sélecteur de période pilote à la fois l'écran (KPI/donuts/tableaux)
      ET le PDF téléchargé — plus de double logique Année (écran) / Période (export)
      qui pouvait diverger (demande explicite utilisateur, 11/08/2026). -->
+<div class="page" id="page-rentabilite">
+  <style>
+    #page-rentabilite .renta-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+    #page-rentabilite .renta-note{margin:0 0 10px;padding:7px 12px;border-left:3px solid var(--purple);background:rgba(167,139,250,.07);border-radius:6px;color:var(--muted);font-size:11.5px}
+    #page-rentabilite .renta-filtres{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 12px}
+    #page-rentabilite .renta-chip{font:11.5px var(--mono);border:1px solid var(--border);border-radius:999px;padding:4px 11px;background:var(--bg3);color:var(--text);cursor:pointer}
+    #page-rentabilite .renta-chip.on{border-color:var(--teal);color:var(--teal);background:rgba(45,212,191,.08)}
+    #page-rentabilite .renta-lbl{color:var(--muted);font-size:10.5px;margin:0 2px 0 8px}
+    #page-rentabilite .renta-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+    #page-rentabilite .renta-kpi{padding:11px 13px}
+    #page-rentabilite .renta-kt{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
+    #page-rentabilite .renta-kv{font-size:22px;font-weight:700;margin-top:3px;color:var(--text-strong)}
+    #page-rentabilite .renta-ks{color:var(--muted);font-size:10.5px;margin-top:2px}
+    #page-rentabilite .renta-g3{display:grid;grid-template-columns:1fr 1fr 1.6fr;gap:10px;margin-top:10px}
+    #page-rentabilite .renta-g2{display:grid;grid-template-columns:1.6fr 1fr;gap:10px;margin-top:10px}
+    #page-rentabilite .renta-ct{font-weight:600;font-size:12.5px;margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    #page-rentabilite .renta-ct span{color:var(--muted);font-weight:400;font-size:10.5px}
+    #page-rentabilite .renta-donutbox{display:flex;gap:14px;align-items:center}
+    #page-rentabilite .renta-leg div{display:flex;align-items:center;gap:7px;margin:4px 0;font-size:11.5px}
+    #page-rentabilite .renta-leg b{margin-left:auto;padding-left:10px}
+    #page-rentabilite .renta-dot{width:9px;height:9px;border-radius:3px;display:inline-block;margin-right:3px}
+    #page-rentabilite .renta-tag{font-size:10px;color:var(--muted)}
+    #page-rentabilite .renta-po{color:var(--teal);font-weight:600;text-decoration:none}
+    #page-rentabilite .renta-mrow{display:grid;grid-template-columns:230px 1fr 64px 90px;gap:8px;align-items:center;margin:3px 0;font-size:11px}
+    #page-rentabilite .renta-bar{height:9px;border-radius:4px;background:var(--bg4);position:relative;overflow:hidden}
+    #page-rentabilite .renta-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}
+    #page-rentabilite .renta-alert{display:flex;gap:9px;padding:7px 0;border-bottom:1px solid var(--border);font-size:11.5px}
+    #page-rentabilite .renta-alert:last-child{border-bottom:0}
+    #page-rentabilite .renta-table{width:100%;border-collapse:collapse;font-size:11.5px}
+    #page-rentabilite .renta-table th{color:var(--muted);font-weight:600;text-align:left;padding:6px;border-bottom:1px solid var(--border);font-size:10.5px;text-transform:uppercase}
+    #page-rentabilite .renta-table td{padding:6px;border-bottom:1px solid var(--border)}
+    #page-rentabilite .renta-table td.n,#page-rentabilite .renta-table th.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+    #page-rentabilite .renta-table a{color:var(--text);text-decoration:underline dotted}
+    #page-rentabilite .renta-badge{font-size:9.5px;padding:1px 6px;border-radius:5px;border:1px solid;margin-left:4px;white-space:nowrap}
+    #page-rentabilite .renta-badge.est{color:var(--amber);border-color:rgba(251,191,36,.4)}
+    #page-rentabilite .renta-badge.ok{color:var(--green);border-color:rgba(16,185,129,.4)}
+    #page-rentabilite .renta-badge.red{color:var(--red);border-color:rgba(244,63,94,.45)}
+    #page-rentabilite .renta-badge.vio{color:var(--purple);border-color:rgba(167,139,250,.45)}
+    #page-rentabilite .renta-vide{color:var(--muted);font-size:11px;padding:8px 0}
+    @media (max-width:1200px){#page-rentabilite .renta-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}#page-rentabilite .renta-g3,#page-rentabilite .renta-g2{grid-template-columns:1fr}}
+  </style>
+  <div class="renta-top no-print">
+    <h2 style="font-family:var(--display);color:var(--teal);font-size:18px;margin:0">💰 Rentabilité Emerson</h2>
+    <span style="margin-left:auto;display:inline-flex;gap:8px">
+      <button class="btn btn-ghost btn-sm" onclick="rentaExportExcel()">⬇ Export Excel</button>
+      <button class="btn btn-teal btn-sm" onclick="rentaImprimerArticlesPO()">📄 PDF articles par PO / BC client</button>
+    </span>
+  </div>
+  <div class="renta-note">📌 Une <b>affaire</b> = un ou plusieurs PO Emerson + les factures <b>fourniture</b> CALINSTRUM correspondantes. <b>Bénéfice = CA HT fourniture (avoirs déduits) − coût Emerson (montant × taux AUD) − frais de transit</b>. Les prestations sont listées à part. Chiffres recalculés à chaque ouverture à partir des données du GRC.</div>
+  <div id="rentaBody"></div>
+</div>
+
 <div class="page" id="page-administratif">
   <div class="flex-between mb12 no-print" style="flex-wrap:wrap;gap:10px">
     <h2 style="font-family:var(--display);color:var(--teal);font-size:18px">📊 Administratif</h2>
@@ -2391,8 +2444,8 @@ function admPreviewPrint(){
          comme une seule "affaire" et calculer correctement la marge globale. -->
     <div class="card mt8" id="dashAffairesCard">
       <div class="ctitle" style="display:flex;align-items:center;gap:10px">
-        📊 Marge par affaire
-        <span style="color:var(--muted);font-weight:400;font-size:10.5px">(une affaire = 1 BC Emerson + ses factures Client liées)</span>
+        💰 Rentabilité Emerson
+        <span style="color:var(--muted);font-weight:400;font-size:10.5px">(PO Emerson ↔ factures fourniture CALINSTRUM)</span>
       </div>
       <div id="dashAffaires"></div>
     </div>
@@ -7189,7 +7242,7 @@ function nav(p){
   // le seul endroit où il était mis à jour).
   if(typeof _refreshAlertPill==='function') _refreshAlertPill();
   var T={dashboard:'Dashboard',devis:'Devis',factures:'Factures',suivi:'Suivi Factures',
-    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue',administratif:'Administratif',
+    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue',administratif:'Administratif',rentabilite:'Rentabilité Emerson',
     params:'Paramètres — Listes déroulantes',coutrevient:'Paramètres — Coût de revient'};
   sv('topTitle',T[p]||p);
   // Sous-titre informatif (visible uniquement en mode pro via CSS)
@@ -7206,6 +7259,7 @@ function nav(p){
     historique:'Historique des modifications',
     catalogue:'Articles et tarifs',
     administratif:'Export annuel CA / TGC / masse salariale pour l\'expert-comptable',
+    rentabilite:'PO Emerson vs factures CALINSTRUM · bénéfice et marge par affaire',
     coutrevient:'Seuils commerciaux et forfaits transitaire du moteur de coût de revient débarqué'
   };
   var subEl=document.getElementById('topSubtitle');
@@ -8328,6 +8382,382 @@ function getAllDealsKPIs(){
   return deals;
 }
 
+// =============================================================================
+// RENTABILITÉ EMERSON — PO Emerson ↔ factures CALINSTRUM (maquette validée le 14/09/2026)
+// =============================================================================
+// Une AFFAIRE = un ou plusieurs PO Emerson + les factures FOURNITURE qui leur
+// correspondent. Bénéfice = CA HT fourniture (avoirs déduits)
+//                          − coût Emerson (getBCCoutXPF) − frais (getBCFraisXPF).
+// Tout est recalculé à chaque affichage depuis DB : aucune donnée copiée.
+//
+// Rapprochement PO -> factures : TOUTES les routes connues. Le seul
+// inv.linkedBCs (vue « Marge par affaire » d'origine) n'en voyait qu'un tiers :
+//   linkedBCs · facture._fromBC · devis lié · n° de facture noté sur le PO
+//   · n° de BC client identique (bcClientSLN / _importPONum / _bcReapproNum)
+//   · n° de BC client cité dans l'objet de la facture (zéros de tête ignorés,
+//     suffixe STRICT : /0001 ≠ /0002) · « PO <n°> » cité dans l'objet.
+// ⛔ Pas de dédoublonnage : deux factures identiques (même BC client, même
+//    montant) peuvent être deux commandes distinctes.
+// ⛔ Coûts et frais : TOUJOURS getBCCoutXPF / getBCFraisXPF (taux et forfait de
+//    l'app), jamais recalculés ici.
+// =============================================================================
+
+// Même BC client ? Numéro principal comparé sans zéros de tête ; si les deux
+// côtés portent un suffixe (-01, /0002, _01), il doit être identique.
+function _rentaMemeBC(bcClient,texte){
+  var norm=function(s){return String(s).replace(/\d+/g,function(x){return String(parseInt(x,10));});};
+  var m=/([A-Z]?\d{5,})\s*(?:[-\/_]\s*(\d{1,4}))?/.exec(String(bcClient||'').toUpperCase());
+  if(!m) return false;
+  var num=norm(m[1]), re=/([A-Z]?\d{5,})\s*(?:[-\/_]\s*(\d{1,4}))?/g, s=String(texte||'').toUpperCase(), t;
+  while((t=re.exec(s))){
+    if(norm(t[1])!==num) continue;
+    if(m[2]&&t[2]&&parseInt(m[2],10)!==parseInt(t[2],10)) continue;
+    return true;
+  }
+  return false;
+}
+
+// Factures (DB.factures) reliées à un PO Emerson, toutes routes confondues.
+function _rentaFacturesDuPO(bc){
+  var FA=DB.factures||[], vus={}, out=[];
+  function add(f){ if(f && !vus[f.id]){ vus[f.id]=1; out.push(f); } }
+  (getInvoicesForBC(bc.id)||[]).forEach(function(inv){
+    add(FA.find(function(f){return f.id===inv.id;})||FA.find(function(f){return f.num===inv.num;}));
+  });
+  FA.forEach(function(f){ if(f._fromBC!=null && String(f._fromBC)===String(bc.id)) add(f); });
+  var dIds=getBCsDevisIds(bc).map(String);
+  if(dIds.length) FA.forEach(function(f){ if(f.devisLieId!=null && dIds.indexOf(String(f.devisLieId))>=0) add(f); });
+  var nums=String(bc.linkFacture||'').split(/[,;+\s]+/).filter(Boolean);
+  if(nums.length) FA.forEach(function(f){ if(nums.indexOf(f.num)>=0) add(f); });
+  var cle=_bcNumKey(bc.linkBCclient||'');
+  if(cle) FA.forEach(function(f){
+    if([f.bcClientSLN,f._importPONum,f._bcReapproNum].some(function(v){return v && _bcNumKey(v)===cle;})) add(f);
+  });
+  if(bc.linkBCclient) FA.forEach(function(f){ if(_rentaMemeBC(bc.linkBCclient,f.objet)) add(f); });
+  if(bc.num) FA.forEach(function(f){ if(f.objet && String(f.objet).indexOf('PO '+bc.num)>=0) add(f); });
+  return out;
+}
+
+function _rentaEstFourniture(f){ return /^fourniture/i.test(String(f&&f.type||'').trim()); }
+// CA HT d'une facture, avoirs déduits (un avoir porte un HT négatif).
+function _rentaHT(f){
+  return (Number(f.ht)||0)+(getAvoirsForFA(f.id)||[]).reduce(function(s,a){return s+(Number(a.ht)||0);},0);
+}
+function _rentaClient(bc){ return String(bc&&bc.clientFinal||'').split(' - ')[0].trim()||'—'; }
+function _rentaRef(r){ return String(r||'').replace(/[\s\-\/.]/g,'').toUpperCase(); }
+
+// Quantités par référence Emerson : commandées (PO) vs facturées. Seules les
+// références présentes des deux côtés comptent (une facture « forfait » sans
+// référence ne déclenche rien).
+function _rentaEcartsQte(bcs,fas){
+  var cmd={}, fac={};
+  bcs.forEach(function(bc){ (bc.lines||[]).forEach(function(l){
+    if(l && l.qte!=null && l.ref){ var k=_rentaRef(l.ref); cmd[k]=(cmd[k]||0)+(Number(l.qte)||0); }
+  });});
+  fas.forEach(function(f){ (f.lines||[]).forEach(function(l){
+    var k=_rentaRef(l&&l.ref); if(k && cmd[k]!==undefined && l.qte!=null) fac[k]=(fac[k]||0)+(Number(l.qte)||0);
+  });});
+  return Object.keys(cmd).sort().filter(function(k){
+    return fac[k]>0 && Math.abs(cmd[k]-fac[k])>1e-9 && k.indexOf('RMTFREIGHT')!==0;
+  }).map(function(k){ return {ref:k, commande:cmd[k], facture:fac[k]}; });
+}
+
+function _rentaAffaires(){
+  var bcs=DB.bcs||[], parent={}, liens={};
+  function find(x){ if(parent[x]===undefined) parent[x]=x; while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; }
+  function union(a,b){ parent[find(a)]=find(b); }
+  bcs.forEach(function(bc){
+    var fs=_rentaFacturesDuPO(bc); liens[bc.id]=fs; find('PO:'+bc.id);
+    fs.forEach(function(f){ if(_rentaEstFourniture(f)) union('PO:'+bc.id,'FA:'+f.id); });
+  });
+  var groupes={}, ordre=[];
+  bcs.forEach(function(bc){
+    var r=find('PO:'+bc.id);
+    if(!groupes[r]){ groupes[r]={pos:[],fa:{},serv:{}}; ordre.push(r); }
+    groupes[r].pos.push(bc);
+    liens[bc.id].forEach(function(f){ (_rentaEstFourniture(f)?groupes[r].fa:groupes[r].serv)[f.id]=f; });
+  });
+  var aff=ordre.map(function(r){
+    var g=groupes[r];
+    var pos=g.pos.slice().sort(function(a,b){return String(a.date||'').localeCompare(String(b.date||''));});
+    var fa=Object.keys(g.fa).map(function(k){return g.fa[k];});
+    var ids={}; fa.forEach(function(f){ ids[String(f.id)]=1; });
+    // Acompte / solde : un enfant dont la facture mère est dans l'affaire n'ajoute rien.
+    fa=fa.filter(function(f){ return !(f.parentId!=null && ids[String(f.parentId)]); })
+         .sort(function(a,b){return String(a.num).localeCompare(String(b.num));});
+    var ca=fa.reduce(function(s,f){return s+_rentaHT(f);},0);
+    var caEmis=fa.reduce(function(s,f){var ph=getPhase(f); return s+((ph&&ph.billed)?_rentaHT(f):0);},0);
+    var cout=pos.reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
+    var frais=pos.reduce(function(s,bc){return s+getBCFraisXPF(bc);},0);
+    var benef=fa.length?ca-cout-frais:null;
+    return {
+      pos:pos, factures:fa, services:Object.keys(g.serv).map(function(k){return g.serv[k];}),
+      date:pos[pos.length-1].date||'', client:_rentaClient(pos[0]), contact:pos[0].clientFinal||'',
+      bcClient:pos.map(function(bc){return bc.linkBCclient;}).filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;}).join(', '),
+      aud:pos.reduce(function(s,bc){return s+(Number(bc.total)||0);},0),
+      cout:cout, frais:frais, ca:ca, caEmis:caEmis, benef:benef,
+      marge:(fa.length&&ca)?benef/ca*100:null,
+      fraisReels:pos.every(function(bc){return bcHasFraisReels(bc);}),
+      tauxDefaut:pos.some(function(bc){return !bc.tauxAUD;}),
+      mixte:fa.some(function(f){return /prestation/i.test(String(f.type||''));}),
+      ecartsQte:_rentaEcartsQte(pos,fa),
+      paidEmerson:pos.every(function(bc){return !!bc.paidEmerson;}),
+      encaisse:fa.reduce(function(s,f){return s+(Number(f.paye)||0);},0),
+      sansFacture:!fa.length, verifier:fa.length>0 && benef<0
+    };
+  });
+  return aff.sort(function(a,b){return String(b.date).localeCompare(String(a.date));});
+}
+
+// Totaux d'une sélection d'affaires. Par défaut, les affaires « à vérifier »
+// (bénéfice négatif : facture manquante ou lien à revoir) sont exclues.
+function _rentaTotaux(aff,opts){
+  var inclure=!!(opts&&opts.inclureAVerifier);
+  var ok=aff.filter(function(a){return !a.sansFacture && (inclure || !a.verifier);});
+  var t={ca:0,cout:0,frais:0,fraisEstimes:0,benef:0,parClient:{},nAffaires:ok.length,nFactures:0,
+    nPO:aff.reduce(function(s,a){return s+a.pos.length;},0),
+    nRapproches:aff.filter(function(a){return !a.sansFacture;}).reduce(function(s,a){return s+a.pos.length;},0),
+    aVerifier:aff.filter(function(a){return a.verifier;})};
+  ok.forEach(function(a){
+    t.ca+=a.ca; t.cout+=a.cout; t.frais+=a.frais; t.benef+=a.benef; t.nFactures+=a.factures.length;
+    if(!a.fraisReels) t.fraisEstimes+=a.frais;
+    t.parClient[a.client]=(t.parClient[a.client]||0)+a.benef;
+  });
+  t.marge=t.ca?t.benef/t.ca*100:0;
+  return t;
+}
+
+// ----- Page -----
+var _rentaEtat={an:'Tout',client:'Tous',verifier:false};
+function rentaSetFiltre(cle,val){ _rentaEtat[cle]=val; renderRentabilite(); }
+function _rentaM(v){ return (Number(v||0)/1e6).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' M'; }
+function _rentaPct(v){ return (Number(v||0)).toLocaleString('fr-FR',{minimumFractionDigits:1,maximumFractionDigits:1})+' %'; }
+
+function _rentaDonut(parts){
+  var r=58,c=2*Math.PI*r,tot=parts.reduce(function(s,p){return s+Math.max(p.v,0);},0)||1,off=0;
+  var h='<svg class="renta-donut" viewBox="0 0 150 150" width="140" height="140"><circle r="58" cx="75" cy="75" fill="none" stroke="var(--bg4)" stroke-width="20"/>';
+  parts.forEach(function(p){
+    var l=Math.max(p.v,0)/tot*c;
+    h+='<circle r="'+r+'" cx="75" cy="75" fill="none" stroke="'+p.c+'" stroke-width="20" stroke-dasharray="'+l+' '+(c-l)+'" stroke-dashoffset="'+(-off)+'" transform="rotate(-90 75 75)"/>';
+    off+=l;
+  });
+  return h+'</svg>';
+}
+
+function _rentaBarres(aff){
+  var parMois={};
+  aff.forEach(function(a){
+    var m=String(a.date).slice(0,7); if(!m) return;
+    var x=parMois[m]||(parMois[m]={ca:0,cf:0,be:0}); x.ca+=a.ca; x.cf+=a.cout+a.frais; x.be+=a.benef;
+  });
+  var ms=Object.keys(parMois).sort(), W=640, H=170, pad=24;
+  if(!ms.length) return '<div class="renta-vide">Aucune donnée.</div>';
+  var mx=Math.max.apply(null,ms.map(function(m){return parMois[m].ca;}).concat([1])), bw=(W-pad*2)/ms.length, w=Math.min(11,bw/4);
+  var sc=function(v){return Math.max(v,0)/mx*(H-42);};
+  var h='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="'+H+'" preserveAspectRatio="none">';
+  ms.forEach(function(m,i){
+    var x=pad+i*bw+bw/2, d=parMois[m];
+    h+='<rect x="'+(x-w*1.6)+'" y="'+(H-22-sc(d.ca))+'" width="'+w+'" height="'+sc(d.ca)+'" fill="var(--muted-soft)" rx="2"><title>CA '+fN(d.ca)+' XPF</title></rect>'+
+       '<rect x="'+(x-w*0.5)+'" y="'+(H-22-sc(d.cf))+'" width="'+w+'" height="'+sc(d.cf)+'" fill="var(--blue)" rx="2"><title>Coût + frais '+fN(d.cf)+' XPF</title></rect>'+
+       '<rect x="'+(x+w*0.6)+'" y="'+(H-22-sc(d.be))+'" width="'+w+'" height="'+sc(d.be)+'" fill="var(--teal)" rx="2"><title>Bénéfice '+fN(d.be)+' XPF</title></rect>'+
+       '<text x="'+x+'" y="'+(H-8)+'" fill="var(--muted)" font-size="10" text-anchor="middle">'+m.slice(5)+'/'+m.slice(2,4)+'</text>';
+  });
+  return h+'</svg>';
+}
+
+function renderRentabilite(){
+  var body=document.getElementById('rentaBody');
+  if(!body) return;
+  _ensureAvoirShape();
+  var tout=_rentaAffaires(), E=_rentaEtat;
+  var ans=tout.map(function(a){return String(a.date).slice(0,4);}).filter(function(v,i,a){return v && a.indexOf(v)===i;}).sort().reverse();
+  var clients=tout.map(function(a){return a.client;}).filter(function(v,i,a){return a.indexOf(v)===i;}).sort();
+  if(E.an!=='Tout' && ans.indexOf(E.an)<0) E.an='Tout';
+  if(E.client!=='Tous' && clients.indexOf(E.client)<0) E.client='Tous';
+  var sel=tout.filter(function(a){return (E.an==='Tout'||String(a.date).slice(0,4)===E.an)&&(E.client==='Tous'||a.client===E.client);});
+  var t=_rentaTotaux(sel,{inclureAVerifier:E.verifier});
+  var retenues=sel.filter(function(a){return !a.sansFacture && (E.verifier || !a.verifier);});
+  var chip=function(attr,val,actif,cle){return '<button type="button" class="renta-chip'+(actif?' on':'')+'" '+attr+'="'+esc(val)+'" onclick="rentaSetFiltre(\''+cle+'\',\''+esc(val).replace(/'/g,"\\'")+'\')">'+esc(val)+'</button>';};
+
+  var h='<div class="renta-filtres"><span class="renta-lbl">Année</span>'+
+    ['Tout'].concat(ans).map(function(v){return chip('data-renta-an',v,E.an===v,'an');}).join('')+
+    '<span class="renta-lbl">Client</span>'+
+    ['Tous'].concat(clients).map(function(v){return chip('data-renta-client',v,E.client===v,'client');}).join('')+
+    '<span class="renta-lbl">Affaires</span><button type="button" class="renta-chip'+(E.verifier?' on':'')+'" data-renta-verifier="1" onclick="rentaSetFiltre(\'verifier\','+(!E.verifier)+')">'+(E.verifier?'☑':'☐')+' inclure « à vérifier »</button></div>';
+
+  var verSel=sel.filter(function(a){return a.verifier;});
+  var kpis=[
+    ['ca','CA fourniture HT',_rentaM(t.ca),t.nAffaires+' affaires · '+t.nFactures+' factures'],
+    ['cout','Coût Emerson',_rentaM(t.cout),(t.ca?_rentaPct(t.cout/t.ca*100):'—')+' du CA'],
+    ['frais','Frais de transit',_rentaM(t.frais),'dont '+_rentaM(t.fraisEstimes)+' <span style="color:var(--amber)">estimés</span>'],
+    ['benef','Bénéfice net','<span style="color:'+(t.benef<0?'var(--red)':'var(--green)')+'">'+_rentaM(t.benef)+'</span>',
+      (verSel.length&&!E.verifier)?'hors '+verSel.length+' à vérifier ('+_rentaM(verSel.reduce(function(s,a){return s+a.benef;},0))+')':'toutes affaires'],
+    ['marge','Marge nette','<span style="color:'+(t.marge<0?'var(--red)':'var(--green)')+'">'+_rentaPct(t.marge)+'</span>','bénéfice / CA HT'],
+    ['po','PO rapprochés',t.nRapproches+' / '+t.nPO,(t.nPO-t.nRapproches)?(t.nPO-t.nRapproches)+' PO sans facture':'tous rapprochés']
+  ];
+  h+='<div class="renta-kpis">'+kpis.map(function(k){
+    return '<div class="card renta-kpi"><div class="renta-kt">'+k[1]+'</div><div class="renta-kv" data-kpi="'+k[0]+'">'+k[2]+'</div><div class="renta-ks">'+k[3]+'</div></div>';
+  }).join('')+'</div>';
+
+  var p1=[{n:'Emerson',v:t.cout,c:'var(--blue)'},{n:'Frais',v:t.frais,c:'var(--amber)'},{n:'Bénéfice',v:t.benef,c:'var(--teal)'}];
+  var coul=['var(--teal)','var(--purple)','var(--orange)','var(--blue)','var(--amber)','var(--green)'];
+  var p2=Object.keys(t.parClient).sort(function(a,b){return t.parClient[b]-t.parClient[a];}).map(function(k,i){return {n:k,v:t.parClient[k],c:coul[i%coul.length]};});
+  var leg=function(parts,fmt){return parts.map(function(p){return '<div><i class="renta-dot" style="background:'+p.c+'"></i>'+esc(p.n)+'<b>'+fmt(p)+'</b></div>';}).join('');};
+  h+='<div class="renta-g3">'+
+    '<div class="card"><div class="renta-ct">Où va 1 XPF facturé <span>CA fourniture HT</span></div><div class="renta-donutbox">'+_rentaDonut(p1)+
+      '<div class="renta-leg">'+leg(p1,function(p){return t.ca?_rentaPct(p.v/t.ca*100):'—';})+'<div class="renta-tag">sur '+_rentaM(t.ca)+' XPF</div></div></div></div>'+
+    '<div class="card"><div class="renta-ct">Bénéfice par client</div><div class="renta-donutbox">'+_rentaDonut(p2)+
+      '<div class="renta-leg">'+leg(p2,function(p){return _rentaM(p.v);})+'</div></div></div>'+
+    '<div class="card"><div class="renta-ct">Par mois de commande <span><i class="renta-dot" style="background:var(--muted-soft)"></i>CA <i class="renta-dot" style="background:var(--blue)"></i>coût + frais <i class="renta-dot" style="background:var(--teal)"></i>bénéfice</span></div>'+_rentaBarres(retenues)+'</div>'+
+  '</div>';
+
+  var classees=sel.filter(function(a){return !a.sansFacture;}).sort(function(a,b){return b.marge-a.marge;});
+  var mxm=Math.max.apply(null,classees.map(function(a){return Math.abs(a.marge);}).concat([35]));
+  var marges=classees.map(function(a){
+    return '<div class="renta-mrow"><span class="renta-po">'+esc(a.pos.map(function(bc){return bc.num;}).join(' + '))+' <span class="renta-tag">'+esc(a.client)+'</span></span>'+
+      '<div class="renta-bar"><i style="width:'+(Math.abs(a.marge)/mxm*100)+'%;background:'+(a.marge<0?'var(--red)':'var(--teal)')+'"></i></div>'+
+      '<b style="text-align:right;color:'+(a.marge<0?'var(--red)':'inherit')+'">'+_rentaPct(a.marge)+'</b><span class="renta-tag" style="text-align:right">'+_rentaM(a.benef)+'</span></div>';
+  }).join('')||'<div class="renta-vide">Aucune affaire facturée sur ce filtre.</div>';
+
+  var nPOsel=[], fraisReels=0, tauxSaisis=0;
+  sel.forEach(function(a){ a.pos.forEach(function(bc){ nPOsel.push(bc); if(bcHasFraisReels(bc)) fraisReels++; if(bc.tauxAUD) tauxSaisis++; }); });
+  var al=function(ico,titre,detail){return '<div class="renta-alert"><span>'+ico+'</span><div><b>'+titre+'</b><br><span class="renta-tag">'+detail+'</span></div></div>';};
+  var alertes=
+    verSel.map(function(a){return al('🔴',esc(a.pos.map(function(bc){return bc.num;}).join(' + '))+' — coût '+_rentaM(a.cout+a.frais)+' &gt; CA '+_rentaM(a.ca)+' ('+esc(a.factures.map(function(f){return f.num;}).join(', '))+')',
+      'Facture(s) manquante(s) ou lien à revoir : exclue du bénéfice tant que non vérifiée.');}).join('')+
+    sel.filter(function(a){return a.sansFacture;}).map(function(a){return al('🟠',esc(a.pos.map(function(bc){return bc.num;}).join(', '))+' ('+esc(a.contact)+') — aucune facture reliée',
+      a.bcClient?'BC client '+esc(a.bcClient)+' : aucune facture ne porte ce numéro.':'BC client non renseigné sur le PO.');}).join('')+
+    sel.filter(function(a){return a.ecartsQte.length;}).map(function(a){return al('🟡',esc(a.pos.map(function(bc){return bc.num;}).join(' + '))+' — quantités PO ≠ facture '+esc(a.factures.map(function(f){return f.num;}).join(', ')),
+      a.ecartsQte.map(function(e){return esc(e.ref)+' : '+e.commande+' commandé(s) / '+e.facture+' facturé(s)';}).join(' · '));}).join('')+
+    sel.filter(function(a){return a.mixte;}).map(function(a){return al('🟡',esc(a.pos.map(function(bc){return bc.num;}).join(' + '))+' — facture « Fourniture + Prestation »','Tout le HT est compté dans le CA fourniture : la part prestation gonfle le bénéfice matériel.');}).join('')+
+    al('🟡','Frais de transit réels saisis : '+fraisReels+' / '+nPOsel.length+' PO','Les autres utilisent le forfait de l\'app ('+DEFAULT_FRAIS_PCT+' % du coût Emerson) → badge « estimé ».')+
+    al('🟡','Taux AUD saisi : '+tauxSaisis+' / '+nPOsel.length+' PO','Les autres utilisent le taux par défaut de l\'app ('+String(DEFAULT_TAUX_AUD).replace('.',',')+' XPF).')+
+    al('ℹ️','Prestations liées, hors bénéfice matériel',sel.reduce(function(l,a){return l.concat(a.services.map(function(f){return esc(f.num)+' ('+_rentaM(_rentaHT(f))+')';}));},[]).join(' · ')||'—');
+  h+='<div class="renta-g2"><div class="card"><div class="renta-ct">Marge par affaire <span>de la plus rentable à la moins rentable</span></div>'+marges+'</div>'+
+    '<div class="card"><div class="renta-ct">⚠ À vérifier / fiabilité des chiffres</div><div id="rentaAlertes">'+alertes+'</div></div></div>';
+
+  var lignes=sel.map(function(a){
+    var etat=a.sansFacture?'<span class="renta-badge vio">sans facture</span>':a.verifier?'<span class="renta-badge red">à vérifier</span>':
+      (a.caEmis>=a.ca-0.5?'<span class="renta-badge ok">facturé</span>':'<span class="renta-badge vio">prévisionnel</span>');
+    var poHtml=a.pos.map(function(bc){return '<a href="#" class="renta-po" onclick="event.preventDefault();nav(\'bc\');setTimeout(function(){openBC('+bc.id+');},80);">'+esc(bc.num)+'</a>';}).join('<br>');
+    var faHtml=a.factures.map(function(f){return '<a href="#" onclick="event.preventDefault();nav(\'factures\');setTimeout(function(){openFA('+f.id+');},80);">'+esc(f.num)+'</a>';}).join(', ')||'—';
+    return '<tr data-client="'+esc(a.client)+'"><td>'+poHtml+'</td><td>'+fD(a.date)+'</td><td>'+esc(a.contact)+'</td><td>'+(esc(a.bcClient)||'<span class="renta-tag">—</span>')+'</td><td>'+faHtml+'</td>'+
+      '<td class="n">'+fN(a.aud)+'</td><td class="n">'+fN(a.cout)+(a.tauxDefaut?'<span class="renta-badge est" title="taux AUD par défaut">~</span>':'')+'</td>'+
+      '<td class="n">'+fN(a.frais)+(a.fraisReels?'':'<span class="renta-badge est">estimé</span>')+'</td>'+
+      '<td class="n">'+(a.sansFacture?'—':fN(a.ca))+'</td>'+
+      '<td class="n" style="color:'+(a.benef<0?'var(--red)':'var(--green)')+'">'+(a.ecartsQte.length?'<span class="renta-badge est" title="quantités PO ≠ facture">qté</span> ':'')+(a.sansFacture?'—':fN(a.benef))+'</td>'+
+      '<td class="n">'+(a.sansFacture?'—':_rentaPct(a.marge))+'</td><td>'+etat+'</td></tr>';
+  }).join('');
+  h+='<div class="card" style="margin-top:10px"><div class="renta-ct">Détail des affaires <span>clic sur un PO ou une facture pour l\'ouvrir</span></div><div style="overflow-x:auto">'+
+    '<table class="renta-table" id="rentaTable"><thead><tr><th>PO Emerson</th><th>Date</th><th>Client</th><th>BC client</th><th>Facture(s)</th><th class="n">AUD</th><th class="n">Coût Emerson</th><th class="n">Frais</th><th class="n">CA HT</th><th class="n">Bénéfice</th><th class="n">Marge</th><th>État</th></tr></thead><tbody>'+lignes+'</tbody></table></div></div>';
+  body.innerHTML=h;
+}
+
+// Carte du dashboard : résumé de la section (remplace l'ancienne « Marge par affaire »
+// qui ne suivait que inv.linkedBCs).
+function renderDashAffaires(){
+  var el=document.getElementById('dashAffaires');
+  if(!el) return;
+  var aff=_rentaAffaires(), t=_rentaTotaux(aff,{inclureAVerifier:false});
+  el.innerHTML='<div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-size:11.5px">'+
+    '<span>CA fourniture <b>'+_rentaM(t.ca)+'</b></span><span>Bénéfice net <b style="color:'+(t.benef<0?'var(--red)':'var(--green)')+'">'+_rentaM(t.benef)+'</b></span>'+
+    '<span>Marge <b>'+_rentaPct(t.marge)+'</b></span><span>PO rapprochés <b>'+t.nRapproches+' / '+t.nPO+'</b></span>'+
+    (t.aVerifier.length?'<span style="color:var(--red)">'+t.aVerifier.length+' affaire(s) à vérifier</span>':'')+
+    '<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="nav(\'rentabilite\');renderRentabilite()">💰 Ouvrir Rentabilité Emerson</button></div>';
+}
+
+function _rentaBCClientAffiche(bc){
+  if(bc.linkBCclient) return esc(bc.linkBCclient);
+  var m=/BCGMAO-(\d{5,})/.exec(String(bc.linkDevis||''));
+  return m?esc(m[1])+' <span style="font-size:8px;color:#64748b">(d\'après le devis '+esc(bc.linkDevis)+')</span>':'';
+}
+function _rentaAUD(v){ return v==null||v===''?'':Number(v).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+
+// PDF « articles par PO Emerson / BC client » : même pattern window.open+print que printAdminReport.
+function rentaImprimerArticlesPO(){
+  var aff=_rentaAffaires(), factPO={};
+  aff.forEach(function(a){ a.pos.forEach(function(bc){ factPO[bc.id]=a.factures.map(function(f){return f.num;}); }); });
+  var groupes={};
+  (DB.bcs||[]).forEach(function(bc){ (groupes[_rentaClient(bc)]=groupes[_rentaClient(bc)]||[]).push(bc); });
+  var noms=Object.keys(groupes).sort();
+  noms.forEach(function(k){ groupes[k].sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));}); });
+  var nArt=function(bc){return (bc.lines||[]).filter(function(l){return l&&l.qte!=null;}).length;};
+  var tous=DB.bcs||[];
+  var css='@page{size:A4 landscape;margin:11mm 11mm 13mm;}'+
+    'body{font-family:Calibri,Arial,sans-serif;color:#111;font-size:10px;margin:0}'+
+    'h1{font-size:18px;color:#1b365d;margin:0}h2{font-size:14px;color:#e46c12;margin:14px 0 6px}'+
+    '.hd{display:flex;justify-content:space-between;align-items:center;border-bottom:2.5px solid #e46c12;padding-bottom:6px;margin-bottom:10px}'+
+    '.sub{color:#5b6b7a;font-size:10px}table{width:100%;border-collapse:collapse}th,td{padding:3px 5px;vertical-align:top}'+
+    '.t th{background:#1b365d;color:#fff;text-align:left;font-size:9.5px}.t td{border-bottom:1px solid #e5e9ef}.t tr:nth-child(even) td{background:#f5f7fa}'+
+    '.n{text-align:right;white-space:nowrap}.page{page-break-before:always;break-before:page}'+
+    '.po{page-break-inside:avoid;break-inside:avoid;margin-bottom:10px}.poh{background:#1b365d;color:#fff;padding:4px 6px;display:flex;gap:18px;font-weight:700;font-size:10px}'+
+    '.pom{background:#eef2f7;color:#5b6b7a;padding:3px 6px;font-size:9.5px}.l th{color:#1b365d;border-bottom:1px solid #1b365d;text-align:left;font-size:9px}'+
+    '.l td{border-bottom:1px solid #eef1f5}.titre td{font-style:italic;font-weight:700;color:#1b365d}.tot td{border-top:1.2px solid #1b365d;font-weight:700}'+
+    'thead{display:table-header-group}tr{page-break-inside:avoid}';
+  var h='<div class="hd"><div><h1>Articles par PO Emerson — correspondance BC client</h1><div class="sub">'+tous.length+' PO Emerson · '+
+    tous.reduce(function(s,bc){return s+nArt(bc);},0)+' articles · édité le '+fD(td())+' · montants en devise du PO (prix d\'achat Emerson)</div></div>'+
+    '<img src="'+LG_PLACEHOLDER+'" style="height:40px" alt="CALINSTRUM"></div>';
+  h+='<h2>Sommaire</h2><table class="t"><thead><tr><th>Client</th><th class="n">PO Emerson</th><th class="n">Articles</th><th class="n">Total</th><th>PO sans BC client</th></tr></thead><tbody>'+
+    noms.map(function(k){var l=groupes[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+l.length+'</td><td class="n">'+l.reduce(function(s,bc){return s+nArt(bc);},0)+'</td><td class="n">'+
+      _rentaAUD(l.reduce(function(s,bc){return s+(Number(bc.total)||0);},0))+'</td><td>'+(l.filter(function(bc){return !_rentaBCClientAffiche(bc);}).map(function(bc){return esc(bc.num);}).join(', ')||'—')+'</td></tr>';}).join('')+
+    '</tbody></table>';
+  h+='<h2>Index PO Emerson ↔ BC client</h2><table class="t"><thead><tr><th>PO Emerson</th><th>Date</th><th>Client</th><th>BC client</th><th>Facture(s) CALINSTRUM</th><th class="n">Total</th></tr></thead><tbody>'+
+    noms.map(function(k){return groupes[k].map(function(bc){return '<tr><td>'+esc(bc.num)+'</td><td>'+fD(bc.date)+'</td><td>'+esc(bc.clientFinal||'')+'</td><td>'+
+      (_rentaBCClientAffiche(bc)||'<span style="color:#c00000">— non renseigné —</span>')+'</td><td>'+esc((factPO[bc.id]||[]).join(', ')||'—')+'</td><td class="n">'+_rentaAUD(bc.total)+' '+esc(bc.devise||'')+'</td></tr>';}).join('');}).join('')+
+    '</tbody></table>';
+  noms.forEach(function(k){
+    h+='<div class="page"></div><h2>'+esc(k)+' — '+groupes[k].length+' PO Emerson</h2>';
+    groupes[k].forEach(function(bc){
+      var lignes=Array.isArray(bc.lines)?bc.lines:[], flags=computeBCKitFlags(lignes), n=0;
+      h+='<div class="po"><div class="poh"><span>PO Emerson '+esc(bc.num)+'</span><span>du '+fD(bc.date)+' · '+esc(bc.status||'')+'</span><span>BC client : '+
+        (_rentaBCClientAffiche(bc)||'— non renseigné —')+'</span><span>'+esc(bc.clientFinal||'')+'</span></div>'+
+        '<div class="pom">Devis Emerson : '+esc((bc.props||[]).map(function(x){return x.num;}).filter(Boolean).join(', ')||'—')+' · Facture(s) CALINSTRUM : '+esc((factPO[bc.id]||[]).join(', ')||'—')+'</div>'+
+        '<table class="l"><thead><tr><th style="width:22px">#</th><th style="width:26%">Référence Emerson</th><th>Désignation</th><th class="n">Qté</th><th class="n">PU '+esc(bc.devise||'')+'</th><th class="n">Total '+esc(bc.devise||'')+'</th></tr></thead><tbody>';
+      lignes.forEach(function(l,i){
+        if(!l) return;
+        if(l.qte==null && l.pu==null){ h+='<tr class="titre"><td></td><td colspan="5">'+esc(l.desc||l.ref||'')+'</td></tr>'; return; }
+        n++;
+        h+='<tr><td>'+n+'</td><td><b>'+esc(l.ref||'')+'</b></td><td>'+esc(l.desc||'').replace(/\n/g,'<br>')+(flags[i]?' <b style="color:#e46c12">[KIT]</b>':'')+'</td>'+
+          '<td class="n">'+(l.qte==null?'':fN(l.qte))+'</td><td class="n">'+_rentaAUD(l.pu)+'</td><td class="n">'+_rentaAUD(bcLineExtended(l,flags[i]))+'</td></tr>';
+      });
+      h+='<tr class="tot"><td></td><td></td><td>Total PO</td><td></td><td></td><td class="n">'+_rentaAUD(bc.total)+'</td></tr></tbody></table></div>';
+    });
+  });
+  var w=window.open('','_blank','');
+  if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Articles par PO Emerson - BC client '+esc(td())+'</title><style>'+css+'</style></head><body>'+h+'</body></html>');
+  w.document.close();
+  w.focus();
+  setTimeout(function(){ w.print(); w.close(); }, 400);
+}
+
+// Export Excel (SheetJS, déjà chargé par l'app) : affaires + articles par PO.
+function rentaExportExcel(){
+  if(!window.XLSX){ alert('Export Excel indisponible (bibliothèque non chargée).'); return; }
+  var aff=_rentaAffaires();
+  var feuille1=[['PO Emerson','Date','Client','Contact','BC client','Facture(s)','Montant PO','Devise','Coût Emerson XPF','Frais XPF','Frais réels','Taux AUD saisi','CA HT XPF','Bénéfice XPF','Marge %','État','Prestations liées']];
+  aff.forEach(function(a){
+    feuille1.push([a.pos.map(function(bc){return bc.num;}).join(' + '),a.date,a.client,a.contact,a.bcClient,a.factures.map(function(f){return f.num;}).join(', '),
+      a.aud,a.pos[0].devise||'',Math.round(a.cout),Math.round(a.frais),a.fraisReels?'oui':'non (forfait)',a.tauxDefaut?'non (défaut)':'oui',
+      a.sansFacture?'':Math.round(a.ca),a.sansFacture?'':Math.round(a.benef),a.sansFacture?'':Math.round(a.marge*10)/10,
+      a.sansFacture?'sans facture':a.verifier?'à vérifier':(a.caEmis>=a.ca-0.5?'facturé':'prévisionnel'),
+      a.services.map(function(f){return f.num;}).join(', ')]);
+  });
+  var factPO={}; aff.forEach(function(a){ a.pos.forEach(function(bc){ factPO[bc.id]=a.factures.map(function(f){return f.num;}).join(', '); }); });
+  var feuille2=[['PO Emerson','Date','Client','BC client','Facture(s)','Référence Emerson','Désignation','Qté','PU','Total','Devise','Kit']];
+  (DB.bcs||[]).forEach(function(bc){
+    var lignes=Array.isArray(bc.lines)?bc.lines:[], flags=computeBCKitFlags(lignes);
+    lignes.forEach(function(l,i){
+      if(!l || (l.qte==null && l.pu==null)) return;
+      feuille2.push([bc.num,bc.date,bc.clientFinal||'',bc.linkBCclient||'',factPO[bc.id]||'',l.ref||'',l.desc||'',Number(l.qte)||0,Number(l.pu)||0,bcLineExtended(l,flags[i]),bc.devise||'',flags[i]?'oui':'']);
+    });
+  });
+  var wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(feuille1),'Affaires');
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(feuille2),'Articles par PO');
+  XLSX.writeFile(wb,'Rentabilite_Emerson_'+td()+'.xlsx');
+}
+
 // Marquer un BC comme payé/non payé chez Emerson
 function setBCPaidEmerson(bcId,paid){
   var bc=DB.bcs.find(function(x){return x.id===bcId;});
@@ -9050,103 +9480,6 @@ function renderSuviKPIs(){
 //   - marge réalisée (= Σ encaissé - coût Emerson si payé)
 //   - % d'avancement encaissement
 //   - alerte si Σ % de la commande ≠ 100% (cohérence facturation)
-function renderDashAffaires(){
-  var el=document.getElementById('dashAffaires');
-  if(!el) return;
-  var deals=getAllDealsKPIs();
-  if(!deals || deals.length===0){
-    el.innerHTML='<div style="text-align:center;padding:18px;background:rgba(255,255,255,.02);border:1px dashed rgba(255,255,255,.08);border-radius:6px;color:var(--muted);font-size:11px">'+
-      '💡 Aucune affaire à afficher. Liez vos factures Client à des BC Emerson (bouton <span style="color:var(--teal)">🔗</span> dans le tableau Suivi) pour voir apparaître la marge par affaire.<br><br>'+
-      '<span style="font-size:10px">Une affaire = 1 BC Emerson + 1 ou plusieurs factures Client liées (acompte 30%, solde 70%, etc.)</span>'+
-      '</div>';
-    return;
-  }
-  // Filtre par client si onglet client actif
-  var clientFilter=(typeof activeClientFilter!=='undefined')?activeClientFilter:'all';
-
-  var html='<div style="font-size:10.5px;color:var(--muted);margin-bottom:8px;padding:6px 10px;background:rgba(167,139,250,.06);border-radius:5px;border-left:3px solid #a78bfa">'+
-    '📌 Une <b>affaire</b> regroupe 1 BC Emerson et toutes les factures Client liées (ex: acompte 30% + solde 70%). La marge se calcule au niveau de l\'affaire pour éviter le double-comptage du coût Emerson sur chaque facture.'+
-    '</div>';
-
-  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:10px">';
-  deals.forEach(function(d){
-    var bc=d.bc;
-    // Filtrage par client : on regarde si au moins une facture liée correspond au client actif
-    if(clientFilter && clientFilter!=='all'){
-      var anyMatch=d.factures.some(function(f){
-        var c=(f.client||'').toString();
-        return c===clientFilter || c.indexOf(clientFilter)===0;
-      });
-      if(!anyMatch) return;
-    }
-    var clientFinal=bc.clientFinal||(d.factures[0] && d.factures[0].client)||'?';
-    var devise=bc.devise||'AUD';
-    var coutAUDStr = bc.total ? fN(bc.total)+' '+devise : '—';
-    var margeColor = d.margeTheorique>=0 ? 'var(--green)' : 'var(--red)';
-    var pctAvancementColor = d.pctAvancement>=99 ? 'var(--green)' : (d.pctAvancement>=50 ? 'var(--amber)' : '#a78bfa');
-    var pctMargeColor = d.pctMargeTheorique>=15 ? 'var(--green)' : (d.pctMargeTheorique>=5 ? 'var(--amber)' : 'var(--red)');
-    // Alerte cohérence : si Σ pctOfBC ≠ 100, on prévient
-    var coherenceBadge='';
-    if(!d.coherent){
-      var diffPct = (100-d.sommePcts);
-      var pctSign = diffPct>0 ? 'manquent' : 'en trop';
-      var diffAbs = Math.abs(diffPct).toFixed(1);
-      coherenceBadge='<div style="margin-top:6px;padding:5px 8px;background:rgba(244,63,94,.1);border:1px solid rgba(244,63,94,.3);border-radius:4px;font-size:10px;color:#f43f5e" title="La somme des % des factures liées à ce BC fait '+d.sommePcts.toFixed(1)+'% au lieu de 100%. Vérifiez les % de chaque facture (champ 💰 % de la commande).">⚠ Cohérence : Σ % = '+d.sommePcts.toFixed(1)+'% (' + diffAbs + '% ' + pctSign + ')</div>';
-    }
-    // Liste des factures liées
-    var faturesHtml='<div style="margin-top:8px;padding-top:6px;border-top:1px dashed rgba(255,255,255,.08);font-size:10.5px">'+
-      '<div style="color:var(--muted);font-size:9.5px;margin-bottom:3px;text-transform:uppercase;letter-spacing:.05em;font-weight:600">Factures Client liées ('+d.factures.length+')</div>';
-    d.factures.forEach(function(f){
-      var pct=(typeof f.pctOfBC==='number')?f.pctOfBC:100;
-      var statusEmoji=(f.status==='Payée'||f.statut==='paid')?'✓':'⏳';
-      var statusColor=(f.status==='Payée'||f.statut==='paid')?'var(--green)':'var(--amber)';
-      faturesHtml+='<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0">'+
-        '<span><span style="color:'+statusColor+';font-weight:700">'+statusEmoji+'</span> '+
-        '<span style="color:var(--teal);font-weight:700;cursor:pointer" onclick="navigateToFA('+(f._factureId||f.id)+')" title="Ouvrir la facture">'+esc(f.num||'?')+'</span> '+
-        '<span style="color:var(--muted);font-size:9.5px">('+pct+'%)</span></span>'+
-        '<span style="font-weight:700">'+fN(f.montant||f.ttc||0)+' XPF</span>'+
-        '</div>';
-    });
-    faturesHtml+='</div>';
-
-    html+='<div class="metric" style="padding:11px 13px;border-top:2px solid #a78bfa">'+
-      // En-tête : BC + client final
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:6px">'+
-        '<div>'+
-          '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">BC Emerson</div>'+
-          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text-strong)">'+esc(bc.num||'?')+'</div>'+
-          '<div style="font-size:10px;color:var(--muted);margin-top:2px">→ '+esc(clientFinal)+'</div>'+
-        '</div>'+
-        '<div style="text-align:right">'+
-          '<div style="font-size:9.5px;color:var(--muted)">Coût Emerson</div>'+
-          '<div style="font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--red)">'+coutAUDStr+'</div>'+
-          '<div style="font-size:9.5px;color:var(--muted);margin-top:1px">'+fN(d.coutEmerson)+' XPF'+(bc.paidEmerson?' <span style="color:var(--green)">✓ payé</span>':'')+'</div>'+
-        '</div>'+
-      '</div>'+
-      // Ligne KPIs : ventes / marge théorique / avancement
-      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;padding:6px 0;border-top:1px solid rgba(255,255,255,.05);border-bottom:1px solid rgba(255,255,255,.05)">'+
-        '<div style="text-align:center">'+
-          '<div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Ventes</div>'+
-          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:var(--teal)">'+fN(d.sommeFactures)+'</div>'+
-        '</div>'+
-        '<div style="text-align:center;border-left:1px dashed rgba(255,255,255,.06);border-right:1px dashed rgba(255,255,255,.06)">'+
-          '<div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Marge théo.</div>'+
-          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:'+margeColor+'">'+fN(d.margeTheorique)+'</div>'+
-          '<div style="font-size:9px;color:'+pctMargeColor+';font-weight:600">'+d.pctMargeTheorique.toFixed(1)+'%</div>'+
-        '</div>'+
-        '<div style="text-align:center">'+
-          '<div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Avancement</div>'+
-          '<div style="font-family:var(--mono);font-size:13px;font-weight:700;color:'+pctAvancementColor+'">'+d.pctAvancement.toFixed(0)+'%</div>'+
-          '<div style="font-size:9px;color:var(--muted)">'+fN(d.sommeEncaisse)+' enc.</div>'+
-        '</div>'+
-      '</div>'+
-      coherenceBadge+
-      faturesHtml+
-      '</div>';
-  });
-  html+='</div>';
-  el.innerHTML=html;
-}
 function dChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
 function renderCharts(){
   if(typeof Chart==='undefined') return; // Chart.js pas chargé, skip
