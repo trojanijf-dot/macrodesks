@@ -1043,6 +1043,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   <div class="sb-sec">Administratif</div>
   <button class="sb-item" onclick="nav('administratif');renderAdmin()" title="Administratif · export annuel CA/TGC/masse salariale pour l'expert-comptable"><span class="ico"><span class="ico-classic">📊</span><i class="ti ti-report-money ico-pro"></i></span>Administratif</button>
   <button class="sb-item" onclick="nav('rentabilite');renderRentabilite()" title="Rentabilité Emerson · PO Emerson vs factures CALINSTRUM, bénéfice et marge par affaire"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-chart-donut ico-pro"></i></span>Rentabilité Emerson</button>
+  <button class="sb-item" onclick="nav('suivicmd');renderSuiviCommandes()" title="Suivi des commandes client · BC client ↔ commandes CALINSTRUM, sans montants, PDF à remettre au client"><span class="ico"><span class="ico-classic">📦</span><i class="ti ti-truck-delivery ico-pro"></i></span>Suivi commandes client</button>
   <div class="sb-sec">Paramètres</div>
   <button class="sb-item" onclick="nav('params');renderParams()" title="Listes déroulantes · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">⚙️</span><i class="ti ti-list ico-pro"></i></span>Listes déroulantes</button>
   <button class="sb-item" onclick="nav('coutrevient');renderCoutRevient()" title="Coût de revient débarqué · seuils commerciaux et forfaits transitaire du moteur landed cost"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-calculator ico-pro"></i></span>Coût de revient</button>
@@ -1143,6 +1144,38 @@ body.has-dashboard-bg #page-dashboard .metric{
   </div>
   <div class="renta-note">📌 Une <b>affaire</b> = un ou plusieurs PO Emerson + les factures <b>fourniture</b> CALINSTRUM correspondantes. <b>Bénéfice = CA HT fourniture (avoirs déduits) − coût Emerson (montant × taux AUD) − frais de transit</b>. Les prestations sont listées à part. Chiffres recalculés à chaque ouverture à partir des données du GRC.</div>
   <div id="rentaBody"></div>
+</div>
+
+<div class="page" id="page-suivicmd">
+  <style>
+    #page-suivicmd .sc-filtres{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 12px}
+    #page-suivicmd .sc-chip{font:11.5px var(--mono);border:1px solid var(--border);border-radius:999px;padding:4px 11px;background:var(--bg3);color:var(--text);cursor:pointer}
+    #page-suivicmd .sc-chip.on{border-color:var(--teal);color:var(--teal);background:rgba(45,212,191,.08)}
+    #page-suivicmd .sc-lbl{color:var(--muted);font-size:10.5px;margin:0 2px 0 8px}
+    #page-suivicmd .sc-note{margin:0 0 10px;padding:7px 12px;border-left:3px solid var(--purple);background:rgba(167,139,250,.07);border-radius:6px;color:var(--muted);font-size:11.5px}
+    #page-suivicmd .sc-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:10px}
+    #page-suivicmd .sc-kpi{padding:10px 13px}
+    #page-suivicmd .sc-kt{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
+    #page-suivicmd .sc-kv{font-size:22px;font-weight:700;margin-top:3px;color:var(--text-strong)}
+    #page-suivicmd .sc-ks{color:var(--muted);font-size:10.5px}
+    #page-suivicmd .sc-table{width:100%;border-collapse:collapse;font-size:11.5px}
+    #page-suivicmd .sc-table th{color:var(--muted);font-weight:600;text-align:left;padding:6px;border-bottom:1px solid var(--border);font-size:10.5px;text-transform:uppercase}
+    #page-suivicmd .sc-table td{padding:6px;border-bottom:1px solid var(--border);vertical-align:top}
+    #page-suivicmd .sc-table a{color:var(--muted)}
+    #page-suivicmd .sc-bc{color:var(--teal);font-weight:600;white-space:nowrap}
+    #page-suivicmd .sc-art{font-size:11px}
+    #page-suivicmd .sc-tag{font-size:10px;color:var(--muted)}
+    #page-suivicmd .sc-st{font-size:10.5px;padding:2px 8px;border-radius:10px;border:1px solid;white-space:nowrap;font-weight:600}
+    #page-suivicmd .sc-st.ok{color:var(--green);border-color:rgba(16,185,129,.45)}
+    #page-suivicmd .sc-st.att{color:var(--purple);border-color:rgba(167,139,250,.45)}
+    #page-suivicmd .sc-int{font-size:9px;color:var(--purple);border:1px dashed rgba(167,139,250,.5);border-radius:4px;padding:0 4px}
+  </style>
+  <div class="no-print" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+    <h2 style="font-family:var(--display);color:var(--teal);font-size:18px;margin:0">📦 Suivi des commandes client</h2>
+    <span style="margin-left:auto"><button class="btn btn-teal btn-sm" onclick="suiviCmdImprimerPDF()">📄 PDF client</button></span>
+  </div>
+  <div class="sc-note">📌 Une ligne par <b>BC client</b>, sans aucun montant. Statut : <b>Livrée</b> dès qu'une <b>facture est émise</b> (les pré-factures ne comptent pas) ou qu'un <b>BL est livré</b> ; sinon <b>« Commande lancée le … — en attente »</b> (date de la commande fournisseur). Le <b>PDF client</b> reprend le filtre en cours et n'imprime ni l'échéance, ni le BL, ni le n° de PO <span class="sc-int">interne</span>.</div>
+  <div id="scBody"></div>
 </div>
 
 <div class="page" id="page-administratif">
@@ -7242,7 +7275,7 @@ function nav(p){
   // le seul endroit où il était mis à jour).
   if(typeof _refreshAlertPill==='function') _refreshAlertPill();
   var T={dashboard:'Dashboard',devis:'Devis',factures:'Factures',suivi:'Suivi Factures',
-    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue',administratif:'Administratif',rentabilite:'Rentabilité Emerson',
+    bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue',administratif:'Administratif',rentabilite:'Rentabilité Emerson',suivicmd:'Suivi des commandes client',
     params:'Paramètres — Listes déroulantes',coutrevient:'Paramètres — Coût de revient'};
   sv('topTitle',T[p]||p);
   // Sous-titre informatif (visible uniquement en mode pro via CSS)
@@ -7260,6 +7293,7 @@ function nav(p){
     catalogue:'Articles et tarifs',
     administratif:'Export annuel CA / TGC / masse salariale pour l\'expert-comptable',
     rentabilite:'PO Emerson vs factures CALINSTRUM · bénéfice et marge par affaire',
+    suivicmd:'BC client ↔ commandes CALINSTRUM · sans montants · PDF à remettre au client',
     coutrevient:'Seuils commerciaux et forfaits transitaire du moteur de coût de revient débarqué'
   };
   var subEl=document.getElementById('topSubtitle');
@@ -8756,6 +8790,170 @@ function rentaExportExcel(){
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(feuille1),'Affaires');
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(feuille2),'Articles par PO');
   XLSX.writeFile(wb,'Rentabilite_Emerson_'+td()+'.xlsx');
+}
+
+// =============================================================================
+// SUIVI DES COMMANDES CLIENT — BC client ↔ commandes CALINSTRUM, SANS MONTANTS
+// (maquette V2 validée le 14/09/2026)
+// =============================================================================
+// Une commande = une affaire de _rentaAffaires (même rapprochement PO ↔ factures
+// que la Rentabilité Emerson, jamais une 2e copie). Deux statuts seulement :
+//   « Livrée »                              facture ÉMISE ou BL livré
+//   « Commande lancée le <date PO> — en attente »   sinon
+// ⛔ Une PRÉ-FACTURE n'est pas une facture émise. Ne pas se fier à getPhase() seul :
+//    une facture SANS phase y retombe sur « Livré client » alors qu'elle attend
+//    souvent sa livraison.
+// ⛔ PDF remis au client : ni montant, ni n° de PO CALINSTRUM, ni devis fournisseur,
+//    ni n° de pré-facture, ni échéance, ni BL (décision utilisateur 14/09).
+// =============================================================================
+
+var SC_PHASES_NON_EMISES=['emerson','transit','douane','chantier_attente','chantier_cours'];
+
+// Facture émise = marqueur explicite : payée / en retard, date d'envoi au client
+// (miroir Suivi Factures), ou phase facturée posée sur la facture elle-même.
+function _suiviFactureEmise(f){
+  if(!f) return false;
+  if(/pay|retard/i.test(String(f.status||''))) return true;
+  var inv=(DB.invoices||[]).find(function(i){return i && (i._factureId===f.id || i.grcFactureId===f.id || i.num===f.num);});
+  if((inv&&inv.dateEnvoi) || f.dateEnvoi) return true;
+  if(SC_PHASES_NON_EMISES.indexOf(f.phase)>=0) return false;
+  return f.phase==='livre' || f.phase==='recu';
+}
+function _suiviDateEnvoi(f){
+  var inv=(DB.invoices||[]).find(function(i){return i && (i._factureId===f.id || i.grcFactureId===f.id || i.num===f.num);});
+  return (inv&&inv.dateEnvoi) || f.dateEnvoi || f.date || '';
+}
+// Lignes « transport » : jamais présentées comme des articles commandés.
+function _suiviLigneFret(texte){ return /fret|freight|transport|handling|travel|frais|assurance/i.test(String(texte||'')); }
+
+function _suiviCommandes(){
+  var out=[];
+  _rentaAffaires().forEach(function(a){
+    var pos=a.pos.filter(function(bc){return String(bc.status||'')!=='Annulé';});
+    if(!pos.length) return;
+    var poIds=pos.map(function(bc){return bc.id;}), faIds=a.factures.map(function(f){return f.id;});
+    var bls=(DB.bls||[]).filter(function(bl){return bl && (poIds.indexOf(bl._linkedBCCaliId)>=0 || faIds.indexOf(bl._linkedFactureId)>=0);});
+    var devis=[];
+    function ajDevis(id){ var dv=(DB.devis||[]).find(function(x){return String(x.id)===String(id);}); if(dv && devis.indexOf(dv)<0) devis.push(dv); }
+    pos.forEach(function(bc){ getBCsDevisIds(bc).forEach(ajDevis); });
+    a.factures.forEach(function(f){ if(f.devisLieId!=null) ajDevis(f.devisLieId); });
+    var echeance=null;
+    devis.forEach(function(dv){ var e=dlEcheance(dv); if(e && (!echeance || e.echeance>echeance)) echeance=e.echeance; });
+    var dateBC='';
+    a.factures.forEach(function(f){ dateBC=dateBC||f.dateReceptionBC||f.bcClientSLNDate||''; });
+    devis.forEach(function(dv){ dateBC=dateBC||dv.bcClientDate||dv.bcClientSLNDate||''; });
+    var articles=[];
+    a.factures.forEach(function(f){ (f.lines||[]).forEach(function(l){
+      if(!l || l._sec==='service' || !(Number(l.qte)>0) || /^FRET/i.test(l.ref||'') || _suiviLigneFret((l.designation||'')+' '+(l.ref||''))) return;
+      articles.push({code:l.codeSLN||'', ref:l.ref||'', des:String(l.designation||'').split('\n')[0], qte:Number(l.qte)});
+    });});
+    if(!articles.length) pos.forEach(function(bc){ (bc.lines||[]).forEach(function(l){
+      if(!l || l.qte==null || _suiviLigneFret((l.desc||'')+' '+(l.ref||''))) return;
+      articles.push({code:'', ref:l.ref||'', des:String(l.desc||'').split('\n')[0], qte:Number(l.qte)});
+    });});
+    var emises=a.factures.filter(_suiviFactureEmise);
+    var blLivre=bls.filter(function(bl){return /livr/i.test(String(bl.status||''));})
+                   .sort(function(x,y){return String(y.date||'').localeCompare(String(x.date||''));})[0];
+    var statut;
+    if(emises.length || blLivre){
+      var le=blLivre ? blLivre.date : emises.map(_suiviDateEnvoi).sort().pop()||'';
+      statut={k:'livre', label:'Livrée', livreeLe:le||'', bl:blLivre?blLivre.num:''};
+    } else {
+      var lance=pos.map(function(bc){return bc.date;}).filter(Boolean).sort()[0]||'';
+      statut={k:'attente', label:'Commande lancée'+(lance?' le '+fD(lance):'')+' — en attente', lanceeLe:lance};
+    }
+    var contact=String(pos[0].clientFinal||'');
+    out.push({
+      pos:pos, factures:a.factures, bls:bls, client:_rentaClient(pos[0]), contact:contact,
+      acheteur:contact.split(' - ').slice(1).join(' - ').trim()||contact,
+      bcClient:a.bcClient, dateBC:dateBC, echeance:echeance?echeance.toISOString().slice(0,10):'',
+      articles:articles, statut:statut,
+      enRetard:statut.k==='attente' && !!echeance && echeance<new Date(new Date().toDateString())
+    });
+  });
+  return out.sort(function(x,y){return String(y.dateBC||y.pos[0].date||'').localeCompare(String(x.dateBC||x.pos[0].date||''));});
+}
+
+// ----- Page -----
+var _scEtat={client:'Tous', acheteur:'Tous', etat:'En attente'};
+function scSetFiltre(cle,val){ _scEtat[cle]=val; if(cle==='client') _scEtat.acheteur='Tous'; renderSuiviCommandes(); }
+function _scSelection(tout){
+  var E=_scEtat;
+  return tout.filter(function(c){
+    return (E.client==='Tous'||c.client===E.client) && (E.acheteur==='Tous'||c.acheteur===E.acheteur) &&
+      (E.etat==='Toutes' || (E.etat==='En attente' ? c.statut.k==='attente' : c.statut.k==='livre'));
+  });
+}
+
+function renderSuiviCommandes(){
+  var body=document.getElementById('scBody');
+  if(!body) return;
+  var tout=_suiviCommandes(), E=_scEtat;
+  var clients=tout.map(function(c){return c.client;}).filter(function(v,i,a){return a.indexOf(v)===i;}).sort();
+  if(E.client!=='Tous' && clients.indexOf(E.client)<0) E.client='Tous';
+  var base=tout.filter(function(c){return E.client==='Tous'||c.client===E.client;});
+  var acheteurs=base.map(function(c){return c.acheteur;}).filter(function(v,i,a){return v && a.indexOf(v)===i;}).sort();
+  if(E.acheteur!=='Tous' && acheteurs.indexOf(E.acheteur)<0) E.acheteur='Tous';
+  var perimetre=base.filter(function(c){return E.acheteur==='Tous'||c.acheteur===E.acheteur;});
+  var sel=_scSelection(tout);
+  var chip=function(attr,cle,val){return '<button type="button" class="sc-chip'+(E[cle]===val?' on':'')+'" '+attr+'="'+esc(val)+'" onclick="scSetFiltre(\''+cle+'\',this.getAttribute(\''+attr+'\'))">'+esc(val)+'</button>';};
+  var h='<div class="sc-filtres"><span class="sc-lbl">Client</span>'+['Tous'].concat(clients).map(function(v){return chip('data-sc-client','client',v);}).join('')+
+    '<span class="sc-lbl">Acheteur</span><select id="scAcheteur" class="filter-sel" onchange="scSetFiltre(\'acheteur\',this.value)">'+
+      ['Tous'].concat(acheteurs).map(function(v){return '<option'+(E.acheteur===v?' selected':'')+'>'+esc(v)+'</option>';}).join('')+'</select>'+
+    '<span class="sc-lbl">Commandes</span>'+['En attente','Livrées','Toutes'].map(function(v){return chip('data-sc-etat','etat',v);}).join('')+'</div>';
+  var kp=[
+    ['Commandes en attente',perimetre.filter(function(c){return c.statut.k==='attente';}).length,'sur '+perimetre.length+' BC client'],
+    ['Livrées',perimetre.filter(function(c){return c.statut.k==='livre';}).length,'facture émise ou BL livré'],
+    ['Échéance dépassée','<span style="color:var(--red)">'+perimetre.filter(function(c){return c.enRetard;}).length+'</span>','délai contractuel du devis']
+  ];
+  h+='<div class="sc-kpis">'+kp.map(function(k){return '<div class="card sc-kpi"><div class="sc-kt">'+k[0]+'</div><div class="sc-kv">'+k[1]+'</div><div class="sc-ks">'+k[2]+'</div></div>';}).join('')+'</div>';
+  var lignes=sel.map(function(c){
+    var arts=c.articles.slice(0,4).map(function(x){return '<b>'+fN(x.qte)+' ×</b> '+(x.code?esc(x.code)+' · ':'')+esc(x.des||x.ref);}).join('<br>')+
+      (c.articles.length>4?'<br><span class="sc-tag">+ '+(c.articles.length-4)+' autre(s) article(s)</span>':'');
+    var st=c.statut.k==='livre'
+      ? '<span class="sc-st ok">Livrée</span>'+(c.statut.livreeLe?'<div class="sc-tag">le '+fD(c.statut.livreeLe)+(c.statut.bl?' · '+esc(c.statut.bl):'')+'</div>':'')
+      : '<span class="sc-st att">'+esc(c.statut.label)+'</span>';
+    var ech=c.echeance ? (c.enRetard?'<span style="color:var(--red);font-weight:600">'+fD(c.echeance)+' · dépassée</span>':fD(c.echeance)) : '<span class="sc-tag">non renseignée</span>';
+    var bl=c.bls.length ? c.bls.map(function(x){return esc(x.num)+'<div class="sc-tag">'+esc(x.status||'')+(x.date?' · '+fD(x.date):'')+'</div>';}).join('') : '<span class="sc-tag">—</span>';
+    var po=c.pos.map(function(bc){return '<a href="#" onclick="event.preventDefault();nav(\'bc\');setTimeout(function(){openBC('+bc.id+');},80);">'+esc(bc.num)+'</a>';}).join('<br>');
+    return '<tr data-bc="'+esc(c.bcClient)+'"><td class="sc-bc">'+(esc(c.bcClient)||'—')+'<div class="sc-tag">'+esc(c.client)+'</div></td><td>'+fD(c.dateBC)+'</td><td>'+esc(c.acheteur)+'</td>'+
+      '<td class="sc-art">'+(arts||'<span class="sc-tag">—</span>')+'</td><td>'+st+'</td><td>'+ech+'</td><td>'+bl+'</td><td class="sc-tag">'+po+'</td></tr>';
+  }).join('')||'<tr><td colspan="8" class="sc-tag">Aucune commande pour ce filtre.</td></tr>';
+  h+='<div class="card" style="overflow-x:auto"><table class="sc-table" id="scTable"><thead><tr><th>BC client</th><th>Date BC</th><th>Acheteur</th><th>Articles commandés</th><th>Statut</th><th>Échéance contractuelle</th><th>Livraison</th><th>PO CALINSTRUM <span class="sc-int">interne</span></th></tr></thead><tbody>'+lignes+'</tbody></table></div>';
+  body.innerHTML=h;
+}
+
+// PDF « Suivi de vos commandes » pour le filtre en cours (pattern window.open+print).
+function suiviCmdImprimerPDF(){
+  var sel=_scSelection(_suiviCommandes()), E=_scEtat;
+  var titre=(E.client==='Tous'?'Tous clients':E.client)+(E.acheteur==='Tous'?'':' · à l\'attention de '+E.acheteur);
+  var etat=E.etat==='Toutes'?'toutes commandes':(E.etat==='En attente'?'commandes en attente':'commandes livrées');
+  var rows='';
+  sel.forEach(function(c){
+    rows+='<tr class="grp"><td>BC '+(esc(c.bcClient)||'—')+'</td><td>'+fD(c.dateBC)+'</td><td colspan="3">Acheteur : '+esc(c.acheteur)+'</td>'+
+      '<td class="'+(c.statut.k==='livre'?'ok':'att')+'">'+esc(c.statut.label)+'</td></tr>';
+    c.articles.forEach(function(x){
+      rows+='<tr><td></td><td></td><td>'+esc(x.code)+'</td><td>'+esc(x.des||x.ref)+(x.code&&x.ref?'<div class="ref">'+esc(x.ref)+'</div>':'')+'</td><td class="n">'+fN(x.qte)+'</td><td></td></tr>';
+    });
+  });
+  var css='@page{size:A4 landscape;margin:12mm 11mm 13mm;}html,body{background:#fff;color-scheme:light}body{font-family:Calibri,Arial,sans-serif;color:#111;font-size:10.5px;margin:0}'+
+    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #e46c12;padding-bottom:8px;margin-bottom:12px}'+
+    'h1{font-size:19px;color:#1b365d;margin:4px 0 2px}.sub{color:#5b6b7a;font-size:10.5px}table{width:100%;border-collapse:collapse}'+
+    'th{background:#1b365d;color:#fff;text-align:left;font-size:10px;padding:5px 6px}td{padding:4px 6px;border-bottom:1px solid #e5e9ef;vertical-align:top}'+
+    'tr.grp td{background:#eef2f7;font-weight:700;color:#1b365d}td.ok{color:#1b7a4e}td.att{color:#6d28d9}.ref{color:#5b6b7a;font-size:9px}.n{text-align:right}'+
+    'thead{display:table-header-group}tr{page-break-inside:avoid}.foot{margin-top:12px;font-size:9.5px;color:#5b6b7a;border-top:1px solid #e5e9ef;padding-top:6px}';
+  var html='<div class="hd"><div><img src="'+LG_PLACEHOLDER+'" style="height:38px" alt="CALINSTRUM"><h1>Suivi de vos commandes</h1>'+
+      '<div class="sub">'+esc(titre)+' · situation au '+fD(td())+' · '+etat+'</div></div>'+
+      '<div class="sub" style="text-align:right">'+esc(CI.nom)+' · '+esc(CI.adresse)+'<br>'+esc(CI.tel)+' · '+esc(CI.email)+'</div></div>'+
+    '<table><thead><tr><th style="width:120px">N° BC client</th><th style="width:74px">Date BC</th><th style="width:90px">Code article</th><th>Désignation</th><th style="width:60px;text-align:right">Quantité</th><th style="width:250px">Statut</th></tr></thead>'+
+    '<tbody>'+(rows||'<tr><td colspan="6">Aucune commande.</td></tr>')+'</tbody></table>'+
+    '<div class="foot">Statuts : « Commande lancée le … — en attente » tant que la marchandise n\'est pas livrée · « Livrée » une fois la livraison effectuée.</div>';
+  var w=window.open('','_blank','');
+  if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Suivi de vos commandes '+esc(titre)+' '+esc(td())+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
+  w.document.close();
+  w.focus();
+  setTimeout(function(){ w.print(); w.close(); }, 400);
 }
 
 // Marquer un BC comme payé/non payé chez Emerson
