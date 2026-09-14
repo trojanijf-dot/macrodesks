@@ -1139,8 +1139,7 @@ body.has-dashboard-bg #page-dashboard .metric{
     <h2 style="font-family:var(--display);color:var(--teal);font-size:18px;margin:0">💰 Rentabilité Emerson</h2>
     <span style="margin-left:auto;display:inline-flex;gap:8px">
       <button class="btn btn-ghost btn-sm" onclick="rentaExportExcel()">⬇ Export Excel</button>
-      <span id="rentaPdfThemeBox" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-renta-theme="clair" onclick="rentaSetPdfTheme('clair')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-renta-theme="sombre" onclick="rentaSetPdfTheme('sombre')">🌙 Sombre</button></span>
-      <button class="btn btn-teal btn-sm" onclick="rentaImprimerArticlesPO()">📄 PDF articles par PO / BC client</button>
+      <span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span><button class="btn btn-teal btn-sm" onclick="rentaImprimerArticlesPO()">📄 PDF articles par PO / BC client</button>
     </span>
   </div>
   <div class="renta-note">📌 Une <b>affaire</b> = un ou plusieurs PO Emerson + les factures <b>fourniture</b> CALINSTRUM correspondantes. <b>Bénéfice = CA HT fourniture (avoirs déduits) − coût Emerson (montant × taux AUD) − frais de transit</b>. Les prestations sont listées à part. Chiffres recalculés à chaque ouverture à partir des données du GRC.</div>
@@ -1173,7 +1172,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   </style>
   <div class="no-print" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
     <h2 style="font-family:var(--display);color:var(--teal);font-size:18px;margin:0">📦 Suivi des commandes client</h2>
-    <span style="margin-left:auto"><button class="btn btn-teal btn-sm" onclick="suiviCmdImprimerPDF()">📄 PDF client</button></span>
+    <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center"><span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span><button class="btn btn-teal btn-sm" onclick="suiviCmdImprimerPDF()">📄 PDF client</button></span>
   </div>
   <div class="sc-note">📌 Une ligne par <b>BC client</b>, sans aucun montant. Statut : <b>Livrée</b> dès qu'une <b>facture est émise</b> (les pré-factures ne comptent pas) ou qu'un <b>BL est livré</b> ; sinon <b>« Commande lancée le … — en attente »</b> (date de la commande fournisseur). Le <b>PDF client</b> reprend le filtre en cours et n'imprime ni l'échéance, ni le BL, ni le n° de PO <span class="sc-int">interne</span>.</div>
   <div id="scBody"></div>
@@ -1199,7 +1198,8 @@ body.has-dashboard-bg #page-dashboard .metric{
         du <input type="date" class="form-input" id="admExpStart" style="width:150px" onchange="admExpRecompute()">
         au <input type="date" class="form-input" id="admExpEnd" style="width:150px" onchange="admExpRecompute()">
       </span>
-      <span style="margin-left:auto;display:inline-flex;gap:8px">
+      <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center">
+        <span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span>
         <button class="btn btn-ghost" onclick="printAdminReportPeriod()" title="Imprime directement la synthèse seule, sans aperçu ni factures jointes">🖨 Synthèse seule</button>
         <button class="btn btn-teal" onclick="admPreviewOpen()" id="admExpGoBtn" title="Aperçu papier avant impression : synthèse + factures signées archivées de la période, dans un seul document">👁 Aperçu avant impression</button>
       </span>
@@ -1784,7 +1784,7 @@ function printAdminReport(){
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Facturation '+esc(_admPeriodLabel(r))+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
-  setTimeout(function(){ w.print(); w.close(); }, 400);
+  setTimeout(function(){ _pdfThemeAppliquer(w.document,_pdfTheme('app')); w.print(); w.close(); }, 400);
 }
 
 // ============================================================================
@@ -1941,7 +1941,7 @@ function printAdminReportPeriod(){
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Facturation '+esc(_admPeriodLabel(r))+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
-  setTimeout(function(){ w.print(); }, 400);
+  setTimeout(function(){ _pdfThemeAppliquer(w.document,_pdfTheme('app')); w.print(); }, 400);
 }
 
 // ============================================================================
@@ -2187,7 +2187,7 @@ function admPreviewPrint(){
   w.focus();
   // Les <img> sont des data:URL (déjà décodées) mais on laisse le layout se
   // stabiliser avant d'ouvrir la boîte d'impression.
-  setTimeout(function(){ w.print(); }, withFa&&_admPrvState.pages.length?900:400);
+  setTimeout(function(){ _pdfThemeAppliquer(w.document,_pdfTheme('app')); w.print(); }, withFa&&_admPrvState.pages.length?900:400);
 }
 </script>
 
@@ -2702,6 +2702,7 @@ function admPreviewPrint(){
       </div>
       <div style="display:flex;gap:12px;align-items:center">
         <label class="no-pm-blur" style="font-size:11px;color:var(--muted)" title="Majoration paie d'un jour férié travaillé (barème A.I.T. — modifiable)">Férié travaillé : +<input type="number" id="ptFerieMaj" min="0" max="200" step="5" style="width:56px;text-align:center;padding:3px 5px;margin:0 2px" onchange="ptSetFerieMaj(this.value)">%</label>
+        <span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span>
         <button class="btn btn-ghost btn-sm" onclick="ptPaiePrint()" title="Imprimer / PDF du récapitulatif paie du mois pour le comptable">🖨 Export PDF paie</button>
       </div>
     </div>
@@ -4558,6 +4559,7 @@ function admPreviewPrint(){
       Joindre les factures signées archivées
       <span id="admPrvFaState" style="color:var(--muted-soft)"></span>
     </label>
+    <span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span>
     <button class="btn btn-ghost" onclick="cm('mADMPRV')">Fermer</button>
     <button class="btn btn-teal" id="admPrvPrintBtn" onclick="admPreviewPrint()" title="Ouvre la boîte d'impression — choisir « Enregistrer en PDF » comme imprimante">🖨️ Imprimer / Enregistrer en PDF</button>
   </div>
@@ -4569,6 +4571,7 @@ function admPreviewPrint(){
   <div class="modal-header"><h3 id="prvTitle">Aperçu</h3><button class="modal-close" onclick="cm('mPRV')">✕</button></div>
   <div class="modal-body" id="prvBody"></div>
   <div class="modal-footer no-print">
+    <span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF (revient sur Clair à chaque aperçu)"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="doc" onclick="pdfSetTheme('clair','doc')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="doc" onclick="pdfSetTheme('sombre','doc')">🌙 Sombre</button></span>
     <button class="btn btn-ghost" onclick="cm('mPRV')">Fermer</button>
     <button class="btn btn-ghost" onclick="om('mSTAMP');initStampCanvas()" title="Choisir, dessiner ou charger une signature à apposer sur l'aperçu">✍️ Tampon / Signature</button>
     <button class="btn btn-teal" onclick="printPreviewBC()" title="Ouvre la boîte de dialogue d'impression — choisir « Enregistrer en PDF » comme imprimante pour obtenir un PDF fiable">🖨️ Imprimer / PDF</button>
@@ -6587,6 +6590,9 @@ function om(id){
       e.setAttribute('data-edit-locked','1');
     }
   }
+  // Aperçu d'un document officiel : thème du PDF remis sur « clair » à chaque ouverture.
+  if(id==='mPRV' && typeof _pdfThemeDocMem!=='undefined') _pdfThemeDocMem='clair';
+  if(typeof _pdfMajBoutonsTheme==='function') _pdfMajBoutonsTheme();
   _onModalOpen(id);
 }
 
@@ -7322,6 +7328,7 @@ function nav(p){
   // sinon il restait caché si l'utilisateur n'allait jamais sur Suivi (qui était
   // le seul endroit où il était mis à jour).
   if(typeof _refreshAlertPill==='function') _refreshAlertPill();
+  if(typeof _pdfMajBoutonsTheme==='function') _pdfMajBoutonsTheme();
   var T={dashboard:'Dashboard',devis:'Devis',factures:'Factures',suivi:'Suivi Factures',
     bc:'Bons de commande',bl:'Bons de livraison',pointage:'Pointage / Heures',clients:'Clients',historique:'Historique',catalogue:'Catalogue',administratif:'Administratif',rentabilite:'Rentabilité Emerson',suivicmd:'Suivi des commandes client',
     params:'Paramètres — Listes déroulantes',coutrevient:'Paramètres — Coût de revient'};
@@ -8775,24 +8782,110 @@ function _rentaBCClientAffiche(bc){
 }
 function _rentaAUD(v){ return v==null||v===''?'':Number(v).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
-// Thème du PDF Rentabilité : « clair » (défaut) ou « sombre » (lecture de nuit), mémorisé
-// dans ce navigateur. Le fond sombre ne s'imprime que si « Graphiques d'arrière-plan » est coché.
-var _rentaPdfThemeMem='clair';
-function _rentaPdfTheme(){
-  try{ var v=localStorage.getItem('rentaPdfTheme'); if(v==='sombre'||v==='clair') _rentaPdfThemeMem=v; }catch(e){}
+// ─── THÈME DES PDF (clair / sombre, lecture de nuit) ───────────────────────
+// Deux portées :
+//  - « app » : PDF d'analyse et de suivi (Rentabilité, Suivi commandes, Administratif,
+//    Paie, Time Sheet, MMB) — choix MÉMORISÉ dans ce navigateur ;
+//  - « doc » : documents ouverts dans l'aperçu (devis, facture, BC, BL, avoir) — choix
+//    NON mémorisé, remis sur « clair » à chaque ouverture de l'aperçu, pour qu'un document
+//    destiné au client ne parte jamais en sombre par oubli.
+var _rentaPdfThemeMem='clair', _pdfThemeDocMem='clair';
+function _pdfTheme(scope){
+  if(scope==='doc') return _pdfThemeDocMem;
+  try{
+    var v=localStorage.getItem('grcPdfTheme');
+    if(v==null) v=localStorage.getItem('rentaPdfTheme'); // ancien réglage de la page Rentabilité
+    if(v==='sombre'||v==='clair') _rentaPdfThemeMem=v;
+  }catch(e){}
   return _rentaPdfThemeMem;
 }
-function rentaSetPdfTheme(t){
-  _rentaPdfThemeMem=(t==='sombre')?'sombre':'clair';
-  try{ localStorage.setItem('rentaPdfTheme',_rentaPdfThemeMem); }catch(e){}
-  _rentaMajBoutonsTheme();
+function pdfSetTheme(t,scope){
+  t=(t==='sombre')?'sombre':'clair';
+  if(scope==='doc') _pdfThemeDocMem=t;
+  else { _rentaPdfThemeMem=t; try{ localStorage.setItem('grcPdfTheme',t); }catch(e){} }
+  _pdfMajBoutonsTheme();
 }
-function _rentaMajBoutonsTheme(){
-  var cur=_rentaPdfTheme();
-  document.querySelectorAll('[data-renta-theme]').forEach(function(b){
-    var on=b.getAttribute('data-renta-theme')===cur;
+function _pdfMajBoutonsTheme(){
+  document.querySelectorAll('[data-pdf-theme]').forEach(function(b){
+    var on=b.getAttribute('data-pdf-theme')===_pdfTheme(b.getAttribute('data-pdf-scope')||'app');
     b.style.background=on?'rgba(45,212,191,.15)':''; b.style.color=on?'var(--teal)':''; b.style.borderColor=on?'var(--teal)':'';
   });
+}
+function _pdfThemeBoxHtml(scope){
+  var s=scope==='doc'?'doc':'app';
+  var btn=function(v,lbl){ var on=_pdfTheme(s)===v; // état actif écrit directement (sélecteur rendu en JS)
+    return '<button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="'+v+'" data-pdf-scope="'+s+'"'+(on?' style="background:rgba(45,212,191,.15);color:var(--teal);border-color:var(--teal)"':'')+' onclick="pdfSetTheme(\''+v+'\',\''+s+'\')">'+lbl+'</button>';};
+  return '<span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF'+(s==='doc'?' (revient sur Clair à chaque aperçu)':'')+'">'+
+    btn('clair','☀ Clair')+btn('sombre','🌙 Sombre')+'</span>';
+}
+// Rentabilité : noms historiques conservés (son PDF a sa propre palette sombre).
+function _rentaPdfTheme(){ return _pdfTheme('app'); }
+function rentaSetPdfTheme(t){ pdfSetTheme(t,'app'); }
+function _rentaMajBoutonsTheme(){ _pdfMajBoutonsTheme(); }
+
+// Passe un document d'impression en sombre, quel que soit son gabarit : lit les couleurs
+// CALCULÉES de chaque élément et les remappe (fonds clairs → sombres, encres sombres →
+// claires, bandeaux déjà foncés et texte blanc conservés, teinte gardée). Couleurs
+// seulement : aucune dimension ne change, la pagination reste identique, le texte reste
+// vectoriel. À appeler juste avant print(). Sans effet si le thème est « clair ».
+function _pdfThemeAppliquer(doc,theme){
+  if(theme!=='sombre' || !doc || !doc.body) return false;
+  var win=doc.defaultView||window;
+  var parse=function(s){ var m=/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,\/]\s*([\d.]+%?))?\s*\)/.exec(s||''); if(!m) return null;
+    var a=m[4]==null?1:(/%$/.test(m[4])?parseFloat(m[4])/100:+m[4]); return [+m[1],+m[2],+m[3],a]; };
+  var hsl=function(c){ var r=c[0]/255,g=c[1]/255,b=c[2]/255,mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2,h=0,s=0,d=mx-mn;
+    if(d){ s=l>.5?d/(2-mx-mn):d/(mx+mn); h=mx===r?(g-b)/d+(g<b?6:0):mx===g?(b-r)/d+2:(r-g)/d+4; h/=6; } return [h,s,l]; };
+  var rgb=function(h,s,l,a){ var f=function(p,q,t){ if(t<0)t+=1; if(t>1)t-=1; return t<1/6?p+(q-p)*6*t:t<1/2?q:t<2/3?p+(q-p)*(2/3-t)*6:p; };
+    var r,g,b; if(!s){ r=g=b=l; } else { var q=l<.5?l*(1+s):l+s-l*s, p=2*l-q; r=f(p,q,h+1/3); g=f(p,q,h); b=f(p,q,h-1/3); }
+    return 'rgba('+Math.round(r*255)+','+Math.round(g*255)+','+Math.round(b*255)+','+a+')'; };
+  var fond=function(c){ var x=hsl(c); if(x[2]<=.45) return null;             // déjà foncé (bandeaux) : conservé
+    return rgb(x[0],Math.min(x[1],.35),.07+(1-x[2])*.45,c[3]); };              // blanc → papier sombre (= marge de page), teintes pâles → un peu plus claires
+  var encre=function(c){ var x=hsl(c); if(x[2]>=.6) return null;               // déjà clair (texte blanc des bandeaux) : conservé
+    return rgb(x[0],x[1],Math.max(.62,.92-x[2]*.5),c[3]); };
+  var trait=function(c){ var x=hsl(c); return x[2]>.6 ? rgb(x[0],Math.min(x[1],.3),.2+(1-x[2])*.4,c[3]) : rgb(x[0],x[1],Math.max(.6,.85-x[2]*.5),c[3]); };
+  var els=doc.body.querySelectorAll('*'), plan=[];
+  for(var i=0;i<els.length;i++){
+    var el=els[i], cs=win.getComputedStyle(el), p={el:el};
+    var bg=parse(cs.backgroundColor); if(bg && bg[3]>0) p.bg=fond(bg);
+    var co=parse(cs.color); if(co) p.co=encre(co);
+    ['Top','Right','Bottom','Left'].forEach(function(k){
+      if(parseFloat(cs['border'+k+'Width'])>0 && cs['border'+k+'Style']!=='none'){ var bc=parse(cs['border'+k+'Color']); if(bc&&bc[3]>0) p['b'+k]=trait(bc); }
+    });
+    if(el instanceof win.SVGElement){
+      var tag=el.tagName.toLowerCase(), fi=parse(cs.fill), sk=parse(cs.stroke);
+      if(fi && fi[3]>0){ var hf=hsl(fi); if(tag==='text'||tag==='tspan') p.fill=encre(fi); else if(hf[1]<.2) p.fill=hf[2]>.6?fond(fi):trait(fi); }
+      if(sk && sk[3]>0 && hsl(sk)[1]<.2) p.stroke=trait(sk);
+    }
+    plan.push(p);
+  }
+  plan.forEach(function(p){
+    var s=p.el.style;
+    if(p.bg) s.setProperty('background-color',p.bg,'important');
+    if(p.co) s.setProperty('color',p.co,'important');
+    ['Top','Right','Bottom','Left'].forEach(function(k){ if(p['b'+k]) s.setProperty('border-'+k.toLowerCase()+'-color',p['b'+k],'important'); });
+    if(p.fill) s.setProperty('fill',p.fill,'important');
+    if(p.stroke) s.setProperty('stroke',p.stroke,'important');
+  });
+  // Logos, tampons, signatures : sur une plaque claire, sinon l'encre foncée disparaît.
+  doc.querySelectorAll('img').forEach(function(im){ im.style.setProperty('background-color','#eef2f5','important'); im.style.setProperty('border-radius','3px','important'); });
+  // Cases de marge @page (n° de page, mention légale en pied) : hors DOM, lues dans les feuilles de style.
+  var marges='';
+  doc.querySelectorAll('style').forEach(function(sty){
+    var re=/@((?:top|bottom|left|right)-[a-z-]+)\s*\{([^}]*)\}/g, m;
+    while((m=re.exec(sty.textContent||''))){
+      var cm=/(?:^|;)\s*color\s*:\s*([^;!]+)/.exec(m[2]); if(!cm) continue;
+      var sonde=doc.createElement('span'); sonde.style.color=cm[1].trim(); doc.body.appendChild(sonde);
+      var c=parse(win.getComputedStyle(sonde).color); sonde.remove();
+      var nc=c&&encre(c); if(nc) marges+='@'+m[1]+'{color:'+nc+'!important}';
+    }
+  });
+  var st=doc.createElement('style');
+  st.setAttribute('data-pdf-theme','sombre');
+  // Papier = rgb(18,18,18), la couleur que Chrome donne aux marges de page en color-scheme sombre : pas de cadre visible.
+  st.textContent='html,body{background:rgb(18,18,18)!important;color-scheme:dark}*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}'+
+    (marges?'@page{'+marges+'}':'');
+  (doc.head||doc.documentElement).appendChild(st);
+  return true;
 }
 
 // PDF « articles par PO Emerson / BC client » : même pattern window.open+print que printAdminReport.
@@ -9071,7 +9164,7 @@ function suiviCmdImprimerPDF(){
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Suivi de vos commandes '+esc(titre)+' '+esc(td())+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
-  setTimeout(function(){ w.print(); w.close(); }, 400);
+  setTimeout(function(){ _pdfThemeAppliquer(w.document,_pdfTheme('app')); w.print(); w.close(); }, 400);
 }
 
 // Marquer un BC comme payé/non payé chez Emerson
@@ -43475,7 +43568,7 @@ function ptPaiePrint(){
   if(!w){alert('Autorisez les popups pour imprimer.');return;}
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();w.focus();
-  setTimeout(function(){try{w.print();}catch(e){}},350);
+  setTimeout(function(){try{_pdfThemeAppliquer(w.document,_pdfTheme('app'));w.print();}catch(e){}},350);
 }
 
 // =============================================================================
@@ -43841,6 +43934,7 @@ function _ptFactCompute(){
   }
   // Documents à imprimer (client + période sélectionnés)
   html+='<div class="no-print" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">'+
+    _pdfThemeBoxHtml('app')+
     '<button class="btn btn-ghost" onclick="ptTimeSheetPrint()" title="Time Sheet à faire viser par le client">🖨 Time Sheet</button>'+
     (bd.circuit==='mmb'?'<button class="btn btn-ghost" onclick="ptMMBPrint()" title="Monthly Measurement Bulletin (PRNC)">📄 MMB CALINSTRUM</button>':'')+
     '</div>';
@@ -44641,7 +44735,7 @@ function _ptOpenPrintDoc(title,bodyHtml,extraCss){
   w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+
     bodyHtml.replace('{{LOGO}}',logo)+'</body></html>');
   w.document.close();w.focus();
-  setTimeout(function(){try{w.print();}catch(e){}},350);
+  setTimeout(function(){try{_pdfThemeAppliquer(w.document,_pdfTheme('app'));w.print();}catch(e){}},350);
 }
 // Devis sélectionné dans l'onglet Facturation (pour PO / objet), sinon null.
 function _ptFactSelectedDevis(){
@@ -50072,6 +50166,7 @@ function printPreviewBC(){
     // Pour TOUS les types (devis, BC, facture, BL) : délai standard pour fonts/images.
     setTimeout(function(){
       try{
+        _pdfThemeAppliquer(w.document,_pdfTheme('doc'));
         w.print();
         setTimeout(function(){try{w.close();}catch(e){}},500);
       }catch(err){
@@ -50828,10 +50923,11 @@ function doPrint(){
   setTimeout(function(){
     // Vérifier que les polices sont chargées avant d'imprimer (si API dispo)
     if(isBCDoc && w.document.fonts && w.document.fonts.ready){
-      w.document.fonts.ready.then(function(){_pgFixPages(w.document);_pgAuditPages(w.document,safeDocTitle);w.print();w.close();});
+      w.document.fonts.ready.then(function(){_pgFixPages(w.document);_pgAuditPages(w.document,safeDocTitle);_pdfThemeAppliquer(w.document,_pdfTheme('doc'));w.print();w.close();});
     } else {
       _pgFixPages(w.document);
       _pgAuditPages(w.document,safeDocTitle);
+      _pdfThemeAppliquer(w.document,_pdfTheme('doc'));
       w.print();w.close();
     }
   },printDelay);
