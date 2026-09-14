@@ -40652,7 +40652,7 @@ function _parseBCSLN(rawLines, lineGroups, fullText, result){
     //   ↑ ce cas n'est PAS variante B (pas de date entre unité et pu) — c'est variante A avec unité présente.
     // En fait sur le PDF 740704, l'ordre dépend de la cellule pdf.js : si la date+qte+unité+pu+total
     // sont sur la même ligne Y, l'ordre peut varier. Le pattern B avec date au milieu doit donc être strict.
-    var mCompact = norm.match(/^(\d{1,2})\s+(.+?)\s+(\d+)\s+(Forfait|Lot\s+de\s+pi[èe]ces|Lot|U|Ft|Kg|kg|m|H|jour)\s+(\d{2}\/\d{2}\/\d{4})\s+([\d\s]+,\d{2})\s+([\d\s]+,\d{2})$/i);
+    var mCompact = norm.match(/^(\d{1,2})\s+(.+?)\s+(\d+)\s+(Forfait|Lot\s+de(?:\s+pi[èe]ces)?|Lot|U|Ft|Kg|kg|m|H|jour)\s+(\d{2}\/\d{2}\/\d{4})\s+([\d\s]+,\d{2})\s+([\d\s]+,\d{2})$/i);
     if(mCompact){
       // Mapping variante B : [_, poste, middle, qte, unite, date, pu, mont]
       // On remap dans la structure variante A : [_, poste, middle, date, qte, unite_, pu, mont]
@@ -40660,7 +40660,17 @@ function _parseBCSLN(rawLines, lineGroups, fullText, result){
     } else {
       // Variante A (cas standard) :
       //   poste DESC IMPUT DATE QTE [UNITE] PU MONTANT
-      mCompact = norm.match(/^(\d{1,2})\s+(.+?)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d+)\s+((?:Forfait|Lot\s+de\s+pi[èe]ces|Lot|U|Ft|Kg|kg|m|H|jour)\s+)?([\d\s]+,\d{2})\s+([\d\s]+,\d{2})$/i);
+      mCompact = norm.match(/^(\d{1,2})\s+(.+?)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d+)\s+((?:Forfait|Lot\s+de(?:\s+pi[èe]ces)?|Lot|U|Ft|Kg|kg|m|H|jour)\s+)?([\d\s]+,\d{2})\s+([\d\s]+,\d{2})$/i);
+    }
+    if(!mCompact){
+      // Variante C (14/09/2026) : poste SANS date de livraison, ex. frais d'import
+      //   "7 FRAIS IMPORT (FRET, ASSURANCE, DOUANE) ZZZZZZZZ 1 453 403,00 453 403,00"
+      // Sans date, une ligne d'adresse ou de conditions pourrait ressembler à un
+      // poste : on ne la retient que si quantité × prix unitaire = montant.
+      var mSansDate = norm.match(/^(\d{1,2})\s+(.+?)\s+(\d+)\s+((?:Forfait|Lot\s+de(?:\s+pi[èe]ces)?|Lot|U|Ft|Kg|kg|m|H|jour)\s+)?([\d\s]+,\d{2})\s+([\d\s]+,\d{2})$/i);
+      if(mSansDate && Math.abs(parseInt(mSansDate[3],10)*parseFR(mSansDate[5]) - parseFR(mSansDate[6])) <= 1){
+        mCompact = [mSansDate[0], mSansDate[1], mSansDate[2], '', mSansDate[3], mSansDate[4]||'', mSansDate[5], mSansDate[6]];
+      }
     }
     if(mCompact){
       var poste = parseInt(mCompact[1], 10);
@@ -40677,6 +40687,12 @@ function _parseBCSLN(rawLines, lineGroups, fullText, result){
       if(mCode){ ref = mCode[1]; desc = mCode[2]; }
       // Enlever IMPUT en queue (format "924631..." 6 chiffres + 3 points) — c'est un n° comptable interne SLN
       desc = desc.replace(/\s+\d{6}\.{2,}$/,'').trim();
+      // Code article « bouche-trou » SLN (ZZZZZZZZ) : pas une désignation
+      desc = desc.replace(/\s+Z{4,}$/,'').trim();
+      // (=X=) UN POSTE N'EXISTE QU'UNE FOIS. Le PDF SLN contient la commande en
+      //       DEUX EXEMPLAIRES (pages 1-5 puis leur copie) : sans cette garde,
+      //       chaque article était repris deux fois sur le BL (14/09/2026).
+      if(items.some(function(x){ return x._poste===poste; })) continue;
       // Sécurité : poste doit être plausible (1-99) et qte > 0
       if(poste>=1 && poste<=99 && qte>=1 && mont>0){
         items.push({
