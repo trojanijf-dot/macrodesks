@@ -6667,7 +6667,54 @@ function _onModalOpen(modalId){
   },0);
 }
 
+// =============================================================================
+// OUVRIR UN DOCUMENT SUR PLACE ET REVENIR À LA SECTION (14/09/2026)
+// =============================================================================
+// Un clic sur une facture / un PO / un devis / un BL depuis une section d'analyse
+// ouvre le document PAR-DESSUS la page courante, sans changer de page. À sa
+// fermeture, la section est recalculée et la hauteur de défilement restaurée.
+// Avant, les liens faisaient nav('factures'|'bc') puis ouvraient : fermer le
+// document laissait l'utilisateur sur la liste Factures / BC.
+var _DOC_MODALES={FA:'mFA',BC:'mBC',DV:'mDV',BL:'mBL'};
+var _docRetour=null;
+function ouvrirDocument(type,id,opts){
+  var fn={FA:'openFA',BC:'openBC',DV:'openDV',BL:'openBL'}[type];
+  if(!fn || typeof window[fn]!=='function') return;
+  // Un document ouvert depuis un autre document garde la section d'origine.
+  if(!_docRetour){
+    var pg=document.querySelector('.page.active');
+    _docRetour={page:pg?pg.id.replace(/^page-/,''):'', y:window.scrollY||0};
+  }
+  window[fn](id);
+  if(opts && opts.section) setTimeout(function(){
+    var el=document.getElementById(opts.section);
+    if(el) el.scrollIntoView({behavior:'smooth',block:'center'});
+  },120);
+}
+function _docRetourApresFermeture(modalId){
+  if(!_docRetour) return;
+  var docs=Object.keys(_DOC_MODALES).map(function(k){return _DOC_MODALES[k];});
+  if(docs.indexOf(modalId)<0) return;
+  // Un autre document est encore ouvert : le retour attend sa fermeture.
+  if(docs.some(function(id){ var e=document.getElementById(id); return id!==modalId && e && e.classList.contains('open'); })) return;
+  var r=_docRetour; _docRetour=null;
+  var pg=document.querySelector('.page.active');
+  if(r.page && pg && pg.id!=='page-'+r.page && typeof nav==='function') nav(r.page);
+  try{
+    if(r.page==='rentabilite' && typeof window.renderRentabilite==='function') window.renderRentabilite();
+    else if(r.page==='suivicmd' && typeof window.renderSuiviCommandes==='function') window.renderSuiviCommandes();
+    else if(r.page==='dashboard' && typeof window.rDash==='function') window.rDash();
+    else if(r.page==='suivi'){
+      var onglet=document.getElementById('suiviTab-dossiers');
+      if(onglet && onglet.classList.contains('active') && typeof window.renderDossiers==='function') window.renderDossiers();
+    }
+  }catch(e){ console.warn('retour section :',e); }
+  window.scrollTo(0,r.y);
+  setTimeout(function(){ window.scrollTo(0,r.y); },30);
+}
+
 function _onModalClose(modalId){
+  _docRetourApresFermeture(modalId);
   if(!_activeHighlight || _activeHighlight.modalId !== modalId) return;
   _clearRowHighlight();
   _activeHighlight = null;
@@ -7306,6 +7353,8 @@ function nav(p){
   if(p==='bc')renderBC();
   if(p==='bl'){rebuildClientSelects();renderBL();}
   if(p==='pointage')renderPointage();
+  if(p==='rentabilite'&&typeof renderRentabilite==='function')renderRentabilite();
+  if(p==='suivicmd'&&typeof renderSuiviCommandes==='function')renderSuiviCommandes();
   if(p==='clients')rClients();
   if(p==='historique')renderHist();
   if(p==='catalogue'){
@@ -8692,8 +8741,8 @@ function renderRentabilite(){
   var lignes=sel.map(function(a){
     var etat=a.sansFacture?'<span class="renta-badge vio">sans facture</span>':a.verifier?'<span class="renta-badge red">à vérifier</span>':
       (a.caEmis>=a.ca-0.5?'<span class="renta-badge ok">facturé</span>':'<span class="renta-badge vio">prévisionnel</span>');
-    var poHtml=a.pos.map(function(bc){return '<a href="#" class="renta-po" onclick="event.preventDefault();nav(\'bc\');setTimeout(function(){openBC('+bc.id+');},80);">'+esc(bc.num)+'</a>';}).join('<br>');
-    var faHtml=a.factures.map(function(f){return '<a href="#" onclick="event.preventDefault();nav(\'factures\');setTimeout(function(){openFA('+f.id+');},80);">'+esc(f.num)+'</a>';}).join(', ')||'—';
+    var poHtml=a.pos.map(function(bc){return '<a href="#" class="renta-po" onclick="event.preventDefault();ouvrirDocument(\'BC\','+bc.id+');">'+esc(bc.num)+'</a>';}).join('<br>');
+    var faHtml=a.factures.map(function(f){return '<a href="#" onclick="event.preventDefault();ouvrirDocument(\'FA\','+f.id+');">'+esc(f.num)+'</a>';}).join(', ')||'—';
     return '<tr data-client="'+esc(a.client)+'"><td>'+poHtml+'</td><td>'+fD(a.date)+'</td><td>'+esc(a.contact)+'</td><td>'+(esc(a.bcClient)||'<span class="renta-tag">—</span>')+'</td><td>'+faHtml+'</td>'+
       '<td class="n">'+fN(a.aud)+'</td><td class="n">'+fN(a.cout)+(a.tauxDefaut?'<span class="renta-badge est" title="taux AUD par défaut">~</span>':'')+'</td>'+
       '<td class="n">'+fN(a.frais)+(a.fraisReels?'':'<span class="renta-badge est">estimé</span>')+'</td>'+
@@ -8981,7 +9030,7 @@ function renderSuiviCommandes(){
       : '<span class="sc-st att">'+esc(c.statut.label)+'</span>';
     var ech=c.echeance ? (c.enRetard?'<span style="color:var(--red);font-weight:600">'+fD(c.echeance)+' · dépassée</span>':fD(c.echeance)) : '<span class="sc-tag">non renseignée</span>';
     var bl=c.bls.length ? c.bls.map(function(x){return esc(x.num)+'<div class="sc-tag">'+esc(x.status||'')+(x.date?' · '+fD(x.date):'')+'</div>';}).join('') : '<span class="sc-tag">—</span>';
-    var po=c.pos.map(function(bc){return '<a href="#" onclick="event.preventDefault();nav(\'bc\');setTimeout(function(){openBC('+bc.id+');},80);">'+esc(bc.num)+'</a>';}).join('<br>');
+    var po=c.pos.map(function(bc){return '<a href="#" onclick="event.preventDefault();ouvrirDocument(\'BC\','+bc.id+');">'+esc(bc.num)+'</a>';}).join('<br>');
     return '<tr data-bc="'+esc(c.bcClient)+'"><td class="sc-bc">'+(esc(c.bcClient)||'—')+'<div class="sc-tag">'+esc(c.client)+'</div></td><td>'+fD(c.dateBC)+'</td><td>'+esc(c.acheteur)+'</td>'+
       '<td class="sc-art">'+(arts||'<span class="sc-tag">—</span>')+'</td><td>'+st+'</td><td>'+ech+'</td><td>'+bl+'</td><td class="sc-tag">'+po+'</td></tr>';
   }).join('')||'<tr><td colspan="8" class="sc-tag">Aucune commande pour ce filtre.</td></tr>';
@@ -10393,8 +10442,8 @@ function renderDossiers(){
         '<td style="padding:5px 6px;text-align:right;font-size:10.5px;color:'+(bcFraisReels?'#10b981':'#fbbf24')+'">'+fN(bcFrais)+' XPF</td>'+
         '<td style="padding:5px 6px;text-align:right">'+bcStBadge+'</td>'+
         '<td style="padding:5px 6px;text-align:right;white-space:nowrap">'+
-          '<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px" onclick="nav(\'bc\');setTimeout(function(){openBC('+bc.id+');},80);" title="Ouvrir le BC en édition">✎</button> '+
-          '<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;color:#a78bfa;border-color:rgba(167,139,250,.3)" onclick="nav(\'bc\');setTimeout(function(){openBC('+bc.id+');setTimeout(function(){var el=document.getElementById(\'bc-cout-reel-section\');if(el)el.scrollIntoView({behavior:\'smooth\',block:\'center\'});},120);},80);" title="Modifier le taux AUD et les frais réels">💰</button> '+
+          '<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px" onclick="ouvrirDocument(\'BC\','+bc.id+');" title="Ouvrir le BC en édition">✎</button> '+
+          '<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;color:#a78bfa;border-color:rgba(167,139,250,.3)" onclick="ouvrirDocument(\'BC\','+bc.id+',{section:\'bc-cout-reel-section\'});" title="Modifier le taux AUD et les frais réels">💰</button> '+
           actionBtn+
         '</td>'+
       '</tr>';
@@ -10448,8 +10497,8 @@ function renderDossiers(){
            '<th style="text-align:right;padding:3px 6px">Actions</th>'+
          '</tr></thead><tbody>'+rowsBc+'</tbody></table>'
         :'<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">'+
-           '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px" onclick="nav(\'bc\');setTimeout(function(){openBC('+d.bcs[0].id+');},80);" title="Ouvrir le BC en édition">✎ Ouvrir BC</button>'+
-           '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#a78bfa;border-color:rgba(167,139,250,.3)" onclick="nav(\'bc\');setTimeout(function(){openBC('+d.bcs[0].id+');setTimeout(function(){var el=document.getElementById(\'bc-cout-reel-section\');if(el)el.scrollIntoView({behavior:\'smooth\',block:\'center\'});},120);},80);" title="Modifier le taux AUD et les frais réels">💰 Taux & frais</button>'+
+           '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px" onclick="ouvrirDocument(\'BC\','+d.bcs[0].id+');" title="Ouvrir le BC en édition">✎ Ouvrir BC</button>'+
+           '<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#a78bfa;border-color:rgba(167,139,250,.3)" onclick="ouvrirDocument(\'BC\','+d.bcs[0].id+',{section:\'bc-cout-reel-section\'});" title="Modifier le taux AUD et les frais réels">💰 Taux & frais</button>'+
            (d.bcs[0].paidEmerson
              ?'<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#fbbf24;border-color:rgba(251,191,36,.3)" onclick="setBCPaidEmerson('+d.bcs[0].id+',false)" title="Marquer non payé">↩ Marquer non payé</button>'
              :'<button class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:3px 8px;color:#10b981;border-color:rgba(16,185,129,.3)" onclick="setBCPaidEmerson('+d.bcs[0].id+',true)" title="Marquer comme payé chez Emerson">✓ Marquer payé Emerson</button>')+
