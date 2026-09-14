@@ -1139,6 +1139,7 @@ body.has-dashboard-bg #page-dashboard .metric{
     <h2 style="font-family:var(--display);color:var(--teal);font-size:18px;margin:0">💰 Rentabilité Emerson</h2>
     <span style="margin-left:auto;display:inline-flex;gap:8px">
       <button class="btn btn-ghost btn-sm" onclick="rentaExportExcel()">⬇ Export Excel</button>
+      <span id="rentaPdfThemeBox" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-renta-theme="clair" onclick="rentaSetPdfTheme('clair')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-renta-theme="sombre" onclick="rentaSetPdfTheme('sombre')">🌙 Sombre</button></span>
       <button class="btn btn-teal btn-sm" onclick="rentaImprimerArticlesPO()">📄 PDF articles par PO / BC client</button>
     </span>
   </div>
@@ -8599,26 +8600,10 @@ function _rentaBarres(aff){
   return h+'</svg>';
 }
 
-function renderRentabilite(){
-  var body=document.getElementById('rentaBody');
-  if(!body) return;
-  _ensureAvoirShape();
-  var tout=_rentaAffaires(), E=_rentaEtat;
-  var ans=tout.map(function(a){return String(a.date).slice(0,4);}).filter(function(v,i,a){return v && a.indexOf(v)===i;}).sort().reverse();
-  var clients=tout.map(function(a){return a.client;}).filter(function(v,i,a){return a.indexOf(v)===i;}).sort();
-  if(E.an!=='Tout' && ans.indexOf(E.an)<0) E.an='Tout';
-  if(E.client!=='Tous' && clients.indexOf(E.client)<0) E.client='Tous';
-  var sel=tout.filter(function(a){return (E.an==='Tout'||String(a.date).slice(0,4)===E.an)&&(E.client==='Tous'||a.client===E.client);});
-  var t=_rentaTotaux(sel,{inclureAVerifier:E.verifier});
-  var retenues=sel.filter(function(a){return !a.sansFacture && (E.verifier || !a.verifier);});
-  var chip=function(attr,val,actif,cle){return '<button type="button" class="renta-chip'+(actif?' on':'')+'" '+attr+'="'+esc(val)+'" onclick="rentaSetFiltre(\''+cle+'\',\''+esc(val).replace(/'/g,"\\'")+'\')">'+esc(val)+'</button>';};
-
-  var h='<div class="renta-filtres"><span class="renta-lbl">Année</span>'+
-    ['Tout'].concat(ans).map(function(v){return chip('data-renta-an',v,E.an===v,'an');}).join('')+
-    '<span class="renta-lbl">Client</span>'+
-    ['Tous'].concat(clients).map(function(v){return chip('data-renta-client',v,E.client===v,'client');}).join('')+
-    '<span class="renta-lbl">Affaires</span><button type="button" class="renta-chip'+(E.verifier?' on':'')+'" data-renta-verifier="1" onclick="rentaSetFiltre(\'verifier\','+(!E.verifier)+')">'+(E.verifier?'☑':'☐')+' inclure « à vérifier »</button></div>';
-
+// KPI, donuts, barres par mois et marge par affaire : construits UNE fois, pour la page
+// et pour la page de synthèse du PDF (les couleurs passent par les variables CSS).
+function _rentaSyntheseBlocs(sel,t,E,retenues){
+  var h='';
   var verSel=sel.filter(function(a){return a.verifier;});
   var kpis=[
     ['ca','CA fourniture HT',_rentaM(t.ca),t.nAffaires+' affaires · '+t.nFactures+' factures'],
@@ -8652,6 +8637,40 @@ function renderRentabilite(){
       '<div class="renta-bar"><i style="width:'+(Math.abs(a.marge)/mxm*100)+'%;background:'+(a.marge<0?'var(--red)':'var(--teal)')+'"></i></div>'+
       '<b style="text-align:right;color:'+(a.marge<0?'var(--red)':'inherit')+'">'+_rentaPct(a.marge)+'</b><span class="renta-tag" style="text-align:right">'+_rentaM(a.benef)+'</span></div>';
   }).join('')||'<div class="renta-vide">Aucune affaire facturée sur ce filtre.</div>';
+  return {h:h, marges:marges, verSel:verSel};
+}
+
+// Sélection courante (filtres année / client / « à vérifier ») : partagée par la page
+// et par la synthèse imprimée en tête du PDF, pour qu'ils montrent les mêmes chiffres.
+function _rentaSelectionCourante(){
+  _ensureAvoirShape();
+  var tout=_rentaAffaires(), E=_rentaEtat;
+  var ans=tout.map(function(a){return String(a.date).slice(0,4);}).filter(function(v,i,a){return v && a.indexOf(v)===i;}).sort().reverse();
+  var clients=tout.map(function(a){return a.client;}).filter(function(v,i,a){return a.indexOf(v)===i;}).sort();
+  if(E.an!=='Tout' && ans.indexOf(E.an)<0) E.an='Tout';
+  if(E.client!=='Tous' && clients.indexOf(E.client)<0) E.client='Tous';
+  var sel=tout.filter(function(a){return (E.an==='Tout'||String(a.date).slice(0,4)===E.an)&&(E.client==='Tous'||a.client===E.client);});
+  return {tout:tout, E:E, ans:ans, clients:clients, sel:sel,
+    t:_rentaTotaux(sel,{inclureAVerifier:E.verifier}),
+    retenues:sel.filter(function(a){return !a.sansFacture && (E.verifier || !a.verifier);})};
+}
+
+function renderRentabilite(){
+  var body=document.getElementById('rentaBody');
+  if(!body) return;
+  var Q=_rentaSelectionCourante();
+  var tout=Q.tout, E=Q.E, ans=Q.ans, clients=Q.clients, sel=Q.sel, t=Q.t, retenues=Q.retenues;
+  _rentaMajBoutonsTheme();
+  var chip=function(attr,val,actif,cle){return '<button type="button" class="renta-chip'+(actif?' on':'')+'" '+attr+'="'+esc(val)+'" onclick="rentaSetFiltre(\''+cle+'\',\''+esc(val).replace(/'/g,"\\'")+'\')">'+esc(val)+'</button>';};
+
+  var h='<div class="renta-filtres"><span class="renta-lbl">Année</span>'+
+    ['Tout'].concat(ans).map(function(v){return chip('data-renta-an',v,E.an===v,'an');}).join('')+
+    '<span class="renta-lbl">Client</span>'+
+    ['Tous'].concat(clients).map(function(v){return chip('data-renta-client',v,E.client===v,'client');}).join('')+
+    '<span class="renta-lbl">Affaires</span><button type="button" class="renta-chip'+(E.verifier?' on':'')+'" data-renta-verifier="1" onclick="rentaSetFiltre(\'verifier\','+(!E.verifier)+')">'+(E.verifier?'☑':'☐')+' inclure « à vérifier »</button></div>';
+
+  var S=_rentaSyntheseBlocs(sel,t,E,retenues), verSel=S.verSel, marges=S.marges;
+  h+=S.h;
 
   var nPOsel=[], fraisReels=0, tauxSaisis=0;
   sel.forEach(function(a){ a.pos.forEach(function(bc){ nPOsel.push(bc); if(bcHasFraisReels(bc)) fraisReels++; if(bc.tauxAUD) tauxSaisis++; }); });
@@ -8707,7 +8726,28 @@ function _rentaBCClientAffiche(bc){
 }
 function _rentaAUD(v){ return v==null||v===''?'':Number(v).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 
+// Thème du PDF Rentabilité : « clair » (défaut) ou « sombre » (lecture de nuit), mémorisé
+// dans ce navigateur. Le fond sombre ne s'imprime que si « Graphiques d'arrière-plan » est coché.
+var _rentaPdfThemeMem='clair';
+function _rentaPdfTheme(){
+  try{ var v=localStorage.getItem('rentaPdfTheme'); if(v==='sombre'||v==='clair') _rentaPdfThemeMem=v; }catch(e){}
+  return _rentaPdfThemeMem;
+}
+function rentaSetPdfTheme(t){
+  _rentaPdfThemeMem=(t==='sombre')?'sombre':'clair';
+  try{ localStorage.setItem('rentaPdfTheme',_rentaPdfThemeMem); }catch(e){}
+  _rentaMajBoutonsTheme();
+}
+function _rentaMajBoutonsTheme(){
+  var cur=_rentaPdfTheme();
+  document.querySelectorAll('[data-renta-theme]').forEach(function(b){
+    var on=b.getAttribute('data-renta-theme')===cur;
+    b.style.background=on?'rgba(45,212,191,.15)':''; b.style.color=on?'var(--teal)':''; b.style.borderColor=on?'var(--teal)':'';
+  });
+}
+
 // PDF « articles par PO Emerson / BC client » : même pattern window.open+print que printAdminReport.
+// En tête : synthèse rentabilité (KPI, donuts, barres) et marge par affaire, selon les filtres de la page.
 function rentaImprimerArticlesPO(){
   var aff=_rentaAffaires(), factPO={};
   aff.forEach(function(a){ a.pos.forEach(function(bc){ factPO[bc.id]=a.factures.map(function(f){return f.num;}); }); });
@@ -8717,21 +8757,47 @@ function rentaImprimerArticlesPO(){
   noms.forEach(function(k){ groupes[k].sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));}); });
   var nArt=function(bc){return (bc.lines||[]).filter(function(l){return l&&l.qte!=null;}).length;};
   var tous=DB.bcs||[];
+  var Q=_rentaSelectionCourante(), SY=_rentaSyntheseBlocs(Q.sel,Q.t,Q.E,Q.retenues);
+  // Thème du PDF : clair (défaut) ou sombre pour la lecture de nuit (choix mémorisé).
+  var P=_rentaPdfTheme()==='sombre'
+    ? {bg:'#0d1512',txt:'#e6efe9',titre:'#5eead4',h2:'#fb923c',sub:'#9aa7a1',line:'#26352f',card:'#111a17',alt:'#131d1a',
+       th:'#1e3a5f',pomBg:'#16211e',accent:'#fb923c',bar:'#26352f',po:'#2dd4bf',scheme:'dark'}
+    : {bg:'#ffffff',txt:'#111111',titre:'#1b365d',h2:'#e46c12',sub:'#5b6b7a',line:'#dfe5ec',card:'#ffffff',alt:'#f5f7fa',
+       th:'#1b365d',pomBg:'#eef2f7',accent:'#e46c12',bar:'#e5e9ef',po:'#0f766e',scheme:'light'};
   var css='@page{size:A4 landscape;margin:11mm 11mm 13mm;}'+
-    'body{font-family:Calibri,Arial,sans-serif;color:#111;font-size:10px;margin:0}'+
-    'h1{font-size:18px;color:#1b365d;margin:0}h2{font-size:14px;color:#e46c12;margin:14px 0 6px}'+
-    '.hd{display:flex;justify-content:space-between;align-items:center;border-bottom:2.5px solid #e46c12;padding-bottom:6px;margin-bottom:10px}'+
-    '.sub{color:#5b6b7a;font-size:10px}table{width:100%;border-collapse:collapse}th,td{padding:3px 5px;vertical-align:top}'+
-    '.t th{background:#1b365d;color:#fff;text-align:left;font-size:9.5px}.t td{border-bottom:1px solid #e5e9ef}.t tr:nth-child(even) td{background:#f5f7fa}'+
+    ':root{--bg3:'+P.alt+';--bg4:'+P.bar+';--border:'+P.line+';--text:'+P.txt+';--text-strong:'+P.titre+';--muted:'+P.sub+';--muted-soft:#94a3b8;'+
+      '--blue:#3b82f6;--amber:#f59e0b;--teal:#14b8a6;--purple:#8b5cf6;--orange:#f97316;--green:#10b981;--red:#ef4444}'+
+    'html,body{background:'+P.bg+';color-scheme:'+P.scheme+'}body{font-family:Calibri,Arial,sans-serif;color:'+P.txt+';font-size:10px;margin:0}'+
+    '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
+    '.card{border:1px solid '+P.line+';border-radius:8px;padding:9px 11px;background:'+P.card+';break-inside:avoid}'+
+    '.renta-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}.renta-kt{color:'+P.sub+';font-size:9px;text-transform:uppercase;letter-spacing:.04em}'+
+    '.renta-kv{font-size:19px;font-weight:700;margin-top:2px;color:'+P.titre+'}.renta-ks{color:'+P.sub+';font-size:9px}'+
+    '.renta-g3{display:grid;grid-template-columns:1fr 1fr 1.6fr;gap:8px;margin-top:8px}.renta-ct{font-weight:700;font-size:11px;margin-bottom:6px;color:'+P.titre+'}'+
+    '.renta-ct span{color:'+P.sub+';font-weight:400;font-size:9px}.renta-donutbox{display:flex;gap:12px;align-items:center}'+
+    '.renta-leg div{display:flex;align-items:center;gap:6px;margin:3px 0;font-size:10px}.renta-leg b{margin-left:auto;padding-left:8px}'+
+    '.renta-dot{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:3px}'+
+    '.renta-tag{font-size:9px;color:'+P.sub+'}.renta-po{color:'+P.po+';font-weight:600}.renta-vide{color:'+P.sub+'}'+
+    '.renta-mrow{display:grid;grid-template-columns:260px 1fr 60px 70px;gap:8px;align-items:center;margin:2px 0;font-size:9.5px;break-inside:avoid}'+
+    '.renta-bar{height:8px;border-radius:4px;background:'+P.bar+';position:relative;overflow:hidden}.renta-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}'+
+    'h1{font-size:18px;color:'+P.titre+';margin:0}h2{font-size:14px;color:'+P.h2+';margin:14px 0 6px}'+
+    '.hd{display:flex;justify-content:space-between;align-items:center;border-bottom:2.5px solid '+P.accent+';padding-bottom:6px;margin-bottom:10px}'+
+    '.logo{text-align:center;background:#fff;border-radius:6px;padding:3px 8px 2px}.logo img{height:36px;display:block;margin:0 auto}'+
+    '.logo div{font-weight:800;font-size:10px;letter-spacing:.8px;color:#1b365d;margin-top:1px}'+
+    '.sub{color:'+P.sub+';font-size:10px}table{width:100%;border-collapse:collapse}th,td{padding:3px 5px;vertical-align:top}'+
+    '.t th{background:'+P.th+';color:#fff;text-align:left;font-size:9.5px}.t td{border-bottom:1px solid '+P.line+'}.t tr:nth-child(even) td{background:'+P.alt+'}'+
     '.n{text-align:right;white-space:nowrap}.page{page-break-before:always;break-before:page}'+
-    '.po{page-break-inside:avoid;break-inside:avoid;margin-bottom:10px}.poh{background:#1b365d;color:#fff;padding:4px 6px;display:flex;gap:18px;font-weight:700;font-size:10px}'+
-    '.pom{background:#eef2f7;color:#5b6b7a;padding:3px 6px;font-size:9.5px}.l th{color:#1b365d;border-bottom:1px solid #1b365d;text-align:left;font-size:9px}'+
-    '.l td{border-bottom:1px solid #eef1f5}.titre td{font-style:italic;font-weight:700;color:#1b365d}.tot td{border-top:1.2px solid #1b365d;font-weight:700}'+
+    '.po{page-break-inside:avoid;break-inside:avoid;margin-bottom:10px}.poh{background:'+P.th+';color:#fff;padding:4px 6px;display:flex;gap:18px;font-weight:700;font-size:10px}'+
+    '.pom{background:'+P.pomBg+';color:'+P.sub+';padding:3px 6px;font-size:9.5px}.l th{color:'+P.titre+';border-bottom:1px solid '+P.titre+';text-align:left;font-size:9px}'+
+    '.l td{border-bottom:1px solid '+P.line+'}.titre td{font-style:italic;font-weight:700;color:'+P.titre+'}.tot td{border-top:1.2px solid '+P.titre+';font-weight:700}'+
     'thead{display:table-header-group}tr{page-break-inside:avoid}';
   var h='<div class="hd"><div><h1>Articles par PO Emerson — correspondance BC client</h1><div class="sub">'+tous.length+' PO Emerson · '+
     tous.reduce(function(s,bc){return s+nArt(bc);},0)+' articles · édité le '+fD(td())+' · montants en devise du PO (prix d\'achat Emerson)</div></div>'+
-    '<img src="'+LG_PLACEHOLDER+'" style="height:40px" alt="CALINSTRUM"></div>';
-  h+='<h2>Sommaire</h2><table class="t"><thead><tr><th>Client</th><th class="n">PO Emerson</th><th class="n">Articles</th><th class="n">Total</th><th>PO sans BC client</th></tr></thead><tbody>'+
+    '<div class="logo"><img src="'+LG_PLACEHOLDER+'" alt="CALINSTRUM"><div>CALINSTRUM</div></div></div>';
+  // Synthèse rentabilité (mêmes blocs et mêmes filtres que la page), puis marge par affaire.
+  var filtre='Année '+Q.E.an+' · client '+Q.E.client+' · '+(Q.E.verifier?'affaires « à vérifier » incluses':'hors affaires « à vérifier »');
+  h+='<h2 style="margin-top:4px">Synthèse rentabilité <span class="sub" style="font-weight:400">'+esc(filtre)+'</span></h2>'+SY.h+
+    '<div class="page"></div><div class="card"><div class="renta-ct">Marge par affaire <span>de la plus rentable à la moins rentable · '+esc(filtre)+'</span></div>'+SY.marges+'</div>';
+  h+='<div class="page"></div><h2>Sommaire</h2><table class="t"><thead><tr><th>Client</th><th class="n">PO Emerson</th><th class="n">Articles</th><th class="n">Total</th><th>PO sans BC client</th></tr></thead><tbody>'+
     noms.map(function(k){var l=groupes[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+l.length+'</td><td class="n">'+l.reduce(function(s,bc){return s+nArt(bc);},0)+'</td><td class="n">'+
       _rentaAUD(l.reduce(function(s,bc){return s+(Number(bc.total)||0);},0))+'</td><td>'+(l.filter(function(bc){return !_rentaBCClientAffiche(bc);}).map(function(bc){return esc(bc.num);}).join(', ')||'—')+'</td></tr>';}).join('')+
     '</tbody></table>';
@@ -8944,7 +9010,8 @@ function suiviCmdImprimerPDF(){
     'thead{display:table-header-group}tr{page-break-inside:avoid}.leg{color:#5b6b7a;font-size:9px;margin-top:2px}';
   // La légende des statuts est dans l'EN-TÊTE : placée après le tableau, elle
   // débordait seule sur une dernière page quasi vide.
-  var html='<div class="hd"><div><img src="'+LG_PLACEHOLDER+'" style="height:38px" alt="CALINSTRUM"><h1>Suivi de vos commandes</h1>'+
+  var html='<div class="hd"><div><div style="display:inline-block;text-align:center"><img src="'+LG_PLACEHOLDER+'" style="height:38px;display:block;margin:0 auto" alt="CALINSTRUM">'+
+      '<div style="font-weight:800;font-size:10px;letter-spacing:.8px;color:#1b365d">CALINSTRUM</div></div><h1>Suivi de vos commandes</h1>'+
       '<div class="sub">'+esc(titre)+' · situation au '+fD(td())+' · '+etat+'</div>'+
       '<div class="leg">Statuts : « Commande lancée le … — en attente » tant que la marchandise n\'est pas livrée · « Livrée » une fois la livraison effectuée.</div></div>'+
       '<div class="sub" style="text-align:right">'+esc(CI.nom)+' · '+esc(CI.adresse)+'<br>'+esc(CI.tel)+' · '+esc(CI.email)+'</div></div>'+
