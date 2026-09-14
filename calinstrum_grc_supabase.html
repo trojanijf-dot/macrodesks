@@ -41157,6 +41157,40 @@ var _blFromDVState = { selectedDevisIds: [], linesData: {} };
 // Statuts retenus : Accepte ET Facture (decision utilisateur du 06/09). La
 // facture part souvent AVANT la livraison ; s'en tenir a « Accepte » rendrait
 // injoignables les dossiers factures non livres.
+// N° de BC client d'un devis, normalisé (même clé que partout ailleurs : _bcNumKey).
+function _dvBCClientKey(d){
+  var v=d && (d.bcClientSLN || d.bcClientRef) || '';
+  return v ? _bcNumKey(v) : '';
+}
+var _DV_STATUTS_MORTS=['obsolète','obsolete','refusé','refuse','brouillon'];
+// Devis de PRESTATION séparé du même BC client : même client, statut vivant,
+// révision courante, au moins une ligne de service chiffrée et AUCUNE fourniture
+// chiffrée. C'est lui qui porte le chantier (cas du 14/09 : un BC client pour
+// deux devis de fourniture et un devis d'installation).
+function _dvPrestationSoeur(d){
+  var cle=_dvBCClientKey(d);
+  if(!cle) return null;
+  var chiffree=function(l){ return l && l.type!=='header' && (Number(l.qte)||0)>0 && (Number(l.pu)||0)>0; };
+  return (DB.devis||[]).find(function(x){
+    if(!x || x===d || x.client!==d.client || _dvBCClientKey(x)!==cle) return false;
+    if(_DV_STATUTS_MORTS.indexOf(String(x.status||'').trim().toLowerCase())>=0) return false;
+    if(typeof _dvIsSuperseded==='function' && _dvIsSuperseded(x)) return false;
+    return ((x.lines && x.lines.service) || []).some(chiffree) && !((x.lines && x.lines.fourniture) || []).some(chiffree);
+  }) || null;
+}
+// Devis à livrer ENSEMBLE : le devis cliqué + les autres devis livrables du même
+// client et du même BC client, sans BL déjà émis → un seul BL par BC client.
+function _dvGroupeBL(d){
+  var cle=_dvBCClientKey(d), ids=[d.id];
+  if(!cle) return ids;
+  (DB.devis||[]).forEach(function(x){
+    if(!x || x===d || x.client!==d.client || _dvBCClientKey(x)!==cle) return;
+    if(typeof _dvIsSuperseded==='function' && _dvIsSuperseded(x)) return;
+    if(_dvLivrableBL(x) && !_dvADejaBL(x)) ids.push(x.id);
+  });
+  return ids;
+}
+
 function _dvLivrableBL(d){
   if(!d) return false;
   var st=String(d.status||'').toLowerCase();
@@ -41174,7 +41208,14 @@ function _dvLivrableBL(d){
   //       deux devis etiquetes « Prestation de service » n'avaient QUE de la
   //       marchandise et sont bel et bien livrables. L'etiquette se saisit a la
   //       main, les lignes decrivent le travail reel.
-  if(((d.lines && d.lines.service) || []).some(chiffree)) return false;
+  //
+  // [14/09/2026] EXCEPTION : quand le BC client porte un devis de PRESTATION
+  // SEPARE (cf _dvPrestationSoeur), le chantier est ce devis-la. Les lignes de
+  // service restees sur le devis de fourniture (engineering ou deplacement du
+  // fabricant, revendus avec le materiel) ne font pas de lui un chantier : sa
+  // fourniture part en livraison. Le BL ne reprend de toute facon que la
+  // fourniture.
+  if(((d.lines && d.lines.service) || []).some(chiffree) && !_dvPrestationSoeur(d)) return false;
   // Second filet : un mixte DECLARE dont la main d'oeuvre n'est pas encore
   // chiffree reste un chantier.
   var t=String(d.type||'');
@@ -41240,7 +41281,7 @@ function _dvBLBtnHtml(d){
     'onclick="event.stopPropagation();openBLFromDV('+d.id+')" '+
     'title="Créer un bon de livraison à partir de ce devis" '+
     'style="padding:5px 8px;margin-right:4px;border:0.5px solid rgba(45,212,191,.5);'+
-    'color:var(--teal);font-weight:700;font-size:10px;white-space:nowrap">\U0001f4e6 BL</button> ';
+    'color:var(--teal);font-weight:700;font-size:10px;white-space:nowrap">📦 BL</button> ';
 }
 
 // Point d'entree depuis une ligne de devis : on saute l'ecran de selection des
@@ -41257,7 +41298,8 @@ function openBLFromDV(devisId){
   }
   openBLFromDVPicker();                       // construit la modale, reinitialise l'etat
   if(!document.getElementById('mBLFromDV')) return;
-  _blFromDVState.selectedDevisIds=[devisId];
+  // Un BC client = un BL : les autres devis livrables du même BC sont cochés d'office.
+  _blFromDVState.selectedDevisIds=_dvGroupeBL(d);
   _openBLFromDVStep2();
 }
 
