@@ -11634,6 +11634,10 @@ function _padNNN(n){return String(n).padStart(3,'0');}
 // (=X=) REFERENCES COMPAREES SANS ESPACES NI PONCTUATION, et une reference tronquee
 //       (>= 20 caracteres) vaut la reference complete dont elle est le debut : les PO
 //       portent « 3051CD1…Q4D1 0305RC… », « …Q4D10305 » ou la reference entiere.
+// Statut du devis cree par la cascade : UNE seule valeur, lue par l'apercu ET par la
+// creation. [15/09/2026] L'apercu annoncait « Facturé » en dur alors que la cascade
+// cree le devis « Accepté » depuis le 09/09 (cf commentaire dans _validerCascadeReappro).
+var _REAPPRO_STATUT_DEVIS='Accepté';
 function _refEmersonCle(r){ return String(r==null?'':r).toUpperCase().replace(/[^A-Z0-9]/g,''); }
 function _refEmersonMeme(a,b){
   a=_refEmersonCle(a); b=_refEmersonCle(b);
@@ -11754,7 +11758,7 @@ function _previewReapproCascade(parsed, fileName){
   h += '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:8px">📋 Documents qui seront créés (NNN partagé : '+_padNNN(nnn)+')</div>';
   h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
   // Devis
-  h += '<div style="background:rgba(167,139,250,0.06);border:1px solid rgba(167,139,250,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:#a78bfa;text-transform:uppercase;font-weight:700;margin-bottom:4px">1️⃣ Devis</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:#a78bfa;word-break:break-all">'+esc(numDevis)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">Statut : Facturé · Type : Fourniture</div></div>';
+  h += '<div style="background:rgba(167,139,250,0.06);border:1px solid rgba(167,139,250,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:#a78bfa;text-transform:uppercase;font-weight:700;margin-bottom:4px">1️⃣ Devis</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:#a78bfa;word-break:break-all">'+esc(numDevis)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">Statut : '+esc(_REAPPRO_STATUT_DEVIS)+' · Type : Fourniture</div></div>';
   // Facture
   h += '<div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:var(--teal);text-transform:uppercase;font-weight:700;margin-bottom:4px">2️⃣ Facture</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:var(--teal)">'+esc(numFacture)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">'+fN(totalXPF)+' XPF</div></div>';
   // BL
@@ -11983,7 +11987,7 @@ function _validerCascadeReappro(){
     //       facturation qui n'avait pas eu lieu, et surprenait a juste titre a
     //       l'ouverture d'un devis qui venait d'etre cree. Il passera « Facture »
     //       quand la facture sera reellement emise.
-    status: 'Accepté',
+    status: _REAPPRO_STATUT_DEVIS,
     tgcM: '506-2',
     bcClientSLN: parsed.num,
     bcClientSLNDate: parsed.date || '',
