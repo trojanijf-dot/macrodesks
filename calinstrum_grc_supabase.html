@@ -4460,11 +4460,25 @@ function admPreviewPrint(){
       </div>
       <div style="margin-top:8px;font-size:10.5px;color:var(--muted);font-style:italic" id="eimp-format-detected"></div>
     </div>
+    <!-- Mode d'import (15/09/2026) : PO déjà renseigné → référence seule ; PO vide → articles cochés -->
+    <div id="eimp-mode-wrap" style="display:none;margin-bottom:10px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <button type="button" class="btn btn-ghost btn-sm" data-eimp-mode="rattacher" onclick="eimpSetMode('rattacher')">🔗 Rattacher la référence du devis</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-eimp-mode="articles" onclick="eimpSetMode('articles')">📦 Importer les articles du devis</button>
+      </div>
+      <div id="eimp-hint" style="font-size:11.5px;color:var(--muted);background:rgba(251,191,36,.07);border-left:3px solid var(--amber);padding:6px 10px;border-radius:5px"></div>
+    </div>
+    <div id="eimp-bc-wrap" style="display:none">
+      <table class="items-tbl" style="margin-bottom:10px">
+        <thead><tr><th style="width:28px"></th><th style="min-width:200px">Article du PO</th><th>Qté</th><th>PU AUD</th><th>Dans le devis ?</th></tr></thead>
+        <tbody id="eimp-bc-tbody"></tbody>
+      </table>
+    </div>
     <div id="eimp-lines-wrap" style="display:none">
-      <div style="font-weight:700;font-size:12px;margin-bottom:6px;color:var(--text)">Lignes extraites <span style="color:var(--muted);font-weight:400;font-size:10.5px">(tu peux modifier avant import)</span></div>
+      <div style="font-weight:700;font-size:12px;margin-bottom:6px;color:var(--text)">Articles du devis <span style="color:var(--muted);font-weight:400;font-size:10.5px">(coche ceux à ajouter au PO, quantités modifiables)</span> <button type="button" class="btn btn-ghost btn-sm" style="font-size:10.5px;padding:2px 8px;margin-left:6px" onclick="eimpToutCocher()">Tout cocher</button></div>
       <div style="font-size:10.5px;color:var(--muted);margin-bottom:8px">💡 Astuce : passe cette section en <strong>Kit</strong> ou <strong>Items</strong> après import selon le besoin. Les lignes seront associées automatiquement à la nouvelle proposition.</div>
       <table class="items-tbl" style="margin-bottom:10px">
-        <thead><tr><th>Item</th><th>Qté</th><th style="min-width:120px">Part Number</th><th style="min-width:200px">Description</th><th>PU</th><th>Montant</th><th></th></tr></thead>
+        <thead><tr><th style="width:28px"></th><th>Item</th><th>Qté</th><th style="min-width:120px">Part Number</th><th style="min-width:200px">Description</th><th>PU</th><th>Montant</th><th></th></tr></thead>
         <tbody id="eimp-lines-tbody"></tbody>
       </table>
       <button type="button" class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="addEimpLine()">+ Ajouter ligne manuellement</button>
@@ -6837,6 +6851,50 @@ function buildClientOptions(selectId, currentVal){
 }
 
 // =============================================================================
+// RECHERCHE RAPIDE DANS UN MENU CLIENT
+// =============================================================================
+// [15/09/2026] Les fiches s'appellent « <PREFIXE> - <Prénom> <NOM> »…
+// La frappe native d'un <select> ne cherche que le DEBUT du libellé : taper « canel » ne
+// trouvait rien, il fallait descendre et remonter la liste. Un petit champ au-dessus du
+// menu filtre les options sur n'importe quel morceau du libellé (sans accents ni casse,
+// plusieurs mots possibles) et sélectionne la première qui répond.
+// (=X=) ON NE RECONSTRUIT PAS LES OPTIONS : on les masque (option.hidden). Les fonctions
+//       qui remplissent ces menus restent seules maîtresses de leur contenu ; le filtre est
+//       réappliqué quand le menu reprend la main (focus / clic).
+function _selNorm(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase(); }
+function _selectRecherche(sel){
+  if(!sel || sel._rechercheInput) return;
+  var inp=document.createElement('input');
+  inp.type='search'; inp.className='form-input'; inp.autocomplete='off';
+  inp.placeholder='🔍 Rechercher (nom, contact…)';
+  inp.setAttribute('data-sel-recherche',sel.id||'');
+  inp.style.cssText='margin-bottom:4px;padding:4px 8px;font-size:11.5px;height:auto';
+  sel.parentNode.insertBefore(inp,sel);
+  sel._rechercheInput=inp;
+  var appliquer=function(choisir){
+    var mots=_selNorm(inp.value).split(/\s+/).filter(Boolean), premier=null;
+    [].forEach.call(sel.options,function(o){
+      var vide=!o.value;
+      var ok=vide || !mots.length || mots.every(function(m){ return _selNorm(o.textContent).indexOf(m)>=0; });
+      o.hidden=!ok;
+      if(ok && !vide && !premier) premier=o;
+    });
+    if(choisir && mots.length && premier && sel.value!==premier.value){
+      sel.value=premier.value;
+      sel.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+  };
+  inp.addEventListener('input',function(){ appliquer(true); });
+  inp.addEventListener('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); sel.focus(); } });
+  sel.addEventListener('focus',function(){ appliquer(false); });
+  sel.addEventListener('mousedown',function(){ appliquer(false); });
+}
+function _selectRechercheInit(){
+  ['dv-client','fa-client','bl-client','bc-client-final','ed-client'].forEach(function(id){ _selectRecherche(document.getElementById(id)); });
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',_selectRechercheInit); else setTimeout(_selectRechercheInit,0);
+
+// =============================================================================
 // getClientPrefix(clientName) — Helper global pour extraire le préfixe société
 // =============================================================================
 // Convention : nom client au format "PFX - Contact Nom" → on extrait "PFX"
@@ -9051,8 +9109,8 @@ function _suiviLigneFret(texte){ return /fret|freight|transport|handling|travel|
 // Articles commandés d'apres les PO Emerson (utilise quand la facture est en forfait) :
 // lignes a reference, hors fret et services ; designation francaise et code SLN du
 // catalogue quand la reference y est ; lignes de meme article additionnees.
-// (=X=) VERIFIE SUR LES BC CLIENT : 00730482-05-43 → 2 × 3051TG3 ; 00722464-01 →
-//       7 × 3051TG2 (1+3+3) et 6 × 3051TG0 (3+3), exactement les quantites du PO.
+// (=X=) VERIFIE SUR LES PDF DE BC CLIENT : les quantites commandees sont exactement celles
+//       du PO Emerson (y compris un BC dont les postes d'un meme article sont repartis 1+3+3).
 function _suiviArticlesPO(pos){
   var out=[], parCle={};
   (pos||[]).forEach(function(bc){ (bc.lines||[]).forEach(function(l){
@@ -9071,7 +9129,7 @@ function _suiviArticlesPO(pos){
   });});
   return out;
 }
-// Quotes Emerson portees par les PO de l'affaire (« 29429380 Ver:2 »), sans doublon.
+// Quotes Emerson portees par les PO de l'affaire (« <n°> Ver:<v> »), sans doublon.
 function _suiviQuotes(pos){
   var vus={}, out=[];
   (pos||[]).forEach(function(bc){ (bc.props||[]).forEach(function(p){
@@ -9099,11 +9157,26 @@ function _suiviCommandes(){
     a.factures.forEach(function(f){ dateBC=dateBC||f.dateReceptionBC||f.bcClientSLNDate||''; });
     devis.forEach(function(dv){ dateBC=dateBC||dv.bcClientDate||dv.bcClientSLNDate||''; });
     var articles=[], forfait=false;
-    a.factures.forEach(function(f){ (f.lines||[]).forEach(function(l){
+    a.factures.forEach(function(f){ var titre=''; (f.lines||[]).forEach(function(l){
+      if(l && l.type==='header'){ titre=String(l.desc||''); return; }
       if(!l || l._sec==='service' || !(Number(l.qte)>0) || /^FRET/i.test(l.ref||'') || _suiviLigneFret((l.designation||'')+' '+(l.ref||''))) return;
       if(!String(l.ref||'').trim()) forfait=true;
-      articles.push({code:l.codeSLN||'', ref:l.ref||'', des:String(l.designation||'').split('\n')[0], qte:Number(l.qte)});
+      articles.push({code:l.codeSLN||'', ref:l.ref||'', des:String(l.designation||'').split('\n')[0], qte:Number(l.qte), _titre:titre});
     });});
+    // (=X=) DEUX ARTICLES AU MEME LIBELLE : on ajoute la precision du titre de kit qui les
+    //       precede sur la facture (« Sonde 214CTk (L: 10inch) … » → « — L: 10inch »).
+    //       [15/09/2026] Une facture a kits affichait deux fois le meme libelle d'article.
+    //       La facture emise n'est pas modifiee : elle porte deja ces titres.
+    var parLib={};
+    articles.forEach(function(x){ var k=String(x.des).trim().toUpperCase(); parLib[k]=(parLib[k]||0)+1; });
+    articles.forEach(function(x){
+      var t=String(x._titre||'').trim();
+      if(parLib[String(x.des).trim().toUpperCase()]>1 && t){
+        var par=t.match(/\(([^)]{1,40})\)/), prec=par ? par[1].trim() : t.replace(/^KIT\s*[—\-–:]\s*/i,'').trim();
+        if(prec && x.des.toUpperCase().indexOf(prec.toUpperCase())<0) x.des+=' — '+prec;
+      }
+      delete x._titre;
+    });
     // (=X=) FACTURE EN FORFAIT : une ligne sans reference article (« Transmetteur 3051TG3
     //       - 55,15 BARG », 1 × 521 380) ne dit pas combien d'articles ont ete commandes.
     //       [15/09/2026] Le PDF client annoncait « 1 × » pour un BC de 2 transmetteurs.
@@ -27528,6 +27601,7 @@ function showEmersonDevisPreview(emersonData,rateInfo,fileName){
       '</div>'+
     '</div>';
   document.body.appendChild(modal);
+  _selectRecherche(document.getElementById('ed-client'));
 
   // Premier calcul des totaux
   recalcEmersonDevisPreview();
@@ -35289,9 +35363,15 @@ function parseEmersonQuoteText(text){
     // === FORMAT A ===
     // Part Number sur la ligne suivante (ex: "214CRTSSB1S3M0170WAAF1C2B1GP2TB")
     // OU Part Number intégré dans la description avec ":" (ex: "RMT-OTHR-3-AU160338:701PBKKF ...")
-    var reA=/^(\d+)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+(\d+\s*weeks?|N\/A|\d+\s*days?)?\s*([\d,\s]+\.\d{2})\s+([\d,\s]+\.\d{2})$/;
+    // (=X=) N° « CUST LINE » FACULTATIF EN TETE : « 1 1 1 Each … » (Cust Line, Item, Qty) comme
+    //       « 8 2 Each … » (Item, Qty, Cust Line vide). [15/09/2026] Seules les lignes a DEUX
+    //       nombres etaient lues : sur une grille tarifaire annuelle, 2 lignes sur 9 (les 7 premieres
+    //       perdues), et 7 devis sur 40 du corpus reel ne rendaient que le fret. Le groupe est
+    //       non capturant : les indices m[2] (qte), m[4] (designation)… ne changent pas.
+    //       Items numerotes « 1a / 1b / 2a » (devis Gas Detectors) acceptes aussi.
+    var reA=/^(?:\d+[a-z]?\s+)?(\d+[a-z]?)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+(\d+\s*weeks?|N\/A|\d+\s*days?)?\s*([\d,\s]+\.\d{2})\s+([\d,\s]+\.\d{2})$/i;
     // Variante sans Lead Time (dernier item freight par ex. "5 1 Each RMT-FREIGHT-JPG:Freight... 125.00 125.00")
-    var reA_noLead=/^(\d+)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+([\d,\s]+\.\d{2})\s+([\d,\s]+\.\d{2})$/;
+    var reA_noLead=/^(?:\d+[a-z]?\s+)?(\d+[a-z]?)\s+(\d+)\s+(Each|Lot|LOT|lot)\s+(.+?)\s+([\d,\s]+\.\d{2})\s+([\d,\s]+\.\d{2})$/i;
     rows.forEach(function(r,idx){
       var m=r.match(reA);
       var extM, descRaw, puVal, extVal;
@@ -35322,6 +35402,12 @@ function parseEmersonQuoteText(text){
           var nextLine=rows[idx+1]||'';
           if(/^[A-Z0-9][\w\-]+$/.test(nextLine)&&nextLine.length>5&&nextLine.length<80){
             partNum=nextLine;
+            // (=X=) CODE MODELE COUPE EN BOUT DE COLONNE : « 3051CD1A02A1BBLES5K8M6Q4D1 » puis
+            //       « 0305RC32B11B4L4 » sur la ligne suivante = une seule reference.
+            var suite=rows[idx+2]||'';
+            //       Recollee avec un espace, comme sur les PO saisis (la comparaison des references
+            //       ignore les espaces, cf _refEmersonCle).
+            if(partNum.length>=20 && /^[A-Z0-9]{8,}$/.test(suite) && !suite.match(reA_noLead)) partNum+=' '+suite;
           }
         }
         lines.push({qte:qte,ref:partNum,desc:descFinal,pu:puVal,ext:extVal});
@@ -35891,14 +35977,92 @@ function renderEimpPreview(formatDetected){
   document.getElementById('eimp-project').textContent=h.project||'—';
   document.getElementById('eimp-format-detected').textContent='Format détecté : '+formatDetected;
   document.getElementById('eimp-header-preview').style.display='block';
-  // Lignes
-  document.getElementById('eimp-lines-wrap').style.display='block';
-  renderEimpLines();
+  // Mode : un PO qui a déjà ses articles (REAPPRO, saisie) ne reçoit que la référence du
+  // devis ; un PO vide reçoit les articles cochés. Rien n'est coché d'office en mode articles
+  // (un devis Emerson est souvent une grille de prix « 1 de chaque »).
+  var arts=_eimpArticlesPO(), dejaLa=_eimpPropExistante(h);
+  eimpState.mode=arts.length?'rattacher':'articles';
+  eimpState.selBC={};
+  arts.forEach(function(x){ eimpState.selBC[x.i]=!!_eimpLigneDevis(x.l.ref) || !!(dejaLa && x.l.propId===dejaLa.id); });
+  ls.forEach(function(l){ if(l.type!=='header') l._sel=false; });
+  _eimpRenderMode();
   // Raw text (debug)
   document.getElementById('eimp-raw-text').textContent=eimpState.rawText||'';
   document.getElementById('eimp-raw-wrap').style.display='block';
-  // Activation du bouton import : il suffit d'avoir N° proposition OU Customer Ref dans le header
-  document.getElementById('eimp-confirm-btn').disabled=!(h.num||h.cref);
+  // Activation du bouton import : N° proposition OU Customer Ref, et au moins un article coché en mode articles
+  _eimpMajBouton();
+}
+
+// ----- Import devis Emerson : modes « rattacher » / « articles » (15/09/2026) -----
+// Articles déjà présents sur le PO en cours d'édition (lignes non-titre).
+function _eimpArticlesPO(){
+  return (bcL||[]).map(function(l,i){return {l:l,i:i};})
+    .filter(function(x){ return x.l && x.l.type!=='header' && (String(x.l.ref||'').trim() || Number(x.l.qte)>0); });
+}
+// Ligne du devis qui porte cette référence : {n: n° d'article dans le devis, l: ligne} ou null.
+function _eimpLigneDevis(ref){
+  var n=0, hit=null;
+  (eimpState.lines||[]).forEach(function(l){
+    if(!l || l.type==='header') return;
+    n++;
+    if(!hit && _refEmersonMeme(l.ref,ref)) hit={n:n,l:l};
+  });
+  return hit;
+}
+// Même quote (n° + version) déjà sur le PO : on la met à jour au lieu d'en créer une seconde.
+function _eimpPropExistante(h){
+  if(!h || !String(h.num||'').trim()) return null;
+  return (bcProps||[]).filter(function(p){
+    return p && String(p.num||'').trim()===String(h.num).trim() && String(p.ver==null?'':p.ver).trim()===String(h.ver==null?'':h.ver).trim();
+  })[0]||null;
+}
+function eimpSetMode(m){ eimpState.mode=(m==='articles')?'articles':'rattacher'; _eimpRenderMode(); }
+function eimpToutCocher(){ (eimpState.lines||[]).forEach(function(l){ if(l.type!=='header') l._sel=true; }); renderEimpLines(); _eimpMajBouton(); }
+function _eimpRenderMode(){
+  var m=eimpState.mode, n=_eimpArticlesPO().length;
+  document.querySelectorAll('#mEIMP [data-eimp-mode]').forEach(function(b){
+    var on=b.getAttribute('data-eimp-mode')===m;
+    b.style.background=on?'rgba(45,212,191,.12)':''; b.style.color=on?'var(--teal)':''; b.style.borderColor=on?'var(--teal)':'';
+  });
+  document.getElementById('eimp-mode-wrap').style.display='block';
+  document.getElementById('eimp-hint').innerHTML = m==='rattacher'
+    ? (n ? 'Ce PO a déjà <b>'+n+' article'+(n>1?'s':'')+'</b> : on ajoute seulement la <b>référence du devis</b>. Aucune ligne ajoutée, aucun prix ni quantité modifié.'
+         : 'Ce PO n\'a aucun article : seule la <b>référence du devis</b> sera posée.')
+    : 'Coche les articles commandés et ajuste les quantités. <b>Rien n\'est coché d\'office</b>.';
+  document.getElementById('eimp-bc-wrap').style.display = m==='rattacher'?'block':'none';
+  document.getElementById('eimp-lines-wrap').style.display = m==='articles'?'block':'none';
+  if(m==='rattacher') _eimpRenderBC(); else renderEimpLines();
+  _eimpMajBouton();
+}
+function _eimpRenderBC(){
+  var tb=document.getElementById('eimp-bc-tbody'); if(!tb) return;
+  var html=_eimpArticlesPO().map(function(x){
+    var l=x.l, hit=_eimpLigneDevis(l.ref), etat;
+    if(hit){
+      etat='<span style="color:var(--green)">✓ ligne '+hit.n+' · '+fN(hit.l.pu)+' AUD</span>';
+      if(Math.abs((+hit.l.pu||0)-(+l.pu||0))>0.5) etat+=' <span style="color:var(--amber)">⚠ devis '+fN(hit.l.pu)+' ≠ PO '+fN(l.pu)+'</span>';
+    } else etat='<span style="color:var(--amber)">⚠ absent du devis</span>';
+    return '<tr><td style="text-align:center"><input type="checkbox" data-eimp-bc="'+x.i+'"'+(eimpState.selBC[x.i]?' checked':'')+'></td>'+
+      '<td><span style="font-family:var(--mono);font-size:11px">'+esc(l.ref||'—')+'</span>'+(l.desc?'<div style="font-size:10.5px;color:var(--muted)">'+esc(String(l.desc).split('\n')[0])+'</div>':'')+'</td>'+
+      '<td style="text-align:center">'+esc(l.qte)+'</td><td style="text-align:right">'+fN(l.pu)+'</td><td>'+etat+'</td></tr>';
+  }).join('') || '<tr><td colspan="5" style="color:var(--muted)">Aucun article sur ce PO.</td></tr>';
+  tb.innerHTML=html;
+  tb.querySelectorAll('input[data-eimp-bc]').forEach(function(c){
+    c.addEventListener('change',function(){ eimpState.selBC[this.getAttribute('data-eimp-bc')]=this.checked; _eimpMajBouton(); });
+  });
+}
+function _eimpMajBouton(){
+  var btn=document.getElementById('eimp-confirm-btn'), h=eimpState.header; if(!btn) return;
+  var base=!!(h && (h.num||h.cref)), n;
+  if(eimpState.mode==='rattacher'){
+    n=Object.keys(eimpState.selBC||{}).filter(function(k){return eimpState.selBC[k];}).length;
+    btn.textContent='✓ Rattacher au PO ('+n+' ligne'+(n>1?'s':'')+')';
+    btn.disabled=!base;
+  } else {
+    n=(eimpState.lines||[]).filter(function(l){return l.type!=='header' && l._sel;}).length;
+    btn.textContent='✓ Importer '+n+' article'+(n>1?'s':'');
+    btn.disabled=!base || n===0;
+  }
 }
 
 // === Render des lignes éditables (preview) ===
@@ -35912,7 +36076,7 @@ function renderEimpLines(){
     // Cas 1 : Header de section détecté par le parser
     if(l.type==='header'){
       html+='<tr style="background:rgba(244,63,94,0.08);border-top:2px solid rgba(244,63,94,0.5);border-bottom:2px solid rgba(244,63,94,0.5)">'+
-        '<td style="text-align:center;color:var(--red);font-weight:700">▸</td>'+
+        '<td></td><td style="text-align:center;color:var(--red);font-weight:700">▸</td>'+
         '<td colspan="4"><input style="width:100%;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.06em;background:transparent;border:none" value="'+esc(l.desc||'')+'" data-eimp-f="desc" data-eimp-i="'+i+'" placeholder="Titre de section"></td>'+
         '<td style="text-align:center;color:var(--muted);font-size:10px;font-style:italic">section</td>'+
         '<td><button type="button" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px" title="Supprimer cette section" onclick="delEimpLine('+i+')">✕</button></td>'+
@@ -35924,7 +36088,8 @@ function renderEimpLines(){
     var kitBadge=isKit?' <span style="display:inline-block;background:rgba(59,130,246,.15);color:#3b82f6;padding:1px 4px;border-radius:3px;font-size:8.5px;font-weight:700;margin-left:2px" title="KIT (1 prix global)">KIT</span>':'';
     // Ligne principale de l'item (ou kit principal)
     var bg=isKit?'background:rgba(59,130,246,.04);':'';
-    html+='<tr style="'+bg+'">'+
+    html+='<tr style="'+bg+(l._sel?'':'opacity:.55;')+'">'+
+      '<td style="text-align:center"><input type="checkbox" data-eimp-sel="'+i+'"'+(l._sel?' checked':'')+' title="Ajouter cet article au PO"></td>'+
       '<td style="text-align:center;color:var(--muted);font-weight:700">'+itemNum+kitBadge+'</td>'+
       '<td><input type="number" style="width:55px" value="'+(l.qte||1)+'" data-eimp-f="qte" data-eimp-i="'+i+'"></td>'+
       '<td><input style="width:130px;font-family:var(--mono);font-size:11px" value="'+esc(l.ref||'')+'" data-eimp-f="ref" data-eimp-i="'+i+'"></td>'+
@@ -35937,7 +36102,7 @@ function renderEimpLines(){
     if(isKit){
       l.subLines.forEach(function(sub,si){
         html+='<tr style="background:rgba(59,130,246,.02)">'+
-          '<td style="text-align:right;color:var(--muted);font-size:10px;padding-right:6px" title="Sous-ligne du KIT">↳</td>'+
+          '<td></td><td style="text-align:right;color:var(--muted);font-size:10px;padding-right:6px" title="Sous-ligne du KIT">↳</td>'+
           '<td><input type="number" style="width:55px;font-size:11px" value="'+(sub.qte||1)+'" data-eimp-sub-f="qte" data-eimp-i="'+i+'" data-eimp-sub="'+si+'"></td>'+
           '<td><input style="width:130px;font-family:var(--mono);font-size:11px" value="'+esc(sub.ref||'')+'" data-eimp-sub-f="ref" data-eimp-i="'+i+'" data-eimp-sub="'+si+'"></td>'+
           '<td><input style="min-width:200px;width:100%;font-size:11px" value="'+esc(sub.desc||'')+'" data-eimp-sub-f="desc" data-eimp-i="'+i+'" data-eimp-sub="'+si+'"></td>'+
@@ -35948,6 +36113,11 @@ function renderEimpLines(){
     }
   });
   tb.innerHTML=html;
+  // Cases « ajouter au PO »
+  tb.querySelectorAll('input[data-eimp-sel]').forEach(function(c){
+    c.addEventListener('change',function(){ var i=parseInt(this.getAttribute('data-eimp-sel')); if(eimpState.lines[i]) eimpState.lines[i]._sel=this.checked;
+      this.closest('tr').style.opacity=this.checked?'':'.55'; _eimpMajBouton(); });
+  });
   // Listeners champs principaux
   tb.querySelectorAll('input[data-eimp-f]').forEach(function(inp){
     inp.addEventListener('input',function(){
@@ -35971,11 +36141,10 @@ function renderEimpLines(){
   });
 }
 function addEimpLine(){
-  eimpState.lines.push({qte:1,ref:'',desc:'',pu:0,ext:0});
+  // Ligne ajoutée à la main = article voulu : cochée.
+  eimpState.lines.push({qte:1,ref:'',desc:'',pu:0,ext:0,_sel:true});
   renderEimpLines();
-  if(eimpState.header){
-    document.getElementById('eimp-confirm-btn').disabled=!(eimpState.header.num||eimpState.header.cref);
-  }
+  _eimpMajBouton();
 }
 function delEimpLine(i){
   if(eimpState.lines[i]){eimpState.lines.splice(i,1);renderEimpLines();}
@@ -35995,16 +36164,54 @@ function confirmEmersonImport(){
   // Validation : on doit avoir AU MOINS un N° de proposition OU un Customer Ref pour créer une proposition.
   if(!h || (!h.num && !h.cref)){alert('Impossible d\'importer : ni N° de proposition ni Customer Ref # n\'ont été détectés dans le PDF.');return;}
 
-  // 1. Créer une nouvelle proposition Emerson dans bcProps
+  // 1. Proposition Emerson : la même quote (n° + version) déjà sur le PO est mise à jour,
+  //    jamais dupliquée ; sinon on la crée.
   var newProp={
     num:h.num||'',
     ver:h.ver||'',
     amount:h.amount||0,
     cref:h.cref||''
   };
-  bcProps.push(newProp);
-  ensurePropIds();
-  var newPropId=bcProps[bcProps.length-1].id;
+  var dejaLa=_eimpPropExistante(h), newPropId;
+  if(dejaLa){
+    if(h.amount) dejaLa.amount=h.amount;
+    if(h.cref) dejaLa.cref=h.cref;
+    ensurePropIds(); newPropId=dejaLa.id;
+  } else {
+    bcProps.push(newProp);
+    ensurePropIds();
+    newPropId=bcProps[bcProps.length-1].id;
+  }
+  var mode=eimpState.mode||'articles';
+
+  // 1 bis. MODE « RATTACHER » : aucune ligne créée, aucun prix ni quantité touché ; les
+  //        articles cochés sont rattachés à la quote, les décochés qui l'étaient s'en détachent.
+  if(mode==='rattacher'){
+    var nRat=0;
+    Object.keys(eimpState.selBC||{}).forEach(function(k){
+      var l=bcL[+k]; if(!l || l.type==='header') return;
+      if(eimpState.selBC[k]){ l.propId=newPropId; nRat++; }
+      else if(l.propId===newPropId){ delete l.propId; }
+    });
+    if(eimpState.pdfBytes && eimpState.pdfFile){
+      storeBCAttachment({bcId:eBCid||('temp_'+Date.now()), filename:eimpState.pdfFile.name, propNum:h.num||'', propVer:h.ver||'',
+        bytes:eimpState.pdfBytes, savedAt:new Date().toISOString()}).catch(function(e){console.warn('Stockage PDF échoué (non bloquant):',e);});
+    }
+    renderEmersonProps();
+    rBClines();
+    cm('mEIMP');
+    showBCSaveToast('✓ Devis Emerson '+(h.num||'')+(h.ver?' Ver:'+h.ver:'')+' rattaché ('+nRat+' ligne'+(nRat>1?'s':'')+')');
+    return;
+  }
+  // MODE « ARTICLES » : seuls les articles cochés, avec le titre de section qui les précède.
+  var retenues=[], sectionEnAttente=null;
+  ls.forEach(function(l){
+    if(l.type==='header'){ sectionEnAttente=l; return; }
+    if(!l._sel) return;
+    if(sectionEnAttente){ retenues.push(sectionEnAttente); sectionEnAttente=null; }
+    retenues.push(l);
+  });
+  ls=retenues;
 
   // 2. Si le projet est renseigné ET aucune section parser présente, on ajoute un header "projet" (mode items par défaut)
   var hasParserSections=ls.some(function(l){return l.type==='header';});
