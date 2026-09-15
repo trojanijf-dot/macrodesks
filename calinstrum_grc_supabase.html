@@ -11620,6 +11620,67 @@ function _formatDateNumCascade(isoDate, nnn){
 function _padNNN(n){return String(n).padStart(3,'0');}
 
 // ----------------------------------------------------------------------------
+// QUOTE EMERSON D'UN REAPPRO
+// ----------------------------------------------------------------------------
+// [15/09/2026] Le PO Emerson issu de la cascade partait SANS proposition Emerson :
+// il fallait retrouver la quote validee dans les documents et la saisir a la main.
+// (=X=) LA QUOTE VALIDEE EST DEJA DANS LA BASE : c'est celle que portent les PO
+//       Emerson de l'annee qui commandent la meme reference. On reprend celle du
+//       PO LE PLUS RECENT (une nouvelle version saisie une fois sur un PO devient la
+//       reference des suivants), et seulement dans l'ANNEE du PO (la tarification
+//       change d'une annee a l'autre). Rien trouve → ligne sans quote, comme avant.
+// (=X=) UNE LIGNE SE RATTACHE A LA PROPOSITION DE SON propId ; a defaut, un PO a
+//       proposition UNIQUE rattache toutes ses lignes (anciens PO saisis sans lien).
+// (=X=) REFERENCES COMPAREES SANS ESPACES NI PONCTUATION, et une reference tronquee
+//       (>= 20 caracteres) vaut la reference complete dont elle est le debut : les PO
+//       portent « 3051CD1…Q4D1 0305RC… », « …Q4D10305 » ou la reference entiere.
+function _refEmersonCle(r){ return String(r==null?'':r).toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function _refEmersonMeme(a,b){
+  a=_refEmersonCle(a); b=_refEmersonCle(b);
+  if(!a||!b) return false;
+  if(a===b) return true;
+  var court=a.length<b.length?a:b, long=a.length<b.length?b:a;
+  return court.length>=20 && long.indexOf(court)===0;
+}
+// refs : references possibles de l'article (constructeur lue sur le BC, catalogue).
+// Rend {num, ver, amount, cref, source:<n° du PO repris>} ou null.
+function _reapproQuoteEmerson(refs, dateIso){
+  refs=(refs||[]).filter(function(r){return _refEmersonCle(r);});
+  if(!refs.length) return null;
+  var an=String(dateIso||td()).slice(0,4), best=null;
+  (DB.bcs||[]).forEach(function(bc){
+    if(!bc || String(bc.date||'').slice(0,4)!==an || /annul/i.test(bc.status||'')) return;
+    var props=(bc.props||[]).filter(function(p){return p && String(p.num||'').trim();});
+    if(!props.length) return;
+    (bc.lines||[]).forEach(function(l){
+      if(!l || l.type==='header') return;
+      var p=l.propId ? props.filter(function(x){return x.id===l.propId;})[0] : (props.length===1?props[0]:null);
+      if(!p) return;
+      if(!refs.some(function(r){return _refEmersonMeme(r,l.ref);})) return;
+      var plusRecent=!best || String(bc.date)>String(best.bc.date) || (String(bc.date)===String(best.bc.date) && (+bc.id||0)>(+best.bc.id||0));
+      if(plusRecent) best={bc:bc,p:p};
+    });
+  });
+  if(!best) return null;
+  var num=String(best.p.num).trim(), ver=String(best.p.ver==null?'':best.p.ver).trim();
+  // (=X=) MONTANT ET CUSTOMER REF : ceux du PO LE PLUS RECENT qui porte CETTE quote
+  //       (meme n°, meme version), toutes lignes confondues. Les premiers PO de
+  //       l'annee y rangeaient le sous-total du PO (5 330, 6 325, 0…), les suivants
+  //       le montant de la quote : c'est la derniere saisie qui fait foi.
+  var amount=0, cref='', dA='', dC='';
+  (DB.bcs||[]).forEach(function(bc){
+    if(!bc || /annul/i.test(bc.status||'')) return;
+    (bc.props||[]).forEach(function(p){
+      if(!p || String(p.num||'').trim()!==num || String(p.ver==null?'':p.ver).trim()!==ver) return;
+      var d=String(bc.date||'');
+      if(+p.amount>0 && d>=dA){ amount=+p.amount; dA=d; }
+      if(String(p.cref||'').trim() && d>=dC){ cref=String(p.cref).trim(); dC=d; }
+    });
+  });
+  return {num:num, ver:ver, amount:amount, cref:cref, source:best.bc.num||''};
+}
+
+// ----------------------------------------------------------------------------
 // PREVIEW MODALE CASCADE
 // ----------------------------------------------------------------------------
 // Affiche 4 panneaux (Devis, Facture, BL, BC Cali) avec lignes vertes/rouges
@@ -11641,9 +11702,16 @@ function _previewReapproCascade(parsed, fileName){
   var matched = parsed.lines.filter(function(l){return l.matchedArticle;});
   var unmatched = parsed.lines.filter(function(l){return !l.matchedArticle;});
   var canCascade = unmatched.length === 0;
+  // Quote Emerson reprise pour chaque ligne (cf _reapproQuoteEmerson) : calculee ICI,
+  // affichee dans l'apercu, et c'est exactement elle que la validation pose sur le PO.
+  var quotes = parsed.lines.map(function(l){
+    var art = l.matchedArticle;
+    return _reapproQuoteEmerson([l.refConstructeur, art && art.ref], todayIso);
+  });
   
   // Stocker l'état pour _validerCascadeReappro
   _reapproPreviewState = {
+    quotes: quotes,
     parsed: parsed,
     fileName: fileName,
     nnn: nnn,
@@ -11692,7 +11760,13 @@ function _previewReapproCascade(parsed, fileName){
   // BL
   h += '<div style="background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:#38bdf8;text-transform:uppercase;font-weight:700;margin-bottom:4px">3️⃣ Bon de livraison</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:#38bdf8">'+esc(numBL)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">'+(parsed.lieuLivraison||'NOUMEA')+'</div></div>';
   // BC Calinstrum
-  h += '<div style="background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:#fbbf24;text-transform:uppercase;font-weight:700;margin-bottom:4px">4️⃣ BC Calinstrum (Emerson)</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:#fbbf24">'+esc(numBCCali)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">'+(totalAUD>0?fN(totalAUD)+' AUD':'AUD non chiffré')+'</div></div>';
+  h += '<div style="background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:10px"><div style="font-size:9.5px;color:#fbbf24;text-transform:uppercase;font-weight:700;margin-bottom:4px">4️⃣ BC Calinstrum (Emerson)</div><div style="font-weight:700;font-family:JetBrains Mono,monospace;font-size:11.5px;color:#fbbf24">'+esc(numBCCali)+'</div><div style="font-size:10px;color:var(--muted);margin-top:4px">'+(totalAUD>0?fN(totalAUD)+' AUD':'AUD non chiffré')+'</div>'+
+    (function(){ var vus={}, lib=[]; quotes.forEach(function(q){ if(q){ var k=q.num+' Ver:'+q.ver; if(!vus[k]){vus[k]=1; lib.push(k);} } });
+      var sans=quotes.filter(function(q){return !q;}).length;
+      return '<div data-reappro-quotes style="font-size:10px;margin-top:4px;color:'+(lib.length?'var(--green)':'var(--amber)')+'">'+
+        (lib.length?'Quote Emerson : '+esc(lib.join(' + ')):'Aucune quote Emerson retrouvée')+
+        (lib.length&&sans?'<br><span style="color:var(--amber)">'+sans+' ligne(s) sans quote</span>':'')+'</div>'; })()+
+    '</div>';
   h += '</div></div>';
   
   // Stats matching
@@ -11723,6 +11797,7 @@ function _previewReapproCascade(parsed, fileName){
   h += '<th style="text-align:right;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">PU XPF</th>';
   h += '<th style="text-align:right;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">PU AUD</th>';
   h += '<th style="text-align:right;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">Total</th>';
+  h += '<th style="text-align:left;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase" title="Proposition Emerson posée sur le PO : celle du PO Emerson le plus récent de l’année qui commande cette référence">Quote Emerson</th>';
   h += '<th style="text-align:center;padding:6px;font-size:9.5px;color:var(--muted);text-transform:uppercase">Match</th>';
   h += '</tr></thead><tbody>';
   parsed.lines.forEach(function(l,i){
@@ -11738,6 +11813,10 @@ function _previewReapproCascade(parsed, fileName){
     h += '<td style="padding:5px 6px;text-align:right;font-family:JetBrains Mono,monospace">'+fN(l.pu||0)+'</td>';
     h += '<td style="padding:5px 6px;text-align:right;font-family:JetBrains Mono,monospace;color:#fbbf24">'+(puAUD>0?fN(puAUD):'-')+'</td>';
     h += '<td style="padding:5px 6px;text-align:right;font-weight:700;font-family:JetBrains Mono,monospace">'+fN(l.total||0)+'</td>';
+    var q = quotes[i];
+    h += q
+      ? '<td style="padding:5px 6px;font-family:JetBrains Mono,monospace;font-size:10.5px;color:var(--green)" title="Reprise du PO '+esc(q.source)+(q.cref?' · Customer Ref '+esc(q.cref):'')+'">'+esc(q.num)+' Ver:'+esc(q.ver)+'<div style="font-size:9px;color:var(--muted)">PO '+esc(q.source)+'</div></td>'
+      : '<td style="padding:5px 6px;font-size:10px;color:var(--amber)">— à ajouter sur le PO</td>';
     if(matched){
       var icon = (l.matchType==='ref') ? '✅' : '🎯';
       h += '<td style="padding:5px 6px;text-align:center"><span style="background:rgba(16,185,129,0.15);color:var(--green);padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700">'+icon+' '+(l.matchType==='ref'?'Ref':'Code')+'</span></td>';
@@ -12014,10 +12093,22 @@ function _validerCascadeReappro(){
   // ===== 4. BC CALINSTRUM (Emerson) {JJMMAAAA}/{NNN} =====
   var bcCaliId = newId();
   // Lignes BC Cali = AUD ; on prend prixAchatAUD de l'article matché
-  var bcLines = parsed.lines.map(function(l){
+  // Propositions Emerson du PO : une par quote distincte retrouvee a l'apercu (cf
+  // _reapproQuoteEmerson), chaque ligne rattachee a la sienne.
+  var bcProps = [], propIdParCle = {};
+  (st.quotes || []).forEach(function(q){
+    if(!q) return;
+    var cle = q.num + '|' + q.ver;
+    if(propIdParCle[cle]) return;
+    propIdParCle[cle] = 'prop_' + nowBase + '_' + bcProps.length;
+    bcProps.push({id: propIdParCle[cle], num: q.num, ver: q.ver, amount: q.amount, cref: q.cref});
+  });
+  var bcLines = parsed.lines.map(function(l, idx){
     var art = l.matchedArticle;
     var puAUD = (art && art.prixAchatAUD) || 0;
+    var q = (st.quotes || [])[idx];
     return {
+      propId: q ? propIdParCle[q.num + '|' + q.ver] : undefined,
       ref: l.refConstructeur || (art && art.ref) || '',  // ref Emerson
       // (=X=) JAMAIS DE LIBELLE EN DUR SUR UN DOCUMENT FOURNISSEUR : c'est la
       //       designation de l'article commande qui fait foi (cf _artDescEmerson).
@@ -12049,11 +12140,12 @@ function _validerCascadeReappro(){
     //       de la cascade ; les 22 BC saisis a la main ont ce champ vide et logent
     //       la reference Emerson dans `props[].cref`. Le code le dit lui-meme
     //       ailleurs : « cref2: '' // legacy, on met cref dans props[0] ».
-    //       Un REAPPRO se sert de la grille tarifaire, il n'a aucune proposition
-    //       Emerson : le champ reste VIDE.
+    //       Le champ reste VIDE : le Customer Ref Emerson d'un REAPPRO vit dans
+    //       `props[].cref`, avec la quote reprise (cf _reapproQuoteEmerson).
     //       La tracabilite vers le BC client vit dans `linkBCclient` et
     //       `_bcReapproNum`, qui sont INTERNES et ne s'impriment pas.
     cref2: '',
+    props: bcProps,
     linkDevis: st.numDevis,
     linkBCclient: parsed.num,
     linkFacture: st.numFacture,
