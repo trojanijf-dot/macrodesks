@@ -1172,9 +1172,9 @@ body.has-dashboard-bg #page-dashboard .metric{
   </style>
   <div class="no-print" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
     <h2 style="font-family:var(--display);color:var(--teal);font-size:18px;margin:0">📦 Suivi des commandes client</h2>
-    <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center"><span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span><button class="btn btn-teal btn-sm" onclick="suiviCmdImprimerPDF()">📄 PDF client</button></span>
+    <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center"><span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span><span style="display:inline-flex;gap:8px;align-items:center;font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:7px;padding:3px 8px" title="Colonnes ajoutées au PDF (références internes : décochées par défaut)">Dans le PDF : <label style="display:inline-flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="scPdfPO"> PO CALINSTRUM</label><label style="display:inline-flex;gap:4px;align-items:center;cursor:pointer"><input type="checkbox" id="scPdfQuote"> Quote Emerson</label></span><button class="btn btn-teal btn-sm" onclick="suiviCmdImprimerPDF()">📄 PDF client</button></span>
   </div>
-  <div class="sc-note">📌 Une ligne par <b>BC client</b>, sans aucun montant. Statut : <b>Livrée</b> dès qu'une <b>facture est émise</b> (les pré-factures ne comptent pas) ou qu'un <b>BL est livré</b> ; sinon <b>« Commande lancée le … — en attente »</b> (date de la commande fournisseur). Le <b>PDF client</b> reprend le filtre en cours et n'imprime ni l'échéance, ni le BL, ni le n° de PO <span class="sc-int">interne</span>.</div>
+  <div class="sc-note">📌 Une ligne par <b>BC client</b>, sans aucun montant. Statut : <b>Livrée</b> dès qu'une <b>facture est émise</b> (les pré-factures ne comptent pas) ou qu'un <b>BL est livré</b> ; sinon <b>« Commande lancée le … — en attente »</b> (date de la commande fournisseur). Le <b>PDF client</b> reprend le filtre en cours et n'imprime ni l'échéance, ni le BL ; le <b>n° de PO</b> et la <b>quote Emerson</b> <span class="sc-int">interne</span> seulement si leur case est cochée.</div>
   <div id="scBody"></div>
 </div>
 
@@ -1581,13 +1581,13 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
   });
   var tgcSegTotal=tgcSegs.reduce(function(s,x){return s+Math.abs(x.value);},0);
 
-  var nbFac=r.factures.length, nbAv=r.avoirs.length;
+  var nbFac=r.factures.length, nbAv=r.avoirs.length, portee=_admPortee(r);
 
   var html=includeScope?_adminScopeBoxHtml():'';
 
   html+='<div style="display:grid;grid-template-columns:repeat('+(includeScope?4:3)+',1fr);gap:12px;margin-bottom:22px">'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
-      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">CA net HT '+esc(r.year)+'</div>'+
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">CA net HT '+esc(portee.lib)+'</div>'+
       '<div style="font-size:20px;font-weight:800;color:'+ADMIN_C1+'">'+fN(r.caHT)+' XPF</div>'+
       '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">après avoirs déduits</div></div>'+
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
@@ -1597,7 +1597,7 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
     '<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
       '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">Factures / Avoirs</div>'+
       '<div style="font-size:20px;font-weight:800">'+nbFac+' / '+nbAv+'</div>'+
-      '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">émis sur l\'année</div></div>'+
+      '<div style="font-size:10px;color:var(--muted-soft);margin-top:4px">émises '+esc(portee.sur)+'</div></div>'+
     // Masse salariale : réservée au GRC écran (includeScope) — retirée du PDF
     // expert-comptable à la demande de l'utilisateur (07/08/2026).
     (includeScope?('<div style="background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:10px;padding:14px 16px">'+
@@ -1977,6 +1977,20 @@ function _admPrvSig(range){ return range.start+'|'+range.end; }
 // calculé, même si l'utilisateur bricole les dates après avoir cliqué "T2".
 // Séparateur "-" et non "/" : Windows interdit "/" dans un nom de fichier,
 // Chrome le remplacerait silencieusement par autre chose.
+// Portée des indicateurs de la synthèse, pour leurs libellés.
+// [15/09/2026] Un export du 01/07 au 30/09 affichait « CA net HT 2026 » et « émis sur
+// l'année » : le libellé était écrit pour l'année entière, les chiffres portaient sur
+// la période choisie.
+function _admPortee(r){
+  var s=String(r&&r.startDate||''), e=String(r&&r.endDate||'');
+  if(s.length<10||e.length<10) return {lib:String(r&&r.year||''), sur:'sur l\'année'};
+  var sy=s.substring(0,4), ey=e.substring(0,4);
+  if(sy===ey && s===sy+'-01-01' && e===sy+'-12-31') return {lib:sy, sur:'sur l\'année'};
+  var qs={'01':1,'04':2,'07':3,'10':4}[s.substring(5,7)], qe={'03':1,'06':2,'09':3,'12':4}[e.substring(5,7)];
+  var dernierJour=new Date(Number(ey),Number(e.substring(5,7)),0).getDate();
+  if(sy===ey && qs && qs===qe && s.substring(8,10)==='01' && Number(e.substring(8,10))===dernierJour) return {lib:'T'+qs+' '+sy, sur:'sur la période T'+qs};
+  return {lib:'du '+fD(s)+' au '+fD(e), sur:'sur la période'};
+}
 function _admPeriodLabel(r){
   var s=String(r.startDate||''), e=String(r.endDate||'');
   if(s.length<10||e.length<10) return String(r.year||'');
@@ -9034,6 +9048,40 @@ function _suiviDateEnvoi(f){
 // Lignes « transport » : jamais présentées comme des articles commandés.
 function _suiviLigneFret(texte){ return /fret|freight|transport|handling|travel|frais|assurance/i.test(String(texte||'')); }
 
+// Articles commandés d'apres les PO Emerson (utilise quand la facture est en forfait) :
+// lignes a reference, hors fret et services ; designation francaise et code SLN du
+// catalogue quand la reference y est ; lignes de meme article additionnees.
+// (=X=) VERIFIE SUR LES BC CLIENT : 00730482-05-43 → 2 × 3051TG3 ; 00722464-01 →
+//       7 × 3051TG2 (1+3+3) et 6 × 3051TG0 (3+3), exactement les quantites du PO.
+function _suiviArticlesPO(pos){
+  var out=[], parCle={};
+  (pos||[]).forEach(function(bc){ (bc.lines||[]).forEach(function(l){
+    if(!l || l.type==='header' || !(Number(l.qte)>0)) return;
+    var ref=String(l.ref||'').trim(), txt=(l.desc||'')+' '+ref;
+    if(!ref || _suiviLigneFret(txt) || /\bservices?\b/i.test(txt)) return;
+    var art=(DB.articles||[]).filter(function(x){return x && _refEmersonMeme(x.ref,ref);})[0];
+    // Hors catalogue, la designation fait partie de la cle : « Mounting pad (lot 10) » et
+    // « (lot 50) » partagent une reference mais ne s'additionnent pas sous un seul libelle.
+    var cle=art ? 'A:'+art.ref : 'R:'+_refEmersonCle(ref)+'|'+String(l.desc||'').trim().toUpperCase();
+    if(parCle[cle]){ parCle[cle].qte+=Number(l.qte); return; }
+    var nom=art ? String(art.nom||'').trim() : '', i=nom.lastIndexOf(' / ');
+    var code=art && art.codeSLN && !/^TBA$/i.test(String(art.codeSLN).trim()) ? String(art.codeSLN).trim() : '';
+    parCle[cle]={code:code, ref:ref.split('\n')[0].trim(), des:(i>=0?nom.slice(0,i).trim():nom) || String(l.desc||'').split('\n')[0], qte:Number(l.qte)};
+    out.push(parCle[cle]);
+  });});
+  return out;
+}
+// Quotes Emerson portees par les PO de l'affaire (« 29429380 Ver:2 »), sans doublon.
+function _suiviQuotes(pos){
+  var vus={}, out=[];
+  (pos||[]).forEach(function(bc){ (bc.props||[]).forEach(function(p){
+    var n=String(p&&p.num||'').trim(); if(!n) return;
+    var lib=n+(String(p.ver==null?'':p.ver).trim()?' Ver:'+String(p.ver).trim():'');
+    if(!vus[lib]){ vus[lib]=1; out.push(lib); }
+  });});
+  return out;
+}
+
 function _suiviCommandes(){
   var out=[];
   _rentaAffaires().forEach(function(a){
@@ -9050,11 +9098,17 @@ function _suiviCommandes(){
     var dateBC='';
     a.factures.forEach(function(f){ dateBC=dateBC||f.dateReceptionBC||f.bcClientSLNDate||''; });
     devis.forEach(function(dv){ dateBC=dateBC||dv.bcClientDate||dv.bcClientSLNDate||''; });
-    var articles=[];
+    var articles=[], forfait=false;
     a.factures.forEach(function(f){ (f.lines||[]).forEach(function(l){
       if(!l || l._sec==='service' || !(Number(l.qte)>0) || /^FRET/i.test(l.ref||'') || _suiviLigneFret((l.designation||'')+' '+(l.ref||''))) return;
+      if(!String(l.ref||'').trim()) forfait=true;
       articles.push({code:l.codeSLN||'', ref:l.ref||'', des:String(l.designation||'').split('\n')[0], qte:Number(l.qte)});
     });});
+    // (=X=) FACTURE EN FORFAIT : une ligne sans reference article (« Transmetteur 3051TG3
+    //       - 55,15 BARG », 1 × 521 380) ne dit pas combien d'articles ont ete commandes.
+    //       [15/09/2026] Le PDF client annoncait « 1 × » pour un BC de 2 transmetteurs.
+    //       Les quantites viennent alors des PO Emerson de l'affaire (cf _suiviArticlesPO).
+    if(forfait){ var dePO=_suiviArticlesPO(pos); if(dePO.length) articles=dePO; }
     if(!articles.length) pos.forEach(function(bc){ (bc.lines||[]).forEach(function(l){
       if(!l || l.qte==null || _suiviLigneFret((l.desc||'')+' '+(l.ref||''))) return;
       articles.push({code:'', ref:l.ref||'', des:String(l.desc||'').split('\n')[0], qte:Number(l.qte)});
@@ -9075,7 +9129,7 @@ function _suiviCommandes(){
       pos:pos, factures:a.factures, bls:bls, client:_rentaClient(pos[0]), contact:contact,
       acheteur:contact.split(' - ').slice(1).join(' - ').trim()||contact,
       bcClient:a.bcClient, dateBC:dateBC, echeance:echeance?echeance.toISOString().slice(0,10):'',
-      articles:articles, statut:statut,
+      articles:articles, quotes:_suiviQuotes(pos), statut:statut,
       enRetard:statut.k==='attente' && !!echeance && echeance<new Date(new Date().toDateString())
     });
   });
@@ -9125,9 +9179,10 @@ function renderSuiviCommandes(){
     var bl=c.bls.length ? c.bls.map(function(x){return esc(x.num)+'<div class="sc-tag">'+esc(x.status||'')+(x.date?' · '+fD(x.date):'')+'</div>';}).join('') : '<span class="sc-tag">—</span>';
     var po=c.pos.map(function(bc){return '<a href="#" onclick="event.preventDefault();ouvrirDocument(\'BC\','+bc.id+');">'+esc(bc.num)+'</a>';}).join('<br>');
     return '<tr data-bc="'+esc(c.bcClient)+'"><td class="sc-bc">'+(esc(c.bcClient)||'—')+'<div class="sc-tag">'+esc(c.client)+'</div></td><td>'+fD(c.dateBC)+'</td><td>'+esc(c.acheteur)+'</td>'+
-      '<td class="sc-art">'+(arts||'<span class="sc-tag">—</span>')+'</td><td>'+st+'</td><td>'+ech+'</td><td>'+bl+'</td><td class="sc-tag">'+po+'</td></tr>';
-  }).join('')||'<tr><td colspan="8" class="sc-tag">Aucune commande pour ce filtre.</td></tr>';
-  h+='<div class="card" style="overflow-x:auto"><table class="sc-table" id="scTable"><thead><tr><th>BC client</th><th>Date BC</th><th>Acheteur</th><th>Articles commandés</th><th>Statut</th><th>Échéance contractuelle</th><th>Livraison</th><th>PO CALINSTRUM <span class="sc-int">interne</span></th></tr></thead><tbody>'+lignes+'</tbody></table></div>';
+      '<td class="sc-art">'+(arts||'<span class="sc-tag">—</span>')+'</td><td>'+st+'</td><td>'+ech+'</td><td>'+bl+'</td><td class="sc-tag">'+po+'</td>'+
+      '<td class="sc-tag" data-sc-quote>'+(c.quotes.length?c.quotes.map(esc).join('<br>'):'—')+'</td></tr>';
+  }).join('')||'<tr><td colspan="9" class="sc-tag">Aucune commande pour ce filtre.</td></tr>';
+  h+='<div class="card" style="overflow-x:auto"><table class="sc-table" id="scTable"><thead><tr><th>BC client</th><th>Date BC</th><th>Acheteur</th><th>Articles commandés</th><th>Statut</th><th>Échéance contractuelle</th><th>Livraison</th><th>PO CALINSTRUM <span class="sc-int">interne</span></th><th>Quote Emerson <span class="sc-int">interne</span></th></tr></thead><tbody>'+lignes+'</tbody></table></div>';
   body.innerHTML=h;
 }
 
@@ -9136,19 +9191,25 @@ function suiviCmdImprimerPDF(){
   var sel=_scSelection(_suiviCommandes()), E=_scEtat;
   var titre=(E.client==='Tous'?'Tous clients':E.client)+(E.acheteur==='Tous'?'':' · à l\'attention de '+E.acheteur);
   var etat=E.etat==='Toutes'?'toutes commandes':(E.etat==='En attente'?'commandes en attente':'commandes livrées');
+  // Colonnes facultatives (références internes) : cochées à côté du bouton PDF, jamais par défaut.
+  var avecPO=!!(document.getElementById('scPdfPO')||{}).checked, avecQuote=!!(document.getElementById('scPdfQuote')||{}).checked;
+  var nCol=6+(avecPO?1:0)+(avecQuote?1:0);
   var rows='';
   sel.forEach(function(c){
     rows+='<tr class="grp"><td>BC '+(esc(c.bcClient)||'—')+'</td><td>'+fD(c.dateBC)+'</td><td colspan="3">Acheteur : '+esc(c.acheteur)+'</td>'+
-      '<td class="'+(c.statut.k==='livre'?'ok':'att')+'">'+esc(c.statut.label)+'</td></tr>';
+      '<td class="'+(c.statut.k==='livre'?'ok':'att')+'">'+esc(c.statut.label)+'</td>'+
+      (avecPO?'<td class="int">'+c.pos.map(function(bc){return esc(bc.num);}).join('<br>')+'</td>':'')+
+      (avecQuote?'<td class="int">'+(c.quotes.length?c.quotes.map(esc).join('<br>'):'—')+'</td>':'')+'</tr>';
     c.articles.forEach(function(x){
-      rows+='<tr><td></td><td></td><td>'+esc(x.code)+'</td><td>'+esc(x.des||x.ref)+(x.code&&x.ref?'<div class="ref">'+esc(x.ref)+'</div>':'')+'</td><td class="n">'+fN(x.qte)+'</td><td></td></tr>';
+      rows+='<tr><td></td><td></td><td>'+esc(x.code)+'</td><td>'+esc(x.des||x.ref)+(x.code&&x.ref?'<div class="ref">'+esc(x.ref)+'</div>':'')+'</td><td class="n">'+fN(x.qte)+'</td><td></td>'+
+        (avecPO?'<td></td>':'')+(avecQuote?'<td></td>':'')+'</tr>';
     });
   });
   var css='@page{size:A4 landscape;margin:12mm 11mm 13mm;}html,body{background:#fff;color-scheme:light}body{font-family:Calibri,Arial,sans-serif;color:#111;font-size:10.5px;margin:0}'+
     '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #e46c12;padding-bottom:8px;margin-bottom:12px}'+
     'h1{font-size:19px;color:#1b365d;margin:4px 0 2px}.sub{color:#5b6b7a;font-size:10.5px}table{width:100%;border-collapse:collapse}'+
     'th{background:#1b365d;color:#fff;text-align:left;font-size:10px;padding:5px 6px}td{padding:4px 6px;border-bottom:1px solid #e5e9ef;vertical-align:top}'+
-    'tr.grp td{background:#eef2f7;font-weight:700;color:#1b365d}td.ok{color:#1b7a4e}td.att{color:#6d28d9}.ref{color:#5b6b7a;font-size:9px}.n{text-align:right}'+
+    'tr.grp td{background:#eef2f7;font-weight:700;color:#1b365d}td.ok{color:#1b7a4e}td.att{color:#6d28d9}.ref{color:#5b6b7a;font-size:9px}.n{text-align:right}tr.grp td.int{font-weight:600;font-size:9.5px;color:#334155}'+
     'thead{display:table-header-group}tr{page-break-inside:avoid}.leg{color:#5b6b7a;font-size:9px;margin-top:2px}';
   // La légende des statuts est dans l'EN-TÊTE : placée après le tableau, elle
   // débordait seule sur une dernière page quasi vide.
@@ -9157,8 +9218,9 @@ function suiviCmdImprimerPDF(){
       '<div class="sub">'+esc(titre)+' · situation au '+fD(td())+' · '+etat+'</div>'+
       '<div class="leg">Statuts : « Commande lancée le … — en attente » tant que la marchandise n\'est pas livrée · « Livrée » une fois la livraison effectuée.</div></div>'+
       '<div class="sub" style="text-align:right">'+esc(CI.nom)+' · '+esc(CI.adresse)+'<br>'+esc(CI.tel)+' · '+esc(CI.email)+'</div></div>'+
-    '<table><thead><tr><th style="width:120px">N° BC client</th><th style="width:74px">Date BC</th><th style="width:90px">Code article</th><th>Désignation</th><th style="width:60px;text-align:right">Quantité</th><th style="width:250px">Statut</th></tr></thead>'+
-    '<tbody>'+(rows||'<tr><td colspan="6">Aucune commande.</td></tr>')+'</tbody></table>';
+    '<table><thead><tr><th style="width:120px">N° BC client</th><th style="width:74px">Date BC</th><th style="width:90px">Code article</th><th>Désignation</th><th style="width:60px;text-align:right">Quantité</th><th style="width:250px">Statut</th>'+
+      (avecPO?'<th style="width:95px">PO CALINSTRUM</th>':'')+(avecQuote?'<th style="width:105px">Quote Emerson</th>':'')+'</tr></thead>'+
+    '<tbody>'+(rows||'<tr><td colspan="'+nCol+'">Aucune commande.</td></tr>')+'</tbody></table>';
   var w=window.open('','_blank','');
   if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Suivi de vos commandes '+esc(titre)+' '+esc(td())+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
