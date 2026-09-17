@@ -3374,6 +3374,7 @@ function admPreviewPrint(){
         <button class="btn btn-ghost btn-sm" onclick="addFAL('lot')">+ Lot forfait</button>
         <button class="btn btn-ghost btn-sm" onclick="addFASection()" style="border-color:rgba(244,63,94,.4);color:#f43f5e">+ Section</button>
         <button class="btn btn-ghost btn-sm" onclick="addFAKitSection()" style="border-color:rgba(59,130,246,.4);color:#3b82f6">+ KIT (1 prix global)</button>
+        <button class="btn btn-ghost btn-sm" onclick="addFATaskSection()" style="border-color:rgba(167,139,250,.45);color:#a78bfa" title="Bloc TÂCHE : une prestation détaillée en sous-lignes (H sup, H tech…) — pour des travaux ajoutés directement sur la facture">+ TÂCHE</button>
         <span style="width:1px;height:22px;background:var(--border);margin:0 2px"></span>
         <button class="btn btn-ghost btn-sm" onclick="copyLinesToClipboard('fa')" title="Copier toutes les lignes de cette facture (réutilisable dans un autre devis/facture)" style="border-color:rgba(45,212,191,.45);color:#5dcaa5;font-weight:500">📋 Copier les lignes</button>
         <button class="btn btn-ghost btn-sm" id="fa-paste-btn" onclick="pasteLinesIntoFA()" title="Coller les lignes précédemment copiées (ajout à la fin)" style="border-color:rgba(167,139,250,.45);color:#a5b4fc;font-weight:500;display:none">📥 Coller les lignes <span id="fa-paste-count" style="background:rgba(167,139,250,.2);color:#c4b5fd;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:2px"></span></button>
@@ -30415,6 +30416,46 @@ function addFAKitSection(){
   ]});
   rFAlines();
 }
+// =============================================================================
+// MODULE TÂCHES DANS LA FACTURE — [18/09/2026]
+// =============================================================================
+// La facture savait DEJA afficher, totaliser (_isTaskCarrier / cFAtot) et imprimer
+// les tâches venues d'un devis ; il lui manquait le moyen d'en CREER une. Cas réel :
+// des travaux supplémentaires décidés pendant le chantier, acceptés par le client,
+// qui ne figurent sur aucun devis et vont directement sur la facture.
+// (=X=) MEME STRUCTURE QU'AU DEVIS (cf addDVHeader/addDVTaskBlock) : bandeau
+//       mode:'task' + porteuse sans prix propre (qte/pu à 0) portant les sous-lignes
+//       chiffrées. Toute autre forme sortirait du périmètre de _isTaskCarrier, donc
+//       du total : des lignes visibles sous un total faux.
+function addFATaskSection(){
+  var title=prompt('Titre de la TÂCHE (travaux détaillés en sous-lignes) :','TÂCHE — TITRE DE LA TÂCHE GROUPÉE');
+  if(!title)return;
+  faL.push({type:'header',mode:'task',desc:title});
+  faL.push({ref:'',designation:'',tgc:0,unite:'',qte:0,pu:0,_isTaskMain:true,subLines:[
+    {ref:'',designation:'',tgc:0,unite:'H sup',qte:1,pu:0},
+    {ref:'',designation:'',tgc:0,unite:'H tech',qte:1,pu:0}
+  ]});
+  rFAlines();
+}
+// Ajoute une 2e porteuse SOUS le même bandeau TÂCHE (chaque bloc a son propre groupe
+// d'heures). Insertion avant le bandeau suivant : un bloc ne doit jamais tomber dans
+// la section d'à côté, sinon il change de total.
+function addFATaskBlock(afterIdx){
+  if(!Array.isArray(faL) || afterIdx<0 || afterIdx>=faL.length) return;
+  var headerIdx=-1;
+  for(var k=afterIdx;k>=0;k--){
+    if(faL[k] && faL[k].type==='header'){ if(faL[k].mode==='task') headerIdx=k; break; }
+  }
+  if(headerIdx<0) return;
+  var insertIdx=faL.length;
+  for(var j=headerIdx+1;j<faL.length;j++){ if(faL[j] && faL[j].type==='header'){ insertIdx=j; break; } }
+  faL.splice(insertIdx,0,{ref:'',designation:'',tgc:0,unite:'',qte:0,pu:0,_isTaskMain:true,subLines:[
+    {ref:'',designation:'',tgc:0,unite:'H sup',qte:1,pu:0},
+    {ref:'',designation:'',tgc:0,unite:'H tech',qte:1,pu:0}
+  ]});
+  rFAlines();
+}
+
 // Modifie la désignation/qte/pu/etc. d'une sous-ligne KIT
 function updateFASubLine(parentIdx,subIdx,field,value){
   if(!faL[parentIdx]||!Array.isArray(faL[parentIdx].subLines))return;
@@ -30492,7 +30533,9 @@ function rFAlines(){
       var modeLabel=l.mode==='kit'?'KIT (1 prix global)':l.mode==='task'?'TÂCHE':'SECTION';
       return '<tr style="background:rgba(244,63,94,.08);border-top:2px solid '+modeColor+'80;border-bottom:2px solid '+modeColor+'80">'+
         '<td colspan="7"><input style="width:100%;font-weight:700;color:'+modeColor+';text-transform:uppercase;letter-spacing:.06em;background:transparent;border:none;font-size:11.5px" value="'+esc(l.desc||'')+'" data-field="desc" data-idx="'+i+'" placeholder="Titre de section"></td>'+
-        '<td style="text-align:right;font-size:9.5px;color:'+modeColor+';font-style:italic">'+modeLabel+'</td>'+
+        '<td style="text-align:right;font-size:9.5px;color:'+modeColor+';font-style:italic">'+modeLabel+
+          (l.mode==='task'?'<br><button onclick="addFATaskBlock('+i+')" style="margin-top:3px;padding:2px 5px;border:1px dashed rgba(167,139,250,.6);background:rgba(167,139,250,.1);color:#a78bfa;border-radius:3px;cursor:pointer;font-size:9px;font-style:normal" title="Ajouter un bloc tâche sous ce titre (chaque bloc a ses propres heures)">+ Bloc tâche</button>':'')+
+        '</td>'+
         '<td><button class="fa-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer" title="Supprimer cette section">✕</button></td>'+
       '</tr>';
     }
