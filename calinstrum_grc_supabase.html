@@ -21445,11 +21445,7 @@ function openDV(id, preSelectedClient){
       gv('dv-quote-emerson-ref',d.quoteEmersonRef||'');gv('dv-quote-emerson-date',d.quoteEmersonDate||'');
       // Render des cartes PDF attachés (Emerson + ACT + PO Calinstrum + BC Client + Quote Emerson) si présents
       if(typeof renderDevisPdfCard==='function'){
-        renderDevisPdfCard(d.id,'emerson');
-        renderDevisPdfCard(d.id,'act');
-        renderDevisPdfCard(d.id,'po_cali');
-        renderDevisPdfCard(d.id,'bc_client');
-        renderDevisPdfCard(d.id,'quote_emerson');
+        DV_PDF_KINDS.forEach(function(k){ renderDevisPdfCard(d.id,k); });
       }
       // Initialise l'historique éditable de phases — lazy migration si manquant
       if(Array.isArray(d.phaseHistory) && d.phaseHistory.length>0){
@@ -21518,9 +21514,13 @@ function openDV(id, preSelectedClient){
     gv('dv-ref-emerson','');gv('dv-ref-emerson-date','');
     gv('dv-ref-act','');gv('dv-ref-act-date','');
     gv('dv-po-calinstrum','');gv('dv-po-calinstrum-date','');
-    // Cartes PDF masquées (rien d'attaché à un nouveau devis sans id)
-    var _eC1=document.getElementById('dv-emerson-pdf-card');if(_eC1){_eC1.style.display='none';_eC1.innerHTML='';}
-    var _eC2=document.getElementById('dv-act-pdf-card');if(_eC2){_eC2.style.display='none';_eC2.innerHTML='';}
+    // ⛔ CARTES PDF : TOUTES vidées (rien n'est attaché à un devis sans id).
+    // [22/09/2026] Seules « emerson » et « act » étaient vidées ici : po_cali, bc_client
+    // et quote_emerson gardaient la carte du devis PRÉCÉDEMMENT ouvert, boutons compris.
+    // Sur un devis vierge, le 🗑 de la carte fantôme proposait de supprimer les fichiers
+    // cloud de l'AUTRE devis. On boucle sur la liste unique DV_PDF_KINDS pour qu'une
+    // 6e sorte de PDF ne puisse pas être oubliée ici.
+    DV_PDF_KINDS.forEach(function(k){ renderDevisPdfCard(null,k); });
     _dvPhaseHistoryEdit=[];
     setTimeout(function(){renderPhaseHistoryTable();_refreshPhaseNextBtn();},0);
     var elDvCondNew=document.getElementById('dv-conditionsCommerciales');
@@ -38661,6 +38661,9 @@ function _isoFromEmersonDate(s){
 // ÉTAPE D-BIS : si pas de record IndexedDB mais entrée présente dans le cache
 // cloud (devisPdfCloudIndex), on affiche QUAND MÊME une carte (sinon UX dead-end :
 // pastille allumée mais aucun moyen de gérer le PDF depuis la modale).
+// Les 5 sortes de PDF attachables à un devis — LISTE UNIQUE (affichage, vidage à la
+// création, garde-fou). Toute nouvelle sorte s'ajoute ICI et nulle part ailleurs.
+var DV_PDF_KINDS=['emerson','act','po_cali','bc_client','quote_emerson'];
 function renderDevisPdfCard(devisId,kind){
   var cardMap={
     'emerson':{cardId:'dv-emerson-pdf-card',color:'#22d3ee',icon:'circuit-bulb',label:'Emerson'},
@@ -38741,6 +38744,7 @@ function renderDevisPdfCard(devisId,kind){
 // rien ne casse pour les PDFs déjà en local, et les 246 du cloud deviennent
 // visibles dès qu'ils existent.
 function openDevisPdf(devisId,kind){
+  if(!_dvPdfCarteDuDevisOuvert(devisId,'ouvert')) return;
   // window.open doit être appelé dans le même tick que le clic pour éviter le
   // blocage pop-up. On ouvre donc l'onglet TOUT DE SUITE, puis on y pousse l'URL.
   var w=window.open('','_blank');
@@ -38770,6 +38774,7 @@ function openDevisPdf(devisId,kind){
 
 // Télécharge le PDF stocké. ÉTAPE C : cloud-first (URL signée) puis fallback local.
 function downloadDevisPdf(devisId,kind){
+  if(!_dvPdfCarteDuDevisOuvert(devisId,'téléchargé')) return;
   getDevisPdfCloudUrl(devisId,kind).then(function(cloudUrl){
     if(cloudUrl){
       var a=document.createElement('a');a.href=cloudUrl;a.download=(kind+'.pdf');
@@ -38805,7 +38810,20 @@ function downloadDevisPdf(devisId,kind){
 //    Annoncé clairement dans la confirm dialog ; l'utilisateur peut annuler
 //    la modale juste après s'il regrette (la valeur d'origine est sauvegardée
 //    avant le clear pour permettre un éventuel revert manuel).
+// ⛔ FILET DE SÉCURITÉ — une carte PDF n'agit QUE sur le devis ouvert.
+// [22/09/2026] Une carte restée à l'écran d'un devis précédent proposait de supprimer
+// 3 fichiers cloud de CET autre devis depuis un formulaire vierge. La cause (cartes non
+// vidées à la création) est corrigée dans openDV ; ceci empêche le dégât même si une
+// carte réapparaissait un jour par un autre chemin.
+function _dvPdfCarteDuDevisOuvert(devisId,action){
+  if(typeof eDVid==='undefined') return true;
+  if(String(devisId||'')===String(eDVid||'')) return true;
+  alert('⛔ Cette pièce jointe n\'appartient pas au devis ouvert : rien n\'a été '+(action||'modifié')+'.\n\n'+
+        'Ferme puis rouvre le devis concerné pour agir sur ses PDF.');
+  return false;
+}
 async function confirmDeleteDevisPdf(devisId, kind){
+  if(!_dvPdfCarteDuDevisOuvert(devisId,'supprimé')) return;
   var labels = {emerson:'Emerson', act:'ACT', po_cali:'PO Calinstrum', bc_client:'BC Client', quote_emerson:'Quote Emerson'};
   var label = labels[kind] || kind;
   var idStr = String(devisId);
