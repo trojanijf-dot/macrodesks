@@ -6478,14 +6478,18 @@ function _dvBCClientNum(d){
 //       champ est deja rempli avec le meme numero sous une autre forme, il n'y
 //       a rien a corriger ; s'il porte un AUTRE numero, c'est une decision
 //       humaine, pas celle d'un parseur.
-function _remplirBCClientCanonique(numExtrait){
+// Remplit le champ canonique du haut (celui qui sert a generer la facture) et SA date.
+// [22/09/2026] Seul le numero etait pose : la date de reception du BC restait a recopier
+// a la main alors que le PDF la donne. Comme partout : on ne remplit que ce qui est VIDE.
+function _remplirBCClientCanonique(numExtrait,dateIso){
   var el=document.getElementById('dv-bc-client-sln');
-  if(!el) return false;
+  var elD=document.getElementById('dv-bc-client-sln-date');
+  var pose=false;
   var num=String(numExtrait==null?'':numExtrait).trim();
-  if(!num) return false;
-  if(String(el.value||'').trim()) return false;   // deja renseigne : on n'y touche pas
-  el.value=num;
-  return true;
+  if(el && num && !String(el.value||'').trim()){ el.value=num; pose=true; }
+  var d=String(dateIso==null?'':dateIso).trim();
+  if(elD && d && !String(elD.value||'').trim()){ elD.value=d; pose=true; }
+  return pose;
 }
 
 function cleanBcClientNum(s){
@@ -23020,8 +23024,34 @@ function onDVStatusChange(){
 // le champ associé `dv-phase-date` SI ce dernier est vide. Si l'utilisateur a
 // déjà saisi une date manuelle, on la respecte. Si la phase est remise à
 // "— Aucune —", on vide aussi la date.
+// =============================================================================
+// LA PHASE TIRE LE STATUT — [22/09/2026]
+// =============================================================================
+// Demande utilisateur : passer la phase à « Facturé client » doit passer le statut
+// du devis à « Facturé » (il le recopiait à la main).
+// (=X=) TOUJOURS VERS L'AVANT, JAMAIS EN ARRIERE : revenir consulter une phase
+//       anterieure ne doit pas retrograder un devis deja facture.
+// (=X=) STATUTS MORTS INTOUCHABLES : Refuse / Obsolete / Cadre ne sont pas des
+//       etapes du cycle — les ecraser ferait reapparaitre un devis abandonne dans
+//       les KPI (cf comportement-kpi-devis-statuts : les KPI somment les statuts actifs).
+var _DV_PHASE_STATUT={ 'envoye':'Envoyé', 'bc_recu':'Accepté', 'facture':'Facturé' };
+var _DV_STATUT_ORDRE=['Brouillon','Envoyé','Accepté','Facturé'];
+function _dvStatutSuitPhase(phaseKey){
+  var vise=_DV_PHASE_STATUT[phaseKey];
+  if(!vise) return false;
+  var sel=document.getElementById('dv-status');
+  if(!sel) return false;
+  var courant=String(sel.value||'').trim();
+  var iC=_DV_STATUT_ORDRE.indexOf(courant), iV=_DV_STATUT_ORDRE.indexOf(vise);
+  if(iC<0) return false;          // Refusé / Obsolète / Cadre : on ne touche à rien
+  if(iV<=iC) return false;        // déjà à ce stade ou plus loin : jamais en arrière
+  sel.value=vise;
+  if(typeof onDVStatusChange==='function') onDVStatusChange();
+  return true;
+}
 function onDVPhaseChange(){
   var phase=gvg('dv-phase');
+  _dvStatutSuitPhase(phase);
   var dateInput=document.getElementById('dv-phase-date');
   if(!dateInput) return;
   if(!phase){
@@ -23074,6 +23104,7 @@ function advanceToNextPhase(){
   // Sync avec les inputs phase courante
   gv('dv-phase',nextKey);
   gv('dv-phase-date',today);
+  _dvStatutSuitPhase(nextKey);   // la phase tire le statut (jamais en arrière)
   renderPhaseHistoryTable();
   _refreshPhaseNextBtn();
 }
@@ -38579,7 +38610,7 @@ function _autoFillFromAttachedPdf(bytes,kind,force){
       //       invisible pour la generation de facture. Le helper ne remplit que
       //       si le champ est VIDE : bcClientSLN est une cle de rapprochement.
       if(refValue && typeof _remplirBCClientCanonique==='function'){
-        _remplirBCClientCanonique(cleanBcClientNum(refValue));
+        _remplirBCClientCanonique(cleanBcClientNum(refValue),refDate);
       }
     } else if(kind==='quote_emerson'){
       // Même structure qu'Emerson (parseEmersonQuoteText) car c'est le même format de PDF
@@ -41048,8 +41079,14 @@ function parseBCClientPdfItems(items){
   // Détection PRNC élargie : on accepte "Prony" seul, "PRNC" en acronyme,
   // ou le pattern N° "L\d{5,6} / \d{4}" qui est non ambigu (jamais utilisé par SLN).
   // L'en-tête "DAY/MON/YR" est aussi signature unique du format PRNC.
-  if(/Prony(?:\s+Resources)?|PRONY(?:\s+RESOURCES)?|\bPRNC\b|DAY\/MON\/YR|\bL\d{5,6}\s*\/\s*\d{4}\b/i.test(fullText)) format = 'PRNC';
-  else if(/LE\s*NICKEL|ERAMET\s*[-–]\s*SLN|N°\s*de\s*BC[\s\S]{0,200}\b00\d{6,8}-\d{2}/i.test(fullText)) format = 'SLN';
+  // (=X=) AEI ET ENERCAL D'ABORD. [22/09/2026] « PRONY ENERGIES » (groupe ENERCAL) et
+  //       « Prony Resources » (PRNC) sont DEUX clients différents : le mot « Prony » seul
+  //       envoyait les BC ENERCAL dans le lecteur PRNC, qui n'y trouvait ni n° ni date.
+  //       On teste donc les signatures propres à chaque client avant la règle large.
+  if(/\bAEI\s*SNC\b|john\s*cockerill/i.test(fullText)) format = 'AEI';
+  else if(/\bENERCAL\b|PRONY\s*ENERGIES/i.test(fullText)) format = 'ENERCAL';
+  else if(/Prony\s+Resources|PRONY\s+RESOURCES|\bPRNC\b|DAY\/MON\/YR|\bL\d{5,6}\s*\/\s*\d{4}\b/i.test(fullText)) format = 'PRNC';
+  else if(/LE\s*NICKEL|ERAMET\s*[-–]\s*SLN|N°\s*de\s*BC[\s\S]{0,200}\b00\d{6,8}-\d{2}|Date\s+d['’]?\s*[ée]mission[\s\S]{0,40}N°\s*\d{6,8}/i.test(fullText)) format = 'SLN';
 
   // Debug : si format non détecté, logger un extrait du texte pour aider au diagnostic.
   // Ce log apparaît dans la console navigateur quand l'auto-fill échoue.
@@ -41071,6 +41108,8 @@ function parseBCClientPdfItems(items){
 
   if(format === 'SLN') return _parseBCSLN(rawLines, lineGroups, fullText, result);
   if(format === 'PRNC') return _parseBCPRNC(rawLines, lineGroups, fullText, result);
+  if(format === 'AEI') return _parseBCAEI(rawLines, lineGroups, fullText, result);
+  if(format === 'ENERCAL') return _parseBCENERCAL(rawLines, lineGroups, fullText, result);
 
   result._errors.push('Format de BC non reconnu (ni SLN ni PRNC)');
   return result;
@@ -41100,7 +41139,32 @@ function _parseBCSLN(rawLines, lineGroups, fullText, result){
   // Trois variantes : 00728195-01- (trailing dash), 00730482-05-43, 00740704-05-37
   var mNum = fullText.match(/\b(00\d{6,8}-\d{2}-?\d*)\b/);
   if(mNum) result.num = mNum[1].replace(/-$/,'');
-  else result._errors.push('N° BC SLN non détecté');
+  // (=X=) BC DE PRESTATION : PAS DE FORME LONGUE. [22/09/2026] Un BC de prestation
+  //       n'ecrit que « N° 757201 » (ou « N° de BC : … ») dans l'en-tete REPETE sur
+  //       chaque page — ni prefixe 00, ni suffixe. La reference ne se remplissait donc
+  //       pas a la jointure du PDF, alors que la date, elle, se remplissait.
+  //       Garde-fou : on ne retient le candidat que s'il apparait AU MOINS DEUX FOIS
+  //       (en-tete de page repete). Un nombre croise une seule fois dans le corps
+  //       (RIDET, telephone, montant) ne peut pas devenir un numero de BC.
+  if(!result.num){
+    // Passe FORTE : motif sans ambiguïté (« Date d'émission N° 743385 », « N° de BC : … »).
+    // Acceptée dès la 1re occurrence : un BC d'attachement ne tient que sur UNE page,
+    // son en-tête n'est donc pas répété.
+    // (pdf.js rend « Date d'émission », « ATTACHEMENT DU BC », « Page 11 » puis « N° 743385 »
+    //  sur QUATRE lignes : la fenêtre doit couvrir ces intercalaires.)
+    var mFort = fullText.match(/Date\s+d['’]?\s*[ée]mission[\s\S]{0,90}?\bN°\s*(\d{6,8})\b/i)
+             || fullText.match(/N°\s*(\d{6,8})\b[\s\S]{0,40}?Date\s+d['’]?\s*[ée]mission/i)
+             || fullText.match(/N°\s*de\s*BC\s*:?\s*(?:Page\s*:?\s*)?(\d{6,8})\b/i);
+    if(mFort) result.num = mFort[1];
+  }
+  if(!result.num){
+    var compte={}, reNum=/N°\s*(?:de\s*BC\s*)?:?\s*(?:Page\s*:?\s*)?(\d{6,8})\b/gi, mNum2;
+    while((mNum2=reNum.exec(fullText))!==null){ compte[mNum2[1]]=(compte[mNum2[1]]||0)+1; }
+    var meilleur='', nVus=0;
+    Object.keys(compte).forEach(function(k){ if(compte[k]>nVus){ meilleur=k; nVus=compte[k]; } });
+    if(meilleur && nVus>=2) result.num=meilleur;
+  }
+  if(!result.num) result._errors.push('N° BC SLN non détecté');
 
   // --- Date d'émission : sous 'Date d'émission', format JJ/MM/AAAA ---
   // Chercher la 1re occurrence d'une date valide après 'Date d\'émission'
@@ -41315,6 +41379,44 @@ function _parseBCSLN(rawLines, lineGroups, fullText, result){
 //   • N° BC = "LXXXXX / XXXX" (ex "L72923 / 0001")
 //   • Date format JJ/MM/AA (sans siècle)
 //   • Devis lié : "Selon devis n° PRNC-DVxxx" ou "Devis PRNC-DVxxx" dans la description
+// ===========================================================================
+// PARSER AEI — [22/09/2026]
+// ===========================================================================
+// Le BC tient sur une page et s'annonce « BON DE COMMANDE N° BC_07999 - page 1/1 »,
+// suivi de « Le 26-08-2026 à 07:46 ». Le numéro est repris tel quel (forme imprimée),
+// comme le fait l'utilisateur sur les autres clients.
+function _parseBCAEI(rawLines, lineGroups, fullText, result){
+  result.client = 'AEI';
+  var mNum = fullText.match(/BON\s+DE\s+COMMANDE\s*N°\s*(BC[_\- ]?\d{3,8})/i) || fullText.match(/\bN°\s*(BC[_\-]\d{3,8})\b/i);
+  if(mNum) result.num = mNum[1].replace(/\s+/g,'').replace(/-/g,'_');
+  else result._errors.push('N° BC AEI non détecté');
+  var mDate = fullText.match(/\bLe\s+(\d{2})[-\/](\d{2})[-\/](\d{4})\b/i);
+  if(mDate) result.date = mDate[3]+'-'+mDate[2]+'-'+mDate[1];
+  else result._errors.push('Date BC AEI non détectée');
+  var mDV = fullText.match(/\b([A-Z]{2,8}(?:\s+[A-Z]{2,4})?-DV\d+[A-Z0-9]*)\b/);
+  if(mDV) result.devisRef = mDV[1].toUpperCase();
+  return result;
+}
+
+// ===========================================================================
+// PARSER ENERCAL / PRONY ENERGIES — [22/09/2026]
+// ===========================================================================
+// ⚠ À NE PAS CONFONDRE AVEC PRNC : « PRONY ENERGIES » (groupe ENERCAL) et « Prony
+// Resources » sont deux clients distincts. En-tête : « Commande / Purchase Order
+// N° <10 chiffres> du JJ.MM.AAAA », et « Votre référence: <n° de devis> ».
+function _parseBCENERCAL(rawLines, lineGroups, fullText, result){
+  result.client = 'ENERCAL';
+  var mNum = fullText.match(/(?:Commande|Purchase\s*Order)[^\n]{0,40}?N°\s*(\d{8,12})\b/i) || fullText.match(/\bN°\s*(51\d{8})\b/);
+  if(mNum) result.num = mNum[1];
+  else result._errors.push('N° commande ENERCAL non détecté');
+  var mDate = fullText.match(/\bdu\s+(\d{2})[.\/-](\d{2})[.\/-](\d{4})\b/i);
+  if(mDate) result.date = mDate[3]+'-'+mDate[2]+'-'+mDate[1];
+  else result._errors.push('Date commande ENERCAL non détectée');
+  var mDV = fullText.match(/Votre\s+r[ée]f[ée]rence\s*:?\s*([A-Z]{2,8}-DV\d+[A-Z0-9]*)/i) || fullText.match(/\b([A-Z]{2,8}-DV\d+[A-Z0-9]*)\b/);
+  if(mDV) result.devisRef = mDV[1].toUpperCase();
+  return result;
+}
+
 function _parseBCPRNC(rawLines, lineGroups, fullText, result){
   // Prefixe d'entite seul : la raison sociale du client n'a pas a figurer dans le
   // source (depot public). Meme regle que l'autre parser de BC — les deux vont
