@@ -36503,19 +36503,43 @@ function storeDevisPdf(att){
 // =============================================================================
 // _forceReExtractAllDevisPdfs — Boucle sur tous les kinds et relance la
 // re-extraction en mode force. Utile pour corriger plusieurs champs en un clic.
+// Octets d'un PDF attaché, pour le relire : copie LOCALE d'abord, sinon CLOUD.
+// [23/09/2026] « Re-extraire » ne savait lire que le local : sur un dossier ancien, dont
+// la carte affiche « ☁ cloud uniquement », le bouton ne faisait rien — sans le dire.
+// Rend null si le PDF est introuvable des deux côtés (l'appelant ne touche alors à rien).
+function _pdfBytesPourReExtraction(devisId,kind){
+  return Promise.resolve()
+    .then(function(){ return (typeof getDevisPdf==='function') ? getDevisPdf(devisId,kind) : null; })
+    .then(function(rec){
+      if(rec && rec.bytes) return rec.bytes;
+      if(rec && rec.blob && rec.blob.arrayBuffer) return rec.blob.arrayBuffer().then(function(ab){ return new Uint8Array(ab); });
+      if(typeof getDevisPdfCloudUrl!=='function') return null;
+      return getDevisPdfCloudUrl(devisId,kind).then(function(url){
+        if(!url) return null;
+        return fetch(url).then(function(r){
+          if(!r.ok) throw new Error('HTTP '+r.status);
+          return r.arrayBuffer();
+        }).then(function(ab){ return new Uint8Array(ab); });
+      });
+    })
+    .catch(function(e){ console.warn('[re-extract] lecture PDF impossible',kind,e); return null; });
+}
 function _forceReExtractAllDevisPdfs(){
   if(!eDVid){
     alert('⚠️ Aucun devis ouvert.');
     return;
   }
-  var kinds=['emerson','act','po_cali','bc_client','quote_emerson'];
+  // (=X=) LISTE UNIQUE : les sortes de PDF viennent de DV_PDF_KINDS, jamais d'une copie
+  //       locale de la liste. [22/09] Une énumération recopiée ailleurs avait laissé
+  //       3 cartes non vidées sur un devis vierge.
+  var kinds=DV_PDF_KINDS;
   var nbFound=0;
   var nbDone=0;
   Promise.all(kinds.map(function(k){
-    return getDevisPdf(eDVid,k).then(function(pdfRow){
-      if(!pdfRow || !pdfRow.bytes) return null;
+    return _pdfBytesPourReExtraction(eDVid,k).then(function(bytes){
+      if(!bytes) return null;
       nbFound++;
-      return _autoFillFromAttachedPdf(pdfRow.bytes,k,true).then(function(){nbDone++;});
+      return _autoFillFromAttachedPdf(bytes,k,true).then(function(){nbDone++;});
     }).catch(function(err){
       console.warn('[force re-extract] kind',k,'failed:',err);
     });
