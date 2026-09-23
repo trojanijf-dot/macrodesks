@@ -30300,9 +30300,49 @@ function importFromDevis(devisId){
   // gardera les menus cohérents avec l'état courant de DB.factures)
   populateFacImportMenus();
 }
+// =============================================================================
+// AJOUT D'UNE LIGNE DE FACTURE — LA LIGNE REJOINT SA SECTION [23/09/2026]
+// =============================================================================
+// Avant, les 3 boutons ne changeaient que l'unité par défaut : la ligne partait en
+// FIN de liste. Sur une facture reprise d'un devis (bandeaux FOURNITURE / MAIN
+// D'ŒUVRE / FRET), un matériel ajouté avec « + Produit » se retrouvait donc sous la
+// main d'œuvre. Maintenant la ligne est marquée puis insérée à la fin de SA zone.
+// (=X=) FACTURE SANS AUCUNE SECTION : on ne marque rien et on ajoute à la fin, comme
+//       avant — sinon un bandeau « FOURNITURE » apparaîtrait sur une facture simple
+//       qui n'en a jamais eu (le rendu pose un bandeau à chaque changement de _sec).
+// (=X=) ON N'EN DÉPLACE AUCUNE AUTRE : insertion seule, jamais de tri de la liste —
+//       l'ordre d'une facture déjà émise ne doit pas bouger sous les pieds.
+var _FA_SEC_ORDRE=['fourniture','service','fret'];
+// Index d'insertion : juste après la dernière entrée de la section visée ; à défaut,
+// avant la première entrée d'une section postérieure ; sinon en fin de liste.
+function _faIndexInsertionSection(sec){
+  var rang=_FA_SEC_ORDRE.indexOf(sec);
+  if(rang<0) return faL.length;
+  var apresDerniere=-1, avantSuivante=-1;
+  faL.forEach(function(l,i){
+    if(!l || !l._sec) return;
+    var r=_FA_SEC_ORDRE.indexOf(l._sec);
+    if(r===rang) apresDerniere=i;
+    if(r>rang && avantSuivante<0) avantSuivante=i;
+  });
+  if(apresDerniere>=0) return apresDerniere+1;
+  if(avantSuivante>=0) return avantSuivante;
+  return faL.length;
+}
 function addFAL(t){
   var d={prod:{designation:'',tgc:0,unite:'U',qte:1,pu:0},svc:{designation:'',tgc:0,unite:'H sup',qte:1,pu:0},lot:{designation:'',tgc:0,unite:'Lot',qte:1,pu:0}};
-  faL.push(Object.assign({},d[t]||d.prod));rFAlines();
+  var ligne=Object.assign({},d[t]||d.prod);
+  var aDesSections=(faL||[]).some(function(l){ return l && (l._sec || l.type==='section_banner'); });
+  if(aDesSections){
+    var sec = (t==='svc') ? 'service'
+            : (t==='lot') ? (confirm('Ce lot forfaitaire est-il de la FOURNITURE ?\n\nOK = Fourniture   ·   Annuler = Main d\'œuvre') ? 'fourniture' : 'service')
+            : 'fourniture';
+    ligne._sec=sec;
+    faL.splice(_faIndexInsertionSection(sec),0,ligne);
+  } else {
+    faL.push(ligne);
+  }
+  rFAlines();
 }
 
 // =============================================================================
