@@ -2465,6 +2465,7 @@ function admPreviewPrint(){
   <div class="tabs">
     <button class="tab active" onclick="st('suiviTab','dash')"><span class="ico-classic">📊</span><i class="ti ti-layout-dashboard ico-pro"></i> Dashboard</button>
     <button class="tab" onclick="st('suiviTab','liste')"><span class="ico-classic">📋</span><i class="ti ti-list-details ico-pro"></i> Liste</button>
+    <button class="tab" onclick="st('suiviTab','reglements')"><span class="ico-classic">💰</span><i class="ti ti-cash ico-pro"></i> Règlements</button>
     <button class="tab" onclick="st('suiviTab','dossiers')"><span class="ico-classic">📁</span><i class="ti ti-folder ico-pro"></i> Dossiers</button>
     <button class="tab" onclick="st('suiviTab','alertes')"><span class="ico-classic">🚨</span><i class="ti ti-alert-octagon ico-pro"></i> Alertes</button>
     <button class="tab" onclick="st('suiviTab','reconcil');renderReconcilTable()"><span class="ico-classic">🔁</span><i class="ti ti-arrows-right-left ico-pro"></i> Réconciliation</button>
@@ -2568,6 +2569,14 @@ function admPreviewPrint(){
       </tr></thead>
       <tbody id="invoice-tbody"></tbody></table>
     </div>
+  </div>
+  <!-- ===== RÈGLEMENTS — factures émises par mois face aux encaissements =====
+       Pointage par avis de règlement (import) ou par relevé bancaire (saisie de la
+       date d'encaissement sur la facture). L'échéance vient de _echeanceFacture
+       (« 30 jours fin de mois »), et tout ce qui est échu sans encaissement remonte
+       dans le bloc de relance en tête. -->
+  <div class="tab-pane" id="suiviTab-reglements">
+    <div id="reglementsContent"></div>
   </div>
   <div class="tab-pane" id="suiviTab-dossiers">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
@@ -5936,6 +5945,46 @@ setTimeout(function(){
 // immédiatement reflétée dans le tableau Factures et Suivi.
 // Pour les entrées qui n'existent QUE dans DB.invoices (ancien Suivi pas encore migré),
 // elles sont rendues telles quelles.
+// =============================================================================
+// ÉCHÉANCE DE PAIEMENT — source unique de calcul (29/09/2026)
+// =============================================================================
+// Mesuré sur les 34 lignes des 9 avis de règlement client : le délai appliqué est
+// « 30 jours FIN DE MOIS » — 30 jours d'abord, PUIS report au dernier jour du mois
+// atteint (33 échéances sur 34 reproduites au jour près ; le seul écart avait été
+// réceptionné le mois suivant son envoi). L'ancien calcul (date + 30 jours secs)
+// affichait « en retard » 23 factures sur 31 chez un client et 3 sur 4 chez un
+// autre, alors qu'elles étaient payées dans les délais — les vrais retards se
+// noyaient dans le bruit.
+// ⚠ Cette fonction est le SEUL endroit qui traduit un libellé de délai en date
+// d'échéance : tout nouvel appelant passe par elle (cf. régressions en cascade).
+function _isoJour(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function _echeanceFacture(dateIso,delaiTxt){
+  // Découpage manuel : new Date('2026-08-18') est interprété en UTC et décale le
+  // jour selon le fuseau — c'est ce qui a produit les échéances à 29 jours en base.
+  var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateIso||''));
+  if(!m)return '';
+  var d=new Date(+m[1],+m[2]-1,+m[3]);
+  if(isNaN(d.getTime()))return '';
+  var t=(delaiTxt||'').toString().toLowerCase();
+  if(t.indexOf('imm')>=0)return _isoJour(d);
+  if(t.indexOf('60')>=0){d.setDate(d.getDate()+60);return _isoJour(d);}
+  // Défaut = libellé standard « sous 30 jours » : 30 jours, puis fin de mois.
+  d.setDate(d.getDate()+30);
+  return _isoJour(new Date(d.getFullYear(),d.getMonth()+1,0));
+}
+// Une date butoir déjà stockée est-elle un HÉRITAGE de l'ancien calcul (donc à
+// recalculer) ou un choix délibéré (donc à respecter) ? Les butoirs présents en
+// base se répartissent tous entre 29 et 36 jours, signature d'un calcul « 30 jours ».
+// Hors de cette fenêtre, c'est une saisie de l'utilisateur : on n'y touche pas.
+function _echeanceEstHeritee(dateIso,butoirIso){
+  if(!dateIso||!butoirIso)return true;
+  var a=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateIso)), b=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(butoirIso));
+  if(!a||!b)return true;
+  var j=Math.round((new Date(+b[1],+b[2]-1,+b[3])-new Date(+a[1],+a[2]-1,+a[3]))/86400000);
+  return j>=25&&j<=40;
+}
 function getSuiviSource(){
   var out=[];
   var seenNums={}; // anti-doublon par num normalisé
@@ -5962,18 +6011,12 @@ function getSuiviSource(){
       var d=DB.devis.find(function(x){return (x.num||'').toUpperCase()===(f.dvlie||'').toUpperCase();});
       if(d&&d.bcClientSLN)po=d.bcClientSLN;
     }
-    // Date butoir = priorité au champ explicite (préservé via getFA), sinon recalculé depuis date+délai
+    // Date butoir : calculée par _echeanceFacture (« 30 jours fin de mois »).
+    // Une butoir déjà stockée n'est remplacée que si elle vient de l'ancien calcul
+    // automatique (fenêtre 25-40 j) ; une échéance choisie à la main est conservée.
     var dateButoir=f.dateButoir||'';
-    if(!dateButoir&&f.date){
-      try{
-        var delai=(f.delai||'').toString();
-        var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
-        var dE=new Date(f.date);
-        if(!isNaN(dE.getTime())){
-          dE.setDate(dE.getDate()+days);
-          dateButoir=dE.toISOString().slice(0,10);
-        }
-      }catch(e){}
+    if(f.date&&(!dateButoir||_echeanceEstHeritee(f.date,dateButoir))){
+      dateButoir=_echeanceFacture(f.date,f.delai)||dateButoir;
     }
     // Phase : priorité à la facture GRC, sinon récupérer depuis l'entrée Suivi correspondante
     // (utile pour les factures migrées qui n'ont pas encore reçu leur phase via re-sync)
@@ -7472,6 +7515,7 @@ function st(grp,tab){
   if(grp==='suiviTab'&&tab==='liste') renderTable();
   if(grp==='suiviTab'&&tab==='alertes') renderAlertes();
   if(grp==='suiviTab'&&tab==='dossiers') renderDossiers();
+  if(grp==='suiviTab'&&tab==='reglements') renderReglements();
   if(grp==='ptTab'&&tab==='saisie') renderPtSaisie();
   if(grp==='ptTab'&&tab==='salaries') renderEmployes();
   if(grp==='ptTab'&&tab==='paie') renderPtPaie();
@@ -7591,12 +7635,12 @@ function setSUIVIPhase(id,newPhase){
   }
 
   // CAS 2 — AUTO-PROMOTION : phase non-billed → billed, dateEnvoi vide
-  // On propose de fixer dateEnvoi=aujourd'hui + butoir=+30j
+  // On propose de fixer dateEnvoi=aujourd'hui + l'échéance calculée (30 j fin de mois)
   if(newBilled && !oldBilled && !inv.dateEnvoi){
-    if(confirm('🎉 La facture '+inv.num+' passe en phase "'+PHASES[newPhase].label+'".\n\nVoulez-vous la considérer comme officiellement émise aujourd\'hui ?\n\n• Date d\'envoi = '+td()+'\n• Date butoir = '+td()+' + 30 jours\n• Statut = En attente de paiement')){
+    var _echAuto=_echeanceFacture(td(),'');
+    if(confirm('🎉 La facture '+inv.num+' passe en phase "'+PHASES[newPhase].label+'".\n\nVoulez-vous la considérer comme officiellement émise aujourd\'hui ?\n\n• Date d\'envoi = '+td()+'\n• Échéance = '+_echAuto+' (30 jours fin de mois)\n• Statut = En attente de paiement')){
       inv.dateEnvoi=td();
-      var d=new Date();d.setDate(d.getDate()+30);
-      inv.dateButoir=d.toISOString().slice(0,10);
+      inv.dateButoir=_echAuto;
       if(inv.statut!=='paid'&&inv.statut!=='partial')inv.statut='pending';
     }
   }
@@ -10509,6 +10553,218 @@ function buildDossiers(){
     };
   });
 }
+// =============================================================================
+// RÈGLEMENTS — suivi des encaissements par mois et relance client (29/09/2026)
+// =============================================================================
+// Une facture émise (phase billed) a une échéance donnée par _echeanceFacture
+// (« 30 jours fin de mois », source unique). Tant qu'aucun encaissement n'est
+// pointé — par import d'avis de règlement, ou à la main depuis le relevé bancaire
+// pour les clients qui n'envoient pas d'avis — elle reste due ; passé l'échéance,
+// elle remonte dans le bloc de relance en tête d'écran.
+// ⚠ Le retard se mesure sur l'ABSENCE d'encaissement, jamais sur un statut : un
+// statut oublié en « En attente » ne doit pas créer une relance fantôme, et un
+// statut passé à « Payée » sans date ne doit pas masquer un impayé.
+// Date du jour isolée dans _reglAujourdhui() pour que les harnais soient stables.
+function _reglAujourdhui(){return td();}
+function _reglMoisLabel(k){
+  var M=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  var p=String(k).split('-');
+  return (M[parseInt(p[1],10)-1]||k)+' '+p[0];
+}
+function _reglJoursEntre(a,b){
+  var ra=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(a||'')), rb=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(b||''));
+  if(!ra||!rb)return 0;
+  return Math.round((new Date(+rb[1],+rb[2]-1,+rb[3])-new Date(+ra[1],+ra[2]-1,+ra[3]))/86400000);
+}
+// Encaissement effectif d'une facture : la date saisie, sinon la date du dernier
+// versement enregistré. Un montant payé sans aucune date ne compte pas comme
+// encaissé — on ne peut pas mesurer un délai sans date.
+function _reglEncaissement(f){
+  if(f.dateEncaissement)return f.dateEncaissement;
+  var v=(f.versements||[]).filter(function(x){return x&&x.date;});
+  if(!v.length)return '';
+  return v.map(function(x){return x.date;}).sort().pop();
+}
+// Les factures à suivre : uniquement celles réellement émises au client.
+function _reglLignes(){
+  var auj=_reglAujourdhui(), out=[];
+  (DB.factures||[]).forEach(function(f){
+    if(!f||!f.num||!f.date)return;
+    var ph=(typeof PHASES!=='undefined')?PHASES[f.phase||'']:null;
+    if(!ph||ph.billed!==true)return;               // pas encore émise → pas de créance
+    var ech=_echeanceFacture(f.date,f.delai);
+    var enc=_reglEncaissement(f);
+    var rel=(f.relances||[]);
+    out.push({
+      id:f.id, num:f.num, client:_reglClient(f), objet:f.objet||'',
+      date:f.date, ech:ech, ttc:Number(f.ttc)||0, enc:enc,
+      retard:(!enc&&ech&&ech<auj)?_reglJoursEntre(ech,auj):0,
+      delai:enc?_reglJoursEntre(f.date,enc):null,
+      derniereRelance:rel.length?rel[rel.length-1].date:''
+    });
+  });
+  return out;
+}
+// Préfixe client tel qu'il apparaît dans le numéro de facture (SLN-…, PRNC-…).
+function _reglClient(f){
+  var n=String(f.num||''), i=n.indexOf('-');
+  return i>0?n.slice(0,i):(f.client||'—');
+}
+var _reglFiltreClient='all';
+function setReglFiltre(c){ _reglFiltreClient=c; renderReglements(); }
+
+function renderReglements(){
+  var box=document.getElementById('reglementsContent');
+  if(!box)return;
+  var toutes=_reglLignes();
+  var clients=[];
+  toutes.forEach(function(L){if(clients.indexOf(L.client)<0)clients.push(L.client);});
+  clients.sort(function(a,z){
+    var sa=0,sz=0; toutes.forEach(function(L){if(L.client===a)sa+=L.ttc;if(L.client===z)sz+=L.ttc;});
+    return sz-sa;
+  });
+  var L=toutes.filter(function(x){return _reglFiltreClient==='all'||x.client===_reglFiltreClient;});
+  var emis=0,enc=0,nEnc=0;
+  L.forEach(function(x){emis+=x.ttc; if(x.enc){enc+=x.ttc;nEnc++;}});
+  var relances=L.filter(function(x){return x.retard>0;}).sort(function(a,z){return z.retard-a.retard;});
+  var totRelance=relances.reduce(function(s,x){return s+x.ttc;},0);
+  var h='';
+
+  // Onglets clients
+  h+='<div class="client-tabs no-print" style="margin-bottom:10px">';
+  h+='<button class="filter-btn'+(_reglFiltreClient==='all'?' active':'')+'" onclick="setReglFiltre(\'all\')">Tous <span class="filter-count">'+toutes.length+'</span></button>';
+  clients.forEach(function(c){
+    var n=toutes.filter(function(x){return x.client===c;}).length;
+    h+='<button class="filter-btn'+(_reglFiltreClient===c?' active':'')+'" onclick="setReglFiltre(\''+esc(c)+'\')">'+esc(c)+' <span class="filter-count">'+n+'</span></button>';
+  });
+  h+='</div>';
+
+  // KPI
+  var pct=emis>0?Math.round(enc/emis*100):0;
+  h+='<div class="g4" style="margin-bottom:12px">';
+  h+=_reglKpi('Facturé',fN(emis),L.length+' facture'+(L.length>1?'s':'')+' émise'+(L.length>1?'s':'')+' · XPF','');
+  h+=_reglKpi('Encaissé',fN(enc),nEnc+' réglée'+(nEnc>1?'s':'')+' · '+pct+' % du facturé','var(--green)');
+  h+=_reglKpi('Reste à encaisser',fN(emis-enc),(L.length-nEnc)+' facture'+((L.length-nEnc)>1?'s':'')+' en attente','var(--blue)');
+  h+=_reglKpi('À relancer',fN(totRelance),relances.length+' facture'+(relances.length>1?'s':'')+' échue'+(relances.length>1?'s':''),relances.length?'var(--red)':'var(--muted-soft)');
+  h+='</div>';
+
+  // Bloc de relance
+  if(relances.length){
+    h+='<div class="card mt8" style="border-color:rgba(244,63,94,.38)">'+
+       '<div class="ctitle" style="color:var(--red)"><span class="ico-classic">⚠</span><i class="ti ti-alert-triangle ico-pro"></i> À relancer '+
+       '<span style="color:var(--muted);font-weight:400;font-size:10.5px">(échéance dépassée, aucun encaissement pointé)</span></div>';
+    h+='<div class="tbl-wrap"><table><thead><tr><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Montant</th>'+
+       '<th>Envoyée le</th><th>Échéance</th><th style="text-align:right">Retard</th><th class="no-print"></th></tr></thead><tbody>';
+    relances.forEach(function(x){
+      h+='<tr>'+
+        '<td style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(x.num)+'</td>'+
+        '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
+        '<td style="color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.objet)+'</td>'+
+        '<td style="text-align:right;font-family:var(--mono)">'+fN(x.ttc)+'</td>'+
+        '<td style="font-family:var(--mono)">'+fD(x.date)+'</td>'+
+        '<td style="font-family:var(--mono);color:var(--red)">'+fD(x.ech)+'</td>'+
+        '<td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--red)">'+x.retard+' j</td>'+
+        '<td class="no-print" style="text-align:right;white-space:nowrap">'+
+          (x.derniereRelance?'<span style="font-size:9.5px;color:var(--amber);margin-right:6px">relancée le '+fD(x.derniereRelance)+'</span>':'')+
+          '<button class="btn btn-ghost btn-sm" style="border-color:rgba(244,63,94,.45);color:var(--red)" onclick="relancerFacture('+JSON.stringify(x.num).replace(/"/g,'&quot;')+')">✉ Relancer</button>'+
+        '</td></tr>';
+    });
+    h+='</tbody></table></div>';
+    h+='<div style="font-size:10.5px;color:var(--muted);margin-top:8px">Total échu : <strong style="font-family:var(--mono)">'+fN(totRelance)+' XPF</strong>. '+
+       'Le bouton prépare un mail à l\'adresse de la facture et note la date de relance.</div>';
+    h+='</div>';
+  }
+
+  // Détail par mois d'émission
+  var mois={}, ordre=[];
+  L.slice().sort(function(a,z){return z.date.localeCompare(a.date);}).forEach(function(x){
+    var k=x.date.slice(0,7);
+    if(!mois[k]){mois[k]=[];ordre.push(k);}
+    mois[k].push(x);
+  });
+  h+='<div class="card mt8"><div class="ctitle"><span class="ico-classic">📅</span><i class="ti ti-calendar ico-pro"></i> Par mois d\'émission '+
+     '<span style="color:var(--muted);font-weight:400;font-size:10.5px">(le mois est celui de la date d\'envoi)</span></div>';
+  ordre.forEach(function(k){
+    var LL=mois[k], se=0, sr=0;
+    LL.forEach(function(x){se+=x.ttc; if(x.enc)sr+=x.ttc;});
+    var solde=se-sr;
+    h+='<div data-mois="'+k+'" style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:rgba(255,255,255,.02);'+
+       'border:1px solid var(--border);border-radius:8px;margin:14px 0 0;font-size:12px;font-weight:700">'+
+       '<span style="width:6px;height:6px;border-radius:50%;background:'+(solde<=0?'var(--green)':'var(--blue)')+';display:inline-block"></span>'+
+       _reglMoisLabel(k)+
+       '<span style="margin-left:auto;font-family:var(--mono);font-weight:600;font-size:10.5px;color:var(--muted)">'+LL.length+' facture'+(LL.length>1?'s':'')+'</span>'+
+       '<span style="font-family:var(--mono);font-size:11px">&nbsp;·&nbsp;émis '+fN(se)+'</span>'+
+       '<span style="font-family:var(--mono);font-size:11px;color:var(--green)">&nbsp;·&nbsp;encaissé '+fN(sr)+'</span>'+
+       (solde>0?'<span style="font-family:var(--mono);font-size:11px;color:var(--blue)">&nbsp;·&nbsp;reste '+fN(solde)+'</span>':'')+
+       '</div>';
+    h+='<div class="tbl-wrap"><table><thead><tr><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Montant</th>'+
+       '<th>Envoi</th><th>Échéance</th><th>Encaissé le</th><th style="text-align:right">Délai</th><th>Statut</th></tr></thead><tbody>';
+    LL.forEach(function(x){
+      var st,encTd,delTd;
+      if(x.enc){
+        st='<span class="pill" style="background:rgba(34,197,94,.14);color:var(--green);border:1px solid rgba(34,197,94,.3);'+
+           'font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:20px;font-family:var(--mono)">✓ réglée</span>';
+        encTd='<span style="font-family:var(--mono);color:var(--green)">'+fD(x.enc)+'</span>';
+        delTd='<span style="font-family:var(--mono)">'+x.delai+' j</span>';
+      } else if(x.retard){
+        st='<span class="pill" style="background:rgba(244,63,94,.14);color:var(--red);border:1px solid rgba(244,63,94,.32);'+
+           'font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:20px;font-family:var(--mono)">⚠ '+x.retard+' j de retard</span>';
+        encTd='<span style="color:var(--muted-soft)">—</span>'; delTd='<span style="color:var(--muted-soft)">—</span>';
+      } else {
+        st='<span class="pill" style="background:rgba(56,189,248,.12);color:var(--blue);border:1px solid rgba(56,189,248,.28);'+
+           'font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:20px;font-family:var(--mono)">en attente</span>';
+        encTd='<span style="color:var(--muted-soft)">—</span>'; delTd='<span style="color:var(--muted-soft)">—</span>';
+      }
+      h+='<tr>'+
+        '<td style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(x.num)+'</td>'+
+        '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
+        '<td style="color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.objet)+'">'+esc(x.objet)+'</td>'+
+        '<td style="text-align:right;font-family:var(--mono)">'+fN(x.ttc)+'</td>'+
+        '<td style="font-family:var(--mono)">'+fD(x.date)+'</td>'+
+        '<td style="font-family:var(--mono)'+(x.retard?';color:var(--red)':'')+'">'+fD(x.ech)+'</td>'+
+        '<td>'+encTd+'</td><td style="text-align:right">'+delTd+'</td><td>'+st+'</td></tr>';
+    });
+    h+='</tbody></table></div>';
+  });
+  h+='</div>';
+  box.innerHTML=h;
+}
+function _reglKpi(lbl,val,foot,couleur){
+  return '<div class="kpi"><div class="kpi-label">'+esc(lbl)+'</div>'+
+    '<div class="kpi-value"'+(couleur?' style="color:'+couleur+'"':'')+'>'+val+'</div>'+
+    '<div style="font-size:10px;color:var(--muted);margin-top:2px">'+esc(foot)+'</div></div>';
+}
+
+// Prépare un mail de relance pour une facture échue et note la date de relance.
+// Le corps reprend les seuls éléments factuels du dossier (n°, date d'envoi,
+// échéance, montant) : un mail de relance part chez le client, il ne porte aucune
+// note interne.
+function relancerFacture(num){
+  var f=(DB.factures||[]).find(function(x){return x.num===num;});
+  if(!f){alert('Facture introuvable : '+num);return;}
+  var ech=_echeanceFacture(f.date,f.delai);
+  var jours=_reglJoursEntre(ech,_reglAujourdhui());
+  var objet='Relance — facture '+f.num+' échue le '+fD(ech);
+  var corps=
+    'Bonjour,\n\n'+
+    'Sauf erreur de notre part, la facture ci-dessous reste impayée à ce jour :\n\n'+
+    '  • Facture    : '+f.num+'\n'+
+    (f.objet?'  • Objet      : '+f.objet+'\n':'')+
+    '  • Date       : '+fD(f.date)+'\n'+
+    '  • Échéance   : '+fD(ech)+' (dépassée de '+jours+' jour'+(jours>1?'s':'')+')\n'+
+    '  • Montant dû : '+fN(f.ttc)+' XPF\n\n'+
+    'Nous vous remercions de bien vouloir nous indiquer la date de règlement prévue.\n'+
+    'Si le règlement a déjà été émis, merci de nous transmettre l\'avis correspondant.\n\n'+
+    'Bien cordialement,\n';
+  var dest=f.email||'';
+  var url='mailto:'+encodeURIComponent(dest)+'?subject='+encodeURIComponent(objet)+'&body='+encodeURIComponent(corps);
+  if(!Array.isArray(f.relances))f.relances=[];
+  f.relances.push({date:_reglAujourdhui(),montant:Number(f.ttc)||0,echeance:ech});
+  saveDB();
+  window.open(url,'_blank');
+  if(!dest)alert('Aucune adresse email n\'est renseignée sur la facture '+f.num+'.\nLe brouillon est ouvert : complétez le destinataire.');
+  renderReglements();
+}
 function renderDossiers(){
   var dossiers=buildDossiers();
   // Filtrage : un dossier est "payé" si TOUS ses BC sont payés ; "ouvert" si au moins un ne l'est pas
@@ -13186,19 +13442,20 @@ function avisRegHandleFile(file){
   reader.onload=function(e){
     var typedArray=new Uint8Array(e.target.result);
     pdfjsLib.getDocument({data:typedArray}).promise.then(function(pdf){
-      var pagesText=[];
       var promises=[];
       for(var p=1;p<=pdf.numPages;p++){
         promises.push(pdf.getPage(p).then(function(page){
           return page.getTextContent().then(function(tc){
-            return tc.items.map(function(it){return it.str;}).join(' ');
+            // On conserve les ITEMS (avec leurs coordonnées) en plus du texte :
+            // le flux texte de pdf.js mélange les colonnes de l'avis.
+            return {texte:tc.items.map(function(it){return it.str;}).join(' '),items:tc.items};
           });
         }));
       }
-      Promise.all(promises).then(function(texts){
-        var fullText=texts.join('\n');
+      Promise.all(promises).then(function(pages){
+        var fullText=pages.map(function(x){return x.texte;}).join('\n');
         _avisRegState.rawText=fullText;
-        avisRegProcessText(fullText);
+        avisRegProcessText(fullText,pages.map(function(x){return x.items;}));
       });
     }).catch(function(err){
       avisRegSetStatus('Erreur lecture PDF : '+err.message,'var(--red)');
@@ -13215,7 +13472,9 @@ function avisRegParseText(){
 }
 
 // Pipeline central : détecte client si auto, lance parser, construit l'aperçu
-function avisRegProcessText(text){
+// `pagesItems` (optionnel) = les items pdf.js AVEC leurs coordonnées, quand l'avis
+// vient d'un PDF. Le mode « coller le texte » n'en a pas : repli sur parseAvisSLN.
+function avisRegProcessText(text,pagesItems){
   var clientSel=gvg('avisreg-client')||'SLN';
   if(clientSel==='auto'){
     // Le n° d'identification du client a ete retire d'ici : donnee metier, depot public.
@@ -13229,7 +13488,12 @@ function avisRegProcessText(text){
   _avisRegState.client=clientSel;
   var parsed;
   try{
-    if(clientSel==='SLN')parsed=parseAvisSLN(text);
+    if(clientSel==='SLN'){
+      // Lecture par COLONNES quand on a le PDF (fiable quelle que soit la forme de
+      // la référence de pièce), repli sur la lecture du flux texte sinon.
+      parsed=(pagesItems&&pagesItems.length)?parseAvisSLNPdf(pagesItems,text):null;
+      if(!parsed||!parsed.factures.length)parsed=parseAvisSLN(text);
+    }
     else{avisRegSetStatus('Parser non disponible pour ce client.','var(--red)');return;}
   } catch(err){
     avisRegSetStatus('Erreur parsing : '+err.message,'var(--red)');
@@ -13248,9 +13512,14 @@ function avisRegProcessText(text){
     return;
   }
   _avisRegState.dateVirement=parsed.dateVirement;
-  _avisRegState.totalAvis=parsed.total||parsed.factures.reduce(function(s,f){return s+f.montant;},0);
+  var _sommeLignes=parsed.factures.reduce(function(s,f){return s+f.montant;},0);
+  _avisRegState.totalAvis=parsed.total||_sommeLignes;
+  // GARDE-FOU : la somme des lignes lues DOIT retomber sur le « Solde créditeur »
+  // imprimé. Sans ce contrôle, un avis dont une ligne n'est pas lue était importé
+  // amputé, en silence (c'est arrivé sur 2 avis, 1 149 480 XPF perdus de vue).
+  _avisRegState.ecartTotal=(parsed.total>0&&Math.abs(parsed.total-_sommeLignes)>1)?(parsed.total-_sommeLignes):0;
   _avisRegState.factures=parsed.factures.map(function(f){
-    var match=avisRegMatchFacture(f.num);
+    var match=avisRegMatchFacture(f.num,clientSel);
     return {
       numParsed:f.num,
       montantAvis:f.montant,
@@ -13265,7 +13534,53 @@ function avisRegProcessText(text){
   avisRegBuildPreview();
 }
 
-// PARSER SLN
+// PARSER SLN — LECTURE PAR COLONNES (source fiable quand l'avis vient d'un PDF)
+// -----------------------------------------------------------------------------
+// Le flux texte de pdf.js mélange les colonnes : la référence de pièce arrive
+// COLLÉE au montant, ce qui obligeait le parseur texte à un motif « F+chiffres »
+// très restrictif. Résultat mesuré sur 9 avis : les pièces d'une autre forme
+// (« 103-A1 », « 103A2 ») étaient perdues — une ligne ignorée en silence et un
+// avis entier déclaré « aucune facture détectée », soit 1 149 480 XPF.
+// Les colonnes sont stables sur tous les avis mesurés :
+//   date pièce x<40 · pièce x≈114 · échéance x≈258 · LT x≈342 · montant x>500
+// On exige les 4 colonnes utiles sur la même ligne (regroupement par Y) : les
+// lignes d'en-tête, de total et de pied de page sont donc écartées d'office.
+function parseAvisSLNPdf(pagesItems,texteComplet){
+  var lignes={};
+  (pagesItems||[]).forEach(function(items,ip){
+    (items||[]).forEach(function(it){
+      if(!it||!it.str||!it.str.trim()||!it.transform)return;
+      var k=ip+':'+Math.round(it.transform[5]/3);
+      (lignes[k]=lignes[k]||[]).push({x:Math.round(it.transform[4]),s:it.str.trim()});
+    });
+  });
+  var estDate=function(s){return /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s);};
+  var factures=[], seen={};
+  Object.keys(lignes).forEach(function(k){
+    var it=lignes[k].sort(function(a,b){return a.x-b.x;});
+    var dates=it.filter(function(c){return c.x<40&&estDate(c.s);});
+    var piece=it.filter(function(c){return c.x>=95&&c.x<200;});
+    var ech  =it.filter(function(c){return c.x>=240&&c.x<330&&estDate(c.s);});
+    var mont =it.filter(function(c){return c.x>=490;});
+    if(!dates.length||!piece.length||!ech.length||!mont.length)return;
+    var ref=piece.map(function(c){return c.s;}).join('').replace(/\s+/g,'').toUpperCase();
+    var montant=parseInt(mont.map(function(c){return c.s;}).join('').replace(/[\s \.]/g,''),10);
+    if(!ref||isNaN(montant)||montant<=0||seen[ref])return;
+    seen[ref]=true;
+    factures.push({num:ref,montant:montant,datePiece:dateFRtoISO(dates[0].s),echeance:dateFRtoISO(ech[0].s)});
+  });
+  // Date de virement et total : lus dans le texte, leurs motifs y sont fiables.
+  var t=texteComplet||'';
+  var dateVirement='';
+  var mDate=t.match(/En\s+date\s+du\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/i);
+  if(mDate)dateVirement=mDate[3]+'-'+pad2(mDate[2])+'-'+pad2(mDate[1]);
+  var total=0;
+  var mTot=t.match(/Solde\s+cr[ée]diteur\s+([\d\s \.]+?)(?:Virement|En\s+date|$)/i);
+  if(mTot)total=parseInt(mTot[1].replace(/[\s \.]/g,''),10)||0;
+  return {dateVirement:dateVirement,factures:factures,total:total};
+}
+
+// PARSER SLN — repli sur le flux texte (mode « coller le texte » depuis un email)
 // Format réel d'extraction pdf.js (l'ordre visuel des cellules ≠ ordre du flux PDF) :
 //   "11/11/2025 31/12/2025  398 573F067"
 //   = "<datePiece> <echeance> <montant><refF>"
@@ -13331,13 +13646,28 @@ function dateFRtoISO(d){
   return p[2]+'-'+pad2(p[1])+'-'+pad2(p[0]);
 }
 
-// Match une facture parsée avec DB.factures (priorité) puis DB.invoices
-function avisRegMatchFacture(numParsed){
+// Clé de rapprochement entre la référence de pièce de l'avis et nos n° de facture.
+// Le client réécrit nos numéros à sa façon : il retire le préfixe client, parfois
+// le « F », et change la casse ou la ponctuation des suffixes de révision et de
+// lot. On compare donc sur une clé nue : alphanumérique, sans préfixe ni F initial.
+// Mesuré sur le corpus d'avis : 34 lignes rapprochées sur 34.
+function _avisCleFacture(n){
+  var s=String(n||'').replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+  s=s.replace(/^(AEISNC|PRNC|SLN|ENN|EPE)/,'');
+  return s.replace(/^F/,'');
+}
+// Match une facture parsée avec DB.factures (priorité) puis DB.invoices.
+// ⛔ Le rapprochement est RESTREINT au client de l'avis : les séries de numéros
+// repartent à zéro chez chaque client, donc la clé nue seule confondrait deux
+// factures de même rang appartenant à deux clients différents.
+function avisRegMatchFacture(numParsed,client){
   if(!numParsed)return {fa:null,inv:null,type:null};
-  var k=numParsed.toLowerCase().trim();
-  var fa=(DB.factures||[]).find(function(x){return (x.num||'').toLowerCase().trim()===k;});
+  var k=_avisCleFacture(numParsed);
+  var pre=String(client||_avisRegState.client||'SLN').toUpperCase()+'-';
+  var duClient=function(n){return String(n||'').toUpperCase().indexOf(pre)===0;};
+  var fa=(DB.factures||[]).find(function(x){return duClient(x.num)&&_avisCleFacture(x.num)===k;});
   if(fa)return {fa:fa,inv:null,type:'grc'};
-  var inv=(DB.invoices||[]).find(function(x){return (x.num||'').toLowerCase().trim()===k;});
+  var inv=(DB.invoices||[]).find(function(x){return duClient(x.num)&&_avisCleFacture(x.num)===k;});
   if(inv)return {fa:null,inv:inv,type:'suivi'};
   return {fa:null,inv:null,type:null};
 }
@@ -13358,7 +13688,15 @@ function avisRegBuildPreview(){
     '<strong>Total avis</strong> : '+fN(_avisRegState.totalAvis||totalParsed)+' XPF<br>'+
     '<strong>Factures dans l\'avis</strong> : '+_avisRegState.factures.length+
     ' <span style="color:var(--green)">(✓ '+matched+' match'+(matched>1?'es':'')+')</span>'+
-    (unmatched>0?' <span style="color:var(--amber)">(⚠ '+unmatched+' non trouvée'+(unmatched>1?'s':'')+' en base)</span>':'');
+    (unmatched>0?' <span style="color:var(--amber)">(⚠ '+unmatched+' non trouvée'+(unmatched>1?'s':'')+' en base)</span>':'')+
+    // Écart entre la somme des lignes lues et le total imprimé : il signifie qu'une
+    // ligne de l'avis n'a pas été lue. On le dit AVANT d'appliquer quoi que ce soit.
+    (_avisRegState.ecartTotal?
+      '<div style="margin-top:8px;padding:8px 10px;background:rgba(244,63,94,.08);border:1px solid rgba(244,63,94,.35);border-radius:6px;color:var(--red)">'+
+      '<strong>⚠ Écart de '+fN(Math.abs(_avisRegState.ecartTotal))+' XPF</strong> — la somme des lignes lues ('+
+      fN(totalParsed)+') ne retombe pas sur le total de l\'avis ('+fN(_avisRegState.totalAvis)+').<br>'+
+      '<span style="color:var(--muted);font-size:10.5px">Une ligne au moins n\'a pas été lue : vérifiez l\'avis avant d\'appliquer, '+
+      'sinon un règlement restera marqué impayé.</span></div>':'');
   document.getElementById('avisreg-datevir').textContent=dateVir;
   document.getElementById('avisreg-count').textContent='— '+_avisRegState.factures.length+' ligne(s)';
   // Lignes
@@ -13471,6 +13809,9 @@ function avisRegApply(){
   cm('mAvisReg');
   if(typeof renderSuivi==='function')renderSuivi();
   if(typeof renderFA==='function')renderFA();
+  // L'écran Règlements vit sur les mêmes données : un avis appliqué solde des
+  // relances, il doit les faire disparaître sans changer d'onglet.
+  if(typeof renderReglements==='function')renderReglements();
   if(typeof rDash==='function')rDash();
   if(typeof renderHist==='function')renderHist();
   if(typeof renderDV==='function')renderDV();
@@ -31090,6 +31431,9 @@ function getFA(){
       // via ptFactGenerate vient d'avoir lieu (cf ce mécanisme, pattern _faDraftSourceDevisId).
       if(Array.isArray(existing._bcConsumption))preservedFlags._bcConsumption=existing._bcConsumption;
       if(typeof existing._bcConsumptionIncludesMajorees==='boolean')preservedFlags._bcConsumptionIncludesMajorees=existing._bcConsumptionIncludesMajorees;
+      // Relances client : historique posé par l'écran Règlements, hors formulaire.
+      // Sans cette ligne, enregistrer la facture effacerait la trace des relances.
+      if(Array.isArray(existing.relances))preservedFlags.relances=existing.relances;
       // Cohérence : si la facture est passée à Payée pour la 1ère fois, on enregistre
       // discrètement la date du changement de statut pour que l'utilisateur puisse
       // si besoin retrouver "quand c'est passé en payée" dans l'historique
