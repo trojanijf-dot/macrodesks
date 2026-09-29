@@ -3716,7 +3716,8 @@ function admPreviewPrint(){
       </div>
       <div id="avisreg-pdf-zone" class="form-group">
         <label>Avis de règlement (PDF)</label>
-        <input type="file" id="avisreg-pdf-file" accept="application/pdf" class="form-input" onchange="avisRegHandleFile(this.files[0])">
+        <input type="file" id="avisreg-pdf-file" accept="application/pdf" class="form-input" multiple onchange="avisRegHandleFiles(this.files)">
+        <div style="font-size:10px;color:var(--muted);margin-top:4px">Vous pouvez sélectionner <b>plusieurs avis</b> d'un coup (Ctrl+clic ou Maj+clic) : ils seront vérifiés ensemble, avis par avis.</div>
         <div style="font-size:10px;color:var(--muted);margin-top:4px;font-style:italic">Formats SLN testés : avis CFEVT***, F14*** avec liste de factures et virement.</div>
       </div>
       <div id="avisreg-text-zone" class="form-group" style="display:none">
@@ -10717,6 +10718,12 @@ function renderReglements(){
     h+='<button class="filter-btn'+(_reglFiltreClient===c?' active':'')+'" onclick="setReglFiltre(\''+esc(c)+'\')">'+esc(c)+' <span class="filter-count">'+n+'</span></button>';
   });
   h+='</div>';
+  // Export PDF : reprend le client affiché. Deux documents (archive / travail).
+  h+='<div class="no-print" style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
+     '<button class="btn btn-ghost btn-sm" onclick="reglImprimerPDF(\'complet\')" title="Tous les mois, toutes les factures — pour archiver">🖨 PDF complet</button>'+
+     '<button class="btn btn-ghost btn-sm" onclick="reglImprimerPDF(\'impayes\')" title="Ce qui reste dû, les échues en tête — pour travailler">🖨 PDF impayés & relances</button>'+
+     _pdfThemeBoxHtml('app')+
+     '</div>';
 
   // KPI
   var pct=emis>0?Math.round(enc/emis*100):0;
@@ -10920,6 +10927,97 @@ function reglValiderPointage(num){
   if(typeof showBCSaveToast==='function')showBCSaveToast(r.statut==='Payée'
     ?'✓ '+num+' soldée au '+fD(date)
     :'✓ '+fN(montant)+' XPF pointés sur '+num+' — reste '+fN(r.reste)+' XPF');
+}
+// ---- Export PDF du suivi des règlements (document INTERNE, pas client) ----
+// Deux documents :
+//   « complet » : archive — tous les mois, toutes les factures, réglées ou non ;
+//   « impayes » : outil de travail — ce qui reste dû, les échues en tête.
+// Reprend le filtre client affiché à l'écran. Les montants viennent de
+// _reglLignes (même source que l'écran) : aucun recalcul concurrent.
+function _reglPdfHtml(mode){
+  var toutes=_reglLignes();
+  var L=toutes.filter(function(x){return _reglFiltreClient==='all'||x.client===_reglFiltreClient;});
+  var auj=_reglAujourdhui();
+  var cli=(_reglFiltreClient==='all')?'Tous clients':_reglFiltreClient;
+  var emis=0,enc=0,du=0,echu=0,nEchu=0;
+  L.forEach(function(x){emis+=x.ttc;enc+=x.verse;du+=x.reste;if(x.retard>0){echu+=x.reste;nEchu++;}});
+  var tdCli=function(x){return '<td class="cli">'+esc(x.client)+'</td>';};
+  var rows='', titreDoc, sousTitre;
+
+  if(mode==='impayes'){
+    titreDoc='Suivi des règlements — impayés & relances';
+    sousTitre=esc(cli)+' · situation au '+fD(auj)+' · reste dû '+fN(du)+' XPF, dont '+fN(echu)+' XPF échus';
+    var dus=L.filter(function(x){return x.reste>0;});
+    var echues=dus.filter(function(x){return x.retard>0;}).sort(function(a,z){return z.retard-a.retard;});
+    var aVenir=dus.filter(function(x){return !(x.retard>0);}).sort(function(a,z){return a.ech.localeCompare(z.ech);});
+    var ligne=function(x){
+      return '<tr><td class="num">'+esc(x.num)+'</td>'+tdCli(x)+'<td class="obj">'+esc(x.objet)+'</td>'+
+        '<td class="n">'+fN(x.ttc)+'</td><td class="n">'+(x.verse?fN(x.verse):'—')+'</td><td class="n b">'+fN(x.reste)+'</td>'+
+        '<td>'+fD(x.date)+'</td><td'+(x.retard?' class="late"':'')+'>'+fD(x.ech)+'</td>'+
+        '<td class="n'+(x.retard?' late':'')+'">'+(x.retard?x.retard+' j':'—')+'</td>'+
+        '<td>'+(x.derniereRelance?fD(x.derniereRelance):'—')+'</td></tr>';
+    };
+    var sous=function(lst){return lst.reduce(function(s,x){return s+x.reste;},0);};
+    rows+='<tr class="grp late"><td colspan="10">Échues — à relancer · '+echues.length+' facture'+(echues.length>1?'s':'')+' · '+fN(sous(echues))+' XPF</td></tr>';
+    rows+=echues.length?echues.map(ligne).join(''):'<tr><td colspan="10" class="vide">Aucune facture échue.</td></tr>';
+    rows+='<tr class="grp"><td colspan="10">À échoir · '+aVenir.length+' facture'+(aVenir.length>1?'s':'')+' · '+fN(sous(aVenir))+' XPF</td></tr>';
+    rows+=aVenir.length?aVenir.map(ligne).join(''):'<tr><td colspan="10" class="vide">Aucune facture à échoir.</td></tr>';
+    rows+='<tr class="tot"><td colspan="5">Total restant dû</td><td class="n">'+fN(du)+'</td><td colspan="4"></td></tr>';
+    var thead='<tr><th style="width:92px">N° facture</th><th style="width:58px">Client</th><th>Objet</th>'+
+      '<th class="n" style="width:78px">Montant</th><th class="n" style="width:74px">Déjà reçu</th><th class="n" style="width:78px">Reste dû</th>'+
+      '<th style="width:66px">Envoi</th><th style="width:66px">Échéance</th><th class="n" style="width:48px">Retard</th><th style="width:66px">Relancée le</th></tr>';
+  } else {
+    titreDoc='Suivi des règlements';
+    sousTitre=esc(cli)+' · situation au '+fD(auj)+' · facturé '+fN(emis)+' · encaissé '+fN(enc)+' · reste '+fN(du)+' XPF';
+    var mois={}, ordre=[];
+    L.slice().sort(function(a,z){return z.date.localeCompare(a.date);}).forEach(function(x){
+      var k=x.date.slice(0,7); if(!mois[k]){mois[k]=[];ordre.push(k);} mois[k].push(x);
+    });
+    ordre.forEach(function(k){
+      var LL=mois[k], se=0, sr=0; LL.forEach(function(x){se+=x.ttc;sr+=x.verse;});
+      rows+='<tr class="grp"><td colspan="10">'+_reglMoisLabel(k)+' · '+LL.length+' facture'+(LL.length>1?'s':'')+
+        ' · émis '+fN(se)+' · encaissé '+fN(sr)+(se-sr>0?' · reste '+fN(se-sr):'')+'</td></tr>';
+      LL.forEach(function(x){
+        var st=x.enc?'<span class="ok">réglée</span>'
+          :x.partiel?'<span class="part">partiel</span>'+(x.retard?' <span class="late">· '+x.retard+' j</span>':'')
+          :x.retard?'<span class="late">'+x.retard+' j de retard</span>':'<span class="att">en attente</span>';
+        rows+='<tr><td class="num">'+esc(x.num)+'</td>'+tdCli(x)+'<td class="obj">'+esc(x.objet)+'</td>'+
+          '<td class="n">'+fN(x.ttc)+'</td><td>'+fD(x.date)+'</td><td'+(x.retard?' class="late"':'')+'>'+fD(x.ech)+'</td>'+
+          '<td>'+(x.enc?fD(x.enc):'—')+'</td><td class="n">'+(x.verse?fN(x.verse):'—')+'</td>'+
+          '<td class="n">'+(x.reste?fN(x.reste):'—')+'</td><td>'+st+(x.enc&&x.delai!=null?' <span class="mut">· '+x.delai+' j</span>':'')+'</td></tr>';
+      });
+    });
+    rows+='<tr class="tot"><td colspan="3">Total</td><td class="n">'+fN(emis)+'</td><td colspan="3"></td><td class="n">'+fN(enc)+'</td><td class="n">'+fN(du)+'</td><td></td></tr>';
+    var thead='<tr><th style="width:92px">N° facture</th><th style="width:58px">Client</th><th>Objet</th>'+
+      '<th class="n" style="width:78px">Montant</th><th style="width:64px">Envoi</th><th style="width:64px">Échéance</th>'+
+      '<th style="width:64px">Encaissé le</th><th class="n" style="width:76px">Encaissé</th><th class="n" style="width:76px">Reste</th><th style="width:118px">Statut</th></tr>';
+  }
+  var css='@page{size:A4 landscape;margin:12mm 11mm 13mm;}html,body{background:#fff;color-scheme:light}'+
+    'body{font-family:Calibri,Arial,sans-serif;color:#111;font-size:10px;margin:0}'+
+    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #e46c12;padding-bottom:8px;margin-bottom:12px}'+
+    'h1{font-size:19px;color:#1b365d;margin:4px 0 2px}.sub{color:#5b6b7a;font-size:10.5px}table{width:100%;border-collapse:collapse}'+
+    'th{background:#1b365d;color:#fff;text-align:left;font-size:9.5px;padding:5px 6px}td{padding:3.5px 6px;border-bottom:1px solid #e5e9ef;vertical-align:top}'+
+    'th.n,td.n{text-align:right;white-space:nowrap}td.b{font-weight:700}td.num{font-weight:700;color:#1b365d;white-space:nowrap}td.cli{color:#5b6b7a;font-size:9px}'+
+    'td.obj{color:#334155}tr.grp td{background:#eef2f7;font-weight:700;color:#1b365d;padding:5px 6px}tr.grp.late td{background:#fdecee;color:#b4232f}'+
+    'tr.tot td{font-weight:700;border-top:2px solid #1b365d;border-bottom:none;padding-top:6px}td.vide{color:#8a96a3;font-style:italic}'+
+    '.late{color:#b4232f}.ok{color:#1b7a4e;font-weight:700}.part{color:#b45309;font-weight:700}.att{color:#1d4ed8}.mut{color:#8a96a3}'+
+    'thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}';
+  var html='<div class="hd"><div><div style="display:inline-block;text-align:center"><img src="'+LG_PLACEHOLDER+'" style="height:38px;display:block;margin:0 auto" alt="CALINSTRUM">'+
+      '<div style="font-weight:800;font-size:10px;letter-spacing:.8px;color:#1b365d">CALINSTRUM</div></div>'+
+      '<h1>'+titreDoc+'</h1><div class="sub">'+sousTitre+'</div>'+
+      '<div class="sub" style="font-size:9px;margin-top:2px">Échéance : 30 jours fin de mois à compter de l\'envoi · encaissé = règlements pointés (avis ou relevé bancaire).</div></div>'+
+      '<div class="sub" style="text-align:right">Document interne<br>'+esc(CI.nom)+'</div></div>'+
+    '<table><thead>'+thead+'</thead><tbody>'+(rows||'<tr><td colspan="10">Aucune facture.</td></tr>')+'</tbody></table>';
+  return {titre:titreDoc+' '+cli+' '+auj, css:css, html:html};
+}
+function reglImprimerPDF(mode){
+  var d=_reglPdfHtml(mode==='impayes'?'impayes':'complet');
+  var w=window.open('','_blank','');
+  if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+esc(d.titre)+'</title><style>'+d.css+'</style></head><body>'+d.html+'</body></html>');
+  w.document.close();
+  w.focus();
+  setTimeout(function(){ _pdfThemeAppliquer(w.document,_pdfTheme('app')); w.print(); w.close(); }, 400);
 }
 function renderDossiers(){
   var dossiers=buildDossiers();
@@ -13667,27 +13765,108 @@ function avisRegProcessText(text,pagesItems){
       '<div style="margin-top:6px">→ Si le texte semble bon mais que rien n\'est détecté, le format de cet avis est différent : envoyez-moi le PDF pour adapter le parser.</div>';
     return;
   }
+  _avisRegState.avis=[]; _avisRegState.factures=[]; _avisRegState.multi=false;
+  var a=_avisRegAjouterAvis(parsed,clientSel,'');
   _avisRegState.dateVirement=parsed.dateVirement;
-  var _sommeLignes=parsed.factures.reduce(function(s,f){return s+f.montant;},0);
-  _avisRegState.totalAvis=parsed.total||_sommeLignes;
-  // GARDE-FOU : la somme des lignes lues DOIT retomber sur le « Solde créditeur »
-  // imprimé. Sans ce contrôle, un avis dont une ligne n'est pas lue était importé
-  // amputé, en silence (c'est arrivé sur 2 avis, 1 149 480 XPF perdus de vue).
-  _avisRegState.ecartTotal=(parsed.total>0&&Math.abs(parsed.total-_sommeLignes)>1)?(parsed.total-_sommeLignes):0;
-  _avisRegState.factures=parsed.factures.map(function(f){
+  _avisRegState.totalAvis=a.total;
+  _avisRegState.ecartTotal=a.ecart;
+  avisRegBuildPreview();
+}
+// Ajoute un avis lu à l'état d'import : son en-tête (date de virement, total,
+// contrôle) et ses lignes, chacune rattachée à SON avis et à SA date de virement.
+// Sert à l'import d'un avis comme à l'import de plusieurs.
+// GARDE-FOU PAR AVIS : la somme des lignes lues DOIT retomber sur le « Solde
+// créditeur » imprimé. Sans ce contrôle, un avis dont une ligne n'est pas lue était
+// importé amputé, en silence (c'est arrivé sur 2 avis, 1 149 480 XPF perdus de vue).
+// En import multiple, il reste calculé avis par avis : un total global noierait
+// l'avis fautif parmi les autres.
+function _avisRegAjouterAvis(parsed,clientSel,nom){
+  if(!Array.isArray(_avisRegState.avis))_avisRegState.avis=[];
+  if(!Array.isArray(_avisRegState.factures))_avisRegState.factures=[];
+  var lignes=(parsed&&parsed.factures)||[];
+  var somme=lignes.reduce(function(s,f){return s+f.montant;},0);
+  var total=(parsed&&parsed.total)||somme;
+  var ecart=((parsed&&parsed.total>0)&&Math.abs(parsed.total-somme)>1)?(parsed.total-somme):0;
+  var idx=_avisRegState.avis.length;
+  var a={nom:nom||'',dateVirement:(parsed&&parsed.dateVirement)||'',total:total,somme:somme,ecart:ecart,n:lignes.length,client:clientSel};
+  _avisRegState.avis.push(a);
+  lignes.forEach(function(f){
     var match=avisRegMatchFacture(f.num,clientSel);
-    return {
+    _avisRegState.factures.push({
       numParsed:f.num,
       montantAvis:f.montant,
       echeance:f.echeance||'',
       datePiece:f.datePiece||'',
+      avisIdx:idx,
+      dateVirement:a.dateVirement,   // date de SON avis (cf avisRegApply)
       matchFacture:match.fa,         // entrée DB.factures
       matchInvoice:match.inv,        // entrée DB.invoices (si seulement Suivi)
       matchType:match.type,          // 'grc' | 'suivi' | null
       include:!!match.fa||!!match.inv  // coché par défaut si on a un match
-    };
+    });
   });
-  avisRegBuildPreview();
+  return a;
+}
+// Import de PLUSIEURS avis d'un coup : chaque PDF est lu comme en import simple
+// (lecture par colonnes, repli texte), puis un seul écran de vérification les
+// regroupe. Un même fichier sélectionné deux fois n'est lu qu'une fois.
+function avisRegHandleFiles(files){
+  var liste=Array.prototype.slice.call(files||[]).filter(function(f){return f;});
+  var vus={};
+  liste=liste.filter(function(f){var k=(f.name||'')+'|'+(f.size||0);if(vus[k])return false;vus[k]=1;return true;});
+  if(!liste.length)return;
+  if(liste.length===1)return avisRegHandleFile(liste[0]);
+  if(typeof pdfjsLib==='undefined'){avisRegSetStatus('Erreur : pdf.js non chargé.','var(--red)');return;}
+  avisRegSetStatus('Lecture de '+liste.length+' avis…','var(--teal)');
+  _avisRegState.avis=[]; _avisRegState.factures=[]; _avisRegState.multi=true;
+  var illisibles=[];
+  var lire=function(file){
+    return new Promise(function(ok){
+      var reader=new FileReader();
+      reader.onload=function(e){
+        pdfjsLib.getDocument({data:new Uint8Array(e.target.result)}).promise.then(function(pdf){
+          var pr=[];
+          for(var p=1;p<=pdf.numPages;p++){
+            pr.push(pdf.getPage(p).then(function(page){return page.getTextContent().then(function(tc){
+              return {texte:tc.items.map(function(it){return it.str;}).join(' '),items:tc.items};
+            });}));
+          }
+          return Promise.all(pr);
+        }).then(function(pages){ok({file:file,pages:pages});}).catch(function(){ok({file:file,pages:null});});
+      };
+      reader.onerror=function(){ok({file:file,pages:null});};
+      reader.readAsArrayBuffer(file);
+    });
+  };
+  // Lecture dans l'ordre de sélection, puis tri chronologique des avis.
+  Promise.all(liste.map(lire)).then(function(res){
+    var lus=[];
+    res.forEach(function(r){
+      if(!r.pages){illisibles.push(r.file.name);return;}
+      var texte=r.pages.map(function(x){return x.texte;}).join('\n');
+      var cl=gvg('avisreg-client')||'SLN';
+      if(cl==='auto')cl=/SOCIETE LE NICKEL|ERAMET|SLN/i.test(texte)?'SLN':'';
+      if(cl!=='SLN'){illisibles.push(r.file.name);return;}
+      var parsed=parseAvisSLNPdf(r.pages.map(function(x){return x.items;}),texte);
+      if(!parsed||!parsed.factures.length)parsed=parseAvisSLN(texte);
+      lus.push({nom:r.file.name,parsed:parsed,client:cl});
+    });
+    lus.sort(function(a,z){return String(a.parsed.dateVirement||'').localeCompare(String(z.parsed.dateVirement||''));});
+    lus.forEach(function(x){_avisRegAjouterAvis(x.parsed,x.client,x.nom);});
+    var A=_avisRegState.avis;
+    _avisRegState.client=(A[0]&&A[0].client)||'SLN';
+    // Date commune seulement si TOUS les avis en ont une ; sinon avisRegApply
+    // demandera confirmation pour les lignes sans date (cf son contrôle).
+    _avisRegState.dateVirement=(A.length&&A.every(function(a){return a.dateVirement;}))?A[0].dateVirement:'';
+    _avisRegState.totalAvis=A.reduce(function(s,a){return s+a.total;},0);
+    _avisRegState.ecartTotal=A.reduce(function(s,a){return s+Math.abs(a.ecart);},0);
+    _avisRegState.illisibles=illisibles;
+    if(!_avisRegState.factures.length){
+      avisRegSetStatus('⚠ Aucune facture détectée dans les '+liste.length+' avis.'+(illisibles.length?' Illisibles : '+illisibles.join(', '):''),'var(--amber)');
+      return;
+    }
+    avisRegBuildPreview();
+  });
 }
 
 // PARSER SLN — LECTURE PAR COLONNES (source fiable quand l'avis vient d'un PDF)
@@ -13838,6 +14017,25 @@ function avisRegBuildPreview(){
   var matched=_avisRegState.factures.filter(function(f){return f.matchType;}).length;
   var unmatched=_avisRegState.factures.length-matched;
   var dateVir=_avisRegState.dateVirement?fD(_avisRegState.dateVirement):'(non détectée)';
+  var _A=_avisRegState.avis||[];
+  if(_avisRegState.multi&&_A.length>1){
+    // Récapitulatif de plusieurs avis : les écarts sont listés AVIS PAR AVIS.
+    var fautifs=_A.filter(function(a){return a.ecart;});
+    dateVir='plusieurs — voir chaque avis';
+    document.getElementById('avisreg-summary').innerHTML=
+      '<strong>Client</strong> : '+esc(_avisRegState.client)+'<br>'+
+      '<strong>'+_A.length+' avis lus</strong> : '+_A.map(function(a){return a.dateVirement?fD(a.dateVirement):'?';}).join(' · ')+'<br>'+
+      '<strong>Total des avis</strong> : '+fN(_avisRegState.totalAvis)+' XPF<br>'+
+      '<strong>Factures détectées</strong> : '+_avisRegState.factures.length+
+      ' <span style="color:var(--green)">(✓ '+matched+' match'+(matched>1?'es':'')+')</span>'+
+      (unmatched>0?' <span style="color:var(--amber)">(⚠ '+unmatched+' non trouvée'+(unmatched>1?'s':'')+' en base)</span>':'')+
+      ((_avisRegState.illisibles||[]).length?'<br><span style="color:var(--amber)">⚠ Illisible'+(_avisRegState.illisibles.length>1?'s':'')+' : '+esc(_avisRegState.illisibles.join(', '))+'</span>':'')+
+      (fautifs.length?
+        '<div style="margin-top:8px;padding:8px 10px;background:rgba(244,63,94,.08);border:1px solid rgba(244,63,94,.35);border-radius:6px;color:var(--red)">'+
+        '<strong>⚠ Écart sur '+fautifs.length+' avis</strong> — la somme des lignes lues ne retombe pas sur le total imprimé :<br>'+
+        fautifs.map(function(a){return '• '+esc(a.nom||'avis')+(a.dateVirement?' ('+fD(a.dateVirement)+')':'')+' : écart de '+fN(Math.abs(a.ecart))+' XPF';}).join('<br>')+
+        '<br><span style="color:var(--muted);font-size:10.5px">Décochez ses lignes ou vérifiez cet avis avant d\'appliquer.</span></div>':'');
+  } else
   document.getElementById('avisreg-summary').innerHTML=
     '<strong>Client</strong> : '+esc(_avisRegState.client)+'<br>'+
     '<strong>Date du virement</strong> : <span style="color:var(--green);font-weight:700">'+dateVir+'</span><br>'+
@@ -13857,7 +14055,7 @@ function avisRegBuildPreview(){
   document.getElementById('avisreg-count').textContent='— '+_avisRegState.factures.length+' ligne(s)';
   // Lignes
   var tb=document.getElementById('avisreg-preview-body');
-  tb.innerHTML=_avisRegState.factures.map(function(f,i){
+  var _lignesHtml=_avisRegState.factures.map(function(f,i){
     var srcLabel='—',srcMontant='—',srcStatut='—',action='—',rowBg='';
     if(f.matchType==='grc'){
       srcLabel='<span style="color:var(--teal);font-weight:700">'+esc(f.matchFacture.num)+'</span> <span style="font-size:9px;color:var(--muted)">(GRC)</span>';
@@ -13898,7 +14096,23 @@ function avisRegBuildPreview(){
       '<td style="padding:6px;text-align:center;font-size:10.5px">'+srcStatut+'</td>'+
       '<td style="padding:6px">'+action+'</td>'+
     '</tr>';
-  }).join('');
+  });
+  // Import de plusieurs avis : un en-tête par avis avant ses lignes, avec son
+  // propre contrôle « somme = Solde créditeur ».
+  var _html='', _prec=-1;
+  _avisRegState.factures.forEach(function(f,i){
+    if(_avisRegState.multi&&(_avisRegState.avis||[]).length>1&&f.avisIdx!==_prec){
+      _prec=f.avisIdx;
+      var a=_avisRegState.avis[f.avisIdx]||{};
+      _html+='<tr data-avis="'+f.avisIdx+'" style="background:rgba(255,255,255,.03);border-bottom:1px solid var(--border)">'+
+        '<td colspan="7" style="padding:7px 6px;font-size:11px;font-weight:700">▸ Avis '+(a.dateVirement?'du '+fD(a.dateVirement):'sans date')+
+        ' <span style="color:var(--muted);font-weight:400">· '+esc(a.nom||'')+' · '+a.n+' ligne'+(a.n>1?'s':'')+' · '+fN(a.total)+' XPF</span> '+
+        (a.ecart?'<span style="color:var(--red)">⚠ écart '+fN(Math.abs(a.ecart))+' XPF</span>':'<span style="color:var(--green)">✓ concordant</span>')+
+        '</td></tr>';
+    }
+    _html+=_lignesHtml[i];
+  });
+  tb.innerHTML=_html;
   // Brancher les checkboxes
   tb.querySelectorAll('input[type="checkbox"]').forEach(function(cb){
     cb.addEventListener('change',function(){
