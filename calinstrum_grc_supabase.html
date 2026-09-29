@@ -7720,6 +7720,37 @@ function _devisPhaseToFacturePhase(dvPhase, facType){
   return null;
 }
 
+// =============================================================================
+// LIEN DEVIS ↔ FACTURE — une facture peut porter PLUSIEURS devis (29/09/2026)
+// =============================================================================
+// Une facture hebdomadaire couvre souvent plusieurs semaines, donc plusieurs
+// devis. Le champ texte « Devis lié » accepte déjà une liste (séparateurs , ; / +)
+// et l'utilisateur la saisissait à la main, mais le lien TECHNIQUE `devisLieId`
+// ne porte qu'un seul identifiant : seul le premier devis était reconnu comme
+// facturé. Mesuré en base : deux devis réellement facturés s'affichaient
+// « aucune facture hebdo encore » dans le sélecteur du pointage — donc exposés
+// à être refacturés une seconde fois.
+// ⛔ L'ESPACE n'est PAS un séparateur : un numéro en contient (« AEI SNC-DV033 »).
+function _faDevisNums(f){
+  if(!f||!f.dvlie)return [];
+  return String(f.dvlie).split(/[,;\/+]/)
+    .map(function(s){return s.trim();})
+    .filter(function(s,i,a){return s&&a.indexOf(s)===i;});
+}
+// Toutes les factures rattachées à un devis : par le lien technique (devisLieId,
+// le devis « porteur » dont le n° de facture est réservé) OU par citation dans le
+// champ texte. Comparaison sur le numéro ENTIER, jamais sur un début de chaîne.
+function _devisFacturesLiees(d){
+  if(!d)return [];
+  var num=String(d.num||'').toUpperCase();
+  return (DB.factures||[]).filter(function(f){
+    if(!f)return false;
+    if(d.id!=null&&f.devisLieId===d.id)return true;
+    if(!num)return false;
+    return _faDevisNums(f).some(function(x){return x.toUpperCase()===num;});
+  });
+}
+
 // Ajoute une entrée au phaseHistory du devis si elle n'existe pas déjà.
 // Retourne true si une nouvelle entrée a été ajoutée.
 function _addPhaseToDevisHistory(d, newPhaseKey, opts){
@@ -44793,6 +44824,144 @@ function _ptLinesFromAgg(pfx,agg){
   });
   return {lines:lines,missing:missing,totalHT:totalHT,agg:agg};
 }
+// =============================================================================
+// POINTAGE — aperçu de l'imputation multi-BC et rattachement multi-devis
+// =============================================================================
+// Une facture hebdomadaire couvre plusieurs semaines : elle relève de plusieurs
+// devis et consomme plusieurs bons de commande. La cascade multi-BC existait
+// déjà (_bcAllocate part du BC choisi et continue sur les suivants par date
+// d'envoi), mais la répartition n'apparaissait qu'APRÈS génération, et un seul
+// devis pouvait être rattaché.
+// Mesuré sur un cas réel : 88 h à imputer pour 43 h de solde disponible, soit
+// 45 h (234 000 XPF) qu'aucun BC ne couvrait — invisible avant de générer.
+// ⚠ L'aperçu appelle _bcAllocate, il ne recalcule RIEN de son côté : deux
+// calculs concurrents de la même règle finiraient par diverger.
+
+// Devis supplémentaires cochés (en plus du devis porteur). {numDevis: true}
+var _ptFactDevisSupp={};
+
+// Simulation de la cascade, sans rien écrire.
+function _ptFactApercuImputation(pfx,bcId,rateQtyMap,excludeFactureId){
+  var vide={lignes:[],nonCouvert:{},totalImpute:0};
+  if(!pfx||!bcId||!rateQtyMap)return vide;
+  var r;
+  try{ r=_bcAllocate(pfx,bcId,rateQtyMap,excludeFactureId); }catch(e){ return vide; }
+  var lignes=(r&&r.alloc)||[];
+  return {lignes:lignes,nonCouvert:(r&&r.unallocated)||{},
+          totalImpute:lignes.reduce(function(s,l){return s+(Number(l.qte)||0);},0)};
+}
+// Devis déduit d'un BC : sa référence client porte parfois notre n° de devis.
+// ⛔ Souvent elle ne le porte PAS (code client, ou le mot « DEVIS » sans numéro) :
+// dans ce cas on ne devine rien — rattacher au mauvais devis coûte plus cher que
+// de laisser l'utilisateur choisir.
+function _ptFactDevisDuBc(bc){
+  if(!bc||!bc.refClient)return null;
+  var ref=String(bc.refClient).trim().toUpperCase();
+  if(!/\d/.test(ref))return null;                 // « DEVIS » seul : inexploitable
+  var d=(DB.devis||[]).find(function(x){return String(x.num||'').toUpperCase()===ref;});
+  return d||null;
+}
+// Texte du champ « Devis lié » : porteur en tête, puis les devis cochés.
+// Le porteur reste le seul lien technique (devisLieId) ; les autres sont cités
+// dans le texte, que _devisFacturesLiees sait relire.
+function _ptFactDvlieTexte(porteur){
+  if(!porteur||!porteur.num)return '';
+  var out=[String(porteur.num)];
+  Object.keys(_ptFactDevisSupp||{}).forEach(function(n){
+    if(!_ptFactDevisSupp[n])return;
+    if(out.some(function(x){return x.toUpperCase()===String(n).toUpperCase();}))return;
+    out.push(n);
+  });
+  return out.join(', ');
+}
+function ptFactToggleDevisSupp(num,on){
+  if(!_ptFactDevisSupp)_ptFactDevisSupp={};
+  if(on)_ptFactDevisSupp[num]=true; else delete _ptFactDevisSupp[num];
+  _ptFactRenderDevisSuppResume();
+}
+function _ptFactRenderDevisSuppResume(){
+  var box=document.getElementById('ptFactDevisSuppResume');if(!box)return;
+  var sel=document.getElementById('ptFactDevis');
+  var porteur=sel?(DB.devis||[]).find(function(x){return String(x.id)===sel.value;}):null;
+  var txt=_ptFactDvlieTexte(porteur);
+  box.innerHTML=txt
+    ? 'Devis n° imprimé sur la facture : <b style="font-family:var(--mono);color:var(--teal)">'+esc(txt)+'</b>'
+    : '<span style="color:var(--muted-soft)">Choisis d\'abord le devis porteur ci-dessus.</span>';
+}
+// Cases à cocher : les autres devis couverts par cette même facture.
+function _ptFactRenderDevisSupp(pfx,porteurId,bcsMobilises){
+  var devs=(DB.devis||[]).filter(function(d){
+    return getClientPrefix(d.client||'')===pfx && ['Accepté','Facturé','Envoyé'].indexOf(d.status)>=0
+        && String(d.id)!==String(porteurId);
+  });
+  if(!devs.length)return '';
+  // Pré-cochage : uniquement les devis que les BC mobilisés désignent sans ambiguïté.
+  var auto={};
+  (bcsMobilises||[]).forEach(function(bc){
+    var d=_ptFactDevisDuBc(bc);
+    if(d&&String(d.id)!==String(porteurId))auto[d.num]=true;
+  });
+  Object.keys(auto).forEach(function(n){if(!(n in _ptFactDevisSupp))_ptFactDevisSupp[n]=true;});
+  var h='<div style="margin-top:12px"><label style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px">'+
+    'Autres devis couverts par cette facture <span style="text-transform:none;letter-spacing:0;color:var(--muted-soft)">'+
+    '(une facture hebdo couvre souvent plusieurs semaines)</span></label>';
+  devs.forEach(function(d){
+    var on=!!_ptFactDevisSupp[d.num];
+    var viaBc=!!auto[d.num];
+    var nJs=JSON.stringify(d.num).replace(/"/g,'&quot;');
+    h+='<label style="display:flex;align-items:center;gap:9px;padding:6px 10px;border:1px solid '+(on?'rgba(45,212,191,.45)':'var(--border)')+';'+
+       'border-radius:7px;background:'+(on?'rgba(45,212,191,.06)':'var(--bg2)')+';margin-bottom:5px;cursor:pointer">'+
+       '<input type="checkbox"'+(on?' checked':'')+' onchange="ptFactToggleDevisSupp('+nJs+',this.checked)" style="width:15px;height:15px;accent-color:#2dd4bf">'+
+       '<span style="font-family:var(--mono);font-weight:700;color:var(--teal);min-width:110px">'+esc(d.num||'')+'</span>'+
+       '<span style="color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc((d.objet||'').substring(0,58))+'</span>'+
+       (viaBc?'<span style="margin-left:auto;font-size:9.5px;font-family:var(--mono);padding:1px 7px;border-radius:20px;background:rgba(167,139,250,.12);color:#a78bfa;border:1px solid rgba(167,139,250,.3);white-space:nowrap">via son BC</span>':'')+
+       '</label>';
+  });
+  h+='<div id="ptFactDevisSuppResume" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>';
+  return h;
+}
+// Bloc d'aperçu affiché au-dessus du sélecteur de devis.
+function _ptFactRenderApercuBc(pfx,rateQtyMap,excludeFactureId){
+  if(!ptFactState.bcId)return '<div id="ptFactApercuBc"></div>';
+  var ap=_ptFactApercuImputation(pfx,ptFactState.bcId,rateQtyMap,excludeFactureId);
+  if(!ap.lignes.length&&!Object.keys(ap.nonCouvert).length)return '<div id="ptFactApercuBc"></div>';
+  var bcsMob=[];
+  var h='<div id="ptFactApercuBc" class="no-print" style="margin-top:14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:11px 13px">'+
+    '<div style="font-weight:700;font-size:12px;margin-bottom:8px">🔎 Aperçu de l\'imputation '+
+    '<span style="color:var(--muted-soft);font-weight:400;font-size:10.5px">(les heures cascadent sur les BC suivants, par date d\'envoi)</span></div>';
+  h+='<table style="width:100%;border-collapse:collapse"><thead><tr>'+
+     ['Bon de commande','Envoyé le','Imputé','Montant HT','Après','Devis rattaché']
+     .map(function(t,i){return '<th style="font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);text-align:'+(i===2||i===3?'right':'left')+';padding:4px 6px;border-bottom:1px solid var(--border);font-weight:600">'+t+'</th>';}).join('')+
+     '</tr></thead><tbody>';
+  ap.lignes.forEach(function(l){
+    var bc=(DB.bcHebdo[pfx]||[]).find(function(x){return x.id===l.bcId;});
+    if(bc&&bcsMob.indexOf(bc)<0)bcsMob.push(bc);
+    var dv=bc?_ptFactDevisDuBc(bc):null;
+    h+='<tr>'+
+      '<td style="padding:5px 6px;font-family:var(--mono);font-weight:700;color:var(--teal);border-bottom:1px solid rgba(255,255,255,.04)">'+esc(l.bcNum||'')+'</td>'+
+      '<td style="padding:5px 6px;font-family:var(--mono);color:var(--muted-soft);border-bottom:1px solid rgba(255,255,255,.04)">'+fD(l.bcDateEnvoi||'')+'</td>'+
+      '<td style="padding:5px 6px;text-align:right;font-family:var(--mono);font-weight:700;border-bottom:1px solid rgba(255,255,255,.04)">'+fH(l.qte)+' h</td>'+
+      '<td style="padding:5px 6px;text-align:right;font-family:var(--mono);border-bottom:1px solid rgba(255,255,255,.04)">'+fN(l.montant)+'</td>'+
+      '<td style="padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.04)">'+
+        (l.epuiseApres
+          ? '<span style="font-size:9.5px;font-family:var(--mono);padding:1px 7px;border-radius:20px;background:rgba(244,63,94,.13);color:var(--red);border:1px solid rgba(244,63,94,.3)">⛔ épuisé</span>'
+          : '<span style="font-size:9.5px;font-family:var(--mono);padding:1px 7px;border-radius:20px;background:rgba(34,197,94,.13);color:var(--green);border:1px solid rgba(34,197,94,.3)">solde restant</span>')+'</td>'+
+      '<td style="padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.04)">'+
+        (dv?'<span style="font-size:10px;font-family:var(--mono);color:#a78bfa;border:1px solid rgba(167,139,250,.3);background:rgba(167,139,250,.08);border-radius:4px;padding:1px 6px">'+esc(dv.num)+'</span>'
+           :'<span style="font-size:10px;font-family:var(--mono);color:var(--amber);border:1px solid rgba(251,191,36,.3);background:rgba(251,191,36,.08);border-radius:4px;padding:1px 6px">à choisir</span>')+'</td>'+
+      '</tr>';
+  });
+  h+='</tbody></table>';
+  var manque=Object.keys(ap.nonCouvert||{});
+  if(manque.length){
+    var det=manque.map(function(r){return fH(ap.nonCouvert[r])+' h à '+fN(Number(r))+' XPF/h ('+fN(Math.round(ap.nonCouvert[r]*Number(r)))+' XPF HT)';}).join(' · ');
+    h+='<div style="margin-top:9px;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.32);border-radius:7px;padding:8px 11px;font-size:11.5px">'+
+       '<b style="color:var(--amber)">⚠ Non couvert par un bon de commande : '+det+'</b><br>'+
+       '<span style="color:var(--muted);font-size:10.5px">Les BC suivants sont épuisés à ce tarif. À la génération, l\'imputation sur le solde d\'un autre tarif sera proposée ; sinon ces heures resteront hors suivi BC.</span></div>';
+  }
+  h+='</div>';
+  return {html:h,bcs:bcsMob};
+}
 function _ptFactCompute(){
   var body=document.getElementById('ptFactBody');
   var btn=document.getElementById('ptFactGenBtn');
@@ -44874,6 +45043,18 @@ function _ptFactCompute(){
     '<button class="btn btn-ghost" onclick="ptTimeSheetPrint()" title="Time Sheet à faire viser par le client">🖨 Time Sheet</button>'+
     (bd.circuit==='mmb'?'<button class="btn btn-ghost" onclick="ptMMBPrint()" title="Monthly Measurement Bulletin (PRNC)">📄 MMB CALINSTRUM</button>':'')+
     '</div>';
+  // Aperçu de l'imputation multi-BC, AVANT génération : quels bons de commande
+  // seront mobilisés, et ce qu'aucun d'eux ne couvre (cf _ptFactApercuImputation).
+  var _apercu={html:'<div id="ptFactApercuBc"></div>',bcs:[]};
+  try{
+    // Même source que la génération (cf bcIncludeMajorees dans ptFactGenerate) :
+    // l'aperçu doit montrer exactement ce qui sera imputé.
+    var _incMaj=(ptFactState.bcIncludeMajorees!==false);
+    var _rqm=_bcRateQtyFromAgg(pfx,res.agg,_incMaj);
+    var _r=_ptFactRenderApercuBc(pfx,_rqm,null);
+    if(_r&&_r.html)_apercu=_r; else if(typeof _r==='string')_apercu={html:_r,bcs:[]};
+  }catch(e){console.warn('aperçu imputation:',e.message);}
+  html+=_apercu.html;
   // Sélecteur devis accepté → pré-facture liée
   var devs=(DB.devis||[]).filter(function(d){
     return getClientPrefix(d.client||'')===pfx && ['Accepté','Facturé','Envoyé'].indexOf(d.status)>=0;
@@ -44888,7 +45069,11 @@ function _ptFactCompute(){
       devs.map(function(d){
         var suffix;
         if(isSemaineCircuit){
-          var nbFa=(DB.factures||[]).filter(function(f){return f.devisLieId===d.id;}).length;
+          // ⚠ Compter via _devisFacturesLiees : une facture peut porter plusieurs
+          // devis, et ceux qui ne sont pas le porteur n'ont PAS de devisLieId vers
+          // eux. Les compter par le seul lien technique annonçait « aucune facture
+          // hebdo encore » sur des devis déjà facturés — invitation à les refacturer.
+          var nbFa=_devisFacturesLiees(d).length;
           suffix=nbFa?(' ('+nbFa+' facture(s) hebdo déjà générée(s))'):' (aucune facture hebdo encore)';
         } else {
           var fa=d.linkFactureId?DB.factures.find(function(f){return f.id===d.linkFactureId;}):null;
@@ -44896,15 +45081,21 @@ function _ptFactCompute(){
         }
         return '<option value="'+d.id+'">'+esc(d.num||'?')+' — '+esc((d.objet||'').substring(0,45))+suffix+'</option>';
       }).join('')+'</select><div id="ptFactDevisInfo" style="font-size:11px;color:var(--muted);margin-top:6px"></div>';
+    // Devis supplémentaires couverts par la même facture : pré-cochés d'après les
+    // BC mobilisés quand leur référence désigne un devis sans ambiguïté.
+    html+=_ptFactRenderDevisSupp(pfx,null,_apercu.bcs);
   } else {
     html+='<div style="font-size:12px;color:var(--amber)">⚠ Aucun devis Accepté/Envoyé/Facturé pour '+esc(pfx)+'. Crée/accepte d\'abord le devis de prestation pour réserver le n° de facture.</div>';
   }
   html+='</div>';
   body.innerHTML=html;
+  if(typeof _ptFactRenderDevisSuppResume==='function')_ptFactRenderDevisSuppResume();
   if(btn){btn.style.display='';btn.disabled=false;btn.textContent=_rgActif?'🧾 Régulariser (facture complémentaire / avoir)':'🧾 Générer / remplir la facture';}
 }
 function _ptFactDevisInfo(){
   var sel=document.getElementById('ptFactDevis');var info=document.getElementById('ptFactDevisInfo');
+  // Le devis porteur ouvre la liste imprimée : la relire à chaque changement.
+  if(typeof _ptFactRenderDevisSuppResume==='function')_ptFactRenderDevisSuppResume();
   if(!sel||!info)return;
   var d=DB.devis.find(function(x){return String(x.id)===sel.value;});
   if(!d){info.textContent='';return;}
@@ -45036,6 +45227,10 @@ function ptFactGenerate(){
     // openFA a chargé la facture ; on remplace les lignes + l'objet par le pointage.
     faL=JSON.parse(JSON.stringify(faLines));
     gv('fa-objet',objet);
+    // Devis liés : porteur + devis supplémentaires cochés. Le champ est rempli
+    // ici (et non au save) pour que l'utilisateur voie la liste avant d'enregistrer.
+    var _dvTxt=_ptFactDvlieTexte(d);
+    if(_dvTxt)gv('fa-dvlie',_dvTxt);
     // armé APRÈS openFA (qui vient de le reset) — enveloppe {applied:true} pour
     // distinguer "régénération sans BC sélectionné" (doit VIDER f._bcConsumption)
     // de "pas de régénération du tout" (ne pas toucher, cf saveFA()). includeMajorees
@@ -45071,7 +45266,9 @@ function _ptFactNouveauBrouillon(d,objet,faLines,bcConsumption,includeMajorees,c
     num:nxt('fa',getClientNumPrefix(d.client)),   // numerotation, cf getClientNumPrefix
     date:td(),client:d.client,contact:d.contact||'',email:d.email||'',adresse:d.adresse||'',
     objet:objet,type:d.type||'Prestation de service',
-    devisLieId:d.id,dvlie:d.num||'',
+    // devisLieId = devis PORTEUR (n° de facture réservé) ; dvlie peut citer en
+    // plus les autres devis couverts par cette facture (cf _ptFactDvlieTexte).
+    devisLieId:d.id,dvlie:_ptFactDvlieTexte(d)||d.num||'',
     bcClientSLN:d.bcClientSLN||'',
     status:'En attente',statut:'En attente',
     tgcM:d.tgcM||'506-2',
