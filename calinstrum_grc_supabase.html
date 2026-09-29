@@ -10607,14 +10607,55 @@ function _reglJoursEntre(a,b){
   if(!ra||!rb)return 0;
   return Math.round((new Date(+rb[1],+rb[2]-1,+rb[3])-new Date(+ra[1],+ra[2]-1,+ra[3]))/86400000);
 }
-// Encaissement effectif d'une facture : la date saisie, sinon la date du dernier
-// versement enregistré. Un montant payé sans aucune date ne compte pas comme
-// encaissé — on ne peut pas mesurer un délai sans date.
-function _reglEncaissement(f){
-  if(f.dateEncaissement)return f.dateEncaissement;
-  var v=(f.versements||[]).filter(function(x){return x&&x.date;});
-  if(!v.length)return '';
-  return v.map(function(x){return x.date;}).sort().pop();
+// MONTANT réellement encaissé sur une facture — c'est lui qui dit si elle est
+// soldée, pas l'existence d'une date : une facture réglée en partie n'est pas
+// soldée. Source : la somme des versements datés.
+// Repli unique : une date d'encaissement pointée SANS aucun versement (saisie à la
+// main dans la fiche, cas réel en base) vaut règlement du TTC — l'utilisateur a
+// vu le règlement ; ne pas en faire une relance fantôme.
+// ⛔ Un statut « Payée » sans date ni versement ne compte PAS : il ne doit pas
+// masquer un impayé.
+function _reglVerse(f){
+  if(!f)return 0;
+  var v=(f.versements||[]).filter(function(x){return x&&x.date&&Number(x.montant)>0;});
+  if(v.length)return Math.round(v.reduce(function(s,x){return s+Number(x.montant);},0));
+  if(f.dateEncaissement)return Math.round(Number(f.ttc)||0);
+  return 0;
+}
+// Date du dernier encaissement (versement le plus récent, sinon date pointée).
+function _reglDernierEncaissement(f){
+  var d=(f.versements||[]).filter(function(x){return x&&x.date;}).map(function(x){return x.date;}).sort();
+  return d.length?d[d.length-1]:(f.dateEncaissement||'');
+}
+// =============================================================================
+// ENREGISTRER UN RÈGLEMENT — mécanique UNIQUE (pointage manuel ET import d'avis)
+// =============================================================================
+// Écrit d'un coup les trois champs qu'un règlement touche : versement daté,
+// date d'encaissement, statut. Avant, le pointage se faisait dans la fiche en
+// trois saisies séparées (cas réel : une date posée, sans versement ni statut),
+// et l'import d'avis ÉCRASAIT les versements : un 2e règlement partiel effaçait
+// le 1er, et le statut était jugé sur le dernier montant au lieu du cumul — une
+// facture soldée en deux fois restait « Partiel ».
+// Retourne null si l'entrée est invalide (rien n'est écrit).
+function _enregistrerReglement(fa,dateIso,montant){
+  var m=Math.round(Number(montant)||0);
+  if(!fa||!/^\d{4}-\d{2}-\d{2}$/.test(String(dateIso||''))||!(m>0))return null;
+  if(!Array.isArray(fa.versements))fa.versements=[];
+  // La même ligne de relevé pointée deux fois ne compte qu'une fois.
+  var doublon=fa.versements.some(function(v){return v&&v.date===dateIso&&Math.abs((Number(v.montant)||0)-m)<=1;});
+  if(!doublon)fa.versements.push({date:dateIso,montant:m});
+  var ttc=Math.round(Number(fa.ttc)||0);
+  var verse=Math.round(fa.versements.reduce(function(s,v){return s+(v&&v.date?(Number(v.montant)||0):0);},0));
+  var solde=verse>=ttc-1;
+  fa.paye=verse;
+  fa.status=solde?'Payée':'Partiel';
+  fa.dateEncaissement=_reglDernierEncaissement(fa);
+  // Phase opérationnelle : un règlement reçu implique une facture émise.
+  if(!fa.phase||['emerson','transit','douane','chantier_attente','chantier_cours'].indexOf(fa.phase)>=0){
+    fa.phase=(fa.type==='Prestation de service')?'recu':'livre';
+  }
+  if(typeof syncFactureToSuivi==='function'){try{syncFactureToSuivi(fa);}catch(e){}}
+  return {statut:fa.status,verse:verse,reste:Math.max(0,ttc-verse),doublon:doublon};
 }
 // Les factures à suivre : uniquement celles réellement émises au client.
 function _reglLignes(){
@@ -10624,12 +10665,17 @@ function _reglLignes(){
     var ph=(typeof PHASES!=='undefined')?PHASES[f.phase||'']:null;
     if(!ph||ph.billed!==true)return;               // pas encore émise → pas de créance
     var ech=_echeanceFacture(f.date,f.delai);
-    var enc=_reglEncaissement(f);
+    var ttc=Math.round(Number(f.ttc)||0);
+    var verse=Math.min(_reglVerse(f),ttc);
+    var reste=Math.max(0,ttc-verse);
+    var solde=reste<=1;
+    var enc=solde?_reglDernierEncaissement(f):'';
     var rel=(f.relances||[]);
     out.push({
       id:f.id, num:f.num, client:_reglClient(f), objet:f.objet||'',
-      date:f.date, ech:ech, ttc:Number(f.ttc)||0, enc:enc,
-      retard:(!enc&&ech&&ech<auj)?_reglJoursEntre(ech,auj):0,
+      date:f.date, ech:ech, ttc:ttc, verse:verse, reste:solde?0:reste,
+      enc:enc, partiel:(!solde&&verse>0),
+      retard:(!solde&&ech&&ech<auj)?_reglJoursEntre(ech,auj):0,
       delai:enc?_reglJoursEntre(f.date,enc):null,
       derniereRelance:rel.length?rel[rel.length-1].date:''
     });
@@ -10655,10 +10701,12 @@ function renderReglements(){
     return sz-sa;
   });
   var L=toutes.filter(function(x){return _reglFiltreClient==='all'||x.client===_reglFiltreClient;});
+  // Encaissé = montant réellement versé (un acompte compte pour son montant, pas
+  // pour le TTC) ; une facture n'est « réglée » que soldée.
   var emis=0,enc=0,nEnc=0;
-  L.forEach(function(x){emis+=x.ttc; if(x.enc){enc+=x.ttc;nEnc++;}});
+  L.forEach(function(x){emis+=x.ttc; enc+=x.verse; if(x.enc)nEnc++;});
   var relances=L.filter(function(x){return x.retard>0;}).sort(function(a,z){return z.retard-a.retard;});
-  var totRelance=relances.reduce(function(s,x){return s+x.ttc;},0);
+  var totRelance=relances.reduce(function(s,x){return s+x.reste;},0);
   var h='';
 
   // Onglets clients
@@ -10679,26 +10727,38 @@ function renderReglements(){
   h+=_reglKpi('À relancer',fN(totRelance),relances.length+' facture'+(relances.length>1?'s':'')+' échue'+(relances.length>1?'s':''),relances.length?'var(--red)':'var(--muted-soft)');
   h+='</div>';
 
+  // Le panneau de pointage n'est inséré qu'UNE fois (une facture échue figure à
+  // la fois dans les relances et dans son mois : deux panneaux = deux jeux d'ids).
+  var panneauPlace=false;
+  var panneau=function(x,colspan){
+    if(panneauPlace||_reglPointageOuvert!==x.num)return '';
+    panneauPlace=true;
+    return '<tr class="no-print"><td colspan="'+colspan+'" style="padding:0 6px 8px">'+_reglPanneauPointage(x)+'</td></tr>';
+  };
+
   // Bloc de relance
   if(relances.length){
     h+='<div class="card mt8" style="border-color:rgba(244,63,94,.38)">'+
        '<div class="ctitle" style="color:var(--red)"><span class="ico-classic">⚠</span><i class="ti ti-alert-triangle ico-pro"></i> À relancer '+
-       '<span style="color:var(--muted);font-weight:400;font-size:10.5px">(échéance dépassée, aucun encaissement pointé)</span></div>';
-    h+='<div class="tbl-wrap"><table><thead><tr><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Montant</th>'+
+       '<span style="color:var(--muted);font-weight:400;font-size:10.5px">(échéance dépassée, facture non soldée)</span></div>';
+    h+='<div class="tbl-wrap"><table><thead><tr><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Reste dû</th>'+
        '<th>Envoyée le</th><th>Échéance</th><th style="text-align:right">Retard</th><th class="no-print"></th></tr></thead><tbody>';
     relances.forEach(function(x){
+      var nJs=JSON.stringify(x.num).replace(/"/g,'&quot;');
       h+='<tr>'+
         '<td style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(x.num)+'</td>'+
         '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
         '<td style="color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.objet)+'</td>'+
-        '<td style="text-align:right;font-family:var(--mono)">'+fN(x.ttc)+'</td>'+
+        '<td style="text-align:right;font-family:var(--mono)">'+fN(x.reste)+
+          (x.partiel?'<div style="font-size:9.5px;color:var(--muted-soft)">sur '+fN(x.ttc)+'</div>':'')+'</td>'+
         '<td style="font-family:var(--mono)">'+fD(x.date)+'</td>'+
         '<td style="font-family:var(--mono);color:var(--red)">'+fD(x.ech)+'</td>'+
         '<td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--red)">'+x.retard+' j</td>'+
         '<td class="no-print" style="text-align:right;white-space:nowrap">'+
           (x.derniereRelance?'<span style="font-size:9.5px;color:var(--amber);margin-right:6px">relancée le '+fD(x.derniereRelance)+'</span>':'')+
-          '<button class="btn btn-ghost btn-sm" style="border-color:rgba(244,63,94,.45);color:var(--red)" onclick="relancerFacture('+JSON.stringify(x.num).replace(/"/g,'&quot;')+')">✉ Relancer</button>'+
-        '</td></tr>';
+          '<button class="btn btn-ghost btn-sm" data-pointer="'+esc(x.num)+'" style="border-color:rgba(34,197,94,.45);color:var(--green);margin-right:4px" onclick="reglOuvrirPointage('+nJs+')">✓ Pointer</button>'+
+          '<button class="btn btn-ghost btn-sm" style="border-color:rgba(244,63,94,.45);color:var(--red)" onclick="relancerFacture('+nJs+')">✉ Relancer</button>'+
+        '</td></tr>'+panneau(x,8);
     });
     h+='</tbody></table></div>';
     h+='<div style="font-size:10.5px;color:var(--muted);margin-top:8px">Total échu : <strong style="font-family:var(--mono)">'+fN(totRelance)+' XPF</strong>. '+
@@ -10717,7 +10777,7 @@ function renderReglements(){
      '<span style="color:var(--muted);font-weight:400;font-size:10.5px">(le mois est celui de la date d\'envoi)</span></div>';
   ordre.forEach(function(k){
     var LL=mois[k], se=0, sr=0;
-    LL.forEach(function(x){se+=x.ttc; if(x.enc)sr+=x.ttc;});
+    LL.forEach(function(x){se+=x.ttc; sr+=x.verse;});
     var solde=se-sr;
     h+='<div data-mois="'+k+'" style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:rgba(255,255,255,.02);'+
        'border:1px solid var(--border);border-radius:8px;margin:14px 0 0;font-size:12px;font-weight:700">'+
@@ -10729,10 +10789,16 @@ function renderReglements(){
        (solde>0?'<span style="font-family:var(--mono);font-size:11px;color:var(--blue)">&nbsp;·&nbsp;reste '+fN(solde)+'</span>':'')+
        '</div>';
     h+='<div class="tbl-wrap"><table><thead><tr><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Montant</th>'+
-       '<th>Envoi</th><th>Échéance</th><th>Encaissé le</th><th style="text-align:right">Délai</th><th>Statut</th></tr></thead><tbody>';
+       '<th>Envoi</th><th>Échéance</th><th>Encaissé le</th><th style="text-align:right">Délai</th><th>Statut</th><th class="no-print"></th></tr></thead><tbody>';
     LL.forEach(function(x){
       var st,encTd,delTd;
-      if(x.enc){
+      if(x.partiel){
+        st='<span class="pill" style="background:rgba(251,191,36,.13);color:var(--amber);border:1px solid rgba(251,191,36,.32);'+
+           'font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:20px;font-family:var(--mono)">⟳ partiel · reste '+fN(x.reste)+'</span>'+
+           (x.retard?' <span style="font-size:9.5px;color:var(--red);font-family:var(--mono)">'+x.retard+' j</span>':'');
+        encTd='<span style="font-family:var(--mono);color:var(--amber)">'+fN(x.verse)+'</span>';
+        delTd='<span style="color:var(--muted-soft)">—</span>';
+      } else if(x.enc){
         st='<span class="pill" style="background:rgba(34,197,94,.14);color:var(--green);border:1px solid rgba(34,197,94,.3);'+
            'font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:20px;font-family:var(--mono)">✓ réglée</span>';
         encTd='<span style="font-family:var(--mono);color:var(--green)">'+fD(x.enc)+'</span>';
@@ -10753,7 +10819,10 @@ function renderReglements(){
         '<td style="text-align:right;font-family:var(--mono)">'+fN(x.ttc)+'</td>'+
         '<td style="font-family:var(--mono)">'+fD(x.date)+'</td>'+
         '<td style="font-family:var(--mono)'+(x.retard?';color:var(--red)':'')+'">'+fD(x.ech)+'</td>'+
-        '<td>'+encTd+'</td><td style="text-align:right">'+delTd+'</td><td>'+st+'</td></tr>';
+        '<td>'+encTd+'</td><td style="text-align:right">'+delTd+'</td><td>'+st+'</td>'+
+        '<td class="no-print" style="text-align:right">'+
+          (x.enc?'':'<button class="btn btn-ghost btn-sm" data-pointer="'+esc(x.num)+'" style="border-color:rgba(34,197,94,.45);color:var(--green)" onclick="reglOuvrirPointage('+JSON.stringify(x.num).replace(/"/g,'&quot;')+')">✓ Pointer</button>')+
+        '</td></tr>'+panneau(x,10);
     });
     h+='</tbody></table></div>';
   });
@@ -10775,26 +10844,82 @@ function relancerFacture(num){
   if(!f){alert('Facture introuvable : '+num);return;}
   var ech=_echeanceFacture(f.date,f.delai);
   var jours=_reglJoursEntre(ech,_reglAujourdhui());
+  // On réclame le RESTE dû : réclamer le TTC à un client qui a versé un acompte
+  // serait faux, et le mail part chez lui.
+  var ttc=Math.round(Number(f.ttc)||0), verse=Math.min(_reglVerse(f),ttc), du=Math.max(0,ttc-verse);
   var objet='Relance — facture '+f.num+' échue le '+fD(ech);
   var corps=
     'Bonjour,\n\n'+
-    'Sauf erreur de notre part, la facture ci-dessous reste impayée à ce jour :\n\n'+
+    'Sauf erreur de notre part, la facture ci-dessous reste '+(verse>0?'partiellement ':'')+'impayée à ce jour :\n\n'+
     '  • Facture    : '+f.num+'\n'+
     (f.objet?'  • Objet      : '+f.objet+'\n':'')+
     '  • Date       : '+fD(f.date)+'\n'+
     '  • Échéance   : '+fD(ech)+' (dépassée de '+jours+' jour'+(jours>1?'s':'')+')\n'+
-    '  • Montant dû : '+fN(f.ttc)+' XPF\n\n'+
+    (verse>0?'  • Montant    : '+fN(ttc)+' XPF, dont '+fN(verse)+' XPF déjà reçus\n':'')+
+    '  • Montant dû : '+fN(du)+' XPF\n\n'+
     'Nous vous remercions de bien vouloir nous indiquer la date de règlement prévue.\n'+
     'Si le règlement a déjà été émis, merci de nous transmettre l\'avis correspondant.\n\n'+
     'Bien cordialement,\n';
   var dest=f.email||'';
   var url='mailto:'+encodeURIComponent(dest)+'?subject='+encodeURIComponent(objet)+'&body='+encodeURIComponent(corps);
   if(!Array.isArray(f.relances))f.relances=[];
-  f.relances.push({date:_reglAujourdhui(),montant:Number(f.ttc)||0,echeance:ech});
+  f.relances.push({date:_reglAujourdhui(),montant:du,echeance:ech});
   saveDB();
   window.open(url,'_blank');
   if(!dest)alert('Aucune adresse email n\'est renseignée sur la facture '+f.num+'.\nLe brouillon est ouvert : complétez le destinataire.');
   renderReglements();
+}
+
+// ---- Pointage d'un règlement depuis l'écran (clients sans avis de règlement) ----
+// L'utilisateur lit son relevé bancaire et pointe la ligne. Tout passe par
+// _enregistrerReglement : la même mécanique que l'import d'avis.
+var _reglPointageOuvert=null;
+function reglOuvrirPointage(num){ _reglPointageOuvert=num; renderReglements();
+  var d=document.getElementById('regl-pt-montant'); if(d){try{d.focus();d.select();}catch(e){}} }
+function reglFermerPointage(){ _reglPointageOuvert=null; renderReglements(); }
+function _reglPanneauPointage(x){
+  var nJs=JSON.stringify(x.num).replace(/"/g,'&quot;');
+  var lbl='font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-soft);font-family:var(--mono);display:block;margin-bottom:4px';
+  var inp='background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 9px;color:var(--text);font-family:var(--mono);font-size:11.5px';
+  return '<div style="background:var(--bg2);border:1px solid rgba(34,197,94,.38);border-radius:8px;padding:11px 13px">'+
+    '<div style="font-size:11.5px;font-weight:700;margin-bottom:9px">✓ Encaissement de <span style="font-family:var(--mono);color:var(--teal)">'+esc(x.num)+'</span>'+
+    ' <span style="color:var(--muted);font-weight:400">— relevé bancaire'+(x.partiel?' · déjà reçu '+fN(x.verse)+' XPF':'')+'</span></div>'+
+    '<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">'+
+      '<div><label style="'+lbl+'">Encaissé le</label><input type="date" id="regl-pt-date" value="'+esc(_reglAujourdhui())+'" style="'+inp+'"></div>'+
+      '<div><label style="'+lbl+'">Montant reçu (XPF)</label><input id="regl-pt-montant" value="'+esc(fN(x.reste))+'" style="'+inp+';min-width:140px;text-align:right" '+
+        'onkeydown="if(event.key===\'Enter\')reglValiderPointage('+nJs+')"></div>'+
+      '<button class="btn btn-sm" style="border:1px solid rgba(34,197,94,.5);color:var(--green);background:rgba(34,197,94,.12);font-weight:700" onclick="reglValiderPointage('+nJs+')">Enregistrer</button>'+
+      '<button class="btn btn-ghost btn-sm" onclick="reglFermerPointage()">Annuler</button>'+
+    '</div>'+
+    '<div style="font-size:10.5px;color:var(--muted);margin-top:8px">Montant pré-rempli au reste dû. Si le client ne règle qu\'une partie, '+
+    'corrigez-le : la facture passe en <b style="color:var(--amber)">Partiel</b> et le solde reste suivi.</div>'+
+    '</div>';
+}
+// Montant saisi comme sur un relevé : « 1 046 803 », « 1046803 », « 1 046 803,00 ».
+function _reglLireMontant(s){
+  var t=String(s||'').replace(/[\s  ]/g,'').replace(/,(\d{1,2})$/,'.$1').replace(/,/g,'');
+  var n=Number(t);
+  return isFinite(n)?Math.round(n):0;
+}
+function reglValiderPointage(num){
+  var f=(DB.factures||[]).find(function(x){return x.num===num;});
+  if(!f){alert('Facture introuvable : '+num);return;}
+  var d=document.getElementById('regl-pt-date'), m=document.getElementById('regl-pt-montant');
+  var date=d?d.value:'', montant=_reglLireMontant(m?m.value:'');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){alert('Indiquez la date d\'encaissement lue sur le relevé.');return;}
+  if(!(montant>0)){alert('Indiquez le montant reçu.');return;}
+  var ttc=Math.round(Number(f.ttc)||0), reste=Math.max(0,ttc-Math.min(_reglVerse(f),ttc));
+  if(montant>reste+1&&!confirm('Le montant saisi ('+fN(montant)+' XPF) dépasse le reste dû ('+fN(reste)+' XPF).\n\nEnregistrer quand même ?'))return;
+  var r=_enregistrerReglement(f,date,montant);
+  if(!r){alert('Règlement non enregistré : vérifiez la date et le montant.');return;}
+  _reglPointageOuvert=null;
+  saveDB();
+  renderReglements();
+  if(typeof renderFA==='function'){try{renderFA();}catch(e){}}
+  if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
+  if(typeof showBCSaveToast==='function')showBCSaveToast(r.statut==='Payée'
+    ?'✓ '+num+' soldée au '+fD(date)
+    :'✓ '+fN(montant)+' XPF pointés sur '+num+' — reste '+fN(r.reste)+' XPF');
 }
 function renderDossiers(){
   var dossiers=buildDossiers();
@@ -13806,21 +13931,14 @@ function avisRegApply(){
     if(f.matchType==='grc'){
       var fa=f.matchFacture;
       if(fa.status==='Payée'){nbAlreadyPaid++;return;}
-      var ttc=fa.ttc||0;
-      var amountDiff=Math.abs(ttc-f.montantAvis);
-      var partial=amountDiff>1&&f.montantAvis<ttc;
-      // Mise à jour directe DB.factures (source de vérité)
-      fa.status=partial?'Partiel':'Payée';
-      fa.dateEncaissement=dateVir;
-      fa.versements=[{date:dateVir,montant:f.montantAvis}];
-      fa.paye=f.montantAvis;
-      // Phase opérationnelle : si pas déjà émise/réceptionnée, promouvoir
-      if(!fa.phase||fa.phase===''||fa.phase==='emerson'||fa.phase==='transit'||fa.phase==='douane'||fa.phase==='chantier_attente'||fa.phase==='chantier_cours'){
-        fa.phase=(fa.type==='Prestation de service')?'recu':'livre';
-      }
-      // Synchroniser l'éventuel miroir Suivi via syncFactureToSuivi
-      if(typeof syncFactureToSuivi==='function')syncFactureToSuivi(fa);
-      if(partial)nbPartial++;else nbApplied++;
+      // Même mécanique que le pointage manuel (_enregistrerReglement) : le
+      // versement s'AJOUTE à l'historique et le statut se juge sur le cumul.
+      // Avant, cette branche écrasait les versements — un 2e règlement partiel
+      // effaçait le 1er — et comparait le seul dernier montant au TTC.
+      // Chaque ligne porte la date de SON avis (import de plusieurs avis).
+      var r=_enregistrerReglement(fa,f.dateVirement||dateVir,f.montantAvis);
+      if(!r)return;
+      if(r.statut==='Partiel')nbPartial++;else nbApplied++;
     } else if(f.matchType==='suivi'){
       var inv=f.matchInvoice;
       if(inv.statut==='paid'){nbAlreadyPaid++;return;}
