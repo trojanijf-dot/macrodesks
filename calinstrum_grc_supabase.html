@@ -46001,10 +46001,23 @@ function parseBCHebdoPdfItems(items){
     var m2=lines[i2].text.match(/^Le\s+(\d{2})-(\d{2})-(\d{4})\s*à\s*(\d{2}:\d{2})/i);
     if(m2){result.dateEnvoi=m2[3]+'-'+m2[2]+'-'+m2[1];result.heureEnvoi=m2[4];break;}
   }
+  // Référence portée par le client. Deux formats coexistent :
+  //   « Votre référence: <code à 6 chiffres> » → code interne du client, pris tel quel
+  //   « Votre référence: DEVIS N°: <n°> »      → NOTRE n° de devis
+  // ⭐ « DEVIS N° » est une ÉTIQUETTE, pas une valeur : la capture du premier mot
+  // gardait « DEVIS » et perdait le numéro, ce qui rendait impossible le
+  // rattachement automatique du devis au bon de commande.
   var iRef=findLine(/Votre\s+référence\s*:/i);
   if(iRef>=0){
-    var mRef=lines[iRef].text.match(/Votre\s+référence\s*:\s*(\S+)/i);
+    var mRef=lines[iRef].text.match(/Votre\s+référence\s*:\s*(?:DEVIS\s*N°?\s*:?\s*)?(\S+)/i);
     if(mRef)result.refClient=mRef[1];
+    // Référence rejetée sur la ligne suivante (mise en page variable) : on la
+    // cherche juste en dessous plutôt que de conserver une étiquette seule.
+    if((!result.refClient||/^DEVIS$/i.test(result.refClient))&&lines[iRef+1]){
+      var mSuite=lines[iRef+1].text.match(/^(?:DEVIS\s*N°?\s*:?\s*)?(\S+)/i);
+      if(mSuite&&!/^DEVIS$/i.test(mSuite[1]))result.refClient=mSuite[1];
+    }
+    if(/^DEVIS$/i.test(result.refClient||''))result.refClient='';
   }
   // 2) Tableau : ancres = lignes avec un entier en tout début (colonne Poste, x<35)
   //    ET un code Imputation à côté (x 40-125) — évite de confondre avec d'autres
