@@ -50115,6 +50115,14 @@ function printPreviewBC(){
       '.doc-tbl tfoot.doc-tbl-running td{padding:5px 8px!important;background:#f1f5f9!important;color:#475569!important;font-weight:600!important;font-size:10.5px!important;font-style:italic!important;border-top:1px solid #cbd5e1!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}'+
       // doc-final-block : totaux + signatures + bandeau footer regroupés en bas de la dernière page
       '.doc-final-block{page-break-inside:avoid!important;break-inside:avoid!important;}'+
+      // ⛔ BLOC DE SIGNATURE INSÉCABLE [29/09/2026]. Sur un BL de 12 lignes (2 pages), les
+      // titres « Visa du client / fournisseur » restaient en page 1 pendant que « Reçu le »
+      // et « Livré le » passaient en page 2 : bloc coupé en deux. La règle existait dans le
+      // CSS de doPrint (devis/facture) mais PAS ici, dans le pipeline BL/BC — et en
+      // page-break-inside seul, que Chrome ignore à l'intérieur d'une cellule de tableau.
+      // Mesuré : même compacté le bloc ne tient pas en page 1, il part donc ENTIER en page 2.
+      '.doc-sign{page-break-inside:avoid!important;break-inside:avoid!important;}'+
+      '.doc-sign-box{page-break-inside:avoid!important;break-inside:avoid!important;}'+
       '.bc-section-cohesive{page-break-inside:avoid!important;break-inside:avoid!important;}'+
       '.bc-section-row{page-break-after:avoid!important;break-after:avoid!important;}'+
       '.bc-item-row{page-break-inside:avoid!important;break-inside:avoid!important;}'+
@@ -51368,10 +51376,18 @@ function doPrint(){
     .doc-sec-head{page-break-after:avoid;}
 
     /* Bottom block: never split */
-    .doc-totals-wrap{page-break-inside:avoid!important;}
-    .doc-sign{page-break-inside:avoid!important;}
-    .doc-notes{page-break-inside:avoid!important;}
-    .doc-bank{page-break-inside:avoid!important;}
+    /* ⛔ LES DEUX SYNTAXES SONT NÉCESSAIRES [29/09/2026]. Ces blocs vivent dans une
+       CELLULE du tableau d'impression (cf. print-wrapper de printPreviewBC) : dans ce
+       contexte Chrome ignore page-break-inside seul. Sur un BL de 12 lignes, les
+       titres « Visa du client / fournisseur » restaient page 1 pendant que « Reçu le »
+       et « Livré le » passaient page 2 — bloc de signature coupé en deux.
+       Mesuré : même compacté, le bloc ne tient pas en page 1 ; il part donc ENTIER
+       en page 2, ce qui est le comportement voulu. */
+    .doc-totals-wrap{page-break-inside:avoid!important;break-inside:avoid!important;}
+    .doc-sign{page-break-inside:avoid!important;break-inside:avoid!important;}
+    .doc-sign-box{page-break-inside:avoid!important;break-inside:avoid!important;}
+    .doc-notes{page-break-inside:avoid!important;break-inside:avoid!important;}
+    .doc-bank{page-break-inside:avoid!important;break-inside:avoid!important;}
 
     /* Subtotal row: only show on print */
     .tbl-subtotal{display:table-row!important;}
