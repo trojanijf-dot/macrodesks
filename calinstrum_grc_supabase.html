@@ -24084,7 +24084,19 @@ function _setFADraftBanner(on, dvNum){
 //   - on ne touche JAMAIS une facture Payée (validé utilisateur), ni une facture acompte/
 //     solde (parentId/acompteType/pctOfBC<100), ni une facture importée (Excel/BC).
 // Idempotent : si rien n'a changé, ne réécrit rien (pas de toast parasite).
-function propagateDevisLinesToFacture(d){
+// ⛔ [30/09/2026] DEUX GARDE-FOUS AJOUTÉS après une perte de données réelle : une
+// facture émise (montant du devis + une tâche « travaux supplémentaires » ajoutée
+// sur la facture, acceptée par le client) est retombée au montant du devis en
+// base, tâche effacée, sur un simple ré-enregistrement du devis.
+//   1. Une facture ÉMISE (phase facturée) n'est jamais réécrite : elle est partie
+//      chez le client, son montant ne change plus que par avoir.
+//   2. Une pré-facture n'est réécrite QUE si elle est restée identique à ce que
+//      l'ANCIENNE version du devis produisait (dAvant) : personne n'y a touché.
+//      Sinon on la conserve et on prévient — on ne devine pas quelles lignes
+//      l'utilisateur voulait garder.
+// Sans dAvant (appel hors saveDV), on ne peut pas prouver que la facture est
+// intacte : on ne touche à rien.
+function propagateDevisLinesToFacture(d,dAvant){
   if(!d || !d.linkFactureId) return;
   var fi=DB.factures.findIndex(function(x){return x.id===d.linkFactureId;});
   if(fi<0) return;
@@ -24097,6 +24109,19 @@ function propagateDevisLinesToFacture(d){
   var faLines=_buildFALinesFromDevis(d);
   // Si les lignes sont identiques à celles déjà en facture → rien à propager.
   if(JSON.stringify(f.lines||[])===JSON.stringify(faLines)) return;
+  var _prevenir=function(pourquoi){
+    if(typeof showToast==='function'){try{showToast('Facture '+f.num+' conservée telle quelle ('+pourquoi+') — reportez-y vous-même les changements du devis si besoin','info');}catch(e){}}
+  };
+  // Garde-fou 1 : facture émise.
+  var _ph=(typeof PHASES!=='undefined')?PHASES[f.phase||'']:null;
+  if(_ph && _ph.billed===true){ _prevenir('déjà émise'); return; }
+  // Garde-fou 2 : pré-facture modifiée à la main depuis la dernière version du devis.
+  var _sig=function(lines){
+    var c=JSON.parse(JSON.stringify(lines||[]));
+    if(typeof _normUniteArr==='function'){try{_normUniteArr(c);}catch(e){}}
+    return JSON.stringify(c);
+  };
+  if(!dAvant || _sig(f.lines)!==_sig(_buildFALinesFromDevis(dAvant))){ _prevenir('modifiée sur la facture'); return; }
   var _t=_faCalcTotaux(faLines);
   f.lines=faLines;
   f.ht=_t.ht; f.t6=_t.t6; f.t11=_t.t11; f.t22=_t.t22; f.tgc=_t.tgc; f.ttc=_t.ttc;
@@ -24329,8 +24354,17 @@ async function saveDV(){
   }
   var d=getDV();
   if(!d.num||!d.client){alert('Champs obligatoires: N° Devis et Client');return;}
+  // Version du devis AVANT cet enregistrement : c'est elle qui permet de savoir si
+  // la facture liée a été modifiée à la main (cf propagateDevisLinesToFacture).
+  var _dAvant=null;
+  if(eDVid){var _o=DB.devis.find(function(x){return x.id===eDVid;});if(_o)_dAvant=JSON.parse(JSON.stringify(_o));}
   if(eDVid){var i=DB.devis.findIndex(function(x){return x.id===eDVid;});if(i>=0)DB.devis[i]=d;else DB.devis.push(d);}
   else {DB.devis.push(d);eDVid=d.id;}
+  // Lignes AVANT la phase : la propagation de phase peut faire passer la facture en
+  // « émise » dans ce même enregistrement ; la protection doit juger l'état d'avant.
+  if(typeof propagateDevisLinesToFacture==='function'){
+    try{ propagateDevisLinesToFacture(d,_dAvant); }catch(e){console.warn('propagateDevisLinesToFacture (saveDV):',e);}
+  }
   // Si statut Cadre : synchroniser les lignes vers le catalogue articles (DB.articles)
   // Permet aux BC SLN GMAO de matcher leurs articles avec les prix de la grille
   var addedArt=0,updatedArt=0;
@@ -24344,11 +24378,7 @@ async function saveDV(){
   if(typeof propagateDevisPhaseToFacture==='function'){
     try{ propagateDevisPhaseToFacture(d); }catch(e){console.warn('propagateDevisPhaseToFacture (saveDV):',e);}
   }
-  // ⭐ Bug A (sens devis→facture) : resync des lignes + totaux TGC vers la facture liée
-  // tant qu'elle n'est pas Payée (snapshot "vivant" jusqu'au solde). Idempotent.
-  if(typeof propagateDevisLinesToFacture==='function'){
-    try{ propagateDevisLinesToFacture(d); }catch(e){console.warn('propagateDevisLinesToFacture (saveDV):',e);}
-  }
+  // (La resync des lignes devis→facture est faite plus haut, avant la phase.)
   // ⭐ PRE-FACTURE AUTOMATIQUE — devis Accepte + BC client recu (cf _prefactureAuto).
   //    Idempotente : ne fait rien si une facture est deja liee.
   var _pf=null;
