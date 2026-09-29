@@ -45208,9 +45208,15 @@ function _ptFactApercuImputation(pfx,bcId,rateQtyMap,excludeFactureId){
   if(!pfx||!bcId||!rateQtyMap)return vide;
   var r;
   try{ r=_bcAllocate(pfx,bcId,rateQtyMap,excludeFactureId); }catch(e){ return vide; }
-  var lignes=(r&&r.alloc)||[];
-  return {lignes:lignes,nonCouvert:(r&&r.unallocated)||{},
-          totalImpute:lignes.reduce(function(s,l){return s+(Number(l.qte)||0);},0)};
+  var base=(r&&r.alloc)||[], brut=(r&&r.unallocated)||{};
+  var lignes=base.slice(), nc=brut;
+  // Même choix que la génération (_ptFactImputerBc) : BC cochés « autre tarif ».
+  var choix=_ptFactChoixAutreTarif();
+  if(Object.keys(brut).length&&choix.length){
+    try{ var a=_bcAllocateAutreTarif(pfx,bcId,brut,excludeFactureId,base,choix); lignes=lignes.concat(a.alloc); nc=a.unallocated; }catch(e){}
+  }
+  return {lignes:lignes,nonCouvert:nc,nonCouvertBrut:brut,allocBase:base,
+          totalImpute:base.reduce(function(s,l){return s+(Number(l.qte)||0);},0)};
 }
 // Devis déduit d'un BC : sa référence client porte parfois notre n° de devis.
 // ⛔ Souvent elle ne le porte PAS (code client, ou le mot « DEVIS » sans numéro) :
@@ -45302,7 +45308,12 @@ function _ptFactRenderApercuBc(pfx,rateQtyMap,excludeFactureId){
     h+='<tr>'+
       '<td style="padding:5px 6px;font-family:var(--mono);font-weight:700;color:var(--teal);border-bottom:1px solid rgba(255,255,255,.04)">'+esc(l.bcNum||'')+'</td>'+
       '<td style="padding:5px 6px;font-family:var(--mono);color:var(--muted-soft);border-bottom:1px solid rgba(255,255,255,.04)">'+fD(l.bcDateEnvoi||'')+'</td>'+
-      '<td style="padding:5px 6px;text-align:right;font-family:var(--mono);font-weight:700;border-bottom:1px solid rgba(255,255,255,.04)">'+fH(l.qte)+' h</td>'+
+      '<td style="padding:5px 6px;text-align:right;font-family:var(--mono);font-weight:700;border-bottom:1px solid rgba(255,255,255,.04)">'+
+        (l.imputeDe
+          ? fH(l.imputeDe.qte)+' h à '+fN(l.imputeDe.rate)+
+            ' <span style="font-size:9.5px;font-family:var(--mono);padding:1px 6px;border-radius:20px;background:rgba(167,139,250,.13);color:#a78bfa;border:1px solid rgba(167,139,250,.32)">imputé</span>'+
+            '<div style="font-size:9.5px;font-weight:400;color:var(--muted-soft)">= '+fH(Math.round(l.qte*100)/100)+' h de la ligne '+fN(l.rate)+'</div>'
+          : fH(l.qte)+' h')+'</td>'+
       '<td style="padding:5px 6px;text-align:right;font-family:var(--mono);border-bottom:1px solid rgba(255,255,255,.04)">'+fN(l.montant)+'</td>'+
       '<td style="padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.04)">'+
         (l.epuiseApres
@@ -45314,12 +45325,40 @@ function _ptFactRenderApercuBc(pfx,rateQtyMap,excludeFactureId){
       '</tr>';
   });
   h+='</tbody></table>';
+  var brut=ap.nonCouvertBrut||ap.nonCouvert||{};
+  var manqueBrut=Object.keys(brut);
   var manque=Object.keys(ap.nonCouvert||{});
-  if(manque.length){
-    var det=manque.map(function(r){return fH(ap.nonCouvert[r])+' h à '+fN(Number(r))+' XPF/h ('+fN(Math.round(ap.nonCouvert[r]*Number(r)))+' XPF HT)';}).join(' · ');
+  if(manqueBrut.length){
+    var det=manqueBrut.map(function(r){return fH(Math.round(brut[r]*100)/100)+' h à '+fN(Number(r))+' XPF/h ('+fN(Math.round(brut[r]*Number(r)))+' XPF HT)';}).join(' · ');
+    // Cases « autre tarif » : TOUS les BC qui gardent du solde à un autre tarif,
+    // quelle que soit leur date. Rien n'est coché d'office.
+    var cands=_bcCandidatsAutreTarif(pfx,brut,excludeFactureId,ap.allocBase||[]);
+    var choix=_ptFactChoixAutreTarif();
     h+='<div style="margin-top:9px;background:rgba(251,191,36,.07);border:1px solid rgba(251,191,36,.32);border-radius:7px;padding:8px 11px;font-size:11.5px">'+
-       '<b style="color:var(--amber)">⚠ Non couvert par un bon de commande : '+det+'</b><br>'+
-       '<span style="color:var(--muted);font-size:10.5px">Les BC suivants sont épuisés à ce tarif. À la génération, l\'imputation sur le solde d\'un autre tarif sera proposée ; sinon ces heures resteront hors suivi BC.</span></div>';
+       '<b style="color:var(--amber)">⚠ Non couvert au tarif des heures : '+det+'</b>';
+    if(cands.length){
+      var pris={}; ap.lignes.forEach(function(l){if(l.imputeDe)pris[l.bcId]=(pris[l.bcId]||0)+l.montant;});
+      h+='<div style="margin-top:8px;border-top:1px dashed rgba(251,191,36,.3);padding-top:8px">'+
+         '<div style="font-weight:700;margin-bottom:6px">Imputer ces heures sur le solde d\'un autre tarif '+
+         '<span style="font-weight:400;color:var(--muted);font-size:10.5px">— la facture reste au tarif des heures, seul le budget du BC est consommé</span></div>';
+      cands.forEach(function(c){
+        var on=choix.indexOf(String(c.bcId))>=0;
+        h+='<label style="display:flex;align-items:center;gap:9px;padding:5px 9px;border:1px solid '+(on?'rgba(167,139,250,.5)':'var(--border)')+';border-radius:7px;background:'+(on?'rgba(167,139,250,.07)':'var(--bg)')+';margin-bottom:5px;cursor:pointer">'+
+           '<input type="checkbox" data-autre-tarif="'+esc(String(c.bcId))+'"'+(on?' checked':'')+' onchange="ptFactToggleAutreTarif(\''+esc(String(c.bcId))+'\',this.checked)" style="width:15px;height:15px;accent-color:#a78bfa">'+
+           '<span style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(c.bcNum)+'</span>'+
+           '<span style="font-family:var(--mono);font-size:10.5px;color:var(--muted)">'+fD(c.dateEnvoi||'')+' · tarif '+fN(c.rate)+' · reste '+fH(c.resteH)+' h ('+fN(c.resteXpf)+' XPF)</span>'+
+           '<span style="margin-left:auto;font-family:var(--mono);font-size:10.5px;color:#a78bfa">'+(pris[c.bcId]?'prend '+fN(pris[c.bcId])+' XPF':'—')+'</span></label>';
+      });
+      h+='<div style="color:var(--muted);font-size:10.5px">Les BC cochés sont consommés du plus ancien au plus récent.</div></div>';
+    }
+    h+='</div>';
+    if(!manque.length){
+      h+='<div style="margin-top:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.3);border-radius:7px;padding:8px 11px;font-size:11.5px">'+
+         '<b style="color:var(--green)">✓ Toutes les heures sont couvertes</b> <span style="color:var(--muted);font-size:10.5px">— dont une partie imputée sur un autre tarif ; la mention figure sur le suivi du BC imprimé.</span></div>';
+    } else if(choix.length||!cands.length){
+      var det2=manque.map(function(r){return fH(Math.round(ap.nonCouvert[r]*100)/100)+' h à '+fN(Number(r))+' XPF/h';}).join(' · ');
+      h+='<div style="margin-top:8px;font-size:10.5px;color:var(--muted)">Reste hors suivi BC : <b style="color:var(--amber)">'+det2+'</b>.</div>';
+    }
   }
   h+='</div>';
   return {html:h,bcs:bcsMob};
@@ -45657,7 +45696,14 @@ function _ptFactNouveauBrouillon(d,objet,faLines,bcConsumption,includeMajorees,c
 function _ptFactImputerBc(pfx,bcId,rateQtyMap,excludeFactureId){
   var allocRes=_bcAllocate(pfx,bcId,rateQtyMap,excludeFactureId);
   var alloc=allocRes.alloc||[], unalloc=allocRes.unallocated||{};
-  if(Object.keys(unalloc).length){
+  // Choix fait dans l'aperçu (cases « autre tarif ») : appliqué tel quel, sans
+  // redemander — l'utilisateur a vu la répartition avant de cliquer.
+  var _choix=_ptFactChoixAutreTarif();
+  if(Object.keys(unalloc).length && _choix.length){
+    var _ch=_bcAllocateAutreTarif(pfx,bcId,unalloc,excludeFactureId,alloc,_choix);
+    alloc=alloc.concat(_ch.alloc);
+    unalloc=_ch.unallocated;
+  } else if(Object.keys(unalloc).length){
     var autre=_bcAllocateAutreTarif(pfx,bcId,unalloc,excludeFactureId,alloc);
     if(autre.alloc.length){
       var det=autre.alloc.map(function(c){return '• '+fH(c.imputeDe.qte)+' h à '+fN(c.imputeDe.rate)+' XPF/h → solde à '+fN(c.rate)+' XPF/h de '+c.bcNum+' ('+fN(c.montant)+' XPF HT)';}).join('\n');
@@ -46659,12 +46705,24 @@ function _bcAllocate(pfx,startBcId,rateQtyMap,excludeFactureId){
 // ligne). Chaque ligne porte imputeDe {rate, qte} pour que
 // le suivi imprimé l'énonce. allocDeja = lignes déjà prises par CETTE facture
 // (même tarif), qui ne sont pas encore en base.
-function _bcAllocateAutreTarif(pfx,startBcId,unallocated,excludeFactureId,allocDeja){
+// bcIdsChoisis (optionnel) : BC cochés par l'utilisateur dans l'aperçu. Sans lui, la
+// recherche part du BC de départ et ne regarde que les BC POSTÉRIEURS — elle ne
+// voyait donc jamais les soldes d'un autre tarif restés sur des BC plus anciens
+// (cas réel 30/09 : 45 h à 5 200 non couvertes alors que deux BC de juillet
+// gardaient 92,5 h à 5 600). Avec lui, seuls les BC cochés sont consommés, quelle
+// que soit leur date, du plus ancien au plus récent.
+function _bcAllocateAutreTarif(pfx,startBcId,unallocated,excludeFactureId,allocDeja,bcIdsChoisis){
   var bcs=(DB.bcHebdo[pfx]||[]).slice().sort(function(a,b){
     return (a.dateEnvoi||'')<(b.dateEnvoi||'')?-1:((a.dateEnvoi||'')>(b.dateEnvoi||'')?1:0);
   });
   var startIdx=bcs.findIndex(function(b){return b.id===startBcId;});
   var alloc=[],reste={};
+  if(Array.isArray(bcIdsChoisis)){
+    var ch=bcIdsChoisis.map(String);
+    bcs=bcs.filter(function(b){return ch.indexOf(String(b.id))>=0;});
+    startIdx=0;
+    if(!bcs.length)return {alloc:alloc,unallocated:Object.assign({},unallocated)};
+  }
   if(startIdx<0)return {alloc:alloc,unallocated:Object.assign({},unallocated)};
   var pris=function(bcId,rate){
     return (allocDeja||[]).concat(alloc).reduce(function(s,c){return s+((c.bcId===bcId&&Number(c.rate)===Number(rate))?(Number(c.qte)||0):0);},0);
@@ -46690,6 +46748,39 @@ function _bcAllocateAutreTarif(pfx,startBcId,unallocated,excludeFactureId,allocD
     if(besoin>0.5)reste[rk]=besoin/r;
   });
   return {alloc:alloc,unallocated:reste};
+}
+// BC proposables pour l'imputation sur un autre tarif : TOUS ceux (toutes dates)
+// qui gardent du solde à un tarif différent de celui des heures non couvertes.
+// allocDeja = ce que la facture en cours prend déjà (pas encore en base).
+function _bcCandidatsAutreTarif(pfx,unallocated,excludeFactureId,allocDeja){
+  var besoins=Object.keys(unallocated||{}).filter(function(k){return (Number(unallocated[k])||0)>0.001;}).map(Number);
+  if(!besoins.length)return [];
+  var bcs=(DB.bcHebdo[pfx]||[]).slice().sort(function(a,b){
+    return (a.dateEnvoi||'')<(b.dateEnvoi||'')?-1:((a.dateEnvoi||'')>(b.dateEnvoi||'')?1:0);
+  });
+  var out=[];
+  bcs.forEach(function(bc){
+    _bcRatesList(bc).forEach(function(r2){
+      if(besoins.indexOf(Number(r2))>=0)return;           // même tarif : ce n'est pas une imputation
+      var auth=_bcAuthorizedQte(bc,r2);
+      if(auth<=0)return;
+      var pris=(allocDeja||[]).reduce(function(s,c){return s+((c.bcId===bc.id&&Number(c.rate)===Number(r2))?(Number(c.qte)||0):0);},0);
+      var resteH=Math.round(Math.max(0,auth-_bcConsumedSoFar(pfx,bc.id,r2,excludeFactureId)-pris)*100)/100;
+      if(resteH<=0.001)return;
+      out.push({bcId:bc.id,bcNum:bc.num,dateEnvoi:bc.dateEnvoi,rate:Number(r2),resteH:resteH,resteXpf:Math.round(resteH*r2)});
+    });
+  });
+  return out;
+}
+// BC cochés par l'utilisateur (ptFactState.autreTarif = {bcId:true}).
+function _ptFactChoixAutreTarif(){
+  var o=ptFactState.autreTarif||{};
+  return Object.keys(o).filter(function(k){return o[k];});
+}
+function ptFactToggleAutreTarif(bcId,on){
+  if(!ptFactState.autreTarif)ptFactState.autreTarif={};
+  if(on)ptFactState.autreTarif[bcId]=true; else delete ptFactState.autreTarif[bcId];
+  try{ if(typeof _ptFactCompute==='function')_ptFactCompute(); }catch(e){}
 }
 
 // ---- UI : cartes de suivi + import (onglet Facturation) ----
