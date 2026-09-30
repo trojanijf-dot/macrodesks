@@ -10623,10 +10623,17 @@ function _reglVerse(f){
   if(f.dateEncaissement)return Math.round(Number(f.ttc)||0);
   return 0;
 }
-// Date du dernier encaissement (versement le plus récent, sinon date pointée).
+// Date d'encaissement AFFICHÉE : la date saisie (dateEncaissement) fait foi. Les
+// versements ne servent que de repli : 18 factures sur 35 en portent un daté du jour
+// de la FACTURE (reliquat d'une ancienne migration), qui les montrait « encaissées »
+// le jour de leur émission, délai 0 j.
 function _reglDernierEncaissement(f){
+  if(f.dateEncaissement)return f.dateEncaissement;
+  return _reglDateDernierVersement(f);
+}
+function _reglDateDernierVersement(f){
   var d=(f.versements||[]).filter(function(x){return x&&x.date;}).map(function(x){return x.date;}).sort();
-  return d.length?d[d.length-1]:(f.dateEncaissement||'');
+  return d.length?d[d.length-1]:'';
 }
 // =============================================================================
 // ENREGISTRER UN RÈGLEMENT — mécanique UNIQUE (pointage manuel ET import d'avis)
@@ -10650,13 +10657,23 @@ function _enregistrerReglement(fa,dateIso,montant){
   var solde=verse>=ttc-1;
   fa.paye=verse;
   fa.status=solde?'Payée':'Partiel';
-  fa.dateEncaissement=_reglDernierEncaissement(fa);
+  // Un règlement enregistré ici est daté de SON versement (avis ou relevé) :
+  // la date d'encaissement devient celle du versement le plus récent.
+  fa.dateEncaissement=_reglDateDernierVersement(fa);
   // Phase opérationnelle : un règlement reçu implique une facture émise.
   if(!fa.phase||['emerson','transit','douane','chantier_attente','chantier_cours'].indexOf(fa.phase)>=0){
     fa.phase=(fa.type==='Prestation de service')?'recu':'livre';
   }
   if(typeof syncFactureToSuivi==='function'){try{syncFactureToSuivi(fa);}catch(e){}}
   return {statut:fa.status,verse:verse,reste:Math.max(0,ttc-verse),doublon:doublon};
+}
+// Position d'un paiement par rapport à l'échéance, en clair. « réglée · 32 j » avait
+// été lu comme 32 jours de RETARD pour une facture payée 3 jours AVANT l'échéance.
+function _reglPosEch(x){
+  if(x.ecartEch==null)return '';
+  if(x.ecartEch<0)return (-x.ecartEch)+' j avant éch.';
+  if(x.ecartEch===0)return 'à l\'échéance';
+  return x.ecartEch+' j après éch.';
 }
 // Les factures à suivre : uniquement celles réellement émises au client.
 function _reglLignes(){
@@ -10678,6 +10695,8 @@ function _reglLignes(){
       enc:enc, partiel:(!solde&&verse>0),
       retard:(!solde&&ech&&ech<auj)?_reglJoursEntre(ech,auj):0,
       delai:enc?_reglJoursEntre(f.date,enc):null,
+      // Position du paiement par rapport à l'échéance : négatif = avant.
+      ecartEch:(enc&&ech)?_reglJoursEntre(ech,enc):null,
       derniereRelance:rel.length?rel[rel.length-1].date:''
     });
   });
@@ -10807,7 +10826,8 @@ function renderReglements(){
         delTd='<span style="color:var(--muted-soft)">—</span>';
       } else if(x.enc){
         st='<span class="pill" style="background:rgba(34,197,94,.14);color:var(--green);border:1px solid rgba(34,197,94,.3);'+
-           'font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:20px;font-family:var(--mono)">✓ réglée</span>';
+           'font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:20px;font-family:var(--mono)">✓ réglée</span>'+
+           (x.ecartEch!=null?' <span style="font-size:9.5px;font-family:var(--mono);color:'+(x.ecartEch>0?'var(--amber)':'var(--muted)')+'">'+_reglPosEch(x)+'</span>':'');
         encTd='<span style="font-family:var(--mono);color:var(--green)">'+fD(x.enc)+'</span>';
         delTd='<span style="font-family:var(--mono)">'+x.delai+' j</span>';
       } else if(x.retard){
@@ -10978,13 +10998,14 @@ function _reglPdfHtml(mode){
       rows+='<tr class="grp"><td colspan="10">'+_reglMoisLabel(k)+' · '+LL.length+' facture'+(LL.length>1?'s':'')+
         ' · émis '+fN(se)+' · encaissé '+fN(sr)+(se-sr>0?' · reste '+fN(se-sr):'')+'</td></tr>';
       LL.forEach(function(x){
-        var st=x.enc?'<span class="ok">réglée</span>'
+        var st=x.enc?'<span class="ok">réglée</span>'+(x.delai!=null?' <span class="mut">en '+x.delai+' j</span>':'')+
+            (x.ecartEch!=null?' <span class="'+(x.ecartEch>0?'late':'mut')+'">· '+_reglPosEch(x)+'</span>':'')
           :x.partiel?'<span class="part">partiel</span>'+(x.retard?' <span class="late">· '+x.retard+' j</span>':'')
           :x.retard?'<span class="late">'+x.retard+' j de retard</span>':'<span class="att">en attente</span>';
         rows+='<tr><td class="num">'+esc(x.num)+'</td>'+tdCli(x)+'<td class="obj">'+esc(x.objet)+'</td>'+
           '<td class="n">'+fN(x.ttc)+'</td><td>'+fD(x.date)+'</td><td'+(x.retard?' class="late"':'')+'>'+fD(x.ech)+'</td>'+
           '<td>'+(x.enc?fD(x.enc):'—')+'</td><td class="n">'+(x.verse?fN(x.verse):'—')+'</td>'+
-          '<td class="n">'+(x.reste?fN(x.reste):'—')+'</td><td>'+st+(x.enc&&x.delai!=null?' <span class="mut">· '+x.delai+' j</span>':'')+'</td></tr>';
+          '<td class="n">'+(x.reste?fN(x.reste):'—')+'</td><td>'+st+'</td></tr>';
       });
     });
     rows+='<tr class="tot"><td colspan="3">Total</td><td class="n">'+fN(emis)+'</td><td colspan="3"></td><td class="n">'+fN(enc)+'</td><td class="n">'+fN(du)+'</td><td></td></tr>';
