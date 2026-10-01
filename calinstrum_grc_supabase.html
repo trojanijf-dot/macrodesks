@@ -1966,7 +1966,11 @@ function printAdminReportPeriod(){
 //     alors un seul document continu.
 // Le paquet {synthèse + images} est construit UNE fois, affiché dans l'aperçu
 // et réutilisé tel quel à l'impression : ce qu'on voit est ce qui sort.
-var _admPrvState={sig:'',pages:[],facs:[],synth:'',busy:false};
+// jeton : identifie LA lecture de PDF en cours. Changer de période l'incrémente ;
+// une lecture dont le jeton n'est plus le bon n'écrit plus rien. Sans lui, une
+// lecture lancée pour une autre période (ex. l'année) continuait de remplir
+// l'aperçu du T3 — cas réel : « 32/59 factures » jointes à un T3 de 28.
+var _admPrvState={sig:'',pages:[],facs:[],synth:'',busy:false,jeton:0};
 
 function _admPrvSig(range){ return range.start+'|'+range.end; }
 
@@ -2063,18 +2067,22 @@ function _admPrvSetState(txt){
 // Rastérisation séquentielle (une facture après l'autre) : borne la mémoire et
 // permet d'afficher une progression honnête. scale 2 ≈ 200 dpi sur A4, JPEG 0.82
 // — net à l'impression sans faire exploser la taille du document.
-function _admPrvRasterize(factures){
+function _admPrvRasterize(factures,jeton){
   _admPrvState.pages=[]; _admPrvState.facs=[];
   var missing=[];
+  var perime=function(){ return jeton!=null && jeton!==_admPrvState.jeton; };
   var chain=loadPdfJs();
   factures.forEach(function(f){
     chain=chain.then(function(){
+      if(perime()) return null;                       // période changée : on s'arrête
       return _getFacturePdfRecord(f.id).then(function(rec){
+        if(perime()) return null;
         if(!rec||!rec.blob){ missing.push(f.num); return null; }
         return rec.blob.arrayBuffer().then(function(buf){
           var bytes=new Uint8Array(buf);
           // bytes.slice(0) obligatoire : pdf.js détache le buffer source.
           return pdfjsLib.getDocument({data:bytes.slice(0)}).promise.then(function(pdf){
+            if(perime()) return null;
             _admPrvState.facs.push({num:f.num,client:f.client});
             var seq=Promise.resolve();
             for(var i=1;i<=pdf.numPages;i++){
@@ -2094,6 +2102,7 @@ function _admPrvRasterize(factures){
                     // rAF : on peut changer d'onglet pendant la lecture d'un
                     // gros trimestre sans que ça se fige.
                     return page.render({canvasContext:ctx,viewport:vp,intent:'print'}).promise.then(function(){
+                      if(perime()) return;
                       _admPrvState.pages.push({num:f.num,client:f.client,page:pageNo,
                         total:total,url:cv.toDataURL('image/jpeg',0.82)});
                       _admPrvSetState('— lecture '+_admPrvState.pages.length+' page(s)…');
@@ -2128,6 +2137,8 @@ function admPreviewOpen(){
     return;
   }
   _admPrvState.sig=_admPrvSig(range);
+  // Nouvelle période : toute lecture encore en cours devient périmée.
+  _admPrvState.jeton++; _admPrvState.busy=false;
   _admPrvState.pages=[]; _admPrvState.facs=[];
   _admPrvRender();
   admPreviewRefreshFactures();
@@ -2150,9 +2161,11 @@ function admPreviewRefreshFactures(){
   if(!factures.length){ _admPrvSetState('(aucune facture sur la période)'); return; }
   if(_admPrvState.busy) return;
   _admPrvState.busy=true;
+  var jeton=++_admPrvState.jeton;
   if(btn){ btn.disabled=true; btn.style.opacity='.5'; }
   _admPrvSetState('— lecture des PDF archivés…');
-  _admPrvRasterize(factures).then(function(missing){
+  _admPrvRasterize(factures,jeton).then(function(missing){
+    if(jeton!==_admPrvState.jeton) return;           // lecture périmée : ne touche à rien
     _admPrvState.busy=false;
     if(btn){ btn.disabled=false; btn.style.opacity=''; }
     var msg='— '+_admPrvState.facs.length+'/'+factures.length+' facture(s), '+
@@ -2161,6 +2174,7 @@ function admPreviewRefreshFactures(){
     _admPrvSetState(msg);
     _admPrvRender();
   }).catch(function(e){
+    if(jeton!==_admPrvState.jeton) return;
     _admPrvState.busy=false;
     if(btn){ btn.disabled=false; btn.style.opacity=''; }
     _admPrvSetState('<span style="color:#f87171">— lecture impossible ('+esc(String(e&&e.message||e))+')</span>');
