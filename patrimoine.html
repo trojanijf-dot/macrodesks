@@ -65,6 +65,21 @@ h1 i{color:var(--cyan)}
 .errp{background:rgba(239,159,39,.12);color:var(--amber);border:1px solid rgba(239,159,39,.3)}
 .cc-dot{font-size:10px;color:var(--amber);cursor:default}
 
+/* evolution (courbes) */
+.evo-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px;margin:12px 0 14px}
+.evo-kpi{background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:9px 11px}
+.evo-kpi .l{font:600 8.5px/1.4 var(--mono);letter-spacing:.08em;color:var(--muted-soft);text-transform:uppercase}
+.evo-kpi .v{font:700 17px/1.3 var(--mono);margin-top:2px}
+.evo-kpi .v.g{color:var(--green)}.evo-kpi .v.r{color:var(--red)}
+.evo-kpi small{display:block;font:500 9.5px/1.4 var(--mono);color:var(--muted-soft);margin-top:1px}
+.evo-chart{background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 6px 2px;overflow-x:auto}
+.evo-chart svg{display:block;min-width:700px;width:100%;height:auto}
+.evo-legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font:500 10.5px/1.4 var(--mono);color:var(--muted)}
+.evo-legend i.d{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+.evo-legend i.b{display:inline-block;width:13px;height:3px;border-radius:2px;margin-right:5px;vertical-align:2px}
+.evo-legend i.g{background:var(--green)}.evo-legend i.r{background:var(--red)}
+.evo-legend i.a{background:#efb04f}.evo-legend i.m{background:#9b9b91}
+
 /* prime */
 .prime{display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:center}
 .spark{height:130px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;position:relative;overflow:hidden}
@@ -324,6 +339,14 @@ tr.best td{background:rgba(93,202,165,.05)}
 </div>
 
 <div class="card">
+  <h2>📈 L'évolution — mois par mois <span class="tag">LA COURBE DU MODÈLE · CHAQUE POINT = UN MOIS</span></h2>
+  <div class="evo-kpis" id="evo-kpis"></div>
+  <div class="evo-chart" id="evo-chart"></div>
+  <div class="evo-legend"><span><i class="d g"></i>mois gagné</span><span><i class="d r"></i>mois perdu</span>
+  <span><i class="b a"></i>cumul robinet</span><span><i class="b m"></i>témoin « ne rien faire »</span></div>
+</div>
+
+<div class="card">
   <h2>Krach éclair — le coupe-circuit, en ombre <span class="tag">AFFICHÉ, PAS SUIVI</span></h2>
   <p class="lead">Mesuré sur 2 univers (2003→ et 1990→), moteur quotidien : la variante qui protège le
   mieux en 2020 est la <b>pire</b> globalement. Le coupe-circuit 200 j améliore le MaxDD mais coûte du
@@ -442,6 +465,19 @@ tr.best td{background:rgba(93,202,165,.05)}
     <div class="xfoot">les poids convergent vers 1/13 ≈ 7,7 % au fil de la rotation — l'écart en démarrage est <b>normal</b>
     · P&amp;L <b>sur les prix</b> : saisis les dividendes du relevé IBKR en « DIVIDENDE », sinon ils ne sont pas comptés</div>
   </div>
+</div>
+
+<div class="card" id="pf-evocard" style="display:none">
+  <h2>💼 Ta courbe — cash &amp; ETF, en dollars <span class="tag">PRIVÉ · UN POINT PAR MOIS · AUTOMATIQUE</span></h2>
+  <p class="lead">La ligne verte = la valeur totale de ta poche au dernier cours. L'aire bleue = <b>ton monétaire en $</b> —
+  il se remplit aux versements, se vide aux achats, et attend les bascules. La variation affichée à chaque point est
+  <b>hors versements</b> (tes gains et pertes réels, pas l'argent ajouté).</p>
+  <div class="evo-chart" id="pf-evo"></div>
+  <div class="evo-legend"><span><i class="b" style="background:var(--green)"></i>valeur totale ($)</span>
+  <span><i class="d" style="background:#7fb7e6;border-radius:2px"></i>dont monétaire ($)</span>
+  <span><i class="d g"></i>mois gagné</span><span><i class="d r"></i>mois perdu</span></div>
+  <div class="xfoot">un instantané est photographié automatiquement chaque mois quand tu ouvres la page —
+  la courbe démarre aujourd'hui et s'allonge toute seule · le point du mois en cours est recalculé en direct au dernier cours</div>
 </div>
 
 <div class="card">
@@ -607,6 +643,62 @@ tr.best td{background:rgba(93,202,165,.05)}
     if(st.anom>0)warns.push('⚠️ '+st.anom+' vente'+(st.anom>1?'s':'')+' dépassant la position détenue — ignorée'+(st.anom>1?'s':'')+' dans le calcul, vérifie tes saisies');
     warn.innerHTML=warns.join('<br>');
     warn.style.display=warns.length?'block':'none';
+
+    renderPfEvo(J,st,lignes,prixOK,total,cash);
+  }
+
+  // courbe de la poche : cash exact (journal filtre par date, via compute),
+  // valeur totale photographiee chaque mois (instantane local, jamais reecrit
+  // pour les mois passes), variation du mois HORS versements.
+  function renderPfEvo(J,st,lignes,prixOK,total,cash){
+    var card=document.getElementById('pf-evocard'); if(!card)return;
+    var SK='mk_pf_snap', S=null;
+    try{ S=JSON.parse(localStorage.getItem(SK)||'null'); }catch(e){}
+    if(!S||S.v!==1||typeof S.m!=='object')S={v:1,m:{}};
+    var curM=todayLocal().slice(0,7);
+    if(prixOK){ S.m[curM]={total:total,dep:st.deposits,d:todayLocal()};
+      try{ localStorage.setItem(SK,JSON.stringify(S)); }catch(e){} }
+    var months=Object.keys(S.m).sort();
+    if(!months.length){ card.style.display='none'; return; }
+    card.style.display='block';
+    var pts=months.map(function(m){
+      var c=compute(J.tx.filter(function(x){ return x.d<=m+'-31'; }));
+      return {m:m,total:S.m[m].total,dep:S.m[m].dep,cash:Math.max(c.cash,0)}; });
+    for(var i=0;i<pts.length;i++){ var pp=pts[i], q=i>0?pts[i-1]:null;
+      pp.pct=(q&&q.total>0)?((pp.total-q.total-(pp.dep-q.dep))/q.total):null; }
+    var maxV=1000; pts.forEach(function(x){ maxV=Math.max(maxV,x.total,x.cash); }); maxV*=1.25;
+    var MN=['jan','fév','mars','avril','mai','juin','juil','août','sept','oct','nov','déc'];
+    function nom(m){ return MN[parseInt(m.split('-')[1],10)-1]||m; }
+    var STEP=180,X0=80,W=Math.max(720,X0+70+(pts.length-1)*STEP),H=330,BASE=270;
+    function Y(v){ return BASE-(v/maxV)*205; }
+    function X(i){ return X0+i*STEP; }
+    var s='<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg" font-family="monospace">'
+     +'<defs><linearGradient id="pfcash" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7fb7e6" stop-opacity=".3"/><stop offset="100%" stop-color="#7fb7e6" stop-opacity=".04"/></linearGradient></defs>'
+     +'<line x1="46" y1="'+BASE+'" x2="'+(W-10)+'" y2="'+BASE+'" stroke="rgba(255,255,250,.14)"/><text x="8" y="'+(BASE+4)+'" fill="#6e6e64" font-size="10">0 $</text>';
+    var pc='M'+X(0)+' '+BASE;
+    pts.forEach(function(x,i){ pc+=' L'+X(i)+' '+Y(x.cash).toFixed(1);
+      if(i<pts.length-1)pc+=' L'+X(i+1)+' '+Y(x.cash).toFixed(1); });
+    pc+=' L'+X(pts.length-1)+' '+BASE+' Z';
+    s+='<path d="'+pc+'" fill="url(#pfcash)" stroke="#7fb7e6" stroke-width="1.4" stroke-opacity=".7"/>';
+    var pt2='';
+    pts.forEach(function(x,i){ pt2+=(i?' L':'M')+X(i)+' '+Y(x.total).toFixed(1); });
+    s+='<path d="'+pt2+'" fill="none" stroke="var(--green)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>';
+    pts.forEach(function(x,i){ var xr=X(i),y=Y(x.total),
+      col=x.pct===null?'#7fb7e6':(x.pct>=0?'#5dcaa5':'#f09595');
+      s+='<circle cx="'+xr+'" cy="'+y.toFixed(1)+'" r="7" fill="'+col+'" stroke="#141411" stroke-width="2"><title>'+x.m+' — total '+money(x.total)+' · cash '+money(x.cash)+(x.pct!==null?' · mois '+pctf(x.pct):'')+'</title></circle>'
+       +'<text x="'+xr+'" y="'+(y-30).toFixed(1)+'" fill="var(--text)" font-size="12" font-weight="700" text-anchor="middle">'+money(x.total)+'</text>'
+       +'<text x="'+xr+'" y="'+(y-16).toFixed(1)+'" fill="'+col+'" font-size="10" font-weight="700" text-anchor="middle">'+(x.pct===null?'départ':'mois : '+pctf(x.pct))+'</text>'
+       +'<text x="'+xr+'" y="'+(BASE+22)+'" fill="#9b9b91" font-size="11" text-anchor="middle">'+nom(x.m)+'</text>';
+      var yc=Y(x.cash)+14; if(yc>BASE-2)yc=BASE-6;
+      s+='<text x="'+xr+'" y="'+yc.toFixed(1)+'" fill="#7fb7e6" font-size="9.5" text-anchor="middle">cash '+money(x.cash)+'</text>'; });
+    var tops=lignes.filter(function(l){ return l.pnl!==null&&l.cost>0; })
+      .sort(function(a,b){ return Math.abs(b.pnl)-Math.abs(a.pnl); }).slice(0,2);
+    if(tops.length&&prixOK){
+      s+='<text x="'+X(pts.length-1)+'" y="'+(Y(pts[pts.length-1].total)-44).toFixed(1)+'" fill="#9b9b91" font-size="9.5" text-anchor="middle">'
+       +tops.map(function(l){ return l.t+' '+pctf(l.pnl/l.cost); }).join(' · ')+'</text>'; }
+    if(pts.length===1){ s+='<text x="'+(X(0)+120)+'" y="'+(Y(pts[0].total)+4).toFixed(1)+'" fill="#6e6e64" font-size="10.5">→ un point s\'ajoutera chaque mois, automatiquement</text>'; }
+    s+='</svg>';
+    document.getElementById('pf-evo').innerHTML=s;
   }
 
   function renderTx(J){
@@ -808,6 +900,7 @@ function render(j){
 
   /* ---- courbe de prime */
   renderSpark(hist);
+  renderEvolution(hist);
 
   /* ---- ombre : coupe-circuit 200 j (present seulement si le node v3 est en place) */
   var avecCC = ok.filter(function(l){ return l.cc200 !== undefined; });
@@ -858,6 +951,60 @@ function renderSpark(hist){
   el('spark-note').textContent = pts.length === 1
     ? '07/2026 — premier point, la série commence ici. 120 mois conservés dans le fichier.'
     : pts.length + ' mois tracés · 120 conservés dans le fichier.';
+}
+
+function renderEvolution(hist){
+  var rows=[];
+  for(var i=0;i<hist.length;i++){ var e=hist[i];
+    /* mois d amorcage (cumuls a 1, prime 0) = point de depart, pas une mesure */
+    if(e.primeCumulee===0 && Math.abs((e.cumulRobinet||1)-1)<1e-9) continue;
+    rows.push(e); }
+  var box=el('evo-chart'), kbox=el('evo-kpis');
+  if(!rows.length){ if(box)box.innerHTML='<div style="padding:18px;color:var(--muted-soft);font:11px var(--mono)">en attente du premier mois mesuré…</div>'; return; }
+  var MN=['jan','fév','mars','avril','mai','juin','juil','août','sept','oct','nov','déc'];
+  function nom(m){ var k=parseInt(String(m).split('-')[1],10)-1; return MN[k]||m; }
+  var verts=0,best=null,worst=null;
+  rows.forEach(function(e){ if(e.robinet>=0)verts++;
+    if(best===null||e.robinet>best)best=e.robinet;
+    if(worst===null||e.robinet<worst)worst=e.robinet; });
+  var last=rows[rows.length-1];
+  var cumR=last.cumulRobinet-1, cumT=last.cumulTemoin-1, prime=last.primeCumulee;
+  kbox.innerHTML=
+    '<div class="evo-kpi"><div class="l">Mois mesurés</div><div class="v">'+rows.length+'</div><small>depuis '+nom(rows[0].mois)+' '+String(rows[0].mois).slice(0,4)+'</small></div>'
+   +'<div class="evo-kpi"><div class="l">Cumul robinet</div><div class="v '+(cumR>=0?'g':'r')+'">'+pct(cumR)+'</div><small>la courbe ambre</small></div>'
+   +'<div class="evo-kpi"><div class="l">Cumul témoin</div><div class="v '+(cumT>=0?'g':'r')+'">'+pct(cumT)+'</div><small>« ne rien faire »</small></div>'
+   +'<div class="evo-kpi"><div class="l">Prime cumulée</div><div class="v '+(prime>=0?'g':'r')+'">'+pct(prime)+'</div><small>l\'écart entre les deux</small></div>'
+   +'<div class="evo-kpi"><div class="l">Mois verts</div><div class="v">'+verts+' / '+rows.length+'</div><small>meilleur '+pct(best)+' · pire '+pct(worst)+'</small></div>';
+  var maxAbs=3;
+  rows.forEach(function(e){ [e.robinet*100,(e.cumulRobinet-1)*100,(e.cumulTemoin-1)*100]
+    .forEach(function(v){ maxAbs=Math.max(maxAbs,Math.abs(v)); }); });
+  maxAbs=Math.ceil(maxAbs);
+  var STEP=170,X0=70,W=Math.max(760,X0+60+rows.length*STEP),H=320,MID=150,PXP=80/maxAbs;
+  function Y(v){ return MID-v*PXP; }
+  function X(i){ return X0+(i+1)*STEP; }
+  var s='<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg" font-family="monospace">'
+   +'<defs><linearGradient id="evoaire" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#efb04f" stop-opacity=".2"/><stop offset="100%" stop-color="#efb04f" stop-opacity="0"/></linearGradient></defs>'
+   +'<line x1="40" y1="'+MID+'" x2="'+(W-10)+'" y2="'+MID+'" stroke="rgba(255,255,250,.14)" stroke-dasharray="3 4"/><text x="8" y="'+(MID+4)+'" fill="#6e6e64" font-size="10">0%</text>'
+   +'<line x1="40" y1="'+Y(maxAbs)+'" x2="'+(W-10)+'" y2="'+Y(maxAbs)+'" stroke="rgba(255,255,250,.05)"/><text x="8" y="'+(Y(maxAbs)+4)+'" fill="#50504a" font-size="10">+'+maxAbs+'%</text>'
+   +'<line x1="40" y1="'+Y(-maxAbs)+'" x2="'+(W-10)+'" y2="'+Y(-maxAbs)+'" stroke="rgba(255,255,250,.05)"/><text x="8" y="'+(Y(-maxAbs)+4)+'" fill="#50504a" font-size="10">−'+maxAbs+'%</text>';
+  var pR='M'+X0+' '+MID, pT='M'+X0+' '+MID, pA='M'+X0+' '+MID;
+  rows.forEach(function(e,i){ var xr=X(i);
+    pR+=' L'+xr+' '+Y((e.cumulRobinet-1)*100).toFixed(1);
+    pT+=' L'+xr+' '+Y((e.cumulTemoin-1)*100).toFixed(1);
+    pA+=' L'+xr+' '+Y((e.cumulRobinet-1)*100).toFixed(1); });
+  pA+=' L'+X(rows.length-1)+' '+MID+' Z';
+  s+='<path d="'+pA+'" fill="url(#evoaire)"/>'
+   +'<path d="'+pT+'" fill="none" stroke="#9b9b91" stroke-width="1.6" stroke-dasharray="5 4" opacity=".65"/>'
+   +'<path d="'+pR+'" fill="none" stroke="#efb04f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>'
+   +'<circle cx="'+X0+'" cy="'+MID+'" r="4" fill="#6e6e64"/><text x="'+X0+'" y="'+(H-34)+'" fill="#6e6e64" font-size="11" text-anchor="middle">départ</text>';
+  rows.forEach(function(e,i){ var xr=X(i), up=e.robinet>=0, yc=Y((e.cumulRobinet-1)*100);
+    s+='<circle cx="'+xr+'" cy="'+yc.toFixed(1)+'" r="7" fill="'+(up?'#5dcaa5':'#f09595')+'" stroke="#141411" stroke-width="2"><title>'+esc(e.mois)+' — mois '+pct(e.robinet)+' · témoin '+pct(e.temoin)+' · cumul '+pct(e.cumulRobinet-1)+'</title></circle>'
+     +'<text x="'+xr+'" y="'+(up?yc-18:yc+26).toFixed(1)+'" fill="'+(up?'#5dcaa5':'#f09595')+'" font-size="12" font-weight="700" text-anchor="middle">'+pct(e.robinet)+'</text>'
+     +'<text x="'+xr+'" y="'+(up?yc-32:yc+40).toFixed(1)+'" fill="#9b9b91" font-size="9.5" text-anchor="middle">témoin '+pct(e.temoin)+'</text>'
+     +'<text x="'+xr+'" y="'+(H-34)+'" fill="#9b9b91" font-size="11" text-anchor="middle">'+nom(e.mois)+'</text>';
+    if(e.robinet<0&&e.robinet>e.temoin){ s+='<text x="'+xr+'" y="'+(H-16)+'" fill="#5dcaa5" font-size="9.5" text-anchor="middle">🛡️ '+((e.robinet-e.temoin)*100).toFixed(2).replace('.',',')+' pt évité</text>'; } });
+  s+='<text x="'+(X(rows.length-1)+16)+'" y="'+(Y((last.cumulRobinet-1)*100)+4).toFixed(1)+'" fill="#efb04f" font-size="11" font-weight="700">🚰 cumul '+pct(cumR)+'</text></svg>';
+  box.innerHTML=s;
 }
 
 fetch(MD_RAW + 'data/robinet.json?t=' + Date.now())
