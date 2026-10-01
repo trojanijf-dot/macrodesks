@@ -1727,9 +1727,12 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
     (rows.length?rows.map(function(x){var c=x.isAvoir?'color:#f87171':'';return '<tr style="'+c+'"><td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(x.num)+'</td>'+
       '<td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+fD(x.date)+'</td>'+
       '<td style="padding:7px 9px;border-bottom:1px solid var(--border)">'+esc(x.client)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ht)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.tgc)+'</td>'+
-      '<td style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ttc)+'</td></tr>';}).join('')
+      // data-money : flouté en mode privacy quel que soit le montant — y compris un
+      // petit avoir sans séparateur de milliers (« -359 ») que la détection par
+      // expression ne reconnaît pas comme montant.
+      '<td data-money style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ht)+'</td>'+
+      '<td data-money style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.tgc)+'</td>'+
+      '<td data-money style="text-align:right;padding:7px 9px;border-bottom:1px solid var(--border)">'+fN(x.ttc)+'</td></tr>';}).join('')
       :'<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:14px">Aucune ligne pour ce filtre</td></tr>')+
     '<tr style="font-weight:800"><td colspan="3" style="padding:7px 9px;border-top:2px solid var(--border)">'+
       (activeFilter?('Sous-total filtré ('+rowsFac+' facture(s) − '+rowsAv+' avoir(s))'):('Total net ('+nbFac+' facture(s) − '+nbAv+' avoir(s))'))+
@@ -5485,7 +5488,7 @@ function _setPrivacyStored(on){
 // Lookbehind/lookahead :
 //   - (?<![\d/.:\-]) : pas précédé de chiffre/.-/: (évite milieu de date/heure)
 //   - (?!\d|[/.:\-]) : pas suivi → exclut "03/05/2026", "23:14"
-var PRIVACY_RX=/(?<![\d/.:\-])(\d{1,3}(?:[\s\u00a0\u202f]\d{3})+(?:[.,]\d+)?(?:\s*(?:XPF|AUD|EUR|USD|€|\$|M|k))?|\d+[.,]\d+\s*[Mk]\b|\d+\s*(?:XPF|AUD|EUR|USD|€|\$)\b|\d+(?:[.,]\d+)?\s*%)(?!\d|[/.:\-])/i;
+var PRIVACY_RX=/(?<![\d/.:\-])([-\u2212]?\d{1,3}(?:[\s\u00a0\u202f]\d{3})+(?:[.,]\d+)?(?:\s*(?:XPF|AUD|EUR|USD|€|\$|M|k))?|\d+[.,]\d+\s*[Mk]\b|\d+\s*(?:XPF|AUD|EUR|USD|€|\$)\b|\d+(?:[.,]\d+)?\s*%)(?!\d|[/.:\-])/i;
 // Sélecteur des conteneurs où chercher des montants à flouter
 function _privacyShouldSkipNode(node){
   if(!node||!node.parentElement)return true;
@@ -5531,7 +5534,7 @@ function _privacyWrapAmounts(root){
   while((cur=walker.nextNode())) nodes.push(cur);
   nodes.forEach(function(textNode){
     var txt=textNode.nodeValue;
-    var rx=/(?<![\d/.:\-])(\d{1,3}(?:[\s\u00a0\u202f]\d{3})+(?:[.,]\d+)?(?:\s*(?:XPF|AUD|EUR|USD|€|\$|M|k))?|\d+[.,]\d+\s*[Mk]\b|\d+\s*(?:XPF|AUD|EUR|USD|€|\$)\b|\d+(?:[.,]\d+)?\s*%)(?!\d|[/.:\-])/gi;
+    var rx=/(?<![\d/.:\-])([-\u2212]?\d{1,3}(?:[\s\u00a0\u202f]\d{3})+(?:[.,]\d+)?(?:\s*(?:XPF|AUD|EUR|USD|€|\$|M|k))?|\d+[.,]\d+\s*[Mk]\b|\d+\s*(?:XPF|AUD|EUR|USD|€|\$)\b|\d+(?:[.,]\d+)?\s*%)(?!\d|[/.:\-])/gi;
     var lastIdx=0,m,frag=document.createDocumentFragment(),any=false;
     while((m=rx.exec(txt))!==null){
       // Texte avant le match
@@ -7569,12 +7572,23 @@ function getDefaultPhase(inv){
 // Une facture est dite "pré-facturée" si sa phase n'est PAS billed.
 // Cela signifie : le n° existe (réservé à la cohérence) mais la facture
 // n'a pas encore été officiellement émise au client.
+// Phase EFFECTIVE (règle de lecture). Une facture créée par la cascade REAPPRO avant
+// le 09/09/2026 n'a pas de phase : la cascade ne posait pas encore phase:'emerson'.
+// Sans phase, la règle historique la tenait pour émise → elle entrait dans le CA de
+// l'Administratif, qui réclamait en plus son PDF archivé, alors qu'elle n'est pas
+// émise. Règle de LECTURE et non migration : elle vaut quel que soit l'ordre de
+// chargement (cloud / migrations au démarrage).
+function _phaseEffective(inv){
+  var p=(inv&&inv.phase)||'';
+  if(!p && inv && inv._fromBCReappro) return 'emerson';
+  return p;
+}
 function isPrebilled(inv){
-  var p=inv.phase||'';
-  return PHASES[p] && PHASES[p].billed===false;
+  var p=_phaseEffective(inv);
+  return !!(PHASES[p] && PHASES[p].billed===false);
 }
 function getPhase(inv){
-  var p=inv.phase||'';
+  var p=_phaseEffective(inv);
   if(PHASES[p]) return PHASES[p];
   // Fallback type-aware pour anciennes factures sans phase ou phase=''
   return PHASES[getDefaultPhase(inv)];
@@ -7868,7 +7882,9 @@ function migrateLegacyEmisePhase(){
   function migrate(item){
     var p=item.phase;
     if(p==null || p==='' || !PHASES[p]){
-      item.phase = getDefaultPhase(item);
+      // Cascade REAPPRO : numéro réservé, rien d'émis → Backlog Emerson, jamais
+      // « Livré client » (cf _phaseEffective).
+      item.phase = item._fromBCReappro ? 'emerson' : getDefaultPhase(item);
       migrated++;
     }
   }
