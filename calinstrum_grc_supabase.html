@@ -4099,7 +4099,7 @@ function admPreviewPrint(){
       <span>Email destinataire</span>
       <button type="button" class="btn btn-ghost btn-sm" onclick="openBLEmailManager()" title="Gérer les emails BL par client" style="font-size:10px;padding:1px 7px;line-height:1.4">⚙️</button>
       <span id="bl-email-save-badge" style="display:none"></span>
-    </label><input class="form-input" id="bl-emaildest" oninput="_refreshBLEmailSaveBadge()"></div>
+    </label><input class="form-input" id="bl-emaildest" oninput="this.dataset.auto='';_refreshBLEmailSaveBadge()"></div>
     <div class="form-row">
       <div class="form-group"><label>N° commande lié</label><input class="form-input" id="bl-po"></div>
       <div class="form-group"><label>Émis par</label><input class="form-input" id="bl-emis" value="Fabrice RIZZO"></div>
@@ -7103,10 +7103,13 @@ function fillCCFromSelect(pfx){
   // Le mapping est centralisé (pas le c.email du client). Ne remplit que si vide
   // pour ne pas écraser une saisie utilisateur.
   if(pfx==='bl'){
+    // [02/10/2026] L'e-mail REMPLI PAR L'APP suit le client ; un e-mail TAPÉ n'est
+    // jamais écrasé. Avant : rempli « seulement si vide ». La recherche du menu
+    // sélectionne une fiche à chaque frappe : « P » → une fiche PRNC → e-mail PRNC
+    // rempli ; « PAUL » → ENERCAL-PRONY → l'e-mail PRNC restait (cas réel).
     var emailDest=document.getElementById('bl-emaildest');
-    if(emailDest && !emailDest.value.trim() && v){
-      var mapped=getBLEmailForClient(v);
-      if(mapped) emailDest.value=mapped;
+    if(emailDest && v && (!emailDest.value.trim() || emailDest.dataset.auto==='1')){
+      _blSetEmailAuto(_blEmailParDefaut(v));
     }
     // Mettre à jour le badge "💾 Sauvegarder pour ce client" inline
     if(typeof _refreshBLEmailSaveBadge==='function') _refreshBLEmailSaveBadge();
@@ -22374,6 +22377,32 @@ function getParams(){
 // Helper : retourne l'email BL pour un nom client donné, en matchant par préfixe.
 // Ex: getBLEmailForClient('SLN - CONTACT') → ''
 // Retourne '' si aucun mapping trouvé.
+// E-mail proposé sur un BL : celui de l'ENTITÉ dans « Emails BL » s'il existe,
+// sinon celui de la fiche du client.
+function _blEmailParDefaut(clientName){
+  if(!clientName)return '';
+  var m=getBLEmailForClient(clientName);
+  if(m)return m;
+  var c=(DB.clients||[]).find(function(x){return x&&x.nom===clientName;});
+  return (c&&c.email)||'';
+}
+// Écrit un e-mail CHOISI PAR L'APP (dataset.auto='1') : il pourra être remplacé
+// si le client ou la table des e-mails BL change. Taper dans le champ efface la
+// marque (cf oninput du champ) : la saisie de l'utilisateur est alors protégée.
+function _blSetEmailAuto(val){
+  var el=document.getElementById('bl-emaildest');
+  if(!el)return;
+  el.value=val||'';
+  el.dataset.auto='1';
+  if(typeof _refreshBLEmailSaveBadge==='function')_refreshBLEmailSaveBadge();
+}
+// Après une modification de la table des e-mails BL : met à jour le champ du BL
+// ouvert s'il porte encore un e-mail choisi par l'app.
+function _blRafraichirEmailAuto(){
+  var el=document.getElementById('bl-emaildest'), sel=document.getElementById('bl-client');
+  if(!el||!sel||!sel.value)return;
+  if(!el.value.trim()||el.dataset.auto==='1')_blSetEmailAuto(_blEmailParDefaut(sel.value));
+}
 function getBLEmailForClient(clientName){
   if(!clientName)return '';
   var map=(getParams().blEmailsByClient)||{};
@@ -22396,6 +22425,8 @@ function setBLEmailForPrefix(prefix,email){
     delete p.blEmailsByClient[prefix];
   }
   saveDB();
+  // Le BL ouvert reflète aussitôt la table (si son e-mail vient de l'app).
+  if(typeof _blRafraichirEmailAuto==='function')_blRafraichirEmailAuto();
 }
 
 // =============================================================================
@@ -43277,6 +43308,8 @@ function openBL(id, opts){
       gv('bl-num',b.num);gv('bl-date',b.date||td());gv('bl-lieu',b.lieu||'');
       buildClientOptions('bl-client',b.client||'');
       gv('bl-contact',b.contact||'');gv('bl-adrdest',b.adrdest||'');gv('bl-emaildest',b.emaildest||'');gv('bl-po',b.po||'');gv('bl-emis',b.emis||'');gv('bl-status',b.status||'En préparation');
+      // E-mail d'un BL enregistré : protégé (sauf s'il est vide).
+      (function(el){ if(el) el.dataset.auto=b.emaildest?'':'1'; })(document.getElementById('bl-emaildest'));
       gv('bl-dvlie', b.dvlie || (b._sourceDevisNums||[]).join(', '));
       gv('bl-fret', Number(b.fret)||0);
       blL=JSON.parse(JSON.stringify(b.lines||[]));
@@ -43298,7 +43331,8 @@ function openBL(id, opts){
     buildClientOptions('bl-client', opts.client || '');
     gv('bl-contact', opts.contact || '');
     gv('bl-adrdest', opts.adrdest || '');
-    gv('bl-emaildest', '');
+    // E-mail du client du devis, affiché d'emblée (avant : laissé vide).
+    _blSetEmailAuto(_blEmailParDefaut(opts.client || ''));
     gv('bl-po', opts.poConsolide || '');
     gv('bl-emis', 'Fabrice RIZZO');
     gv('bl-status', 'En préparation');
@@ -43312,7 +43346,7 @@ function openBL(id, opts){
     _blPendingSourceDevisIds = (opts.fromDevisIds||[]).slice();
     sv('mBLtitle', 'Nouveau BL depuis devis');
   } else {
-    gv('bl-num',nxt('bl'));gv('bl-date',td());gv('bl-lieu','NOUMEA');gv('bl-contact','');gv('bl-adrdest','');gv('bl-emaildest','');gv('bl-po','');gv('bl-emis','Fabrice RIZZO');gv('bl-status','En préparation');gv('bl-dvlie','');gv('bl-fret',0);sv('mBLtitle','Nouveau Bon de Livraison');
+    gv('bl-num',nxt('bl'));gv('bl-date',td());gv('bl-lieu','NOUMEA');gv('bl-contact','');gv('bl-adrdest','');_blSetEmailAuto('');gv('bl-po','');gv('bl-emis','Fabrice RIZZO');gv('bl-status','En préparation');gv('bl-dvlie','');gv('bl-fret',0);sv('mBLtitle','Nouveau Bon de Livraison');
     _blPendingSourceDevisIds = null;
   }
   rBLlines();renderBLColisageCard();om('mBL');
