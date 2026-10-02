@@ -7586,6 +7586,15 @@ function getDefaultPhase(inv){
   var t=(inv&&inv.type)||'';
   return (t==='Prestation de service') ? 'recu' : 'livre';
 }
+// PREMIÈRE phase d'une facture selon son type (pré-facture : rien n'est émis).
+// Prestation → Chantier non démarré ; Fourniture et mixte → Backlog Emerson (le
+// matériel conditionne la livraison). Même règle que la pré-facture automatique.
+// [02/10/2026] Une facture sans phase s'affichait « Backlog Emerson » même en
+// prestation : c'était simplement le premier choix du menu.
+function _premierePhase(type){
+  var t=String(type||'');
+  return (/prestation/i.test(t) && !/fourniture/i.test(t)) ? 'chantier_attente' : 'emerson';
+}
 // Une facture est dite "pré-facturée" si sa phase n'est PAS billed.
 // Cela signifie : le n° existe (réservé à la cohérence) mais la facture
 // n'a pas encore été officiellement émise au client.
@@ -7616,7 +7625,10 @@ function phaseBadge(inv){
 }
 // Sélecteur dropdown pour modifier la phase inline dans le tableau
 function phaseSelect(inv){
-  var current=inv.phase||'';
+  var current=_phaseEffective(inv);
+  // Sans phase valide : la première phase de SON type (et non le 1er choix du menu,
+  // « Backlog Emerson », affiché jusque-là même pour une prestation).
+  if(!PHASES[current]) current=_premierePhase(inv.type);
   var opts=Object.keys(PHASES).map(function(k){
     var p=PHASES[k];
     return '<option value="'+k+'"'+(k===current?' selected':'')+'>'+p.icon+' '+p.label+'</option>';
@@ -7668,7 +7680,20 @@ function setSUIVIPhase(id,newPhase){
 
   // CAS 2 — AUTO-PROMOTION : phase non-billed → billed, dateEnvoi vide
   // On propose de fixer dateEnvoi=aujourd'hui + l'échéance calculée (30 j fin de mois)
-  if(newBilled && !oldBilled && !inv.dateEnvoi){
+  // ⛔ [02/10/2026] Réservé aux VRAIES pré-factures (phase précédente réellement
+  // « non facturée ») : elles partent chez le client maintenant. Une ANCIENNE
+  // facture sans phase est déjà émise depuis longtemps : la dater d'aujourd'hui lui
+  // donnait une échéance fausse (cas réel : facture de juin → échéance au 30/11).
+  // Elle garde sa propre date, sans question.
+  var _etaitPreFacture=!!(PHASES[oldPhase] && PHASES[oldPhase].billed===false);
+  if(newBilled && !oldBilled && !inv.dateEnvoi && !_etaitPreFacture){
+    var _faL=(DB.factures||[]).find(function(x){return x.id===(inv._factureId||inv.grcFactureId||inv.id);});
+    var _dL=(_faL&&_faL.date)||inv._dateCreation||'';
+    if(_dL){
+      inv.dateEnvoi=_dL;
+      inv.dateButoir=_echeanceFacture(_dL,_faL?_faL.delai:'');
+    }
+  } else if(newBilled && !oldBilled && !inv.dateEnvoi){
     var _echAuto=_echeanceFacture(td(),'');
     if(confirm('🎉 La facture '+inv.num+' passe en phase "'+PHASES[newPhase].label+'".\n\nVoulez-vous la considérer comme officiellement émise aujourd\'hui ?\n\n• Date d\'envoi = '+td()+'\n• Échéance = '+_echAuto+' (30 jours fin de mois)\n• Statut = En attente de paiement')){
       inv.dateEnvoi=td();
@@ -31976,11 +32001,11 @@ function renderFADelaiHistory(){
   var dateEmission=gvg('fa-date');
   var delaiTxt=gvg('fa-delai')||'';
   var dateEnc=gvg('fa-date-encaissement');
-  // Détecter le délai en jours depuis le texte
-  var nbJours=30; // défaut 30 jours
-  if(/imm[ée]diat/i.test(delaiTxt))nbJours=0;
-  else if(/60\s*jours/i.test(delaiTxt))nbJours=60;
-  else if(/30\s*jours/i.test(delaiTxt))nbJours=30;
+  // [02/10/2026] Échéance tirée de _echeanceFacture, la règle UNIQUE (« 30 jours
+  // fin de mois »). Ce panneau la recalculait lui-même à 30 jours secs : une
+  // facture payée à l'heure y apparaissait « +4j de retard ».
+  var dEchIso=_echeanceFacture(dateEmission,delaiTxt);
+  var nbJours=dEchIso?_reglJoursEntre(dateEmission,dEchIso):0;
   // Construire les lignes
   var html='<div style="font-weight:700;color:var(--teal);margin-bottom:6px;font-size:11px;text-transform:uppercase;letter-spacing:.05em">📊 Historique du délai</div>';
   if(!dateEmission){
@@ -31992,19 +32017,13 @@ function renderFADelaiHistory(){
     box.innerHTML=html+'<div style="font-style:italic">Date d\'émission invalide.</div>';
     return;
   }
-  // Échéance théorique = émission + nbJours
-  var dEch=new Date(dE);
-  dEch.setDate(dEch.getDate()+nbJours);
-  var dEchIso=dEch.toISOString().slice(0,10);
   html+='<div>📅 <strong style="color:var(--text)">Émise le</strong> '+fD(dateEmission)+'</div>';
   html+='<div>⏰ <strong style="color:var(--text)">Échéance théorique</strong> '+fD(dEchIso)+(nbJours>0?' (J+'+nbJours+')':' (paiement immédiat)')+'</div>';
   if(dateEnc){
     var dEn=new Date(dateEnc);
     if(!isNaN(dEn.getTime())){
-      var ecartMs=dEn.getTime()-dE.getTime();
-      var ecartJ=Math.round(ecartMs/(24*3600*1000));
-      var retardMs=dEn.getTime()-dEch.getTime();
-      var retardJ=Math.round(retardMs/(24*3600*1000));
+      var ecartJ=_reglJoursEntre(dateEmission,dateEnc);
+      var retardJ=_reglJoursEntre(dEchIso,dateEnc);
       var retardLabel='';
       if(retardJ>0)retardLabel=' <span style="color:#f43f5e">⚠ +'+retardJ+'j de retard</span>';
       else if(retardJ===0)retardLabel=' <span style="color:#10b981">✓ pile à l\'échéance</span>';
@@ -33139,6 +33158,10 @@ async function saveFA(){
   // Sync vers Suivi Factures (DB.invoices) : créer ou mettre à jour l'entrée miroir
   // ⚠ Critique : c'est cette synchro qui garde DB.invoices cohérent avec DB.factures
   // pour que le badge facture dans Devis et la liste Suivi affichent le bon statut.
+  // Facture NEUVE sans phase (pointage, formulaire…) : elle naît pré-facture, dans
+  // la première phase de son type. Sans phase, elle passait pour émise et
+  // s'affichait « Backlog Emerson » même en prestation.
+  if(wasNew && (!f.phase || !PHASES[f.phase])) f.phase=_premierePhase(f.type);
   syncFactureToSuivi(f);
   // Mettre à jour le f dans DB.factures avec le suiviId retourné
   var fi=DB.factures.findIndex(function(x){return x.id===f.id;});
@@ -45755,6 +45778,7 @@ function _ptFactNouveauBrouillon(d,objet,faLines,bcConsumption,includeMajorees,c
     // devisLieId = devis PORTEUR (n° de facture réservé) ; dvlie peut citer en
     // plus les autres devis couverts par cette facture (cf _ptFactDvlieTexte).
     devisLieId:d.id,dvlie:_ptFactDvlieTexte(d)||d.num||'',
+    phase:_premierePhase(d.type||'Prestation de service'),
     bcClientSLN:d.bcClientSLN||'',
     status:'En attente',statut:'En attente',
     tgcM:d.tgcM||'506-2',
