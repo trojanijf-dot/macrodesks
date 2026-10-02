@@ -4113,7 +4113,7 @@ function admPreviewPrint(){
     </div>
     <hr class="sep">
     <button class="btn btn-ghost btn-sm mb8" onclick="addBLL()">+ Ajouter ligne</button>
-    <table class="items-tbl"><thead><tr><th>Réf. produit</th><th style="min-width:170px">Description</th><th>Qtés</th><th>Unité(XPF)</th><th></th></tr></thead>
+    <table class="items-tbl"><thead><tr><th>Réf. produit</th><th style="min-width:170px">Description</th><th>Qtés</th><th>Unité(XPF)</th><th>TGC %</th><th></th></tr></thead>
     <tbody id="blLN"></tbody></table>
     <!-- (=X=) TROIS LIGNES, comme au pied du devis : marchandise, fret, total du.
          `blTT` garde son sens d'origine -- la MARCHANDISE SEULE -- parce qu'il
@@ -4125,6 +4125,7 @@ function admPreviewPrint(){
         <input class="form-input" id="bl-fret" type="number" step="1" min="0" value="0" oninput="cBLtot()"
                title="Repris du devis. Un fret ne se facture qu'une fois : sur un 2e BL du meme devis il est propose a 0."
                style="width:130px;text-align:right;padding:2px 6px;font-size:12px"></div>
+      <div class="t-row" id="blTGCrow" style="display:none"><span>TGC</span><span id="blTGC">0</span></div>
       <div class="t-row t-total"><span>TOTAL (XPF)</span><span id="blTTG">0</span></div>
     </div>
     <hr class="sep">
@@ -43067,6 +43068,7 @@ function _openBLFromDVStep2(){
         ref: l.ref || '',
         desc: l.designation || l.desc || '',
         pu: Number(l.pu) || 0,
+        tgc: Number(l.tgc) || 0,    // taux de TGC de la ligne de devis (repris sur le BL)
         qte_commandee: qteCommandee,
         qte_deja_livree: qteDejaLivree,
         qte_restante: qteRestante,
@@ -43223,7 +43225,8 @@ function _commitBLFromDV(){
         ref: l.ref || '',
         desc: descPrefix + (l.desc || ''),
         qte: l.qte_a_livrer,
-        pu: l.pu
+        pu: l.pu,
+        tgc: Number(l.tgc) || 0
       });
     });
   });
@@ -43363,7 +43366,7 @@ function openBL(id, opts){
     gv('bl-fret', Number(opts.fret)||0);
     // Pré-remplir les lignes
     blL = (opts.prefillLines || []).map(function(l){
-      return { ref: l.ref || '', desc: l.desc || '', qte: Number(l.qte)||1, pu: Number(l.pu)||0 };
+      return { ref: l.ref || '', desc: l.desc || '', qte: Number(l.qte)||1, pu: Number(l.pu)||0, tgc: Number(l.tgc)||0 };
     });
     // Mémoriser les IDs sources pour la traçabilité (utilisé par saveBL via getBL)
     _blPendingSourceDevisIds = (opts.fromDevisIds||[]).slice();
@@ -43387,13 +43390,15 @@ function rBLlines(){
       '<td><input style="min-width:150px;width:100%" value="'+esc(l.desc)+'" data-field="desc" data-idx="'+i+'"></td>'+
       '<td><input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'"></td>'+
       '<td><input type="number" style="width:75px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'"></td>'+
+      // Taux de TGC de la ligne (repris du devis). Sans effet pour un client exonéré.
+      '<td><input type="number" style="width:46px" value="'+(l.tgc!=null&&l.tgc!==''?l.tgc:'')+'" placeholder="—" data-field="tgc" data-idx="'+i+'" title="Taux de TGC (%) — repris du devis"></td>'+
       '<td><button class="bl-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
       '</tr>';
   }).join('');
   tb.querySelectorAll('input,textarea').forEach(function(inp){
     inp.addEventListener('input',function(){
       var idx=parseInt(this.getAttribute('data-idx')),field=this.getAttribute('data-field');
-      if(!isNaN(idx)&&field){blL[idx][field]=field==='qte'||field==='pu'?+this.value:this.value;cBLtot();}
+      if(!isNaN(idx)&&field){blL[idx][field]=(field==='qte'||field==='pu'||field==='tgc')?+this.value:this.value;cBLtot();}
     });
   });
   tb.querySelectorAll('.bl-del-btn').forEach(function(btn){
@@ -43420,8 +43425,70 @@ function _blFretForm(){var e=document.getElementById('bl-fret');return e?(Number
 function cBLtot(){
   var tot=blL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0);},0);
   sv('blTT',fN(tot)+' XPF');
-  sv('blTTG',fN(tot+_blFretForm())+' XPF');
+  // TGC : client assujetti seulement (exonéré → 0, affichage d'avant inchangé).
+  var srcIds=_blPendingSourceDevisIds;
+  if(!srcIds&&eBLid){var ex=(DB.bls||[]).find(function(x){return x.id===eBLid;});srcIds=ex&&ex._sourceDevisIds;}
+  var t=_blTgc({lines:blL,fret:_blFretForm(),client:gvg('bl-client'),_sourceDevisIds:srcIds||null,dvlie:gvg('bl-dvlie')});
+  var row=document.getElementById('blTGCrow');
+  if(row)row.style.display=t.total?'':'none';
+  sv('blTGC',Object.keys(t.parTaux).map(function(k){return k+' % : '+fN(t.parTaux[k]);}).join(' · ')+(t.total?' XPF':''));
+  sv('blTTG',fN(tot+_blFretForm()+t.total)+' XPF');
   return tot;
+}
+// =============================================================================
+// TGC D'UN BL — client ASSUJETTI seulement (02/10/2026)
+// =============================================================================
+// Le BL s'arrêtait au hors taxe : pour un client soumis à la TGC son total ne
+// correspondait plus au devis (cas réel : 1 926 166 HT au lieu de 2 110 009 TTC).
+// - taux de chaque ligne : porté par la ligne (repris du devis à la création) ;
+//   ligne sans taux (BL plus ancien) → celui de la ligne de devis correspondante ;
+// - fret : au taux de ses lignes dans le(s) devis source ;
+// - client EXONÉRÉ : 0 → le BL s'imprime exactement comme avant.
+// b.total garde son sens (la marchandise seule) : la TGC n'est qu'un affichage.
+function _blDevisSources(b){
+  var out=[];
+  (b&&b._sourceDevisIds||[]).forEach(function(id){var d=(DB.devis||[]).find(function(x){return x.id===id;});if(d)out.push(d);});
+  if(!out.length&&b&&b.dvlie){
+    String(b.dvlie).split(/[,;\/+]/).map(function(s){return s.trim();}).filter(Boolean).forEach(function(n){
+      var d=(DB.devis||[]).find(function(x){return String(x.num||'').toUpperCase()===n.toUpperCase();});
+      if(d&&out.indexOf(d)<0)out.push(d);
+    });
+  }
+  return out;
+}
+function _blTauxLigne(l,srcLignes){
+  if(l&&l.tgc!=null&&l.tgc!==''&&!isNaN(Number(l.tgc)))return Number(l.tgc);
+  var r=String((l&&(l.ref||l.refConstructeur))||'').trim().toLowerCase();
+  var dsc=String((l&&(l.desc||l.designation))||'').replace(/^\[[^\]]+\]\s*/,'').trim().toLowerCase().slice(0,30);
+  var m=(srcLignes||[]).find(function(x){
+    var xr=String(x.ref||'').trim().toLowerCase();
+    if(r&&xr&&(xr===r||xr.indexOf(r)===0||r.indexOf(xr)===0))return true;
+    return dsc&&String(x.designation||x.desc||'').trim().toLowerCase().slice(0,30)===dsc;
+  });
+  return m?(Number(m.tgc)||0):0;
+}
+function _blTgc(b){
+  var res={parTaux:{},total:0};
+  if(!b)return res;
+  if(typeof isClientExo==='function'&&b.client&&isClientExo(b.client))return res;
+  var srcL=[],srcF=[];
+  _blDevisSources(b).forEach(function(d){
+    srcL=srcL.concat((d.lines&&d.lines.fourniture)||[]);
+    srcF=srcF.concat((d.lines&&d.lines.fret)||[]);
+  });
+  var base={};
+  (b.lines||[]).forEach(function(l){
+    var t=_blTauxLigne(l,srcL);if(!t)return;
+    base[t]=(base[t]||0)+(Number(l.qte)||0)*(Number(l.pu)||0);
+  });
+  var fret=Number(b.fret)||0;
+  if(fret>0){
+    var fHT=0,fT={};
+    srcF.forEach(function(l){var h=(Number(l.qte)||0)*(Number(l.pu)||0);fHT+=h;var t=Number(l.tgc)||0;if(t)fT[t]=(fT[t]||0)+h;});
+    if(fHT>0)Object.keys(fT).forEach(function(t){base[t]=(base[t]||0)+fret*fT[t]/fHT;});
+  }
+  Object.keys(base).forEach(function(t){var m=Math.round(base[t]*Number(t)/100);if(m){res.parTaux[t]=m;res.total+=m;}});
+  return res;
 }
 function getBL(){
   var tot=cBLtot();
@@ -49642,6 +49709,22 @@ function bBL(b){
       '<tr><td colspan="3" style="text-align:right;font-size:11px;color:#475569">Fret / frais locaux</td><td style="text-align:right;font-weight:700;font-size:11px;color:#475569">'+fN(_blFret)+'</td></tr>'+
       '<tr><td colspan="3" style="text-align:right;font-weight:800;font-size:12px">TOTAL (XPF)</td><td style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f">'+fN(_blMarch+_blFret)+'</td></tr>'
     : '<tr><td colspan="3" style="text-align:right;font-weight:800;font-size:12px">TOTAL</td><td style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f">'+fN(_blMarch)+'</td></tr>';
+  // TGC — client ASSUJETTI seulement (cf _blTgc). Un client exonéré garde le pied
+  // ci-dessus, au caractère près. Le total retombe alors sur le TTC du devis.
+  var _blT=_blTgc(b);
+  if(_blT.total>0){
+    var _st='text-align:right;font-size:11px;color:#475569', _sv='text-align:right;font-weight:700;font-size:11px;color:#475569';
+    _blFoot=
+      (_blFret>0
+        ? '<tr><td colspan="3" style="'+_st+'">Total marchandises (XPF)</td><td style="'+_sv+'">'+fN(_blMarch)+'</td></tr>'+
+          '<tr><td colspan="3" style="'+_st+'">Fret / frais locaux</td><td style="'+_sv+'">'+fN(_blFret)+'</td></tr>'
+        : '')+
+      '<tr><td colspan="3" style="'+_st+'">Total HT (XPF)</td><td style="'+_sv+'">'+fN(_blMarch+_blFret)+'</td></tr>'+
+      Object.keys(_blT.parTaux).sort(function(a,z){return Number(a)-Number(z);}).map(function(k){
+        return '<tr><td colspan="3" style="'+_st+'">TGC '+k+' %</td><td style="'+_sv+'">'+fN(_blT.parTaux[k])+'</td></tr>';
+      }).join('')+
+      '<tr><td colspan="3" style="text-align:right;font-weight:800;font-size:12px">TOTAL TTC (XPF)</td><td style="text-align:right;font-weight:900;font-size:13px;color:#1e3a5f">'+fN(_blMarch+_blFret+_blT.total)+'</td></tr>';
+  }
   // DATE DE LIVRAISON -- affichee a DEUX endroits : l'en-tete « Date : » et le pied
   // « Livre le : ». C'est le CHAMP DATE DU FORMULAIRE qui la pilote.
   //
