@@ -49980,6 +49980,33 @@ function previewBL(){var b=getBL();if(!b.num)return;window._prvDvSourceId=null;w
 
 
 // ===== JS PAGINATOR FOR DEVIS PRINT =====
+// Retire de la fin d'une page (liste de rowItems) le dernier BLOC insécable et le
+// renvoie : une ligne seule, ou un bloc TÂCHE entier (ses sous-lignes partagent les
+// cellules #/Réf./Désignation en rowspan : coupé, la suite s'affiche décalée sous
+// les mauvaises colonnes — constaté le 06/10/2026), avec le ou les titres qui le
+// précèdent. Ne vide jamais la page : renvoie [] (page intacte) si le bloc est
+// tout ce qu'elle contient. Seule règle de découpe pour devis et factures.
+function _pgDetacherDernierBloc(page){
+  var n=page.length;
+  if(!n) return [];
+  var debut=n-1;
+  if(page[debut].taskGroup && !page[debut].taskGroupStart){
+    while(debut>0 && page[debut-1].taskGroup && !page[debut].taskGroupStart) debut--;
+  }
+  while(debut>0 && page[debut-1].isSec) debut--;
+  if(debut===0) return [];
+  return page.splice(debut);
+}
+
+// Étiquette une ligne de facture pour _pgFixPages (montant exact, titre, bloc
+// TÂCHE), à partir des drapeaux de la pagination. Le devis pose les mêmes
+// attributs directement dans son gabarit.
+function _pgEtiqueterLigne(r){
+  var a=r.isSec?' data-pgsec="1"':' data-pgtot="'+(Number(r.tot)||0)+'"';
+  if(r.taskGroup) a+=' data-pgtask="1"'+(r.taskGroupStart?' data-pgtaskstart="1"':'');
+  return String(r.html).replace(/^<tr/,'<tr'+a);
+}
+
 function buildPaginatedDV(d, logoSrc, sigSrc){
   var isExo=isClientExo(d.client);
   var clientDetail=getClientDetail(d.client);
@@ -50279,12 +50306,9 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
     var lastHeight=lastPage.reduce(function(s,r){return s+r.height;},0);
     var lastBudget=pages.length===1?PAGE1_BUDGET:PAGE_N_BUDGET;
     while(lastHeight+LAST_EXTRA>lastBudget && lastPage.length>1){
-      // Déplacer la dernière ligne vers une nouvelle page — MAIS si celle du dessus est un header,
-      // le déplacer aussi (ne pas séparer header + 1ère ligne)
-      var moved=[lastPage.pop()];
-      while(lastPage.length && lastPage[lastPage.length-1].isSec){
-        moved.unshift(lastPage.pop());
-      }
+      // Déplacer le dernier BLOC (ligne, ou bloc TÂCHE entier, avec son titre)
+      var moved=_pgDetacherDernierBloc(lastPage);
+      if(!moved.length) break;
       pages.push(moved);
       lastPage=pages[pages.length-1];
       lastHeight=moved.reduce(function(s,r){return s+r.height;},0);
@@ -50599,17 +50623,13 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   document.body.appendChild(measureDiv);
   var colgroup='<colgroup><col style="width:28px"><col style="width:130px"><col><col style="width:38px"><col style="width:46px"><col style="width:36px"><col style="width:78px"><col style="width:82px"></colgroup>';
   function measureRow(html){var t=document.createElement('table');t.style.cssText='width:703px;border-collapse:collapse;table-layout:fixed;font-size:14px;font-family:Calibri,Arial,sans-serif';t.innerHTML=colgroup+'<tbody>'+html+'</tbody>';measureDiv.appendChild(t);var h=t.getBoundingClientRect().height;measureDiv.removeChild(t);return h;}
-  // ⛔ NE PAS ETIQUETER LES LIGNES DE FACTURE (data-pgtot / data-pgsec / data-pgtask).
-  // Ces attributs ACTIVENT _pgFixPages, la boucle de correction de pagination.
-  // Essaye le 14/08/2026, RETIRE le jour meme : sur les factures avec suivi de
-  // BC (type AEI SNC), la correction redecoupait un document dont la mise en
-  // page etait deja reglee -- une ligne du tableau basculait en page 2, laissant
-  // un vide sous le tableau, et le bloc de suivi des BC s'intercalait dans la
-  // facturation au lieu de la suivre.
-  // REGLE METIER : la facture doit tenir d'un seul tenant ; si elle deborde, on
-  // TERMINE la facture puis on place le suivi des BC apres. Jamais d'intercalage.
-  // Sans ces attributs, _pgFixPages est inerte sur les factures (garde en tete
-  // de fonction) et le rendu reste exactement celui d'avant.
+  // Lignes ÉTIQUETÉES à l'assemblage (_pgEtiqueterLigne) : _pgFixPages corrige
+  // donc aussi les factures. Retiré le 14/08 parce que le suivi des BC
+  // s'intercalait dans la facturation ; depuis le 11/09 il a TOUJOURS sa propre
+  // page (data-pgkind="suivi-bc"), où aucune ligne ne peut glisser.
+  // [06/10/2026] Sans correction, l'estimation seule décidait : ~25 lignes
+  // faisaient déborder la page 1 (bandeau rogné), et un bloc TÂCHE pouvait être
+  // coupé. Règle métier inchangée : facture complète, PUIS suivi BC.
   var rowItems=[];
   lineData.forEach(function(item){
     if(item.isSec){
@@ -50770,10 +50790,8 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
     var lastHeight=lastPage.reduce(function(s,r){return s+r.height;},0);
     var lastBudget=pages.length===1?PAGE1_BUDGET:PAGE_N_BUDGET;
     while(lastHeight+LAST_EXTRA>lastBudget && lastPage.length>1){
-      var moved=[lastPage.pop()];
-      while(lastPage.length && lastPage[lastPage.length-1].isSec){
-        moved.unshift(lastPage.pop());
-      }
+      var moved=_pgDetacherDernierBloc(lastPage);
+      if(!moved.length) break;
       pages.push(moved);
       lastPage=pages[pages.length-1];
       lastHeight=moved.reduce(function(s,r){return s+r.height;},0);
@@ -50821,7 +50839,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
     var pageSub=0;
     pageRows.forEach(function(r){if(!r.isSec)pageSub+=r.tot;});
     cumulSub+=pageSub;
-    var rowsHTML=pageRows.map(function(r){return r.html;}).join('');
+    var rowsHTML=pageRows.map(_pgEtiqueterLigne).join('');
     var subtotalRowHTML='';
     if(isMultiPage && !isLast){
       var stLabel='Sous-total HT (XPF) — Report page suivante',stValue=fN(cumulSub);
@@ -50836,7 +50854,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         '<div class="doc-footer-bar">'+CI.nom+' \u2014 '+CI.tel+' \u2014 '+CI.email+' \u2014 '+CI.rcs+'</div>'+
         '<p class="doc-legal">'+mention+'</p>'+
       '</div>';
-    var pageHTML='<div class="doc-page">';
+    var pageHTML='<div class="doc-page" data-pgstlabel="Sous-total HT (XPF) — Report page suivante">';
     pageHTML+=buildPageHeader(pi+1,pages.length);
     pageHTML+=tableHTML;
     if(isLast){
@@ -50869,7 +50887,7 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
         '<div class="doc-footer-bar">'+CI.nom+' — '+CI.tel+' — '+CI.email+' — '+CI.rcs+'</div>'+
         '<p class="doc-legal">'+mention+'</p>'+
       '</div>';
-    pagesHTML+='<div class="doc-page">'+
+    pagesHTML+='<div class="doc-page" data-pgkind="suivi-bc">'+
       buildPageHeader(pages.length+1,pages.length+1)+
       '<div class="doc-page-final-block" style="margin-top:8px">'+bcTrackHtml+'</div>'+
       bcPageFooterHTML+
@@ -52843,6 +52861,15 @@ function _pgFixPages(pdoc){
       var tb=corps(neuf);
       if(!tb) return null;
       while(tb.firstChild) tb.removeChild(tb.firstChild);
+      // Copie de la page 1 : on ne garde que le bandeau logo/titre, comme sur toute
+      // page suivante (sans quoi parties, objet et barre d'infos seraient répétés).
+      if(pg===pdoc.querySelector('.doc-page')){
+        var tblNeuf=neuf.querySelector('table.doc-tbl');
+        while(tblNeuf && neuf.firstElementChild && neuf.firstElementChild.nextElementSibling &&
+              neuf.firstElementChild.nextElementSibling!==tblNeuf){
+          neuf.removeChild(neuf.firstElementChild.nextElementSibling);
+        }
+      }
       var tf=neuf.querySelector('table.doc-tbl>tfoot');
       if(tf) tf.parentNode.removeChild(tf);
       var blocNeuf=neuf.querySelector('.doc-page-final-block');
@@ -52893,8 +52920,12 @@ function _pgFixPages(pdoc){
         var suiv=pages[i+1];
         // Une ligne d'article ne doit JAMAIS glisser dans une page de descriptif
         // technique (ni l'inverse) : ce sont deux tableaux de nature differente.
-        if(suiv && suiv.getAttribute('data-pgkind')!==pages[i].getAttribute('data-pgkind')) break;
-        if(!suiv){ suiv=nouvellePageApres(pages[i]); if(!suiv) break; pages=listePages(); suiv=pages[i+1]; }
+        // Suivante d'une autre nature (descriptif, suivi des BC) : on intercale une
+        // page de même nature plutôt que d'abandonner une page qui déborde.
+        if(!suiv || suiv.getAttribute('data-pgkind')!==pages[i].getAttribute('data-pgkind')){
+          if(!nouvellePageApres(pages[i])) break;
+          pages=listePages(); suiv=pages[i+1];
+        }
         var ntb=corps(suiv); if(!ntb) break;
         var bouges=repousserDerniere(tb,ntb);
         if(!bouges) break; // plus rien de déplaçable : pas de boucle infinie
@@ -52904,23 +52935,35 @@ function _pgFixPages(pdoc){
     }
 
     // --- Sous-totaux : recalcul exact depuis data-pgtot, cumulé de page en page ---
+    // La page qui porte le bloc final n'a pas de sous-total ; toute autre page
+    // d'articles en a un (créé s'il manque : page d'où le bloc final vient de partir).
     pages=listePages();
     var cumul=0;
+    var fmt=function(v){ return (typeof fN==='function')?fN(Math.round(v)):String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g,' '); };
     pages.forEach(function(pg,i){
       var estDerniere=(i===pages.length-1);
       var tb=corps(pg);
-      if(tb){
-        Array.prototype.forEach.call(tb.rows,function(tr){
-          var v=tr.getAttribute('data-pgtot');
-          if(v!==null) cumul+=Number(v)||0;
-        });
-      }
+      if(!tb) return;
+      Array.prototype.forEach.call(tb.rows,function(tr){
+        var v=tr.getAttribute('data-pgtot');
+        if(v!==null) cumul+=Number(v)||0;
+      });
       var tf=pg.querySelector('table.doc-tbl>tfoot');
-      if(estDerniere){
-        if(tf) tf.parentNode.removeChild(tf); // la dernière page porte le bloc final
-      } else if(tf){
+      var porteFinal=!!pg.querySelector('.doc-page-final-block');
+      if(estDerniere||porteFinal){
+        if(tf) tf.parentNode.removeChild(tf); // la page du bloc final porte le total
+      } else if(pg.getAttribute('data-pgkind')!=='descriptif'){
+        if(!tf){
+          var st='background:#dbeafe!important;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;border-top:2px solid #1e3a5f;padding:8px 12px;color:#1e3a5f';
+          tf=pdoc.createElement('tfoot');
+          tf.innerHTML='<tr><td colspan="6" style="text-align:left;font-weight:700;font-size:12px;'+st+'">'+
+            (pg.getAttribute('data-pgstlabel')||'Sous-total HT (XPF)')+'</td>'+
+            '<td colspan="2" style="text-align:right;font-weight:900;font-size:13px;'+st+'"></td></tr>';
+          tb.parentNode.appendChild(tf);
+          rap.sousTotauxAjoutes=(rap.sousTotauxAjoutes||0)+1;
+        }
         var cell=tf.querySelector('td:last-child');
-        if(cell) cell.textContent=String(Math.round(cumul)).replace(/\B(?=(\d{3})+(?!\d))/g,' ');
+        if(cell) cell.textContent=fmt(cumul);
       }
     });
 
@@ -53024,11 +53067,33 @@ function _pgAuditPages(pdoc,titre){
       // 6 sous-totaux manquants sur un document parfaitement sain -- exactement le
       // genre de faux positif qui decredibilise une alerte et la fait ignorer.
       var estDescriptif=(pg.getAttribute('data-pgkind')==='descriptif');
-      var sousTotalAttendu=(!estDerniere && aLignes && !estDescriptif);
+      // Idem pour la page qui porte le bloc final quand une page annexe la suit
+      // (suivi des BC) : c'est elle qui porte le total.
+      var porteFinal=!!pg.querySelector('.doc-page-final-block');
+      var sousTotalAttendu=(!estDerniere && aLignes && !estDescriptif && !porteFinal);
       var sousTotalManquant=(sousTotalAttendu && !aSousTotal);
+      // STRUCTURE (06/10/2026) — une ligne qui n'occupe pas exactement les colonnes
+      // de l'en-tête (rowspan compris) s'affiche décalée ; un rowspan qui dépasse la
+      // fin de la page signe un bloc TÂCHE coupé (« H tech » seule en
+      // page 2, sous la colonne Désignation). Invisible pour la mesure de hauteur.
+      var decalees=0, scinde=false;
+      Array.prototype.forEach.call(pg.querySelectorAll('table.doc-tbl'),function(t){
+        var nCol=t.querySelectorAll('colgroup col').length||t.querySelectorAll('thead th').length;
+        var tb=t.tBodies[0]; if(!tb||!nCol) return;
+        var ouverts=[];
+        Array.prototype.forEach.call(tb.rows,function(tr){
+          var w=0; Array.prototype.forEach.call(tr.cells,function(c){w+=c.colSpan||1;});
+          if(ouverts.length+w!==nCol) decalees++;
+          ouverts=ouverts.map(function(x){return x-1;}).filter(function(x){return x>0;});
+          Array.prototype.forEach.call(tr.cells,function(c){ if(c.rowSpan>1) for(var k=0;k<(c.colSpan||1);k++) ouverts.push(c.rowSpan-1); });
+        });
+        if(ouverts.length) scinde=true;
+      });
+      rapport.lignesDecalees=(rapport.lignesDecalees||0)+decalees;
+      if(scinde) rapport.blocsScindes=(rapport.blocsScindes||0)+1;
       if(debord>0) rapport.debordements++;
       if(sousTotalManquant) rapport.sousTotauxManquants++;
-      if(debord>0||sousTotalManquant||piedCoupe||piedEcrase) rapport.ok=false;
+      if(debord>0||sousTotalManquant||piedCoupe||piedEcrase||decalees||scinde) rapport.ok=false;
       rapport.pages.push({page:i+1,boitePx:Math.round(boite),contenuPx:Math.round(contenu),
         debordementPx:Math.round(debord),sousTotal:aSousTotal,sousTotalAttendu:sousTotalAttendu,
         piedCoupe:piedCoupe,piedEcrase:piedEcrase,barrePx:barreH,
@@ -53052,7 +53117,8 @@ function _pgAuditPages(pdoc,titre){
       console.warn('[PAGINATION] ANOMALIE sur « '+rapport.titre+' » — '+
         rapport.debordements+' page(s) en débordement, '+
         rapport.sousTotauxManquants+' sous-total(aux) manquant(s), '+
-        (rapport.piedsEcrases||0)+' bandeau(x) écrasé(s). Bandeaux (px) : '+rapport.barresPx+' | référence : '+rapport.barreRefPx);
+        (rapport.piedsEcrases||0)+' bandeau(x) écrasé(s), '+
+        (rapport.blocsScindes||0)+' bloc(s) TÂCHE coupé(s), '+(rapport.lignesDecalees||0)+' ligne(s) décalée(s). Bandeaux (px) : '+rapport.barresPx+' | référence : '+rapport.barreRefPx);
       console.table?console.table(rapport.pages):console.warn(rapport.pages);
       console.warn('[PAGINATION] Rapport complet : window._pgLastAudit');
     }
