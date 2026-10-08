@@ -7758,10 +7758,14 @@ function _findLinkedDevisFromFacture(f){
     if(fa) fac=fa;
   }
   // Pass 1 : champ dvlie (le plus fiable)
+  // ⛔ Le numéro est PARTAGÉ par toutes les révisions (« XXX-DV032 » = le devis
+  // d'origine ET sa REV1) : le premier trouvé était souvent une révision remplacée,
+  // qui recevait alors « Livré client » à la place de la révision en cours
+  // (constaté le 09/10/2026). On remonte à la révision ACTIVE de la famille.
   if(fac.dvlie && Array.isArray(DB.devis)){
     var up=String(fac.dvlie).toUpperCase();
     var d=DB.devis.find(function(x){return (x.num||'').toUpperCase()===up;});
-    if(d) return d;
+    if(d) return _dvRevisionActive(d);
   }
   // Pass 2 : linkFactureId (reverse-lookup côté devis)
   if(Array.isArray(DB.devis)){
@@ -15996,10 +16000,10 @@ var PHASES_META={
 function _getCurrentPhase(d){
   // Retourne la dernière entrée du phaseHistory, ou fallback sur d.phase legacy
   if(!d) return null;
-  if(Array.isArray(d.phaseHistory) && d.phaseHistory.length>0){
-    return d.phaseHistory[d.phaseHistory.length-1];
-  }
-  if(d.phase) return {phase:d.phase,date:d.phaseDate||''};
+  var h=_dvHistoirePhases(d);
+  if(h.length>0) return h[h.length-1];
+  // d.phase legacy : dérivé de la dernière entrée, donc faux sur une révision remplacée
+  if(d.phase && !(Array.isArray(d.phaseHistory) && d.phaseHistory.length)) return {phase:d.phase,date:d.phaseDate||''};
   return null;
 }
 function _isPhaseApplicable(phaseKey,devisType){
@@ -16064,11 +16068,15 @@ function _buildPhaseHistory(d){
   if(d.poCalinstrumDate) add('po_emerson',d.poCalinstrumDate,true);
 
   // Recherche de la facture/invoice liée pour reconstruire les phases logistiques
+  // Le numéro est commun à toutes les révisions : une révision REMPLACÉE ne se
+  // rattache à la facture de la famille que par un lien technique (id), jamais par
+  // le numéro — sinon elle hérite de la livraison de la révision en cours.
+  var parNum=!_dvIsSuperseded(d);
   var invLinked=null;
   if(typeof DB!=='undefined' && Array.isArray(DB.invoices)){
     invLinked=DB.invoices.find(function(inv){
       return inv.linkedDevisId===d.id ||
-             (inv.intitule && d.num && inv.intitule.toUpperCase().indexOf(d.num.toUpperCase())>=0);
+             (parNum && inv.intitule && d.num && inv.intitule.toUpperCase().indexOf(d.num.toUpperCase())>=0);
     });
   }
   if(invLinked){
@@ -16098,7 +16106,7 @@ function _buildPhaseHistory(d){
   if(typeof DB!=='undefined' && Array.isArray(DB.factures)){
     var faLinked=DB.factures.find(function(f){
       return f._sourceDevisId===d.id ||
-             (f._sourceDevisNum && d.num && f._sourceDevisNum===d.num) ||
+             (parNum && f._sourceDevisNum && d.num && f._sourceDevisNum===d.num) ||
              (d.linkFactureId && f.id===d.linkFactureId);
     });
     // (=X=) UNE FACTURE QUI EXISTE N'EST PAS UNE FACTURE EMISE. [10/09/2026]
@@ -16247,8 +16255,8 @@ function _renderTraca(d){
     var rebuilt=_buildPhaseHistory(d);
     if(rebuilt.length>0) d.phaseHistory=rebuilt;
   }
-  var hist=Array.isArray(d.phaseHistory)?d.phaseHistory:[];
-  var currentEntry=hist.length>0?hist[hist.length-1]:(d.phase?{phase:d.phase,date:d.phaseDate}:null);
+  var hist=_dvHistoirePhases(d);
+  var currentEntry=_getCurrentPhase(d);
 
   var html='<div class="traca-cell" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">';
 
@@ -16306,8 +16314,8 @@ function _togglePhaseHistory(event,devisId){
   }
   var d=(DB.devis||[]).find(function(x){return x.id===devisId;});
   if(!d) return;
-  var hist=Array.isArray(d.phaseHistory)?d.phaseHistory:[];
-  if(hist.length===0 && !d.phase) return;
+  var hist=_dvHistoirePhases(d);
+  if(hist.length===0 && !_getCurrentPhase(d)) return;
 
   // Liste FILTRÉE des phases pertinentes pour le type du devis
   // (les phases non applicables sont masquées du popover, pour un rendu plus propre)
@@ -30352,6 +30360,21 @@ function _dvSuccessor(d){
 }
 // true si le devis a été remplacé par une révision ultérieure (→ ne compte plus / = obsolète).
 function _dvIsSuperseded(d){ return !!_dvSuccessor(d); }
+// Révision en cours de la famille (dernière de la cascade, celle qu'aucune ne remplace).
+function _dvRevisionActive(d){
+  var cur=d, garde=0, s;
+  while(cur && (s=_dvSuccessor(cur)) && garde++<50) cur=s;
+  return cur||d;
+}
+// Historique de phases À AFFICHER. Une révision remplacée ne montre que SA propre
+// histoire : les étapes propagées automatiquement depuis la facture (_autoSync)
+// appartiennent à la révision en cours, même si une ancienne version de l'app les a
+// écrites sur l'ancienne (règle de LECTURE : les données ne sont pas réécrites ici).
+function _dvHistoirePhases(d){
+  var h=(d && Array.isArray(d.phaseHistory))?d.phaseHistory:[];
+  if(h.length && _dvIsSuperseded(d)) h=h.filter(function(e){return e && !e._autoSync;});
+  return h;
+}
 // Libellé "REVn" pour l'affichage "Remplacé par ...".
 function _dvRevLabel(x){
   if(!x) return '';
