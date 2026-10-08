@@ -6938,11 +6938,11 @@ function buildClientOptions(selectId, currentVal){
 //       qui remplissent ces menus restent seules maîtresses de leur contenu ; le filtre est
 //       réappliqué quand le menu reprend la main (focus / clic).
 function _selNorm(s){ return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase(); }
-function _selectRecherche(sel){
-  if(!sel || sel._rechercheInput) return;
+function _selectRecherche(sel,placeholder){
+  if(!sel || sel._rechercheInput || !sel.parentNode) return;
   var inp=document.createElement('input');
   inp.type='search'; inp.className='form-input'; inp.autocomplete='off';
-  inp.placeholder='🔍 Rechercher (nom, contact…)';
+  inp.placeholder=placeholder||'🔍 Rechercher (nom, contact…)';
   inp.setAttribute('data-sel-recherche',sel.id||'');
   inp.style.cssText='margin-bottom:4px;padding:4px 8px;font-size:11.5px;height:auto';
   sel.parentNode.insertBefore(inp,sel);
@@ -6969,6 +6969,70 @@ function _selectRechercheInit(){
   ['dv-client','fa-client','bl-client','bc-client-final','ed-client'].forEach(function(id){ _selectRecherche(document.getElementById(id)); });
 }
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',_selectRechercheInit); else setTimeout(_selectRechercheInit,0);
+
+// [09/10/2026] RECHERCHE SUR TOUS LES MENUS LONGS, ET AU CLAVIER.
+// La liste ci-dessus (5 menus nommés) oubliait tous les autres : fenêtre « Import
+// devis PDF », imports de BC, filtres… Avec des centaines de clients, faire défiler
+// n'est pas tenable. Règle : tout menu Client, et tout menu d'au moins 12 options,
+// reçoit la case de recherche — y compris dans une fenêtre créée à la volée ou un
+// menu rempli après coup (observateur du DOM). Seuils : menu CLIENT (repéré par son
+// id) dès 8 options, tout autre menu dès 25 (un menu de tri de 12 entrées n'en a
+// pas besoin). Exclus : menus multiples, menus des lignes de tableau (un par
+// ligne : bruit), menus marqués data-sans-recherche.
+function _selEstClient(s){ return /cli(ent)?(?![a-z])|client/i.test(s.id||''); }
+function _selDoitChercher(s){
+  if(!s || s._rechercheInput || s.multiple || s.hasAttribute('data-sans-recherche')) return false;
+  var client=_selEstClient(s);
+  if(!client && s.closest('td')) return false;
+  var n=0; for(var i=0;i<s.options.length;i++){ if(s.options[i].value!=='') n++; }
+  return client ? n>=8 : n>=25;
+}
+function _selectRechercheScan(){
+  var liste=document.querySelectorAll('select');
+  for(var i=0;i<liste.length;i++){
+    var s=liste[i];
+    if(_selDoitChercher(s)) _selectRecherche(s,_selEstClient(s)?'🔍 Rechercher un client (nom, contact…)':'🔍 Rechercher…');
+    // la case suit la visibilité de son menu (masqué en ligne ou par une classe)
+    if(s._rechercheInput){ var cache=(s.style.display==='none' || getComputedStyle(s).display==='none'); if((s._rechercheInput.style.display==='none')!==cache) s._rechercheInput.style.display=cache?'none':''; }
+  }
+}
+(function(){
+  var t=null;
+  var planifier=function(){ if(t) return; t=setTimeout(function(){ t=null; try{ _selectRechercheScan(); }catch(e){} },60); };
+  var demarrer=function(){
+    planifier();
+    try{ new MutationObserver(planifier).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['style']}); }catch(e){}
+  };
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',demarrer); else setTimeout(demarrer,0);
+})();
+
+// Frappe au clavier SUR un menu : le navigateur ne cherche que le DÉBUT du libellé
+// (taper le nom d'un contact ne trouve pas « PFX - Prénom NOM »). On cherche partout : début du
+// libellé d'abord, puis début d'un mot, puis n'importe où ; plusieurs lettres tapées
+// d'affilée (< 1 s) forment un seul mot recherché.
+document.addEventListener('keydown',function(e){
+  var s=e.target;
+  if(!s || s.tagName!=='SELECT' || s.multiple || e.ctrlKey || e.altKey || e.metaKey) return;
+  if(!e.key || e.key.length!==1) return;
+  var now=Date.now();
+  if(now-(s._taT||0)>1000) s._taBuf='';
+  if(e.key===' ' && !s._taBuf) return;            // espace seul : ouvre le menu (natif)
+  s._taT=now; s._taBuf=(s._taBuf||'')+e.key;
+  var mots=_selNorm(s._taBuf).split(/\s+/).filter(Boolean);
+  if(!mots.length) return;
+  var best=null, rang=9;
+  for(var i=0;i<s.options.length;i++){
+    var o=s.options[i]; if(o.disabled || o.hidden) continue;
+    var t=_selNorm(o.textContent);
+    if(!mots.every(function(m){return t.indexOf(m)>=0;})) continue;
+    var p=t.indexOf(mots[0]);
+    var r=(p===0)?0:(/[a-z0-9]/.test(t.charAt(p-1))?2:1);
+    if(r<rang){ rang=r; best=o; if(r===0) break; }
+  }
+  if(!best) return;
+  e.preventDefault();
+  if(s.value!==best.value){ s.value=best.value; s.dispatchEvent(new Event('change',{bubbles:true})); }
+},true);
 
 // =============================================================================
 // getClientPrefix(clientName) — Helper global pour extraire le préfixe société
