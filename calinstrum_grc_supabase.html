@@ -1133,16 +1133,25 @@ body.has-dashboard-bg #page-dashboard .metric{
     #page-rentabilite .renta-badge.red{color:var(--red);border-color:rgba(244,63,94,.45)}
     #page-rentabilite .renta-badge.vio{color:var(--purple);border-color:rgba(167,139,250,.45)}
     #page-rentabilite .renta-vide{color:var(--muted);font-size:11px;padding:8px 0}
+    #page-rentabilite .rv-jour td{background:var(--bg3);color:var(--teal);font-weight:600;font-size:11.5px}
+    #page-rentabilite .rv-ano{border-left:3px solid var(--red);background:rgba(244,63,94,.07);border-radius:6px;padding:8px 12px;margin:10px 0;font-size:11.5px}
+    #page-rentabilite .rv-ano li{margin:3px 0}
+    #page-rentabilite .rv-note{color:var(--muted);font-size:10.5px}
     @media (max-width:1200px){#page-rentabilite .renta-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}#page-rentabilite .renta-g3,#page-rentabilite .renta-g2{grid-template-columns:1fr}}
   </style>
   <div class="renta-top no-print">
     <h2 style="font-family:var(--display);color:var(--teal);font-size:18px;margin:0">💰 Rentabilité Emerson</h2>
+    <span style="display:inline-flex;gap:6px;margin-left:10px">
+      <button type="button" class="renta-chip on" data-renta-onglet="affaires" onclick="rentaOnglet('affaires')">📊 Affaires</button>
+      <button type="button" class="renta-chip" data-renta-onglet="virements" onclick="rentaOnglet('virements')">🏦 Rapprochement virements</button>
+    </span>
     <span style="margin-left:auto;display:inline-flex;gap:8px">
-      <button class="btn btn-ghost btn-sm" onclick="rentaExportExcel()">⬇ Export Excel</button>
-      <span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span><button class="btn btn-teal btn-sm" onclick="rentaImprimerArticlesPO()">📄 PDF articles par PO / BC client</button>
+      <span id="rentaActionsAffaires" style="display:inline-flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="rentaExportExcel()">⬇ Export Excel</button></span>
+      <span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span><button class="btn btn-teal btn-sm" id="rentaBtnArticlesPO" onclick="rentaImprimerArticlesPO()">📄 PDF articles par PO / BC client</button>
     </span>
   </div>
-  <div class="renta-note">📌 Une <b>affaire</b> = un ou plusieurs PO Emerson + les factures <b>fourniture</b> CALINSTRUM correspondantes. <b>Bénéfice = CA HT fourniture (avoirs déduits) − coût Emerson (montant × taux AUD) − frais de transit</b>. Les prestations sont listées à part. Chiffres recalculés à chaque ouverture à partir des données du GRC.</div>
+  <div id="rvBody" style="display:none"></div>
+  <div class="renta-note" id="rentaNoteAffaires">📌 Une <b>affaire</b> = un ou plusieurs PO Emerson + les factures <b>fourniture</b> CALINSTRUM correspondantes. <b>Bénéfice = CA HT fourniture (avoirs déduits) − coût Emerson (montant × taux AUD) − frais de transit</b>. Les prestations sont listées à part. Chiffres recalculés à chaque ouverture à partir des données du GRC.</div>
   <div id="rentaBody"></div>
 </div>
 
@@ -8972,6 +8981,434 @@ function renderRentabilite(){
   h+='<div class="card" style="margin-top:10px"><div class="renta-ct">Détail des affaires <span>clic sur un PO ou une facture pour l\'ouvrir</span></div><div style="overflow-x:auto">'+
     '<table class="renta-table" id="rentaTable"><thead><tr><th>PO Emerson</th><th>Date</th><th>Client</th><th>BC client</th><th>Facture(s)</th><th class="n">AUD</th><th class="n">Coût Emerson</th><th class="n">Frais</th><th class="n">CA HT</th><th class="n">Bénéfice</th><th class="n">Marge</th><th>État</th></tr></thead><tbody>'+lignes+'</tbody></table></div></div>';
   body.innerHTML=h;
+}
+
+// =============================================================================
+// RAPPROCHEMENT DES VIREMENTS EMERSON — PAR LE CALCUL EXACT (08/10/2026)
+// =============================================================================
+// Le comptable envoie son grand livre fournisseur Emerson (Excel) : factures au
+// CRÉDIT (pièce = n° de facture Emerson, libellé « EMERSON <montant> AUD »), virements
+// au DÉBIT (« CPT N … FAV EMERSON … ») SANS référence de facture. Il demande à
+// quelles factures correspond chaque virement.
+// PREUVE : la banque applique UN taux à tous les virements d'une même date. Si au
+// moins 2 virements du jour retombent exactement (à l'arrondi du XPF près) sur des
+// factures distinctes, le taux du jour est PROUVÉ et chaque virement du jour se
+// convertit en AUD exacts (une facture, plusieurs, ou un ensemble de virements).
+// Un seul virement ce jour-là : le taux ne peut pas être prouvé → « probable » au
+// mieux (taux voisin des jours prouvés, à 1 % près), JAMAIS « prouvé ».
+// Le lien facture → PO est une PROPOSITION (même montant AUD, PO antérieur à la
+// facture) : le grand livre ne cite aucun PO.
+var RV_TAUX_EURO=119.3317;
+var _rvEtat={du:'',au:'',statuts:{prouve:true,probable:true,introuvable:true},sel:null};
+var _rvDernier=null;
+var _rentaOngletActif='affaires';
+
+function _rvIso(v){
+  if(typeof v==='number' && v>20000 && v<80000) return new Date(Math.round((v-25569)*86400000)).toISOString().slice(0,10);
+  if(v instanceof Date) return v.getFullYear()+'-'+String(v.getMonth()+1).padStart(2,'0')+'-'+String(v.getDate()).padStart(2,'0');
+  var s=String(v==null?'':v).trim(), m=/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(s);
+  if(m) return (m[3].length===2?'20'+m[3]:m[3])+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  return /^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10):'';
+}
+function _rvNombre(v){
+  if(typeof v==='number') return v;
+  var n=parseFloat(String(v==null?'':v).replace(/[\s  ]/g,'').replace(',','.'));
+  return isNaN(n)?0:n;
+}
+function _rvAudLibelle(lib){
+  var m=/(\d[\d   ]*)\s*AUD/i.exec(lib||'');
+  return m?Number(m[1].replace(/\D/g,'')):null;
+}
+function _rvAud(n){ return n==null?'—':Number(n).toFixed(1).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,' '); }
+function _rvTaux(n){ return n==null?'—':Number(n).toFixed(4).replace('.',','); }
+
+// Lecture du classeur (première feuille). Colonnes repérées par leur titre ;
+// la pièce est la colonne juste avant « libellé » (sans titre chez le comptable).
+function _rvLireClasseur(buf,nom){
+  var wb=XLSX.read(buf,{type:'array'});
+  var ws=wb.Sheets[wb.SheetNames[0]];
+  return _rvLireGrandLivre(XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null}),nom);
+}
+function _rvLireGrandLivre(aoa,nom){
+  var cle=function(s){return String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z]/g,'');};
+  var h=-1,c={};
+  for(var i=0;i<Math.min(aoa.length,20)&&h<0;i++){
+    var cc={};
+    (aoa[i]||[]).forEach(function(v,j){ var k=cle(v);
+      if(k==='date')cc.date=j; else if(/^libel/.test(k))cc.lib=j; else if(/^debit/.test(k))cc.deb=j; else if(/^credit/.test(k))cc.cre=j; });
+    if(cc.date!=null&&cc.lib!=null&&cc.deb!=null&&cc.cre!=null){h=i;c=cc;}
+  }
+  if(h<0) throw new Error('Colonnes « date / libellé / débit / crédit » introuvables : ce fichier n\'est pas un grand livre.');
+  var gl={nom:nom||'',importeLe:td(),factures:[],virements:[],autres:[]};
+  aoa.slice(h+1).forEach(function(r,i){
+    if(!r) return;
+    var date=_rvIso(r[c.date]); if(!date) return;
+    var lib=String(r[c.lib]==null?'':r[c.lib]).trim(), piece=c.lib>0?String(r[c.lib-1]==null?'':r[c.lib-1]).trim():'';
+    var deb=_rvNombre(r[c.deb]), cre=_rvNombre(r[c.cre]), aud=_rvAudLibelle(lib), ligne=h+2+i;
+    if(cre>0 && aud && /emerson/i.test(lib)){
+      var inv=/invoice\s*(\d{6,})/i.exec(lib);
+      gl.factures.push({ligne:ligne,date:date,piece:piece,num:inv?inv[1]:piece.replace(/^\D+/,''),aud:aud,xpf:cre,lib:lib});
+    } else if(deb>0 && !/^ext/i.test(lib) && /virt|cpt\s*n|fav\s*emers/i.test(lib+' '+piece)){
+      var ref=/cpt\s*n\s*(\d+)/i.exec(lib);
+      gl.virements.push({ligne:ligne,date:date,lib:lib,ref:ref?'CPT N '+ref[1]:lib,xpf:deb,audLibelle:aud});
+    } else gl.autres.push({ligne:ligne,date:date,piece:piece,lib:lib,deb:deb,cre:cre,aud:aud});
+  });
+  // Extourne : écriture « EXT … » au débit du montant exact d'une facture
+  gl.autres.forEach(function(a){
+    if(/^ext/i.test(a.lib) && a.deb>0){
+      var f=gl.factures.find(function(x){return !x.extournee && Math.abs(x.xpf-a.deb)<1;});
+      if(f) f.extournee=a.date;
+    }
+  });
+  return gl;
+}
+
+function _rvRapprocher(gl,bcs){
+  var F=(gl.factures||[]).map(function(f,i){return Object.assign({k:'F'+i,src:'gl',paye:null},f);});
+  var P=(bcs||[]).filter(function(b){return Number(b.total)>0 && String(b.devise||'AUD').toUpperCase()==='AUD';})
+    .map(function(b){return {k:'P'+b.id,src:'po',id:b.id,num:b.num,piece:b.num,date:String(b.date||'').slice(0,10),aud:Number(b.total),client:b.clientFinal||''};});
+  var lignes=(gl.virements||[]).map(function(v,i){
+    return {id:'V'+i+'-'+v.date+'-'+v.xpf,date:v.date,ref:v.ref,lib:v.lib,xpf:v.xpf,audLibelle:v.audLibelle,
+      taux:null,preuve:'',aud:null,statut:'introuvable',factures:[],po:[],note:'',ensemble:null};
+  });
+  var tolR=function(r,x){return r*0.6/x;};               // XPF arrondi à l'unité
+  var ouvertes=function(date){return F.filter(function(f){return !f.paye && f.date<=date;});};
+  var parAnciennete=function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;};
+  var payer=function(l,fs){ fs.slice().sort(function(a,b){return b.aud-a.aud;}).forEach(function(f){ f.paye=l.id; l.factures.push(f); }); };
+  var tauxJour={}, anomalies=[];
+
+  // Libellé erroné : deux factures enregistrées le même jour l'ont été au même taux.
+  // Si l'une s'en écarte nettement et que son montant XPF, au taux de l'autre, tombe
+  // sur un nombre rond d'AUD, c'est le libellé qui est faux (cas réel : deux chiffres
+  // inversés dans le montant AUD). On rapproche sur le montant corrigé et on le signale.
+  F.forEach(function(f){
+    if(Math.abs(f.xpf/f.aud-RV_TAUX_EURO)<0.02) return;
+    var soeurs=F.filter(function(g){return g!==f && g.date===f.date && Math.abs(g.xpf/g.aud-RV_TAUX_EURO)>=0.02;});
+    if(!soeurs.length) return;
+    var r=soeurs[0].xpf/soeurs[0].aud;
+    if(!soeurs.every(function(g){return Math.abs(g.xpf/g.aud-r)/r<0.002;})) return;
+    if(Math.abs(f.xpf/f.aud-r)/r<0.02) return;
+    var corr=f.xpf/r;
+    if(Math.abs(corr-Math.round(corr))>0.05) return;
+    anomalies.push({type:'Libellé erroné',texte:'La facture '+f.piece+' est libellée '+_rvAud(f.aud)+' AUD, mais ses '+fN(f.xpf)+' XPF valent exactement '+_rvAud(Math.round(corr))+
+      ' AUD au taux de '+soeurs.map(function(g){return g.piece;}).join(', ')+' enregistrée le même jour ('+_rvTaux(r)+') : montant à corriger en '+_rvAud(Math.round(corr))+' AUD.'});
+    f.audLibelle=f.aud; f.aud=Math.round(corr);
+  });
+
+  // 0) Montant AUD écrit dans le libellé du virement : taux exact immédiat.
+  lignes.forEach(function(l){
+    if(!l.audLibelle) return;
+    var r=l.xpf/l.audLibelle;
+    l.taux=r; l.aud=l.audLibelle; l.preuve='montant AUD indiqué au libellé';
+    var f=ouvertes(l.date).filter(function(x){return x.aud===l.audLibelle;}).sort(parAnciennete)[0];
+    if(f){ payer(l,[f]); l.statut='prouve'; }
+    else l.note='aucune facture de '+_rvAud(l.audLibelle)+' AUD dans le grand livre';
+    tauxJour[l.date]=tauxJour[l.date]||{taux:r,n:1,source:'libellé'};
+  });
+
+  // Combinaisons de factures dont la somme vaut exactement `cible` AUD.
+  var combinaisons=function(pool,cible,maxn){
+    var out=[];
+    (function rec(start,pick,sum){
+      if(out.length>3) return;
+      if(pick.length>=2 && Math.abs(sum-cible)<=0.05){ out.push(pick.slice()); return; }
+      if(pick.length>=maxn) return;
+      for(var i=start;i<pool.length;i++){
+        if(sum+pool[i].aud>cible+0.05) continue;
+        pick.push(pool[i]); rec(i+1,pick,sum+pool[i].aud); pick.pop();
+      }
+    })(0,[],0);
+    // des factures de même montant donnent des combinaisons équivalentes
+    var vues={}, uniques=[];
+    out.forEach(function(cb){ var s=cb.map(function(f){return f.aud;}).sort().join('+'); if(!vues[s]){vues[s]=1;uniques.push(cb);} });
+    return uniques;
+  };
+
+  // 1) Jours à plusieurs virements : recherche du taux commun (preuve).
+  var jours={};
+  lignes.forEach(function(l){ if(l.statut==='introuvable' && !l.audLibelle) (jours[l.date]=jours[l.date]||[]).push(l); });
+  Object.keys(jours).sort().forEach(function(date){
+    var vs=jours[date]; if(vs.length<2) return;
+    // Unités : un virement seul, ou deux virements du jour qui paient ENSEMBLE une
+    // facture (cas réel : une facture réglée « 50 POURCENT » en deux virements).
+    var unites=vs.map(function(v){return {vs:[v],xpf:v.xpf};});
+    for(var a=0;a<vs.length;a++) for(var z=a+1;z<vs.length;z++) unites.push({vs:[vs[a],vs[z]],xpf:vs[a].xpf+vs[z].xpf});
+    var cands=F.filter(function(f){return !f.paye;}), best=null;
+    unites.forEach(function(u){ cands.forEach(function(f){
+      var r=u.xpf/f.aud; if(r<50||r>100) return;
+      var prisF={}, prisV={}, aff=[], apres=0;
+      // seules d'abord, paires ensuite : une paire ne prend jamais la place d'une preuve simple
+      unites.forEach(function(w){
+        if(w.vs.some(function(v){return prisV[v.id];})) return;
+        var m=cands.filter(function(g){return !prisF[g.k] && Math.abs(w.xpf/g.aud-r)<=tolR(r,w.xpf)+tolR(r,u.xpf);});
+        if(!m.length) return;
+        m.sort(function(a,b){return ((a.date<=date)?0:1)-((b.date<=date)?0:1) || parAnciennete(a,b);});
+        prisF[m[0].k]=1; w.vs.forEach(function(v){prisV[v.id]=1;}); aff.push([w,m[0]]); if(m[0].date>date) apres++;
+      });
+      if(aff.length>=2 && (!best || aff.length>best.aff.length || (aff.length===best.aff.length && apres<best.apres))) best={aff:aff,apres:apres};
+    }); });
+    if(!best) return;
+    var sx=0, sa=0; best.aff.forEach(function(p){sx+=p[0].xpf; sa+=p[1].aud;});
+    var r=sx/sa;
+    tauxJour[date]={taux:r,n:best.aff.reduce(function(s,p){return s+p[0].vs.length;},0),source:'prouvé'};
+    var preuve=tauxJour[date].n+' virements du '+fD(date)+' retombent exactement sur ce taux';
+    best.aff.forEach(function(p){
+      var u=p[0], f=p[1];
+      u.vs.forEach(function(l){ l.statut='prouve'; l.taux=r; l.aud=l.xpf/r; l.preuve=preuve; l.factures.push(f); });
+      f.paye=u.vs[0].id;
+      if(u.vs.length>1){
+        u.vs.forEach(function(l){ l.ensemble='P-'+f.k;
+          l.note='facture payée en '+u.vs.length+' virements : '+u.vs.map(function(x){return _rvAud(x.xpf/r);}).join(' + ')+' = '+_rvAud(f.aud)+' AUD'; });
+      }
+    });
+    var reste=vs.filter(function(l){return l.statut==='introuvable';});
+    reste.forEach(function(l){ l.taux=r; l.aud=l.xpf/r; l.preuve='taux prouvé du jour'; });
+    // ⛔ Une COMBINAISON de montants n'est jamais une preuve : on la donne comme piste,
+    // sans rien affecter. Cas réel : deux virements dont la somme égale celle de deux factures — les
+    // sommes coïncident, mais la banque montre deux autres factures. Le montant AUD
+    // exact de chaque virement (taux prouvé), lui, est sûr.
+    var pool=ouvertes(date).sort(parAnciennete);
+    var piste=function(cb){return cb.map(function(f){return f.piece+' ('+_rvAud(f.aud)+')';}).join(' + ');};
+    if(reste.length>=2){
+      var tot=reste.reduce(function(s,l){return s+l.aud;},0);
+      var cbE=combinaisons(pool,tot,4);
+      if(cbE.length===1) reste.forEach(function(l){
+        l.piste='ensemble des '+reste.length+' virements restants du jour = '+_rvAud(tot)+' AUD = '+piste(cbE[0])+' (coïncidence possible, à vérifier)'; });
+    }
+    reste.forEach(function(l){
+      var cb=combinaisons(pool,l.aud,3);
+      if(cb.length===1 && !l.piste) l.piste='= '+piste(cb[0])+' (combinaison, à vérifier)';
+    });
+  });
+
+  // Taux de référence d'une date : interpolé entre les jours prouvés voisins.
+  var prouves=Object.keys(tauxJour).sort();
+  var tauxRef=function(date){
+    var av=null, ap=null;
+    prouves.forEach(function(d){ if(d<=date) av=d; else if(!ap) ap=d; });
+    var t=function(d){return tauxJour[d].taux;}, j=function(d){return new Date(d+'T00:00:00Z').getTime();};
+    if(av&&ap) return t(av)+(t(ap)-t(av))*(j(date)-j(av))/(j(ap)-j(av));
+    if(av) return t(av); if(ap) return t(ap);
+    return (typeof DEFAULT_TAUX_AUD!=='undefined')?DEFAULT_TAUX_AUD:74.5;
+  };
+
+  // Proposition de PO pour une facture : même montant AUD, PO antérieur, chacun une fois.
+  var poPris={};
+  var poPour=function(f){
+    var m=P.filter(function(p){return !poPris[p.k] && p.aud===f.aud && p.date<=f.date;})
+      .sort(function(a,b){return a.date<b.date?1:-1;});
+    if(!m.length) return null;
+    poPris[m[0].k]=1; return m[0];
+  };
+  F.slice().sort(parAnciennete).forEach(function(f){ f.poPropose=poPour(f); });
+
+  // 2) Jours sans taux prouvable : facture unique à 1 % du taux voisin → probable.
+  lignes.filter(function(l){return l.statut==='introuvable' && l.taux==null;}).forEach(function(l){
+    var ref=tauxRef(l.date), audRef=l.xpf/ref;
+    var dans=function(a){return Math.abs(a-audRef)/audRef<=0.01;};
+    var g=ouvertes(l.date).filter(function(f){return dans(f.aud);});
+    var montants=g.map(function(f){return f.aud;}).filter(function(v,i,a){return a.indexOf(v)===i;});
+    l.preuve='un seul virement ce jour-là : taux non prouvable (voisin ≈ '+_rvTaux(ref)+')';
+    if(montants.length===1){
+      var f=g.sort(parAnciennete)[0];
+      payer(l,[f]); l.statut='probable'; l.taux=l.xpf/f.aud; l.aud=f.aud;
+      return;
+    }
+    // ⛔ Pas de rapprochement sur un PO seul (montant voisin à 1 %) : sans facture ni taux
+    // prouvé, c'est une coïncidence possible. Cas réel : la moitié d'une facture
+    // rapprochée d'un PO voisin à 0,5 % → fausse alerte « payé deux fois ».
+    l.aud=audRef; l.taux=ref; l.estime=true;
+    if(montants.length>1) l.note='plusieurs factures possibles : '+g.map(function(f){return f.piece+' ('+_rvAud(f.aud)+')';}).join(', ');
+  });
+
+  // Pistes pour les montants exacts sans facture, et PO des factures payées
+  lignes.forEach(function(l){
+    if(l.statut==='introuvable' && !l.note && l.aud){
+      var proche=ouvertes(l.date).filter(function(f){return Math.abs(f.aud-l.aud)/l.aud<0.05;})
+        .sort(function(a,b){return Math.abs(a.aud-l.aud)-Math.abs(b.aud-l.aud);})[0];
+      l.note='aucune facture de '+(l.estime?'≈ ':'')+_rvAud(l.aud)+' AUD'+(proche?' · la plus proche : '+proche.piece+' ('+_rvAud(proche.aud)+' AUD, écart '+_rvAud(Math.abs(proche.aud-l.aud))+' AUD)':'');
+    }
+    if(l.piste) l.note=(l.note?l.note+' · ':'')+'piste : '+l.piste;
+    l.factures.forEach(function(f){ if(f.poPropose && !l.po.some(function(p){return p.id===f.poPropose.id;})) l.po.push({id:f.poPropose.id,num:f.poPropose.num,aud:f.poPropose.aud,propose:true}); });
+    l.factures=l.factures.map(function(f){return {piece:f.piece,num:f.num,aud:f.aud,date:f.date,extournee:f.extournee||null};});
+  });
+
+  // Anomalies du grand livre (les libellés erronés sont relevés plus haut)
+  var euro=F.filter(function(f){return Math.abs(f.xpf/f.aud-RV_TAUX_EURO)<0.02;});
+  if(euro.length){
+    var trop=euro.reduce(function(s,f){return s+f.xpf-f.aud*tauxRef(f.date);},0);
+    anomalies.push({type:'Taux de l\'euro',texte:euro.length+' facture'+(euro.length>1?'s':'')+' converties à '+_rvTaux(RV_TAUX_EURO).replace(/0+$/,'')+' XPF (taux de l\'euro) au lieu du taux AUD : environ '+fN(Math.round(trop))+' XPF de trop au crédit Emerson — '+euro.map(function(f){return f.piece;}).join(', ')});
+  }
+  var parNum={};
+  F.forEach(function(f){ if(f.num) (parNum[f.num]=parNum[f.num]||[]).push(f); });
+  Object.keys(parNum).forEach(function(n){ var g=parNum[n]; if(g.length>1)
+    anomalies.push({type:'Doublon',texte:'La facture '+n+' ('+_rvAud(g[0].aud)+' AUD) est enregistrée '+g.length+' fois : pièces '+g.map(function(f){return f.piece+' du '+fD(f.date);}).join(' et ')}); });
+  F.forEach(function(f){ if(f.extournee && f.paye){ var l=lignes.find(function(x){return x.id===f.paye;});
+    anomalies.push({type:'Extourne',texte:'La facture '+f.piece+' ('+_rvAud(f.aud)+' AUD) a été extournée le '+fD(f.extournee)+' alors qu\'elle est payée par le virement du '+fD(l?l.date:'')}); } });
+
+  lignes.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+  return {lignes:lignes, anomalies:anomalies, jours:tauxJour};
+}
+
+function rentaOnglet(o){
+  _rentaOngletActif=(o==='virements')?'virements':'affaires';
+  var v=_rentaOngletActif==='virements';
+  document.querySelectorAll('[data-renta-onglet]').forEach(function(b){ b.classList.toggle('on',b.getAttribute('data-renta-onglet')===_rentaOngletActif); });
+  [['rentaBody',!v],['rentaNoteAffaires',!v],['rentaActionsAffaires',!v],['rentaBtnArticlesPO',!v],['rvBody',v]].forEach(function(x){
+    var el=document.getElementById(x[0]); if(el) el.style.display=x[1]?'':'none';
+  });
+  if(v) renderRvVirements(); else renderRentabilite();
+}
+
+function _rvVisibles(res){
+  var E=_rvEtat;
+  return res.lignes.filter(function(l){
+    return (!E.du||l.date.slice(0,7)>=E.du) && (!E.au||l.date.slice(0,7)<=E.au) && E.statuts[l.statut];
+  });
+}
+var _RV_STATUTS={prouve:['Prouvé','ok'],probable:['Probable','est'],introuvable:['Non trouvé','red']};
+
+function renderRvVirements(){
+  var body=document.getElementById('rvBody'); if(!body) return;
+  var gl=DB.grandLivreEmerson;
+  var imp='<label class="btn btn-teal btn-sm" style="cursor:pointer">⬆ '+(gl?'Importer un autre grand livre':'Importer le grand livre Emerson (Excel)')+
+    '<input type="file" accept=".xlsx,.xls,.csv" style="display:none" onchange="rvImporter(this)"></label>';
+  if(!gl){
+    body.innerHTML='<div class="card" style="padding:16px"><div class="renta-ct">🏦 Rapprochement des virements Emerson</div>'+
+      '<p class="rv-note" style="font-size:12px">Importe le grand livre fournisseur Emerson envoyé par le comptable (Excel, sans filtre). '+
+      'L\'app retrouve, par le calcul exact, la ou les factures Emerson payées par chaque virement.</p>'+imp+'</div>';
+    return;
+  }
+  var res=_rvRapprocher(gl,DB.bcs||[]); _rvDernier=res;
+  if(!_rvEtat.sel){ _rvEtat.sel={}; res.lignes.forEach(function(l){ _rvEtat.sel[l.id]=true; }); }
+  var vis=_rvVisibles(res), E=_rvEtat;
+  var mois=res.lignes.map(function(l){return l.date.slice(0,7);}).filter(function(v,i,a){return a.indexOf(v)===i;});
+  var opt=function(cur,vide){return '<option value="">'+vide+'</option>'+mois.map(function(m){return '<option value="'+m+'"'+(cur===m?' selected':'')+'>'+_reglMoisLabel(m)+'</option>';}).join('');};
+  var nb=function(s){return vis.filter(function(l){return l.statut===s;}).length;};
+  var nSel=vis.filter(function(l){return E.sel[l.id];}).length;
+  var h='<div class="renta-filtres">'+imp+
+    '<span class="renta-lbl">Du</span><select class="btn btn-ghost btn-sm" onchange="_rvEtat.du=this.value;renderRvVirements()">'+opt(E.du,'début')+'</select>'+
+    '<span class="renta-lbl">au</span><select class="btn btn-ghost btn-sm" onchange="_rvEtat.au=this.value;renderRvVirements()">'+opt(E.au,'fin')+'</select>'+
+    '<span class="renta-lbl">Statut</span>'+Object.keys(_RV_STATUTS).map(function(s){
+      return '<button type="button" class="renta-chip'+(E.statuts[s]?' on':'')+'" onclick="_rvEtat.statuts.'+s+'=!_rvEtat.statuts.'+s+';renderRvVirements()">'+_RV_STATUTS[s][0]+'</button>';}).join('')+
+    '<span style="margin-left:auto;display:inline-flex;gap:6px">'+
+      '<button class="btn btn-ghost btn-sm" onclick="rvSelection(true)">☑ Tout</button><button class="btn btn-ghost btn-sm" onclick="rvSelection(false)">☐ Rien</button>'+
+      '<button class="btn btn-ghost btn-sm" onclick="rvMarquerPayes()" title="Marque « payé à Emerson » les PO des lignes cochées, à la date du virement">✔ PO payés</button>'+
+      '<button class="btn btn-teal btn-sm" onclick="rvImprimerPDF()">📄 PDF de la sélection ('+nSel+')</button></span></div>';
+  h+='<div class="rv-note" style="margin:-4px 0 10px"><b style="color:var(--teal)">Rapprochement des virements Emerson</b> · source : '+esc(gl.nom||'grand livre')+' · importé le '+fD(gl.importeLe)+' · '+gl.factures.length+' factures, '+gl.virements.length+' virements</div>';
+  var tot=vis.reduce(function(s,l){return s+l.xpf;},0);
+  h+='<div class="renta-kpis" style="grid-template-columns:repeat(5,minmax(0,1fr))">'+
+    [['Virements',vis.length,fN(tot)+' XPF'],['Prouvés',nb('prouve'),'taux du jour commun'],['Probables',nb('probable'),'un seul virement ce jour-là'],['Non trouvés',nb('introuvable'),'aucune facture au taux du jour'],['Sélection',nSel,'lignes cochées → PDF']]
+    .map(function(k){return '<div class="card renta-kpi"><div class="renta-kt">'+k[0]+'</div><div class="renta-kv">'+k[1]+'</div><div class="renta-ks">'+k[2]+'</div></div>';}).join('')+'</div>';
+  if(res.anomalies.length) h+='<div class="rv-ano"><b>⚠ Points à vérifier dans le grand livre</b><ul style="margin:4px 0 0 16px;padding:0">'+
+    res.anomalies.map(function(a){return '<li><b>'+esc(a.type)+'</b> — '+esc(a.texte)+'</li>';}).join('')+'</ul></div>';
+  var rows='', jourCourant='';
+  vis.forEach(function(l){
+    if(l.date!==jourCourant){
+      jourCourant=l.date; var tj=res.jours[l.date];
+      rows+='<tr class="rv-jour"><td colspan="8">'+fD(l.date)+(tj&&tj.source==='prouvé'?' · taux '+_rvTaux(tj.taux)+' prouvé ('+tj.n+' virements au même taux)':tj?' · taux '+_rvTaux(tj.taux)+' (montant AUD au libellé)':' · taux non prouvable')+'</td></tr>';
+    }
+    var st=_RV_STATUTS[l.statut];
+    rows+='<tr><td><input type="checkbox" data-rv-sel="'+esc(l.id)+'"'+(E.sel[l.id]?' checked':'')+' onchange="_rvEtat.sel[this.getAttribute(\'data-rv-sel\')]=this.checked;renderRvVirements()"></td>'+
+      '<td>'+esc(l.ref)+'</td><td class="n">'+fN(l.xpf)+'</td><td class="n">'+(l.estime?'≈ ':'')+_rvTaux(l.taux)+'</td><td class="n">'+(l.estime?'≈ ':'')+_rvAud(l.aud)+'</td>'+
+      '<td>'+(l.factures.map(function(f){return '<b>'+esc(f.piece)+'</b> <span class="renta-tag">'+_rvAud(f.aud)+' AUD</span>';}).join('<br>')||'—')+'</td>'+
+      '<td>'+(l.po.map(function(p){return '<a href="#" class="renta-po" onclick="event.preventDefault();ouvrirDocument(\'BC\','+p.id+');">'+esc(p.num)+'</a> <span class="renta-tag">proposé</span>';}).join('<br>')||'<span class="renta-tag">—</span>')+'</td>'+
+      '<td><span class="renta-badge '+st[1]+'">'+st[0]+'</span>'+(l.note?'<div class="rv-note">'+esc(l.note)+'</div>':'')+'</td></tr>';
+  });
+  h+='<div class="card" style="margin-top:10px"><div style="overflow-x:auto"><table class="renta-table"><thead><tr><th style="width:24px"></th><th>Virement</th><th class="n">XPF</th><th class="n">Taux</th><th class="n">AUD</th><th>Facture(s) Emerson</th><th>PO CALINSTRUM</th><th>Statut</th></tr></thead><tbody>'+
+    (rows||'<tr><td colspan="8" class="renta-vide">Aucun virement sur ce filtre.</td></tr>')+'</tbody></table></div>'+
+    '<div class="rv-note" style="margin-top:8px">Preuve : la banque applique un seul taux aux virements d\'une même date ; si 2 virements du jour retombent exactement sur des factures, le taux est prouvé. Le PO est une proposition (même montant AUD, PO antérieur à la facture).</div></div>';
+  body.innerHTML=h;
+}
+
+function rvSelection(tout){
+  if(!_rvDernier) return;
+  _rvVisibles(_rvDernier).forEach(function(l){ _rvEtat.sel[l.id]=!!tout; });
+  renderRvVirements();
+}
+
+function rvImporter(input){
+  var f=input.files&&input.files[0]; if(!f) return;
+  var rd=new FileReader();
+  rd.onload=function(){
+    try{
+      var gl=_rvLireClasseur(rd.result,f.name);
+      if(!gl.virements.length && !gl.factures.length){ alert('Aucune facture ni aucun virement Emerson trouvés dans ce fichier.\nVérifiez qu\'aucun filtre n\'est actif dans Excel (Ctrl+Maj+L).'); return; }
+      DB.grandLivreEmerson=gl; _rvEtat.sel=null; saveDB(); renderRvVirements();
+    }catch(e){ alert('Lecture impossible : '+e.message); }
+    input.value='';
+  };
+  rd.readAsArrayBuffer(f);
+}
+
+function _rvLignesSelection(){
+  if(!_rvDernier) return [];
+  return _rvVisibles(_rvDernier).filter(function(l){return _rvEtat.sel&&_rvEtat.sel[l.id];});
+}
+
+function _rvPdfHtml(){
+  var res=_rvDernier, L=_rvLignesSelection(), gl=DB.grandLivreEmerson||{};
+  var per=L.length?fD(L[0].date)+' → '+fD(L[L.length-1].date):'—';
+  var tot=L.reduce(function(s,l){return s+l.xpf;},0);
+  var rows='', j='';
+  L.forEach(function(l){
+    if(l.date!==j){ j=l.date; var tj=res.jours[l.date];
+      rows+='<tr class="grp"><td colspan="7">Virements du '+fD(l.date)+(tj&&tj.source==='prouvé'?' · taux '+_rvTaux(tj.taux)+' prouvé ('+tj.n+' virements au même taux)':tj?' · taux '+_rvTaux(tj.taux):' · taux non prouvable (un seul virement)')+'</td></tr>'; }
+    rows+='<tr><td class="num">'+esc(l.ref)+'</td><td class="n">'+fN(l.xpf)+'</td><td class="n">'+(l.estime?'≈ ':'')+_rvTaux(l.taux)+'</td><td class="n">'+(l.estime?'≈ ':'')+_rvAud(l.aud)+'</td>'+
+      '<td>'+(l.factures.map(function(f){return '<b>'+esc(f.piece)+'</b> ('+_rvAud(f.aud)+' AUD)';}).join('<br>')||'—')+'</td>'+
+      '<td>'+(l.po.map(function(p){return esc(p.num);}).join('<br>')||'—')+'</td>'+
+      '<td><span class="st-'+l.statut+'">'+_RV_STATUTS[l.statut][0]+'</span>'+(l.note?'<div class="mut">'+esc(l.note)+'</div>':'')+'</td></tr>';
+  });
+  rows+='<tr class="tot"><td>Total sélection</td><td class="n">'+fN(tot)+'</td><td colspan="5"></td></tr>';
+  var css='@page{size:A4 landscape;margin:12mm 11mm 13mm;}html,body{background:#fff;color-scheme:light}'+
+    'body{font-family:Calibri,Arial,sans-serif;color:#111;font-size:10px;margin:0}'+
+    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #e46c12;padding-bottom:8px;margin-bottom:10px}'+
+    'h1{font-size:19px;color:#1b365d;margin:4px 0 2px}.sub{color:#5b6b7a;font-size:10.5px}table{width:100%;border-collapse:collapse}'+
+    'th{background:#1b365d;color:#fff;text-align:left;font-size:9.5px;padding:5px 6px}td{padding:3.5px 6px;border-bottom:1px solid #e5e9ef;vertical-align:top}'+
+    'th.n,td.n{text-align:right;white-space:nowrap}td.num{font-weight:700;color:#1b365d;white-space:nowrap}'+
+    'tr.grp td{background:#eef2f7;font-weight:700;color:#1b365d;padding:5px 6px}tr.tot td{font-weight:700;border-top:2px solid #1b365d;border-bottom:none;padding-top:6px}'+
+    '.st-prouve{color:#1b7a4e;font-weight:700}.st-probable{color:#b45309;font-weight:700}.st-introuvable{color:#b4232f;font-weight:700}.mut{color:#6b7785;font-size:9px}'+
+    '.ano{border-left:3px solid #b4232f;background:#fdf2f3;padding:6px 10px;margin:0 0 10px;font-size:10px}.ano li{margin:2px 0}'+
+    'thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}';
+  var html='<div class="hd"><div><div style="display:inline-block;text-align:center"><img src="'+LG_PLACEHOLDER+'" style="height:38px;display:block;margin:0 auto" alt="CALINSTRUM">'+
+      '<div style="font-weight:800;font-size:10px;letter-spacing:.8px;color:#1b365d">CALINSTRUM</div></div>'+
+      '<h1>Rapprochement des virements Emerson</h1><div class="sub">'+L.length+' virement'+(L.length>1?'s':'')+' · '+per+' · '+fN(tot)+' XPF</div>'+
+      '<div class="sub" style="font-size:9px;margin-top:2px">Source : grand livre fournisseur Emerson'+(gl.nom?' ('+esc(gl.nom)+')':'')+'. Preuve : la banque applique un seul taux aux virements d\'une même date ; '+
+      'quand au moins 2 virements du jour retombent exactement sur des factures, le taux est prouvé et chaque virement se convertit en AUD exacts.</div></div>'+
+      '<div class="sub" style="text-align:right">'+esc(CI.nom)+'<br>'+fD(td())+'</div></div>'+
+    (res.anomalies.length?'<div class="ano"><b>Points à vérifier dans le grand livre</b><ul style="margin:3px 0 0 14px;padding:0">'+res.anomalies.map(function(a){return '<li><b>'+esc(a.type)+'</b> — '+esc(a.texte)+'</li>';}).join('')+'</ul></div>':'')+
+    '<table><thead><tr><th style="width:120px">Virement</th><th class="n" style="width:78px">Montant XPF</th><th class="n" style="width:62px">Taux</th><th class="n" style="width:70px">AUD</th>'+
+    '<th style="width:170px">Facture(s) Emerson</th><th style="width:100px">PO CALINSTRUM</th><th>Statut</th></tr></thead><tbody>'+
+    (L.length?rows:'<tr><td colspan="7">Aucune ligne sélectionnée.</td></tr>')+'</tbody></table>';
+  return {titre:'Rapprochement virements Emerson '+td(), css:css, html:html};
+}
+function rvImprimerPDF(){
+  if(!_rvLignesSelection().length){ alert('Cochez au moins un virement.'); return; }
+  var d=_rvPdfHtml();
+  var w=window.open('','_blank','');
+  if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+esc(d.titre)+'</title><style>'+d.css+'</style></head><body>'+d.html+'</body></html>');
+  w.document.close(); w.focus();
+  setTimeout(function(){ _pdfThemeAppliquer(w.document,_pdfTheme('app')); w.print(); w.close(); }, 400);
+}
+
+// Marque « payé à Emerson » les PO des lignes cochées (date = date du virement).
+// Un PO déjà marqué payé n'est pas modifié.
+function rvMarquerPayes(){
+  var L=_rvLignesSelection().filter(function(l){return l.po.length && l.statut!=='introuvable';});
+  var aFaire=[], deja=[];
+  L.forEach(function(l){ l.po.forEach(function(p){
+    var bc=(DB.bcs||[]).find(function(b){return b.id===p.id;}); if(!bc) return;
+    if(bc.paidEmerson) deja.push(bc.num); else if(!aFaire.some(function(x){return x.bc===bc;})) aFaire.push({bc:bc,l:l});
+  }); });
+  if(!aFaire.length){ alert(deja.length?'Les PO de la sélection sont déjà marqués payés : '+deja.join(', '):'Aucun PO proposé dans la sélection.'); return; }
+  if(!confirm('Marquer payés à Emerson :\n\n'+aFaire.map(function(x){return '• '+x.bc.num+' — virement du '+fD(x.l.date)+' ('+fN(x.l.xpf)+' XPF)';}).join('\n')+
+    (deja.length?'\n\nDéjà payés (inchangés) : '+deja.join(', '):''))) return;
+  aFaire.forEach(function(x){
+    x.bc.paidEmerson=true; x.bc.paidEmersonDate=x.l.date;
+    x.bc.paidEmersonVirement=x.l.ref; x.bc.paidEmersonTauxJour=x.l.taux?Math.round(x.l.taux*10000)/10000:null;
+  });
+  saveDB(); renderRvVirements();
 }
 
 // Carte du dashboard : résumé de la section (remplace l'ancienne « Marge par affaire »
