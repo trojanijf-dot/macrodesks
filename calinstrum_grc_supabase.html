@@ -8999,7 +8999,7 @@ function renderRentabilite(){
 // Le lien facture → PO est une PROPOSITION (même montant AUD, PO antérieur à la
 // facture) : le grand livre ne cite aucun PO.
 var RV_TAUX_EURO=119.3317;
-var _rvEtat={du:'',au:'',statuts:{prouve:true,probable:true,introuvable:true},sel:null};
+var _rvEtat={du:'',au:'',statuts:{prouve:true,banque:true,probable:true,introuvable:true},sel:null,edit:null};
 var _rvDernier=null;
 var _rentaOngletActif='affaires';
 
@@ -9021,6 +9021,16 @@ function _rvAudLibelle(lib){
 }
 function _rvAud(n){ return n==null?'—':Number(n).toFixed(1).replace('.',',').replace(/\B(?=(\d{3})+(?!\d))/g,' '); }
 function _rvTaux(n){ return n==null?'—':Number(n).toFixed(4).replace('.',','); }
+// PO écrit à la main dans un libellé bancaire (« PO JJMMAAAA/061REV1 », « PO JJMMAAAA/97 »)
+// → PO du GRC (« JJMMAAAA/061-rev1 », « JJMMAAAA/097 ») : même date, même numéro, même suffixe.
+function _rvTrouverPO(txt,bcs){
+  var cle=function(s){
+    var m=/(\d{8})\s*\/\s*0*(\d+)\s*[-\s]*(.*)$/.exec(String(s||'').trim());
+    return m?m[1]+'/'+Number(m[2])+'/'+m[3].toLowerCase().replace(/[^a-z0-9]/g,'').replace(/^0+(?=\d)/,''):'';
+  };
+  var k=cle(txt); if(!k) return null;
+  return (bcs||[]).find(function(b){return cle(b.num)===k;})||null;
+}
 
 // Lecture du classeur (première feuille). Colonnes repérées par leur titre ;
 // la pièce est la colonne juste avant « libellé » (sans titre chez le comptable).
@@ -9221,6 +9231,34 @@ function _rvRapprocher(gl,bcs){
     if(montants.length>1) l.note='plusieurs factures possibles : '+g.map(function(f){return f.piece+' ('+_rvAud(f.aud)+')';}).join(', ');
   });
 
+  // 3) Compléments « relevé banque » (ordre de virement : montant AUD, facture, PO),
+  //    saisis par l'utilisateur et conservés hors du grand livre (DB.rvComplements,
+  //    clé date|montant XPF : ils survivent à un nouvel import). Acceptés SEULEMENT si
+  //    le montant AUD retombe sur le taux du jour (prouvé : à 0,5 AUD près ; non
+  //    prouvable : à 1 % du taux voisin). Une saisie fausse est refusée et signalée.
+  var comp=(typeof DB!=='undefined' && DB.rvComplements)||{};
+  lignes.forEach(function(l){
+    var c=comp[l.date+'|'+l.xpf]; if(!c || !(Number(c.aud)>0)) return;
+    var aud=Number(c.aud), ok, r;
+    if(tauxJour[l.date] && l.taux && !l.estime && l.statut!=='probable'){ r=l.taux; ok=Math.abs(l.xpf/r-aud)<=0.5; }
+    else { r=l.xpf/aud; var ref=tauxRef(l.date); ok=Math.abs(r-ref)/ref<=0.01; }
+    if(!ok){
+      anomalies.push({type:'Relevé banque incohérent',texte:'Virement '+fN(l.xpf)+' XPF du '+fD(l.date)+' : le complément saisi ('+_rvAud(aud)+' AUD) ne retombe pas sur le taux du jour ('+
+        (l.taux?_rvTaux(l.taux)+' → '+_rvAud(l.xpf/l.taux)+' AUD':'—')+') : complément ignoré.'});
+      return;
+    }
+    l.banque={aud:aud,facture:String(c.facture||''),po:String(c.po||''),ref:String(c.ref||'')};
+    var poBc=_rvTrouverPO(c.po,bcs);
+    if(poBc && !l.po.some(function(p){return p.id===poBc.id;})) l.po.unshift({id:poBc.id,num:poBc.num,aud:Number(poBc.total),propose:false});
+    if(l.statut!=='prouve'){
+      if(!l.factures.length){
+        var g=ouvertes(l.date).filter(function(f){return Math.abs(f.aud-aud)<0.5;}).sort(parAnciennete);
+        if(g.length) payer(l,[g[0]]);
+      }
+      l.statut='banque'; l.taux=r; l.aud=aud; l.estime=false; l.piste=null; l.note='';
+    }
+  });
+
   // Pistes pour les montants exacts sans facture, et PO des factures payées
   lignes.forEach(function(l){
     if(l.statut==='introuvable' && !l.note && l.aud){
@@ -9266,7 +9304,8 @@ function _rvVisibles(res){
     return (!E.du||l.date.slice(0,7)>=E.du) && (!E.au||l.date.slice(0,7)<=E.au) && E.statuts[l.statut];
   });
 }
-var _RV_STATUTS={prouve:['Prouvé','ok'],probable:['Probable','est'],introuvable:['Non trouvé','red']};
+var _RV_STATUTS={prouve:['Prouvé','ok'],banque:['Confirmé banque','ok'],probable:['Probable','est'],introuvable:['Non trouvé','red']};
+function _rvBanqueTxt(b){ return b?[b.facture?'INVOICE '+b.facture:'',b.ref?'réf. '+b.ref:'',b.po?'PO '+b.po:''].filter(Boolean).join(' · ')+' — relevé banque '+_rvAud(b.aud)+' AUD':''; }
 
 function renderRvVirements(){
   var body=document.getElementById('rvBody'); if(!body) return;
@@ -9297,8 +9336,8 @@ function renderRvVirements(){
       '<button class="btn btn-teal btn-sm" onclick="rvImprimerPDF()">📄 PDF de la sélection ('+nSel+')</button></span></div>';
   h+='<div class="rv-note" style="margin:-4px 0 10px"><b style="color:var(--teal)">Rapprochement des virements Emerson</b> · source : '+esc(gl.nom||'grand livre')+' · importé le '+fD(gl.importeLe)+' · '+gl.factures.length+' factures, '+gl.virements.length+' virements</div>';
   var tot=vis.reduce(function(s,l){return s+l.xpf;},0);
-  h+='<div class="renta-kpis" style="grid-template-columns:repeat(5,minmax(0,1fr))">'+
-    [['Virements',vis.length,fN(tot)+' XPF'],['Prouvés',nb('prouve'),'taux du jour commun'],['Probables',nb('probable'),'un seul virement ce jour-là'],['Non trouvés',nb('introuvable'),'aucune facture au taux du jour'],['Sélection',nSel,'lignes cochées → PDF']]
+  h+='<div class="renta-kpis" style="grid-template-columns:repeat(6,minmax(0,1fr))">'+
+    [['Virements',vis.length,fN(tot)+' XPF'],['Prouvés',nb('prouve'),'taux du jour commun'],['Confirmés banque',nb('banque'),'relevé banque cohérent avec le taux'],['Probables',nb('probable'),'un seul virement ce jour-là'],['Non trouvés',nb('introuvable'),'aucune facture au taux du jour'],['Sélection',nSel,'lignes cochées → PDF']]
     .map(function(k){return '<div class="card renta-kpi"><div class="renta-kt">'+k[0]+'</div><div class="renta-kv">'+k[1]+'</div><div class="renta-ks">'+k[2]+'</div></div>';}).join('')+'</div>';
   if(res.anomalies.length) h+='<div class="rv-ano"><b>⚠ Points à vérifier dans le grand livre</b><ul style="margin:4px 0 0 16px;padding:0">'+
     res.anomalies.map(function(a){return '<li><b>'+esc(a.type)+'</b> — '+esc(a.texte)+'</li>';}).join('')+'</ul></div>';
@@ -9311,14 +9350,47 @@ function renderRvVirements(){
     var st=_RV_STATUTS[l.statut];
     rows+='<tr><td><input type="checkbox" data-rv-sel="'+esc(l.id)+'"'+(E.sel[l.id]?' checked':'')+' onchange="_rvEtat.sel[this.getAttribute(\'data-rv-sel\')]=this.checked;renderRvVirements()"></td>'+
       '<td>'+esc(l.ref)+'</td><td class="n">'+fN(l.xpf)+'</td><td class="n">'+(l.estime?'≈ ':'')+_rvTaux(l.taux)+'</td><td class="n">'+(l.estime?'≈ ':'')+_rvAud(l.aud)+'</td>'+
-      '<td>'+(l.factures.map(function(f){return '<b>'+esc(f.piece)+'</b> <span class="renta-tag">'+_rvAud(f.aud)+' AUD</span>';}).join('<br>')||'—')+'</td>'+
-      '<td>'+(l.po.map(function(p){return '<a href="#" class="renta-po" onclick="event.preventDefault();ouvrirDocument(\'BC\','+p.id+');">'+esc(p.num)+'</a> <span class="renta-tag">proposé</span>';}).join('<br>')||'<span class="renta-tag">—</span>')+'</td>'+
-      '<td><span class="renta-badge '+st[1]+'">'+st[0]+'</span>'+(l.note?'<div class="rv-note">'+esc(l.note)+'</div>':'')+'</td></tr>';
+      '<td>'+(l.factures.map(function(f){return '<b>'+esc(f.piece)+'</b> <span class="renta-tag">'+_rvAud(f.aud)+' AUD</span>';}).join('<br>')||(l.banque?'':'—'))+(l.banque?'<div class="rv-note" style="color:var(--teal)">🏦 '+esc(_rvBanqueTxt(l.banque))+'</div>':'')+'</td>'+
+      '<td>'+(l.po.map(function(p){return '<a href="#" class="renta-po" onclick="event.preventDefault();ouvrirDocument(\'BC\','+p.id+');">'+esc(p.num)+'</a> <span class="renta-tag">'+(p.propose?'proposé':'banque')+'</span>';}).join('<br>')||'<span class="renta-tag">—</span>')+'</td>'+
+      '<td><span class="renta-badge '+st[1]+'">'+st[0]+'</span> <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10px" title="Compléter avec l\'ordre de virement de la banque (montant AUD, facture, PO)" onclick="rvEditer(\''+esc(l.id)+'\')">🏦 relevé</button>'+(l.note?'<div class="rv-note">'+esc(l.note)+'</div>':'')+'</td></tr>'+
+      (E.edit===l.id?_rvEditeurHtml(l):'');
   });
   h+='<div class="card" style="margin-top:10px"><div style="overflow-x:auto"><table class="renta-table"><thead><tr><th style="width:24px"></th><th>Virement</th><th class="n">XPF</th><th class="n">Taux</th><th class="n">AUD</th><th>Facture(s) Emerson</th><th>PO CALINSTRUM</th><th>Statut</th></tr></thead><tbody>'+
     (rows||'<tr><td colspan="8" class="renta-vide">Aucun virement sur ce filtre.</td></tr>')+'</tbody></table></div>'+
     '<div class="rv-note" style="margin-top:8px">Preuve : la banque applique un seul taux aux virements d\'une même date ; si 2 virements du jour retombent exactement sur des factures, le taux est prouvé. Le PO est une proposition (même montant AUD, PO antérieur à la facture).</div></div>';
   body.innerHTML=h;
+}
+
+// Complément « relevé banque » d'un virement : saisi à partir de l'ordre de virement
+// (portail bancaire). Conservé dans DB.rvComplements (clé date|XPF), hors grand livre.
+function _rvCleComplement(l){ return l.date+'|'+l.xpf; }
+function _rvEditeurHtml(l){
+  var c=(DB.rvComplements||{})[_rvCleComplement(l)]||{};
+  var inp=function(id,ph,val,w){return '<input id="rvc-'+id+'" placeholder="'+ph+'" value="'+esc(val==null?'':String(val))+'" style="width:'+w+'px;margin-right:6px" class="btn btn-ghost btn-sm">';};
+  return '<tr><td></td><td colspan="7" style="background:var(--bg3)"><span class="rv-note">Ordre de virement de la banque : </span>'+
+    inp('aud','Montant AUD',c.aud,100)+inp('fac','N° invoice',c.facture,110)+inp('po','PO (ex. JJMMAAAA/077)',c.po,150)+inp('ref','Réf.',c.ref,100)+
+    '<button class="btn btn-teal btn-sm" onclick="rvEnregistrerComplement(\''+esc(l.id)+'\')">Enregistrer</button> '+
+    (c.aud?'<button class="btn btn-ghost btn-sm" onclick="rvSupprimerComplement(\''+esc(l.id)+'\')">Retirer</button> ':'')+
+    '<button class="btn btn-ghost btn-sm" onclick="rvEditer(null)">Annuler</button>'+
+    '<div class="rv-note" style="margin-top:4px">Accepté seulement si le montant AUD retombe sur le taux du jour ('+(l.taux?_rvTaux(l.taux)+' → '+(l.estime?'≈ ':'')+_rvAud(l.xpf/l.taux)+' AUD':'—')+').</div></td></tr>';
+}
+function rvEditer(id){ _rvEtat.edit=id; renderRvVirements(); }
+function _rvLigneParId(id){ return _rvDernier?_rvDernier.lignes.find(function(x){return x.id===id;}):null; }
+function rvEnregistrerComplement(id){
+  var l=_rvLigneParId(id); if(!l) return;
+  var v=function(k){var el=document.getElementById('rvc-'+k);return el?el.value.trim():'';};
+  var aud=_rvNombre(v('aud'));
+  if(!(aud>0)){ alert('Saisissez le montant AUD de l\'ordre de virement.'); return; }
+  DB.rvComplements=DB.rvComplements||{};
+  DB.rvComplements[_rvCleComplement(l)]={aud:aud,facture:v('fac').replace(/^invoice\s*/i,''),po:v('po').replace(/^po\s*/i,''),ref:v('ref'),saisiLe:td()};
+  _rvEtat.edit=null; saveDB(); renderRvVirements();
+  var apres=_rvLigneParId(id);
+  if(apres && !apres.banque) alert('Montant refusé : '+_rvAud(aud)+' AUD ne retombe pas sur le taux du jour. Vérifiez l\'ordre de virement (voir « Points à vérifier »).');
+}
+function rvSupprimerComplement(id){
+  var l=_rvLigneParId(id); if(!l||!DB.rvComplements) return;
+  delete DB.rvComplements[_rvCleComplement(l)];
+  _rvEtat.edit=null; saveDB(); renderRvVirements();
 }
 
 function rvSelection(tout){
@@ -9355,7 +9427,7 @@ function _rvPdfHtml(){
     if(l.date!==j){ j=l.date; var tj=res.jours[l.date];
       rows+='<tr class="grp"><td colspan="7">Virements du '+fD(l.date)+(tj&&tj.source==='prouvé'?' · taux '+_rvTaux(tj.taux)+' prouvé ('+tj.n+' virements au même taux)':tj?' · taux '+_rvTaux(tj.taux):' · taux non prouvable (un seul virement)')+'</td></tr>'; }
     rows+='<tr><td class="num">'+esc(l.ref)+'</td><td class="n">'+fN(l.xpf)+'</td><td class="n">'+(l.estime?'≈ ':'')+_rvTaux(l.taux)+'</td><td class="n">'+(l.estime?'≈ ':'')+_rvAud(l.aud)+'</td>'+
-      '<td>'+(l.factures.map(function(f){return '<b>'+esc(f.piece)+'</b> ('+_rvAud(f.aud)+' AUD)';}).join('<br>')||'—')+'</td>'+
+      '<td>'+(l.factures.map(function(f){return '<b>'+esc(f.piece)+'</b> ('+_rvAud(f.aud)+' AUD)';}).join('<br>')||(l.banque?'':'—'))+(l.banque?'<div class="mut">'+esc(_rvBanqueTxt(l.banque))+'</div>':'')+'</td>'+
       '<td>'+(l.po.map(function(p){return esc(p.num);}).join('<br>')||'—')+'</td>'+
       '<td><span class="st-'+l.statut+'">'+_RV_STATUTS[l.statut][0]+'</span>'+(l.note?'<div class="mut">'+esc(l.note)+'</div>':'')+'</td></tr>';
   });
@@ -9367,7 +9439,7 @@ function _rvPdfHtml(){
     'th{background:#1b365d;color:#fff;text-align:left;font-size:9.5px;padding:5px 6px}td{padding:3.5px 6px;border-bottom:1px solid #e5e9ef;vertical-align:top}'+
     'th.n,td.n{text-align:right;white-space:nowrap}td.num{font-weight:700;color:#1b365d;white-space:nowrap}'+
     'tr.grp td{background:#eef2f7;font-weight:700;color:#1b365d;padding:5px 6px}tr.tot td{font-weight:700;border-top:2px solid #1b365d;border-bottom:none;padding-top:6px}'+
-    '.st-prouve{color:#1b7a4e;font-weight:700}.st-probable{color:#b45309;font-weight:700}.st-introuvable{color:#b4232f;font-weight:700}.mut{color:#6b7785;font-size:9px}'+
+    '.st-prouve,.st-banque{color:#1b7a4e;font-weight:700}.st-probable{color:#b45309;font-weight:700}.st-introuvable{color:#b4232f;font-weight:700}.mut{color:#6b7785;font-size:9px}'+
     '.ano{border-left:3px solid #b4232f;background:#fdf2f3;padding:6px 10px;margin:0 0 10px;font-size:10px}.ano li{margin:2px 0}'+
     'thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}';
   var html='<div class="hd"><div><div style="display:inline-block;text-align:center"><img src="'+LG_PLACEHOLDER+'" style="height:38px;display:block;margin:0 auto" alt="CALINSTRUM">'+
