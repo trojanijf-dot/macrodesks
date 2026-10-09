@@ -2636,6 +2636,7 @@ function admPreviewPrint(){
     <div style="display:flex;gap:8px">
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadPOCalinstrumPdf()" title="Importer un ou plusieurs PDFs de PO Calinstrum (Purchase Order) déjà créés avant le GRC. Détecte automatiquement N° PO, date, vendor, Customer Ref, Emerson Proposal, lignes et total. Anti-doublon strict sur le N° PO." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Importer PO PDF</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadBCReapproPdf()" title="Importe un PDF de BC SLN REAPPRO (signature : « GÉNÉRÉ PAR LE RÉAPPROVISIONNEMENT »). Crée AUTOMATIQUEMENT 4 documents liés en cascade : 1) Devis SLN-DV-BCGMAO-{numBC}, 2) Facture SLN-F{NNN}, 3) BL BL{JJMMAAAA}/{NNN}, 4) BC Calinstrum (Emerson, AUD) {JJMMAAAA}/{NNN}. Le NNN est partagé entre les 4 documents. Bloque l'import si une ref est hors grille tarifaire." style="border-color:rgba(167,139,250,.5);color:#a78bfa;font-weight:700">🔄 Import REAPPRO (cascade)</button>
+      <button class="btn btn-ghost btn-sm no-print" onclick="ouvrirControlePO()" title="Compare chaque PO Emerson au devis accepté : références et quantités" style="border-color:rgba(244,63,94,.45);color:#fb7185;font-weight:700">🛡 Contrôle des PO</button>
       <button class="btn btn-teal no-print" onclick="openBC()">+ Nouveau bon de commande</button>
     </div>
   </div>
@@ -3874,6 +3875,7 @@ function admPreviewPrint(){
 <div class="modal modal-lg">
   <div class="modal-header"><h3 id="mBCtitle">Nouveau Bon de Commande — Emerson</h3><button class="modal-close" onclick="cm('mBC')">✕</button></div>
   <div class="modal-body">
+    <div id="bc-controle-devis"></div>
     <div class="form-row3">
       <div class="form-group"><label>N° PO <span class="req">*</span></label><input class="form-input" id="bc-num"><div id="bc-num-hint" style="display:none;font-size:10.5px;color:var(--muted);margin-top:4px;line-height:1.4"></div></div>
       <div class="form-group"><label>Date <span class="req">*</span></label><input type="date" class="form-input" id="bc-date"></div>
@@ -36041,6 +36043,7 @@ function _toggleBCDevisLieSelection(devisId, checked){
   _refreshBCDevisLieUI();
   _autoFillClientFinalFromDevis();
   _autoFillLinkBCclientFromDevis();
+  if(typeof renderBCControleDevis==='function') renderBCControleDevis();
 }
 
 // Met à jour le label du bouton multi-select (synthèse de la sélection)
@@ -36104,10 +36107,271 @@ function _autoFillLinkBCclientFromDevis(){
 function _setBCSelectedDevisIds(ids){
   _bcSelectedDevisIds = (ids||[]).slice();
   _refreshBCDevisLieUI();
+  if(typeof renderBCControleDevis==='function') renderBCControleDevis();
+}
+
+// =============================================================================
+// GARDE-FOU PO EMERSON ↔ DEVIS ACCEPTÉ (09/10/2026)
+// =============================================================================
+// Incident : un devis client accepté avec la référence RECOMMANDÉE par Emerson
+// (section « Alternates & Recommendations ») et un PO envoyé avec la référence de la
+// ligne principale — 2 caractères d'écart, autre produit livré. Rien ne comparait
+// le PO au devis : le PO était construit depuis le devis Emerson, le devis client
+// à part, et ce PO n'était même pas relié techniquement au devis.
+// Règle : chaque ligne FOURNITURE du devis accepté (révision active) doit se
+// retrouver sur le PO avec la même référence et la même quantité. Les différences
+// d'ÉCRITURE ne sont pas des écarts (casse, espaces, retours à la ligne, « * »,
+// option écrite après « : » au devis et dans la désignation au PO, référence
+// tronquée). « Référence différente » = même famille mais caractères différents.
+// Contrôle impossible si le devis ne porte pas de référence constructeur.
+var _bcControleJustif=null;
+function _poCleNum(s){ var m=/(\d{8})\s*\/\s*0*(\d+)/.exec(String(s||'')); return m?m[1]+'/'+Number(m[2]):''; }
+function _poNormRef(s){ return String(s||'').toUpperCase().replace(/[\s*]/g,''); }
+// Codes constructeur d'un texte : blocs d'au moins 6 caractères mêlant lettres et chiffres.
+function _poCodes(s){
+  return String(s||'').toUpperCase().split(/[\s:,;]+/)
+    .map(function(t){return t.replace(/\*/g,'').replace(/^[^0-9A-Z]+|[^0-9A-Z]+$/g,'');})
+    .filter(function(t){return t.length>=6 && /\d/.test(t) && /[A-Z]/.test(t);});
+}
+function _poArticle(ref,desc,qte,extra){
+  var o={ref:String(ref||'').trim(),desc:String(desc||''),qte:Number(qte)||0};
+  o.key=_poNormRef(o.ref); o.codes=_poCodes(o.ref); o.prim=o.codes[0]||''; o.codesTout=o.codes.concat(_poCodes(o.desc));
+  if(extra) for(var k in extra) o[k]=extra[k];
+  return o;
+}
+function _poLignesDevis(d){
+  var out=[];
+  ((d&&d.lines&&d.lines.fourniture)||[]).forEach(function(l){
+    if(!l || l.type==='header') return;
+    // Ligne titre d'un kit (« sonde assemblée avec transmetteur ») : ce sont ses sous-lignes qui portent les références.
+    var titreKit=(l.subLines||[]).length && !_poCodes(l.ref).length;
+    (titreKit?l.subLines:[l].concat(l.subLines||[])).forEach(function(x){
+      var ref=String(x.ref||'').trim(), des=x.designation||x.desc||'';
+      if(!ref && !des) return;
+      if(/FREIGHT|\bFRET\b|TRANSPORT/i.test(ref+' '+des)) return;
+      out.push(_poArticle(ref,des,x.qte,{devis:d}));
+    });
+  });
+  return out;
+}
+function _poLignesPO(bc){
+  var out=[];
+  ((bc&&bc.lines)||[]).forEach(function(l,i){
+    if(!l || l.type==='header') return;
+    out.push(_poArticle(l.ref,l.desc,l.qte,{idx:i}));
+    (l.subLines||[]).forEach(function(s){ out.push(_poArticle(s.ref,s.desc,s.qte,{idx:i,sub:true})); });
+  });
+  return out;
+}
+// Devis reliés au PO (révision ACTIVE) : lien technique, sinon n° de PO cité par le devis.
+function _poDevisLies(bc){
+  var res=[], vus={};
+  var add=function(d){ if(!d) return; d=_dvRevisionActive(d); if(vus[d.id]) return; vus[d.id]=1; res.push(d); };
+  var ids=(typeof getBCsDevisIds==='function')?(getBCsDevisIds(bc)||[]):[].concat(bc.devisLieIds||[],bc.devisLieId?[bc.devisLieId]:[]);
+  ids.forEach(function(id){ add((DB.devis||[]).find(function(x){return String(x.id)===String(id);})); });
+  var k=_poCleNum(bc.num);
+  if(k) (DB.devis||[]).forEach(function(d){ if(_poCleNum(d.poCalinstrum)===k) add(d); });
+  return res;
+}
+// Même article ? 'exact' | 'code' | 'tronque' | 'incomplet' (+ manque) | null
+function _poCorrespond(dl,p,tousCodesPO){
+  if(!dl.key || !p.key) return null;
+  if(dl.key===p.key) return {niveau:'exact'};
+  var manque=function(){ return dl.codes.slice(1).filter(function(c){return (tousCodesPO||p.codesTout).indexOf(c)<0;}); };
+  if(dl.prim && p.codesTout.indexOf(dl.prim)>=0){ var m=manque(); return m.length?{niveau:'incomplet',manque:m}:{niveau:'code'}; }
+  var court=dl.key.length<=p.key.length?dl.key:p.key, long=court===dl.key?p.key:dl.key;
+  if(court.length>=12 && long.indexOf(court)===0){
+    if(court===dl.key) return {niveau:'tronque'};
+    var reste=dl.key.slice(p.key.length);
+    var trouve=(tousCodesPO||p.codesTout).some(function(c){return c.indexOf(reste)>=0||reste.indexOf(c)>=0;}) || _poNormRef(p.desc).indexOf(reste)>=0;
+    return trouve?{niveau:'code'}:{niveau:'incomplet',manque:[reste]};
+  }
+  return null;
+}
+function _poDistance(a,b){
+  var m=a.length,n=b.length,pr=[],cu,i,j;
+  for(j=0;j<=n;j++) pr[j]=j;
+  for(i=1;i<=m;i++){ cu=[i]; for(j=1;j<=n;j++) cu[j]=Math.min(pr[j]+1,cu[j-1]+1,pr[j-1]+(a[i-1]===b[j-1]?0:1)); pr=cu; }
+  return pr[n];
+}
+function _poProche(a,b){
+  if(!a || !b) return false;
+  var pre=0; while(pre<a.length && pre<b.length && a[pre]===b[pre]) pre++;
+  var r=1-_poDistance(a,b)/Math.max(a.length,b.length);
+  return (pre>=4 && r>=0.6) || r>=0.75;
+}
+// Surligne les caractères qui diffèrent entre deux références (préfixe/suffixe communs).
+// Comparaison caractère par caractère (plus longue sous-suite commune) : seuls les
+// caractères qui n'appartiennent pas à la partie commune sont surlignés.
+function _poDiffHtml(a,b){
+  a=String(a||''); b=String(b||'');
+  var m=a.length, n=b.length, T=[], i, j;
+  for(i=0;i<=m;i++){ T[i]=[]; for(j=0;j<=n;j++) T[i][j]=0; }
+  for(i=m-1;i>=0;i--) for(j=n-1;j>=0;j--) T[i][j]=a[i]===b[j]?T[i+1][j+1]+1:Math.max(T[i+1][j],T[i][j+1]);
+  var ka=[], kb=[]; i=0; j=0;
+  while(i<m && j<n){ if(a[i]===b[j]){ ka[i]=kb[j]=true; i++; j++; } else if(T[i+1][j]>=T[i][j+1]) i++; else j++; }
+  var f=function(x,k){ var h='', buf='', diff=false;
+    var vider=function(){ if(buf) h+=diff?'<b style="background:var(--red);color:#fff;border-radius:2px;padding:0 1px">'+esc(buf)+'</b>':esc(buf); buf=''; };
+    for(var c=0;c<x.length;c++){ var d=!k[c]; if(d!==diff){ vider(); diff=d; } buf+=x[c]; }
+    vider(); return h; };
+  return [f(a,ka),f(b,kb)];
+}
+var _PO_VERDICTS={ok:['Identique','ok'],tronque:['Identique (référence abrégée au devis)','ok'],reference:['Référence différente','red'],quantite:['Quantité différente','red'],
+  incomplet:['Élément absent du PO','amber'],absent:['Absent du PO','amber'],extra:['Absent du devis','amber'],impossible:['Contrôle impossible','gris']};
+function _poControleDevis(bc){
+  var res={verdict:'sans-devis',devis:[],lignes:[],nbEcarts:0,sig:''};
+  if(!bc) return res;
+  var devis=_poDevisLies(bc); res.devis=devis;
+  if(!devis.length) return res;
+  var D=[]; devis.forEach(function(d){ D=D.concat(_poLignesDevis(d)); });
+  var P=_poLignesPO(bc), tous=[]; P.forEach(function(p){ tous=tous.concat(p.codesTout); });
+  var L=[], comparables=0;
+  // 1) correspondances (même article, écritures différentes acceptées)
+  D.forEach(function(dl){
+    if(!dl.prim && dl.key.length<12){ L.push({verdict:'impossible',dv:dl,note:'pas de référence constructeur au devis'}); dl.fait=true; return; }
+    comparables++;
+    var best=null, rang={exact:0,code:1,tronque:2,incomplet:3};
+    P.forEach(function(p){ if(p.pris) return; var c=_poCorrespond(dl,p,tous); if(c && (!best || rang[c.niveau]<rang[best.c.niveau])) best={p:p,c:c}; });
+    if(!best) return;
+    best.p.pris=true; dl.fait=true;
+    var v=best.c.niveau==='incomplet'?'incomplet':(best.c.niveau==='tronque'?'tronque':'ok');
+    var note=v==='incomplet'?('absent du PO : '+best.c.manque.join(', ')):'';
+    if(dl.qte && best.p.qte && dl.qte!==best.p.qte){ v='quantite'; note=dl.qte+' au devis / '+best.p.qte+' au PO'; }
+    L.push({verdict:v,dv:dl,po:best.p,note:note});
+  });
+  // 2) même famille, caractères différents
+  D.forEach(function(dl){
+    if(dl.fait) return;
+    var cand=P.filter(function(p){return !p.pris && (p.prim||p.key) && _poProche(dl.prim||dl.key,p.prim||p.key);})
+      .sort(function(a,b){return _poDistance(dl.prim||dl.key,a.prim||a.key)-_poDistance(dl.prim||dl.key,b.prim||b.key);})[0];
+    if(cand){ cand.pris=true; dl.fait=true; L.push({verdict:'reference',dv:dl,po:cand,note:'référence commandée par le client : '+dl.ref}); return; }
+    dl.fait=true; L.push({verdict:'absent',dv:dl,note:'aucune ligne du PO ne porte cette référence'});
+  });
+  // 3) lignes du PO qui ne viennent pas du devis (frais et lignes sans code ignorés)
+  P.forEach(function(p){ if(!p.pris && p.prim && !/FREIGHT|FRET|SHIPPING/i.test(p.ref)) L.push({verdict:'extra',po:p,note:'ligne du PO absente du devis accepté'}); });
+  res.lignes=L;
+  var rouge=L.filter(function(l){return _PO_VERDICTS[l.verdict][1]==='red';});
+  var ambre=L.filter(function(l){return _PO_VERDICTS[l.verdict][1]==='amber';});
+  res.nbEcarts=rouge.length;
+  res.verdict=rouge.length?'ecart':(!comparables?'impossible':(ambre.length||L.some(function(l){return l.verdict==='impossible';})?'verifier':'ok'));
+  res.sig=rouge.concat(ambre).map(function(l){return l.verdict+':'+(l.dv?l.dv.key+'×'+l.dv.qte:'')+'>'+(l.po?l.po.key+'×'+l.po.qte:'');}).sort().join('|');
+  return res;
+}
+var _PO_GLOBAL={ok:['✅ PO conforme au devis accepté','ok'],ecart:['🛑 Le PO ne correspond pas au devis accepté','red'],verifier:['⚠ PO à vérifier','amber'],
+  impossible:['⚪ Contrôle impossible','gris'],'sans-devis':['⚪ Aucun devis relié à ce PO','gris']};
+function _poDevisLabel(r){ return (r.devis||[]).map(function(d){return d.num+(d.rev?' '+d.rev:'');}).join(', '); }
+function _poControleHtml(r,bc,fiche){
+  var g=_PO_GLOBAL[r.verdict], couleur={ok:'var(--green)',red:'var(--red)',amber:'var(--amber)',gris:'var(--muted)'};
+  var just=(r.verdict==='ecart' && bc && bc.controleDevis && bc.controleDevis.sig===r.sig)?bc.controleDevis:null;
+  var bord=just?'var(--amber)':couleur[g[1]];
+  var h='<div style="border-left:4px solid '+bord+';background:var(--bg3);border-radius:6px;padding:9px 12px;margin-bottom:10px;font-size:12px">'+
+    '<b style="color:'+bord+'">'+g[0]+(r.devis.length?' '+esc(_poDevisLabel(r)):'')+'</b>';
+  if(r.verdict==='sans-devis') h+='<div style="color:var(--muted);font-size:11px;margin-top:3px">Reliez le devis accepté (champ « Devis liés ») pour vérifier les références commandées.</div>';
+  if(r.verdict==='ecart') h+=just?'<div style="color:var(--amber);font-size:11px;margin-top:3px">Écart justifié le '+fD(just.date)+' : « '+esc(just.motif)+' »</div>'
+    :'<div style="color:var(--muted);font-size:11px;margin-top:3px">Impression / envoi à Emerson bloqués tant que l\'écart n\'est ni corrigé ni justifié.</div>';
+  var lignes=r.lignes.filter(function(l){return fiche || _PO_VERDICTS[l.verdict][1]!=='ok';});
+  if(lignes.length){
+    h+='<table style="width:100%;border-collapse:collapse;margin-top:7px;font-size:11.5px"><thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase">'+
+      '<th style="text-align:left;padding:3px">Devis accepté</th><th style="text-align:left;padding:3px">PO CALINSTRUM</th><th style="text-align:left;padding:3px">Verdict</th></tr></thead><tbody>';
+    lignes.forEach(function(l){
+      var v=_PO_VERDICTS[l.verdict], dRef=l.dv?esc(l.dv.ref):'—', pRef=l.po?esc(l.po.ref):'—';
+      if(l.verdict==='reference'){ var df=_poDiffHtml(l.dv.ref,l.po.ref); dRef=df[0]; pRef=df[1]; }
+      var act='';
+      if(fiche && l.verdict==='reference' && l.po && !l.po.sub)
+        act=' <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10px" onclick="bcReprendreRefDevis('+l.po.idx+',\''+esc(String(l.dv.ref).replace(/\\/g,'\\\\').replace(/'/g,"\\'"))+'\')">↺ Reprendre la référence du devis</button>';
+      h+='<tr style="border-top:1px solid var(--border)"><td style="padding:4px 3px;font-family:var(--mono)">'+dRef+(l.dv?' <span style="color:var(--muted)">×'+l.dv.qte+'</span>':'')+'</td>'+
+        '<td style="padding:4px 3px;font-family:var(--mono)">'+pRef+(l.po?' <span style="color:var(--muted)">×'+l.po.qte+'</span>':'')+'</td>'+
+        '<td style="padding:4px 3px"><span style="color:'+couleur[v[1]]+';font-weight:700">'+v[0]+'</span>'+(l.note?'<div style="color:var(--muted);font-size:10.5px">'+esc(l.note)+'</div>':'')+act+'</td></tr>';
+    });
+    h+='</tbody></table>';
+  }
+  if(fiche && r.verdict==='ecart' && !just) h+='<div style="margin-top:7px"><button type="button" class="btn btn-ghost btn-sm" onclick="bcJustifierEcart()">Justifier l\'écart…</button></div>';
+  return h+'</div>';
+}
+function renderBCControleDevis(){
+  var el=document.getElementById('bc-controle-devis'); if(!el) return;
+  var bc; try{ bc=getBC(); }catch(e){ el.innerHTML=''; return; }
+  if(_bcControleJustif) bc.controleDevis=_bcControleJustif;
+  el.innerHTML=_poControleHtml(_poControleDevis(bc),bc,true);
+}
+function bcReprendreRefDevis(idx,ref){
+  if(!bcL[idx]) return;
+  var avant=bcL[idx].ref;
+  bcL[idx].ref=ref;
+  rBClines();
+  alert('Référence remplacée : '+avant+' → '+ref+'\n\n⚠ Vérifiez le PRIX AUD de cette ligne : une référence recommandée par Emerson n\'a pas le même prix (voir la section « Alternates & Recommendations » du devis Emerson).');
+}
+function bcJustifierEcart(){
+  var bc=getBC(), r=_poControleDevis(bc);
+  if(r.verdict!=='ecart') return;
+  var motif=prompt('Motif de l\'écart entre le PO et le devis accepté (obligatoire) :','');
+  if(!motif || !motif.trim()) return;
+  _bcControleJustif={sig:r.sig,motif:motif.trim(),date:td()};
+  var enBase=eBCid?(DB.bcs||[]).find(function(x){return x.id===eBCid;}):null;
+  if(enBase){ enBase.controleDevis=_bcControleJustif; saveDB(); }
+  renderBCControleDevis();
+}
+// Point de passage obligé avant d'imprimer / envoyer un PO : écart rouge non justifié
+// → arrêt, sauf confirmation explicite AVEC motif (enregistré sur le PO).
+function _poGardeImpression(bc){
+  if(!bc) return true;
+  var r=_poControleDevis(bc);
+  if(r.verdict!=='ecart') return true;
+  if(bc.controleDevis && bc.controleDevis.sig===r.sig) return true;
+  var lignes=r.lignes.filter(function(l){return _PO_VERDICTS[l.verdict][1]==='red';}).map(function(l){
+    return '• '+_PO_VERDICTS[l.verdict][0]+' :\n   devis accepté : '+(l.dv?l.dv.ref+' × '+l.dv.qte:'—')+'\n   ce PO          : '+(l.po?l.po.ref+' × '+l.po.qte:'—');
+  }).join('\n');
+  if(!confirm('🛑 PO '+(bc.num||'')+' : il ne correspond pas au devis accepté '+_poDevisLabel(r)+'\n\n'+lignes+
+    '\n\nEnvoyer ce PO ferait livrer autre chose que ce qui a été vendu au client.\n\nOK = imprimer quand même (motif obligatoire) · Annuler = corriger le PO')) return false;
+  var motif=prompt('Motif de l\'écart (obligatoire) :','');
+  if(!motif || !motif.trim()) return false;
+  var just={sig:r.sig,motif:motif.trim(),date:td()};
+  bc.controleDevis=just;
+  var enBase=(DB.bcs||[]).find(function(x){return x.id===bc.id;});
+  if(enBase) enBase.controleDevis=just;
+  if(typeof eBCid!=='undefined' && eBCid===bc.id) _bcControleJustif=just;
+  saveDB();
+  return true;
+}
+
+// Vue « Contrôle des PO » : tous les PO face à leur devis accepté, écarts en tête.
+var _ctlPoFiltre='alertes';
+function ouvrirControlePO(){
+  var ancien=document.getElementById('mCTLPO'); if(ancien) ancien.remove();
+  var ordre={ecart:0,verifier:1,impossible:2,'sans-devis':3,ok:4};
+  var tous=(DB.bcs||[]).map(function(bc){ return {bc:bc,r:_poControleDevis(bc)}; })
+    .sort(function(a,b){ return (ordre[a.r.verdict]-ordre[b.r.verdict]) || String(b.bc.date||'').localeCompare(String(a.bc.date||'')); });
+  var n={}; tous.forEach(function(x){ n[x.r.verdict]=(n[x.r.verdict]||0)+1; });
+  var vis=tous.filter(function(x){ return _ctlPoFiltre==='tous' || (_ctlPoFiltre==='alertes' && (x.r.verdict==='ecart'||x.r.verdict==='verifier')); });
+  var tag=function(v){ var g={ecart:['Écart','var(--red)'],verifier:['À vérifier','var(--amber)'],impossible:['Contrôle impossible','var(--muted)'],'sans-devis':['Sans devis relié','var(--muted)'],ok:['Conforme','var(--green)']}[v];
+    return '<span style="color:'+g[1]+';font-weight:700;white-space:nowrap">'+g[0]+'</span>'; };
+  var rows=vis.map(function(x){
+    var det=x.r.lignes.filter(function(l){return _PO_VERDICTS[l.verdict][1]==='red'||_PO_VERDICTS[l.verdict][1]==='amber';}).slice(0,3).map(function(l){
+      var dRef=l.dv?esc(l.dv.ref):'—', pRef=l.po?esc(l.po.ref):'—';
+      if(l.verdict==='reference'){ var df=_poDiffHtml(l.dv.ref,l.po.ref); dRef=df[0]; pRef=df[1]; }
+      return '<div><b>'+_PO_VERDICTS[l.verdict][0]+'</b> : <span style="font-family:var(--mono)">'+dRef+'</span>'+(l.dv?' ×'+l.dv.qte:'')+' au devis / <span style="font-family:var(--mono)">'+pRef+'</span>'+(l.po?' ×'+l.po.qte:'')+' au PO</div>';
+    }).join('') || (x.r.verdict==='impossible'?'<span style="color:var(--muted)">devis sans référence constructeur</span>':'');
+    var just=(x.r.verdict==='ecart' && x.bc.controleDevis && x.bc.controleDevis.sig===x.r.sig)?'<div style="color:var(--amber);font-size:10.5px">justifié : « '+esc(x.bc.controleDevis.motif)+' »</div>':'';
+    return '<tr style="border-top:1px solid var(--border)"><td style="padding:5px"><a href="#" style="color:var(--teal);font-weight:700" onclick="event.preventDefault();document.getElementById(\'mCTLPO\').remove();ouvrirDocument(\'BC\','+x.bc.id+');">'+esc(x.bc.num)+'</a><div style="color:var(--muted);font-size:10.5px">'+fD(x.bc.date)+'</div></td>'+
+      '<td style="padding:5px;font-size:11px">'+esc(String(x.bc.clientFinal||'').slice(0,30))+'</td><td style="padding:5px;font-size:11px">'+esc(_poDevisLabel(x.r))+'</td>'+
+      '<td style="padding:5px">'+tag(x.r.verdict)+just+'</td><td style="padding:5px;font-size:11px">'+det+'</td></tr>';
+  }).join('') || '<tr><td colspan="5" style="padding:10px;color:var(--muted)">Aucun PO dans ce filtre.</td></tr>';
+  var chip=function(k,lab){ return '<button type="button" class="btn btn-ghost btn-sm" style="'+(_ctlPoFiltre===k?'border-color:var(--teal);color:var(--teal)':'')+'" onclick="_ctlPoFiltre=\''+k+'\';ouvrirControlePO()">'+lab+'</button>'; };
+  var m=document.createElement('div');
+  m.id='mCTLPO'; m.className='modal-overlay open';
+  m.innerHTML='<div class="modal modal-lg"><div class="modal-header"><h3>🛡 Contrôle des PO Emerson ↔ devis accepté</h3><button class="modal-close" onclick="document.getElementById(\'mCTLPO\').remove()">✕</button></div>'+
+    '<div class="modal-body"><div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'+
+      chip('alertes','Écarts et à vérifier ('+((n.ecart||0)+(n.verifier||0))+')')+chip('tous','Tous ('+tous.length+')')+
+      '<span style="margin-left:auto;color:var(--muted);font-size:11px">'+(n.ecart||0)+' écart(s) · '+(n.verifier||0)+' à vérifier · '+(n.ok||0)+' conforme(s) · '+(n.impossible||0)+' contrôle(s) impossible(s) · '+(n['sans-devis']||0)+' sans devis</span></div>'+
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Chaque ligne fourniture du devis accepté (révision en cours) doit se retrouver sur le PO avec la même référence et la même quantité. Les différences d\'écriture (espaces, retours à la ligne, « * », option après « : ») ne comptent pas.</div>'+
+    '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase"><th style="text-align:left;padding:5px">PO</th><th style="text-align:left;padding:5px">Client</th><th style="text-align:left;padding:5px">Devis accepté</th><th style="text-align:left;padding:5px">Verdict</th><th style="text-align:left;padding:5px">Détail</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  document.body.appendChild(m);
 }
 
 function openBC(id){
   eBCid=id||null;bcL=[];rebuildAllParamSelects();
+  _bcControleJustif=null;
+  if(id){ var _bcj=(DB.bcs||[]).find(function(x){return x.id===id;}); if(_bcj && _bcj.controleDevis) _bcControleJustif=_bcj.controleDevis; }
   // Refresh datalist suggestions BC Client (à chaque ouverture car DB.devis peut bouger)
   _refreshBCClientDatalist();
   if(id){
@@ -36487,6 +36751,7 @@ function rBClines(){
     });
   });
   cBCtot();
+  if(typeof renderBCControleDevis==='function') renderBCControleDevis();
 }
 
 // Mise à jour light d'une seule ligne (montant affiché) sans re-render complet du tableau
@@ -36613,6 +36878,9 @@ function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot
   fraisXPF:(fraisNum!==null&&!isNaN(fraisNum)&&fraisNum>=0)?fraisNum:undefined,
   fraisNote:gvg('bc-fraisNote')||''
   };
+  // Justification d'un écart PO ↔ devis (posée seulement si définie : absente, la
+  // valeur en base est restaurée par _preserveHiddenFields).
+  if(_bcControleJustif) _bc.controleDevis=_bcControleJustif;
   // ⚠ Restaure les champs posés par du code et absents du formulaire
   // (paidEmerson, paidEmersonDate → trésorerie). Cf _preserveHiddenFields.
   return _preserveHiddenFields(_bc, eBCid?(DB.bcs||[]).find(function(x){return x.id===eBCid;}):null);
@@ -36702,10 +36970,7 @@ function handleEmersonPdfSelected(event){
       var arr=new Uint8Array(e.target.result);
       eimpState.pdfBytes=arr.slice(0); // clone pour stockage ultérieur
       extractEmersonPdf(arr).then(function(result){
-        eimpState.header=result.header;
-        eimpState.lines=result.lines;
-        eimpState.rawText=result.rawText;
-        renderEimpPreview(result.formatDetected);
+        _eimpChargerResultat(result);
       }).catch(function(err){
         console.error('Parse error:',err);
         setEimpStatus('❌ Erreur lors de l\'analyse : '+(err.message||err));
@@ -36752,6 +37017,7 @@ function extractEmersonPdf(uint8arr){
       var rawText=pageTexts.join('\n\n---PAGE BREAK---\n\n');
       var parsed=parseEmersonQuoteText(rawText);
       parsed.rawText=rawText;
+      parsed.alternatives=_emersonAlternatives(rawText);
       return parsed;
     });
   });
@@ -37508,6 +37774,50 @@ function parseEmersonQuoteText(text){
   return {header:header,lines:lines,formatDetected:formatDetected};
 }
 
+// === Alternatives chiffrées d'un devis Emerson (09/10/2026) ===
+// Le tableau principal s'arrête au premier « TOTAL PRICE » ; la section « Alternates &
+// Recommendations » qui suit peut contenir des articles CHIFFRÉS (ex. le même
+// transmetteur avec une autre antenne, à un autre prix). Ils n'étaient jamais lus : un devis
+// client établi sur la référence recommandée ne pouvait donc pas être recopié sur le PO.
+// On ne lit que la section CHIFFRÉE (en-tête « Unit Price » juste après le titre) ; le
+// sommaire et les descriptifs détaillés (« Alternates & Recommendations Detailed Item
+// Summary », non chiffrés) sont ignorés. Même lecteur de lignes que le tableau principal.
+function _emersonAlternatives(text){
+  text=String(text||'');
+  var tot=text.search(/Total\s*Price/i); if(tot<0) return [];
+  var re=/Alternates\s*(?:&|and)\s*Recommendations/gi, m, out=[];
+  while((m=re.exec(text))){
+    if(m.index<tot) continue;
+    var apres=text.slice(m.index+m[0].length, m.index+m[0].length+300);
+    if(!/Unit\s*Price/i.test(apres) || /^\s*Detailed\s*Item\s*Summary/i.test(apres)) continue;
+    var zone=text.slice(m.index+m[0].length);
+    var fin=zone.search(/Detailed\s*Item\s*Summary|Emerson is committed|---PAGE BREAK---|Terms\s*&\s*Conditions|Clarifications/i);
+    if(fin>=0) zone=zone.slice(0,fin);
+    var r=parseEmersonQuoteText('Commercial Summary\n'+zone+'\nTotal Price 0.00');
+    (r.lines||[]).forEach(function(l){ if(l && l.type!=='header'){ l._alternative=true; out.push(l); } });
+  }
+  return out;
+}
+
+// Charge le résultat d'un devis Emerson lu dans la fenêtre d'import (alternatives à la suite).
+function _eimpChargerResultat(result){
+  eimpState.header=result.header;
+  eimpState.lines=(result.lines||[]).concat(result.alternatives||[]);
+  eimpState.rawText=result.rawText||'';
+  renderEimpPreview(result.formatDetected);
+}
+// Lignes fourniture des devis acceptés reliés au PO en cours d'édition (révision active).
+function _eimpLignesDevisAccepte(){
+  var ids=(typeof _bcSelectedDevisIds!=='undefined' && _bcSelectedDevisIds)||[], D=[], noms=[];
+  ids.forEach(function(id){
+    var d=(DB.devis||[]).find(function(x){return String(x.id)===String(id);}); if(!d) return;
+    d=_dvRevisionActive(d);
+    if(noms.indexOf(d.num+(d.rev?' '+d.rev:''))>=0) return;
+    noms.push(d.num+(d.rev?' '+d.rev:'')); D=D.concat(_poLignesDevis(d));
+  });
+  return {lignes:D, noms:noms};
+}
+
 // === Render du preview dans le modal ===
 function renderEimpPreview(formatDetected){
   var h=eimpState.header;
@@ -37538,6 +37848,18 @@ function renderEimpPreview(formatDetected){
   eimpState.selBC={};
   arts.forEach(function(x){ eimpState.selBC[x.i]=!!_eimpLigneDevis(x.l.ref) || !!(dejaLa && x.l.propId===dejaLa.id); });
   ls.forEach(function(l){ if(l.type!=='header') l._sel=false; });
+  // [09/10/2026] Devis accepté relié au PO : ses lignes (alternatives Emerson comprises)
+  // sont cochées d'office — c'est ce que le client a commandé. Les autres restent décochées.
+  var acc=_eimpLignesDevisAccepte();
+  eimpState.devisAccepte=acc.noms.join(', ');
+  if(acc.lignes.length){
+    ls.forEach(function(l){
+      if(l.type==='header') return;
+      var p=_poArticle(l.ref,l.desc,l.qte);
+      l._dansDevis=acc.lignes.some(function(dl){ return !!_poCorrespond(dl,p); });
+      l._sel=l._dansDevis;
+    });
+  }
   _eimpRenderMode();
   // Raw text (debug)
   document.getElementById('eimp-raw-text').textContent=eimpState.rawText||'';
@@ -37581,7 +37903,9 @@ function _eimpRenderMode(){
   document.getElementById('eimp-hint').innerHTML = m==='rattacher'
     ? (n ? 'Ce PO a déjà <b>'+n+' article'+(n>1?'s':'')+'</b> : on ajoute seulement la <b>référence du devis</b>. Aucune ligne ajoutée, aucun prix ni quantité modifié.'
          : 'Ce PO n\'a aucun article : seule la <b>référence du devis</b> sera posée.')
-    : 'Coche les articles commandés et ajuste les quantités. <b>Rien n\'est coché d\'office</b>.';
+    : (eimpState.devisAccepte
+        ? 'Les lignes du devis accepté <b>'+esc(eimpState.devisAccepte)+'</b> sont cochées d\'office, <b>alternatives Emerson comprises</b>. Vérifie avant d\'importer.'
+        : 'Coche les articles commandés et ajuste les quantités. <b>Rien n\'est coché d\'office</b> (aucun devis relié à ce PO).');
   document.getElementById('eimp-bc-wrap').style.display = m==='rattacher'?'block':'none';
   document.getElementById('eimp-lines-wrap').style.display = m==='articles'?'block':'none';
   if(m==='rattacher') _eimpRenderBC(); else renderEimpLines();
@@ -37637,8 +37961,15 @@ function renderEimpLines(){
       return;
     }
     itemNum++;
+    // Séparateur avant la première alternative Emerson (hors total du devis Emerson)
+    if(l._alternative && !(eimpState.lines[i-1] && eimpState.lines[i-1]._alternative)){
+      html+='<tr><td colspan="8" style="background:rgba(251,191,36,.08);color:var(--amber);font-weight:700;font-size:11px;padding:5px 8px">'+
+        'Alternatives &amp; recommandations Emerson — chiffrées à part, hors « Total Price » du devis Emerson</td></tr>';
+    }
     var isKit=Array.isArray(l.subLines)&&l.subLines.length>0;
     var kitBadge=isKit?' <span style="display:inline-block;background:rgba(59,130,246,.15);color:#3b82f6;padding:1px 4px;border-radius:3px;font-size:8.5px;font-weight:700;margin-left:2px" title="KIT (1 prix global)">KIT</span>':'';
+    if(l._alternative) kitBadge+=' <span style="display:inline-block;background:rgba(251,191,36,.15);color:var(--amber);padding:1px 4px;border-radius:3px;font-size:8.5px;font-weight:700" title="Alternative / recommandation Emerson">ALT</span>';
+    if(eimpState.devisAccepte) kitBadge+=l._dansDevis?' <span style="color:var(--green);font-size:9px;font-weight:700" title="Référence du devis accepté">✓ devis</span>':' <span style="color:var(--muted);font-size:9px" title="Absente du devis accepté">hors devis</span>';
     // Ligne principale de l'item (ou kit principal)
     var bg=isKit?'background:rgba(59,130,246,.04);':'';
     html+='<tr style="'+bg+(l._sel?'':'opacity:.55;')+'">'+
@@ -50554,7 +50885,7 @@ window._prvDvObj=null;
 window._prvFaObj=null;
 function prvDV(id){var d=DB.devis.find(function(x){return x.id===id;});if(d){window._prvDvSourceId=d.id;window._prvDvObj=d;window._prvFaSourceId=null;window._prvFaObj=null;showPrv('Devis — '+d.num,bDV(d));}}
 function prvFA(id){var f=DB.factures.find(function(x){return x.id===id;});if(f){window._prvFaSourceId=f.id;window._prvFaObj=f;window._prvDvSourceId=null;window._prvDvObj=null;showPrv('Facture — '+f.num,bFA(f));}}
-function prvBC(id){var b=DB.bcs.find(function(x){return x.id===id;});if(b){window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv(buildBCTitle(b),bBC(b));}}
+function prvBC(id){var b=DB.bcs.find(function(x){return x.id===id;});if(b){window._prvBcObj=b;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv(buildBCTitle(b),bBC(b));}}
 function prvBL(id){var b=DB.bls.find(function(x){return x.id===id;});if(b){window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv('BL — '+b.num,bBL(b));}}
 function previewDV(){var d=getDV();if(!d.num)return;window._prvDvSourceId=d.id||null;window._prvDvObj=d;window._prvFaSourceId=null;window._prvFaObj=null;showPrv('Devis — '+d.num,bDV(d));}
 function previewFA(){var f=getFA();if(!f.num)return;window._prvFaSourceId=f.id||null;window._prvFaObj=f;window._prvDvSourceId=null;window._prvDvObj=null;showPrv('Facture — '+f.num,bFA(f));}
@@ -50571,7 +50902,7 @@ function regenerateFAPdf(){
     showBCSaveToast('🔄 PDF facture re-généré avec la dernière mise en page');
   }
 }
-function previewBC(){var b=getBC();if(!b.num)return;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv(buildBCTitle(b),bBC(b));}
+function previewBC(){var b=getBC();if(!b.num)return;window._prvBcObj=b;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv(buildBCTitle(b),bBC(b));}
 function previewBL(){var b=getBL();if(!b.num)return;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv('BL — '+b.num,bBL(b));}
 
 
@@ -51562,6 +51893,9 @@ function printPreviewBC(){
   if(/^Devis\s/i.test(docTitleEarly) || /^Facture\s/i.test(docTitleEarly)){
     return window.doPrint();
   }
+  // [09/10/2026] Garde-fou : un PO qui ne correspond pas au devis accepté ne part pas
+  // chez Emerson sans confirmation explicite et motif (cf _poGardeImpression).
+  if(/Purchase\s*Order/i.test(docTitleEarly) && typeof _poGardeImpression==='function' && !_poGardeImpression(window._prvBcObj)) return;
 
   // Récupérer tous les <style> et <link rel="stylesheet"> de l'app pour cohérence visuelle
   var stylesHtml='';
