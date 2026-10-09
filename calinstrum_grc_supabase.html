@@ -36141,15 +36141,16 @@ function _poArticle(ref,desc,qte,extra){
 }
 function _poLignesDevis(d){
   var out=[];
-  ((d&&d.lines&&d.lines.fourniture)||[]).forEach(function(l){
+  ((d&&d.lines&&d.lines.fourniture)||[]).forEach(function(l,li){
     if(!l || l.type==='header') return;
     // Ligne titre d'un kit (« sonde assemblée avec transmetteur ») : ce sont ses sous-lignes qui portent les références.
     var titreKit=(l.subLines||[]).length && !_poCodes(l.ref).length;
+    var kit=(l.subLines||[]).length?(String(d.id)+':'+li):null;
     (titreKit?l.subLines:[l].concat(l.subLines||[])).forEach(function(x){
       var ref=String(x.ref||'').trim(), des=x.designation||x.desc||'';
       if(!ref && !des) return;
       if(/FREIGHT|\bFRET\b|TRANSPORT/i.test(ref+' '+des)) return;
-      out.push(_poArticle(ref,des,x.qte,{devis:d}));
+      out.push(_poArticle(ref,des,x.qte,{devis:d,kit:kit}));
     });
   });
   return out;
@@ -36230,10 +36231,25 @@ function _poControleDevis(bc){
   D.forEach(function(dl){
     if(!dl.prim && dl.key.length<12){ L.push({verdict:'impossible',dv:dl,note:'pas de référence constructeur au devis'}); dl.fait=true; return; }
     comparables++;
+    // Une ligne de PO peut porter PLUSIEURS articles assemblés (« sonde + transmetteur »,
+    // deux codes sur la même ligne) : elle satisfait chacun de ses codes, une fois chacun.
+    // Entre deux lignes possibles, on préfère celle qui porte aussi les autres articles
+    // du même kit du devis.
     var best=null, rang={exact:0,code:1,tronque:2,incomplet:3};
-    P.forEach(function(p){ if(p.pris) return; var c=_poCorrespond(dl,p,tous); if(c && (!best || rang[c.niveau]<rang[best.c.niveau])) best={p:p,c:c}; });
+    var freres=dl.kit?D.filter(function(x){return x!==dl && x.kit===dl.kit && x.prim;}).map(function(x){return x.prim;}):[];
+    P.forEach(function(p){
+      if(p.prisTout) return;
+      var c=_poCorrespond(dl,p,tous); if(!c) return;
+      var parCode=(c.niveau==='code'||c.niveau==='incomplet');
+      if(parCode && p.codesPris && p.codesPris[dl.prim]) return;
+      if(!parCode && p.utilisee) return;
+      var score=rang[c.niveau]*10-freres.filter(function(f){return p.codesTout.indexOf(f)>=0;}).length;
+      if(!best || score<best.score) best={p:p,c:c,score:score};
+    });
     if(!best) return;
-    best.p.pris=true; dl.fait=true;
+    best.p.utilisee=true; dl.fait=true;
+    if(best.c.niveau==='code'||best.c.niveau==='incomplet'){ best.p.codesPris=best.p.codesPris||{}; dl.codes.forEach(function(c){ best.p.codesPris[c]=true; }); }
+    else best.p.prisTout=true;
     var v=best.c.niveau==='incomplet'?'incomplet':(best.c.niveau==='tronque'?'tronque':'ok');
     var note=v==='incomplet'?('absent du PO : '+best.c.manque.join(', ')):'';
     if(dl.qte && best.p.qte && dl.qte!==best.p.qte){ v='quantite'; note=dl.qte+' au devis / '+best.p.qte+' au PO'; }
@@ -36242,13 +36258,13 @@ function _poControleDevis(bc){
   // 2) même famille, caractères différents
   D.forEach(function(dl){
     if(dl.fait) return;
-    var cand=P.filter(function(p){return !p.pris && (p.prim||p.key) && _poProche(dl.prim||dl.key,p.prim||p.key);})
+    var cand=P.filter(function(p){return !p.utilisee && (p.prim||p.key) && _poProche(dl.prim||dl.key,p.prim||p.key);})
       .sort(function(a,b){return _poDistance(dl.prim||dl.key,a.prim||a.key)-_poDistance(dl.prim||dl.key,b.prim||b.key);})[0];
-    if(cand){ cand.pris=true; dl.fait=true; L.push({verdict:'reference',dv:dl,po:cand,note:'référence commandée par le client : '+dl.ref}); return; }
+    if(cand){ cand.utilisee=true; dl.fait=true; L.push({verdict:'reference',dv:dl,po:cand,note:'référence commandée par le client : '+dl.ref}); return; }
     dl.fait=true; L.push({verdict:'absent',dv:dl,note:'aucune ligne du PO ne porte cette référence'});
   });
   // 3) lignes du PO qui ne viennent pas du devis (frais et lignes sans code ignorés)
-  P.forEach(function(p){ if(!p.pris && p.prim && !/FREIGHT|FRET|SHIPPING/i.test(p.ref)) L.push({verdict:'extra',po:p,note:'ligne du PO absente du devis accepté'}); });
+  P.forEach(function(p){ if(!p.utilisee && p.prim && !/FREIGHT|FRET|SHIPPING/i.test(p.ref)) L.push({verdict:'extra',po:p,note:'ligne du PO absente du devis accepté'}); });
   res.lignes=L;
   var rouge=L.filter(function(l){return _PO_VERDICTS[l.verdict][1]==='red';});
   var ambre=L.filter(function(l){return _PO_VERDICTS[l.verdict][1]==='amber';});
