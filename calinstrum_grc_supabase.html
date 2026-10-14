@@ -13089,6 +13089,15 @@ function _previewReapproCascade(parsed, fileName){
   h += '<div style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.25);border-radius:6px;padding:8px;text-align:center"><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Total HT</div><div style="font-size:18px;font-weight:700;color:var(--teal)">'+fN(totalXPF)+' XPF</div></div>';
   h += '</div>';
   
+  // [14/10/2026] Doublon de commande : ce BC est-il déjà porté par un devis ?
+  var _dejaLa = (typeof _devisPortantBC==='function') ? _devisPortantBC(parsed.num) : [];
+  if(_dejaLa.length){
+    h += '<div data-reappro-doublon style="background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.5);border-radius:6px;padding:10px;margin-bottom:12px">';
+    h += '<div style="font-weight:700;color:var(--amber);margin-bottom:4px">⚠ Ce BC est déjà porté par '+(_dejaLa.length>1?_dejaLa.length+' devis':'un devis')+' : '+_dejaLa.map(function(x){return esc(_devisLibelle(x));}).join(' · ')+'</div>';
+    h += '<div style="font-size:11px;color:var(--muted)">Valider créerait un SECOND devis (et une facture, un BL, un PO) pour la même commande. Si ce devis est un devis de prix de référence, passe-le en « Cadre » ; sinon, annule.</div>';
+    h += '</div>';
+  }
+
   // Message bloquant si lignes hors grille
   if(unmatched.length > 0){
     h += '<div style="background:rgba(244,63,94,0.1);border:1px solid rgba(244,63,94,0.45);border-radius:6px;padding:10px;margin-bottom:12px">';
@@ -13202,7 +13211,11 @@ function _validerCascadeReappro(){
   var st = _reapproPreviewState;
   if(!st){alert('⚠ Aucun aperçu cascade actif.');return;}
   var parsed = st.parsed;
-  
+  // Doublon de commande : confirmation explicite (cf aperçu)
+  var _dejaLa = (typeof _devisPortantBC==='function') ? _devisPortantBC(parsed.num) : [];
+  if(_dejaLa.length && !confirm('⚠ Le BC '+(parsed.num||'')+' est déjà porté par :\n\n'+_dejaLa.map(function(x){return '• '+_devisLibelle(x);}).join('\n')+
+      '\n\nValider créerait un SECOND devis + facture + BL + PO pour la même commande.\n\nOK = créer quand même · Annuler = ne rien créer')) return;
+
   // Re-checker absence de hors-grille (sécurité)
   var unmatched = parsed.lines.filter(function(l){return !l.matchedArticle;});
   if(unmatched.length > 0){
@@ -19940,11 +19953,17 @@ function renderDVPro(){
     var sep=raw.indexOf(' - ');
     return sep>0?raw.substring(0,sep).trim():raw;
   }
+  // [14/10/2026] Un contact = les mêmes MOTS, quel que soit leur ordre ou leur casse :
+  // la cascade REAPPRO écrit « NOM Prénom » (forme du BC client) là où les devis
+  // portent « Prénom NOM » — le filtre exact écartait le devis de sa propre liste.
+  // Libellé affiché : la forme de la fiche client quand elle désigne la même personne.
   function extractContact(d){
-    if(d.contact) return d.contact.trim();
     var raw=(d.client||'').trim();
     var sep=raw.indexOf(' - ');
-    return sep>0?raw.substring(sep+3).trim():'';
+    var deFiche=sep>0?raw.substring(sep+3).trim():'';
+    var c=String(d.contact||'').trim();
+    if(c && deFiche && _contactCle(c)===_contactCle(deFiche)) return deFiche;
+    return c||deFiche;
   }
   // Normalise le type pour matcher les 3 buckets standards
   function normType(t){
@@ -19963,10 +19982,12 @@ function renderDVPro(){
   var dvAllForSelects=dvAll.filter(function(d){
     return parseInt(String(d.date||'').substring(0,4),10)===_curFy;
   });
-  var prefixSet={},contactSet={},typeSet={};
+  var prefixSet={},contactSet={},typeSet={},contactLibelle={};
   dvAllForSelects.forEach(function(d){
     var p=extractPrefix(d); if(p) prefixSet[p]=(prefixSet[p]||0)+1;
-    var c=extractContact(d); if(c) contactSet[c]=(contactSet[c]||0)+1;
+    // un seul choix par personne, quelle que soit l'écriture de son nom
+    var c=extractContact(d);
+    if(c){ var ck=_contactCle(c); if(!contactLibelle[ck]) contactLibelle[ck]=c; c=contactLibelle[ck]; contactSet[c]=(contactSet[c]||0)+1; }
     var t=normType(d.type); if(t) typeSet[t]=(typeSet[t]||0)+1;
   });
   var prefixOptions=Object.keys(prefixSet).sort();
@@ -19989,7 +20010,7 @@ function renderDVPro(){
     if(s&&(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)<0) return false;
     if(fType&&normType(x.type)!==fType) return false;
     if(fPrefix&&extractPrefix(x)!==fPrefix) return false;
-    if(fContact&&extractContact(x)!==fContact) return false;
+    if(fContact&&_contactCle(extractContact(x))!==_contactCle(fContact)) return false;
     if(fRevised&&!_dvIsRevised(x)) return false; // [22/05/2026] filtre devis révisés
     if(fWon&&!(x.status==='Accepté'||x.status==='Facturé')) return false; // [22/05/2026] filtre gagnés
     // Filtre invisible : mois d'émission
@@ -20013,7 +20034,7 @@ function renderDVPro(){
       if(s&&(x.num+(x.client||'')+(x.objet||'')).toLowerCase().indexOf(s)<0) return false;
       if(fType&&normType(x.type)!==fType) return false;
       if(fPrefix&&extractPrefix(x)!==fPrefix) return false;
-      if(fContact&&extractContact(x)!==fContact) return false;
+      if(fContact&&_contactCle(extractContact(x))!==_contactCle(fContact)) return false;
       if(fRevised&&!_dvIsRevised(x)) return false; // [22/05/2026] filtre devis révisés
       if(fWon&&!(x.status==='Accepté'||x.status==='Facturé')) return false; // [22/05/2026] filtre gagnés
       return true;
@@ -22728,6 +22749,32 @@ var eDVid=null,dvL={fourniture:[],service:[],fret:[]};
 // défaut sont posées explicitement par openDV.
 function _dvViderFormulaire(){ _viderFormulaire('mDV'); }
 
+// Devis qui portent déjà ce n° de BC client (révision en cours de chaque famille).
+// Un devis CADRE ne porte pas de commande : il n'est jamais compté. Un devis obsolète
+// ou refusé non plus. Comparaison _bcNumKey (espaces, zéros de tête ignorés).
+function _devisPortantBC(numBC, exclu){
+  var k=_bcNumKey(numBC); if(!k || k.length<4) return [];
+  var vus={}, out=[];
+  (DB.devis||[]).forEach(function(x){
+    if(!x || x===exclu || (exclu && exclu.id!=null && x.id===exclu.id)) return;
+    if(_bcNumKey(_dvBCClientNum(x))!==k) return;
+    var a=_dvRevisionActive(x);
+    if(vus[a.id]) return; vus[a.id]=1;
+    if(a.status==='Cadre' || a.status==='Obsolète' || a.status==='Refusé') return;
+    if(exclu && _dvBaseNum(a)===_dvBaseNum(exclu)) return;   // même famille (révisions)
+    out.push(a);
+  });
+  return out;
+}
+function _devisLibelle(x){ return x.num+(x.rev?' '+x.rev:'')+' ('+(x.status||'—')+', '+(x.client||'')+')'; }
+
+// Clé de comparaison d'un nom de contact : mêmes mots, sans accents ni casse, dans
+// n'importe quel ordre (« NOM Prénom » = « Prénom Nom »).
+function _contactCle(s){
+  return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase()
+    .split(/[^a-z0-9]+/).filter(Boolean).sort().join(' ');
+}
+
 // Un BC client appartient à UN client. Devis d'un AUTRE client (préfixe différent) qui
 // portent le même n° de BC (comparaison _bcNumKey : espaces et zéros de tête ignorés).
 // Les révisions d'un même devis et les devis du même client partageant un BC sont normaux.
@@ -25103,6 +25150,15 @@ async function saveDV(){
       _bcAutres.slice(0,5).map(function(x){return '• '+x.num+(x.rev?' '+x.rev:'')+' — '+x.client;}).join('\n')+
       '\n\nUn BC client appartient à UN seul client. Ce devis est pour « '+d.client+' ».\n\n'+
       'OK = enregistrer quand même · Annuler = corriger le n° de BC')) return;
+  // [14/10/2026] Même client, même BC, autre devis (hors révisions et hors cadre) :
+  // doublon de commande probable. Avertissement seulement (un BC peut couvrir 2 devis).
+  if(!_bcAutres.length && d.status!=='Cadre'){
+    var _bcMeme=_devisPortantBC(_dvBCClientNum(d), d);
+    if(_bcMeme.length && !confirm('⚠ Le n° de BC client « '+_dvBCClientNum(d)+' » est déjà sur :\n\n'+
+        _bcMeme.slice(0,5).map(function(x){return '• '+_devisLibelle(x);}).join('\n')+
+        '\n\nDeux devis pour la même commande ? (Si l\'un est un devis de prix de référence, passe-le en « Cadre ».)\n\n'+
+        'OK = enregistrer quand même · Annuler = vérifier')) return;
+  }
   // Version du devis AVANT cet enregistrement : c'est elle qui permet de savoir si
   // la facture liée a été modifiée à la main (cf propagateDevisLinesToFacture).
   var _dAvant=null;
