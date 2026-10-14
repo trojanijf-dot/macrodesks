@@ -22723,6 +22723,49 @@ function rDash(){
 
 // ===== DEVIS =====
 var eDVid=null,dvL={fourniture:[],service:[],fret:[]};
+// Vide tous les champs de saisie du formulaire devis (texte, date, nombre, zones de
+// texte). Les menus déroulants et les cases ne sont pas touchés : leurs valeurs par
+// défaut sont posées explicitement par openDV.
+function _dvViderFormulaire(){ _viderFormulaire('mDV'); }
+
+// Un BC client appartient à UN client. Devis d'un AUTRE client (préfixe différent) qui
+// portent le même n° de BC (comparaison _bcNumKey : espaces et zéros de tête ignorés).
+// Les révisions d'un même devis et les devis du même client partageant un BC sont normaux.
+function _dvBCClientAutresClients(d,liste){
+  var num=_dvBCClientNum(d), k=_bcNumKey(num);
+  if(!k || k.length<4) return [];
+  var pfx=getClientPrefix(d.client||'');
+  return (liste||DB.devis||[]).filter(function(x){
+    if(!x || x===d || (d.id!=null && x.id===d.id)) return false;
+    if(getClientPrefix(x.client||'')===pfx) return false;
+    return _bcNumKey(_dvBCClientNum(x))===k;
+  });
+}
+// Tous les n° de BC client portés par des devis de PLUSIEURS clients, groupés par
+// client. L'app ne désigne pas de « propriétaire » : elle montre, l'utilisateur tranche.
+function _dvBCClientConflits(){
+  var vus={}, out=[];
+  (DB.devis||[]).forEach(function(d){
+    var autres=_dvBCClientAutresClients(d);
+    if(!autres.length) return;
+    var cle=_bcNumKey(_dvBCClientNum(d)); if(vus[cle]) return; vus[cle]=1;
+    var parClient={};
+    [d].concat(autres).forEach(function(x){ var p=getClientPrefix(x.client||''); (parClient[p]=parClient[p]||[]).push(x); });
+    out.push({num:_dvBCClientNum(d), clients:Object.keys(parClient).map(function(p){return {prefixe:p, devis:parClient[p]};})});
+  });
+  return out;
+}
+// Même règle pour tout formulaire de création (devis, facture, PO) : vider TOUT
+// avant de poser les valeurs du nouveau document (cf test_formulaires_neufs_vierges).
+function _viderFormulaire(modalId){
+  var m=document.getElementById(modalId); if(!m) return;
+  m.querySelectorAll('input, textarea').forEach(function(e){
+    var t=(e.type||'').toLowerCase();
+    if(t==='file'||t==='checkbox'||t==='radio'||t==='button'||t==='submit'||t==='search'||t==='hidden') return;
+    e.value='';
+  });
+}
+
 function openDV(id, preSelectedClient){
   // === CLIENT PICKER INTERCEPTOR (mai 2026) ===
   // Si pas d'id (= nouveau devis) ET pas de client présélectionné,
@@ -22873,6 +22916,14 @@ function openDV(id, preSelectedClient){
       }
     }
   } else {
+    // ⛔ [14/10/2026] D'ABORD TOUT VIDER, puis poser les valeurs par défaut.
+    // Les champs étaient vidés un par un, liste écrite à la main : elle oubliait
+    // « BC client » (n° + date), « Quote Emerson » (n° + date) et les champs « Autre… ».
+    // Un devis neuf héritait ainsi du BC client du devis ouvert juste avant (un devis
+    // d'un client avec le BC du devis d'un autre client). Même classe que les cartes PDF du
+    // 22/09 : corriger une liste en laisse toujours passer une autre. On vide donc le
+    // FORMULAIRE ENTIER : un champ ajouté demain est couvert d'office.
+    _dvViderFormulaire();
     gv('dv-num',nxt('dv'));gv('dv-date',td());gv('dv-rev','');gv('dv-type','Fourniture');
     gv('dv-contact','');gv('dv-email','');gv('dv-adresse','');gv('dv-objet','');
     gv('dv-incoterms','');gv('dv-transport','');gv('dv-freight','');gv('dv-danger','Non');
@@ -25045,6 +25096,13 @@ async function saveDV(){
   }
   var d=getDV();
   if(!d.num||!d.client){alert('Champs obligatoires: N° Devis et Client');return;}
+  // [14/10/2026] Un BC client appartient à UN client : refuser en silence un n° de BC
+  // qui est déjà celui d'un devis d'un AUTRE client (cas réel : BC d'un client sur le devis d'un autre).
+  var _bcAutres=_dvBCClientAutresClients(d);
+  if(_bcAutres.length && !confirm('⚠ Le n° de BC client « '+_dvBCClientNum(d)+' » est déjà celui de :\n\n'+
+      _bcAutres.slice(0,5).map(function(x){return '• '+x.num+(x.rev?' '+x.rev:'')+' — '+x.client;}).join('\n')+
+      '\n\nUn BC client appartient à UN seul client. Ce devis est pour « '+d.client+' ».\n\n'+
+      'OK = enregistrer quand même · Annuler = corriger le n° de BC')) return;
   // Version du devis AVANT cet enregistrement : c'est elle qui permet de savoir si
   // la facture liée a été modifiée à la main (cf propagateDevisLinesToFacture).
   var _dAvant=null;
@@ -31484,6 +31542,7 @@ function openFA(id,fromDV,preSelectedClient){
       setTimeout(function(){if(typeof renderFADelaiHistory==='function')renderFADelaiHistory();},50);
     }
   } else if(fromDV){
+    _viderFormulaire('mFA');   // rien ne doit rester de la facture ouverte avant (14/10/2026)
     gv('fa-num',nxt('fa', getClientNumPrefix(fromDV.client||'')));gv('fa-date',td());
     buildClientOptions('fa-client',fromDV.client||'');
     gv('fa-contact',fromDV.contact||'');gv('fa-adresse',fromDV.adresse||'');
@@ -31514,6 +31573,7 @@ function openFA(id,fromDV,preSelectedClient){
     // preSelectedClient est passé depuis le picker → on incrémente le N° sur le
     // bon préfixe via fillCCFromSelect (qui appelle nxt('fa', clientPrefix)).
     var faPfx=preSelectedClient?getClientNumPrefix(preSelectedClient):'SLN';
+    _viderFormulaire('mFA');   // rien ne doit rester de la facture ouverte avant (14/10/2026)
     gv('fa-num',nxt('fa',faPfx));gv('fa-date',td());gv('fa-contact','');
     gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');_faDvlieInit('');gv('fa-dvlie-print','');
     // Email vide → dropdown initialisé avec valeur courante = ''
@@ -36425,6 +36485,7 @@ function openBC(id){
     bindCoutReelLive();updateCoutReelPreview();
     sv('mBCtitle','Modifier BC — '+b.num);}
   } else {
+    _viderFormulaire('mBC');   // rien ne doit rester du PO ouvert avant (14/10/2026)
     _bcNumIsAuto=true;gv('bc-num',_nextBCNum(''));gv('bc-date',td());gv('bc-devise','AUD');gv('bc-cal-contact','Fabrice RIZZO');setEmersonContactUI('');gv('bc-vaddr','471 Mountain Highway Bayswater, VICTORIA 3153 AUSTRALIA');gv('bc-inco','FCA BAYSWATER');gv('bc-fret','Collect');gv('bc-status','En attente');populateBCDevisSelect();
     _setBCSelectedDevisIds([]); // nouveau BC : aucun devis lié
     populateBCClientFinalSelect('');gv('bc-client-final','');gv('bc-cref2','');
