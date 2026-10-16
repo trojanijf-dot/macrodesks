@@ -7710,20 +7710,26 @@ var PHASES={
   'chantier_cours':  {label:'Chantier en cours',       icon:'🔧', color:'#f59e0b', billed:false, type:'prestation'},
   'recu':            {label:'Réceptionné PV',          icon:'✅', color:'#10b981', billed:true,  type:'prestation'}
 };
+// RÈGLE UNIQUE du suivi par type : un travail qui comporte de la PRESTATION
+// (« Prestation de service », « Fourniture + Prestation ») se suit comme une
+// prestation — chantier, PV. Seule la Fourniture pure suit le matériel Emerson.
+// [17/10/2026] Le mixte était rangé avec la Fourniture : une pré-facture de pose
+// (coffrets, tubing, sans aucun matériel Emerson) apparaissait « Backlog Emerson ».
+function _typeEstPrestation(type){
+  return /prestation/i.test(String(type||''));
+}
 // Phase par défaut selon le type d'activité (utilisée pour migration et fallbacks).
-// Fourniture / mixte → 'livre' ; Prestation → 'recu'.
+// Fourniture → 'livre' ; Prestation et mixte → 'recu'.
 function getDefaultPhase(inv){
-  var t=(inv&&inv.type)||'';
-  return (t==='Prestation de service') ? 'recu' : 'livre';
+  return _typeEstPrestation(inv&&inv.type) ? 'recu' : 'livre';
 }
 // PREMIÈRE phase d'une facture selon son type (pré-facture : rien n'est émis).
-// Prestation → Chantier non démarré ; Fourniture et mixte → Backlog Emerson (le
-// matériel conditionne la livraison). Même règle que la pré-facture automatique.
+// Prestation et mixte → Chantier non démarré ; Fourniture → Backlog Emerson.
+// Même règle que la pré-facture automatique et le PO confirmé.
 // [02/10/2026] Une facture sans phase s'affichait « Backlog Emerson » même en
 // prestation : c'était simplement le premier choix du menu.
 function _premierePhase(type){
-  var t=String(type||'');
-  return (/prestation/i.test(t) && !/fourniture/i.test(t)) ? 'chantier_attente' : 'emerson';
+  return _typeEstPrestation(type) ? 'chantier_attente' : 'emerson';
 }
 // Une facture est dite "pré-facturée" si sa phase n'est PAS billed.
 // Cela signifie : le n° existe (réservé à la cohérence) mais la facture
@@ -15321,7 +15327,9 @@ function syncBCToFacture(bc){
     email:email,
     objet:objet,
     dvlie:dvNum,
-    type:'Fourniture',
+    // Type du devis lié (un PO peut servir une prestation avec fourniture) ;
+    // sans devis, c'est une fourniture. Phase : règle unique _premierePhase.
+    type:(dvLie&&dvLie.type)||'Fourniture',
     status:'En attente',
     tgcM:'506-2',
     delai:'Paiement sous 30 jours à reception de la facture',
@@ -15332,7 +15340,7 @@ function syncBCToFacture(bc){
     dateReceptionBC: autoDetectedRecBC,
     lines:faLines,
     ht:ttc,tgc:0,ttc:ttc,
-    phase:'emerson',
+    phase:_premierePhase((dvLie&&dvLie.type)||'Fourniture'),
     _fromBC:bc.id,
     _fromBCNum:bc.num
   };
@@ -25146,9 +25154,10 @@ function _prefactureAuto(d){
 
   // Phase NON FACTUREE, choisie selon le type : c'est elle qui dit « numero
   // reserve, pas encore emis ». Fourniture -> le materiel est encore chez
-  // Emerson ; Prestation -> le chantier n'a pas demarre.
+  // Emerson ; Prestation ou mixte -> le chantier n'a pas demarre. Regle unique,
+  // cf _premierePhase (ne pas la recopier ici).
   var type=String(d.type||'Fourniture');
-  var phase=/prestation/i.test(type) && !/fourniture/i.test(type) ? 'chantier_attente' : 'emerson';
+  var phase=_premierePhase(type);
 
   var fa={
     id:Date.now()+Math.floor(Math.random()*1000),
