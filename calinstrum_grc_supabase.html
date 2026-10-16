@@ -5529,6 +5529,58 @@ function _privacyShouldSkipNode(node){
   if(p.classList && p.classList.contains('pm-blur')) return true;
   return false;
 }
+// Montants des documents : un « 750 » sans séparateur de milliers ni devise ne se
+// distingue pas d'une quantité par sa FORME → la regex le laissait en clair. Dans un
+// document (.doc), on lit la STRUCTURE :
+//   - tableau à en-tête : cellule chiffrée d'une colonne PU / Total / Montant / Prix…
+//     (hors heures « (h) » et taux « % ») ;
+//   - bloc des totaux (.doc-totals) : la valeur de chaque ligne ;
+//   - « Montant en lettres » : le texte qui suit le libellé.
+var PRIVACY_COL_RX=/\b(p\.?\s?u\.?|prix|montant|total|price|amount|h\.?t\.?|ttc|xpf|aud|eur|usd|co[uû]ts?|marge|solde|reste\s+d[uû]|tarif|frais|brut|tgc|ca)\b/i;
+var PRIVACY_COL_EXCL_RX=/%|\(h\)|\btotal\s+h\b|\bqt[ée]\b|\bqty\b|quantit|\bnb\b|nombre/i;
+var PRIVACY_NUM_RX=/^[-−+]?\d[\d\s  .,]*(?:\s*(?:XPF|AUD|EUR|USD|€|\$))?$/i;
+function _privacyCellule(td){
+  if(!td||td.classList.contains('pm-blur')||td.closest('.no-pm-blur')) return;
+  if(!PRIVACY_NUM_RX.test((td.textContent||'').trim())) return;
+  td.classList.add('pm-blur','pm-direct');
+}
+function _privacyZonesDocument(root){
+  if(!root||!root.querySelectorAll) return;
+  var docs=[].slice.call(root.querySelectorAll('.doc'));
+  var haut=root.closest&&root.closest('.doc'); if(haut) docs.push(haut);
+  docs.forEach(function(doc){
+    doc.querySelectorAll('table').forEach(function(t){
+      if(t.classList.contains('doc-totals')){
+        [].forEach.call(t.rows,function(tr){ _privacyCellule(tr.cells[tr.cells.length-1]); });
+        return;
+      }
+      // Grille du tableau (rowspan/colspan) → colonne réelle de chaque cellule
+      var occ=[], cells=[], entete=[];
+      [].forEach.call(t.rows,function(tr,r){
+        occ[r]=occ[r]||[]; var c=0;
+        var estEntete=!!tr.closest('thead')||[].every.call(tr.cells,function(x){return x.tagName==='TH';});
+        [].forEach.call(tr.cells,function(td){
+          while(occ[r][c]) c++;
+          var cs=td.colSpan||1, rs=td.rowSpan||1;
+          for(var i=0;i<rs;i++){ occ[r+i]=occ[r+i]||[]; for(var j=0;j<cs;j++) occ[r+i][c+j]=1; }
+          if(estEntete){
+            var lbl=(td.textContent||'').trim();
+            if(PRIVACY_COL_RX.test(lbl)&&!PRIVACY_COL_EXCL_RX.test(lbl)) for(var k=0;k<cs;k++) entete[c+k]=true;
+          } else if(cs===1) cells.push({td:td,col:c});
+          c+=cs;
+        });
+      });
+      cells.forEach(function(x){ if(entete[x.col]) _privacyCellule(x.td); });
+    });
+    doc.querySelectorAll('.doc-notes strong').forEach(function(s){
+      if(!/^Montant en lettres/i.test((s.textContent||'').trim())) return;
+      var n=s.nextSibling;
+      if(!n||n.nodeType!==3||!n.nodeValue.trim()) return;
+      var span=document.createElement('span'); span.className='pm-blur pm-auto'; span.textContent=n.nodeValue;
+      n.parentNode.replaceChild(span,n);
+    });
+  });
+}
 // Applique le flou : on parcourt tous les noeuds texte et on wrappe les
 // montants détectés dans un <span class="pm-blur">.
 // Cette fonction est idempotente (elle ne re-wrappe pas les spans déjà créés).
@@ -5544,13 +5596,15 @@ function _privacyWrapAmounts(root){
       el.classList.add('pm-blur','pm-direct');
     }
   });
+  // ÉTAPE 1 bis : montants des DOCUMENTS (devis, facture, avoir, PO, BL…).
+  _privacyZonesDocument(root);
   // ÉTAPE 2 : scanner les noeuds texte avec la regex (pour les chiffres dispersés
   // dans les badges, les sous-titres, les tables, etc.)
   var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
     acceptNode:function(n){
       if(_privacyShouldSkipNode(n))return NodeFilter.FILTER_REJECT;
       // Skip aussi si le parent a data-money (déjà flouté en bloc)
-      if(n.parentElement && n.parentElement.closest('[data-money]')) return NodeFilter.FILTER_REJECT;
+      if(n.parentElement && n.parentElement.closest('[data-money],.pm-direct')) return NodeFilter.FILTER_REJECT;
       if(!PRIVACY_RX.test(n.nodeValue||''))return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }
