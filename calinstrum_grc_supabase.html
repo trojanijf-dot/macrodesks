@@ -140,6 +140,8 @@ body.theme-pro .sb-item.active i{color:var(--blue)}
    PRIVACY MODE — flou CSS auto-détecté via classe .pm-blur ajoutée par JS
    Activable depuis le bouton flottant. Persiste en localStorage._grcPrivacy.
    ============================================================================ */
+/* Case Qté d'une ligne chiffrée sans quantité : cf _qteAlerte */
+input[data-qte-alerte]{border:1px solid var(--red)!important;background:rgba(244,63,94,.14)!important}
 .pm-blur{
   filter:blur(6px);
   transition:filter .18s ease;
@@ -6445,6 +6447,26 @@ function _normUniteArr(arr){
     if(l.unite!=null) l.unite=_normUnite(l.unite);
     if(Array.isArray(l.subLines)) _normUniteArr(l.subLines);
   });
+}
+// Case « Qté » d'une ligne CHIFFRÉE : elle montre la quantité ENREGISTRÉE, celle
+// que le total et l'impression multiplient (qte || 0). Elle affichait `qte || 1` :
+// une quantité à 0 (porteuse de TÂCHE basculée en KIT, case vidée) se lisait « 1 »
+// pendant que la ligne valait 0 au total — PU 117 200, Total HT 0, rien de visible.
+// _qteAlerte : bordure rouge + info-bulle tant qu'un PU est saisi sans quantité.
+function _qteSaisie(q){
+  return (q===undefined||q===null||q==='')?'':String(q);
+}
+var _QTE_ALERTE_TITRE='Quantité nulle : cette ligne ne compte pas dans le total. Saisissez la quantité.';
+function _qteAlerte(l){
+  return !!l && Number(l.pu)>0 && !(Number(l.qte)>0);
+}
+function _qteAlerteAttr(l){
+  return _qteAlerte(l)?' title="'+_QTE_ALERTE_TITRE+'" data-qte-alerte="1"':'';
+}
+function _qteAlerteMaj(inp,l){
+  if(!inp) return;
+  if(_qteAlerte(l)){ inp.title=_QTE_ALERTE_TITRE; inp.setAttribute('data-qte-alerte','1'); }
+  else { inp.removeAttribute('title'); inp.removeAttribute('data-qte-alerte'); }
 }
 // Construit les <option> d'un menu Uté en sélectionnant la valeur courante de
 // façon TOLÉRANTE (casse), et en ajoutant la valeur si elle n'est dans aucune
@@ -23554,7 +23576,7 @@ function toggleDVHeaderMode(s,idx){
   // Pas de KIT/TASK pour la section fret
   if(s==='fret'){return;}
   // Cycle : items → kit → task → items
-  var nextMode;
+  var nextMode, prevMode=h.mode;
   if(h.mode==='items') nextMode='kit';
   else if(h.mode==='kit') nextMode='task';
   else nextMode='items';
@@ -23575,6 +23597,13 @@ function toggleDVHeaderMode(s,idx){
     }
   } else {
     // Ligne existante → adapter
+    // Une porteuse de TÂCHE n'a pas de prix propre (qte 0, sans unité) : en sortant
+    // du mode TÂCHE elle devient une ligne chiffrée → quantité 1 et une unité, sinon
+    // son PU est multiplié par 0 et la ligne ne compte pas dans le total.
+    if(nextMode!=='task' && (nextLine._isTaskMain || prevMode==='task')){
+      if(!(Number(nextLine.qte)>0)) nextLine.qte=1;
+      if(!nextLine.unite) nextLine.unite=(nextMode==='kit')?'Forfait':'U';
+    }
     if(nextMode==='kit'){
       if(!Array.isArray(nextLine.subLines)) nextLine.subLines=[];
       delete nextLine._isTaskMain;
@@ -23797,6 +23826,7 @@ function _updateDVLineTotal(tb, sec, idx, subIdx){
       if(firstTextNode) firstTextNode.nodeValue=fN(subT)+' ';
       else subCell.textContent=fN(subT)+' ';
     }
+    _qteAlerteMaj(tb.querySelector('input[data-sub-field="qte"][data-main-idx="'+idx+'"][data-sub-idx="'+subIdx+'"]'), sub);
     // Maj du Σ porteuse de la TASK
     var totalTask=computeTaskTotal(l);
     var motherEl=tb.querySelector('[data-task-mother-total="'+sec+':'+idx+'"]');
@@ -23815,6 +23845,7 @@ function _updateDVLineTotal(tb, sec, idx, subIdx){
   var tot=Math.round((Number(l.qte)||0)*(Number(l.pu)||0));
   var cell=tb.querySelector('[data-line-total="'+sec+':'+idx+'"]');
   if(cell) cell.textContent=fN(tot);
+  _qteAlerteMaj(tb.querySelector('input[data-field="qte"][data-idx="'+idx+'"]'), l);
 }
 
 function rDVlines(){
@@ -23955,7 +23986,7 @@ function rDVlines(){
           var subT=Math.round((sub.qte||0)*(sub.pu||0)); // HT pur — cf note computeTaskTotal
           return '<td><select data-sub-field="tgc" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10.5px">'+taskTgcOpts(sub.tgc)+'</select></td>'+
             '<td><select data-sub-field="unite" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10.5px">'+taskUteOpts(sub.unite||'H sup')+'</select></td>'+
-            '<td><input type="number" style="width:50px;font-size:10.5px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
+            '<td><input type="number" style="width:50px;font-size:10.5px" value="'+_qteSaisie(sub.qte)+'"'+_qteAlerteAttr(sub)+' data-sub-field="qte" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
             '<td><input type="number" style="width:75px;font-size:10.5px" value="'+(sub.pu||0)+'" data-sub-field="pu" data-sec="'+sec+'" data-main-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
             '<td style="font-weight:700;color:#fbbf24;font-size:10.5px;white-space:nowrap" data-sub-total="'+sec+':'+i+':'+si+'">'+fN(subT)+
               (canDelSub?' <button onclick="delDVKitSubLine(\''+sec+'\','+i+','+si+')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px;opacity:.6;padding:0 0 0 4px" title="Supprimer cette sous-ligne">✕</button>':'')+
@@ -23992,7 +24023,7 @@ function rDVlines(){
           '<td><textarea rows="1" style="min-width:130px;width:100%;resize:vertical;font-family:inherit;font-size:inherit;line-height:1.3;padding:4px 6px" data-field="designation" data-sec="'+sec+'" data-idx="'+i+'">'+esc(l.designation||'')+'</textarea></td>'+
           '<td><select data-field="tgc" data-sec="'+sec+'" data-idx="'+i+'">'+tgcOpts+'</select></td>'+
           '<td><select data-field="unite" data-sec="'+sec+'" data-idx="'+i+'">'+uteOpts+'</select></td>'+
-          '<td><input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-sec="'+sec+'" data-idx="'+i+'"></td>'+
+          '<td><input type="number" style="width:50px" value="'+_qteSaisie(l.qte)+'"'+_qteAlerteAttr(l)+' data-field="qte" data-sec="'+sec+'" data-idx="'+i+'"></td>'+
           '<td><input type="number" style="width:75px" value="'+(l.pu||0)+'" data-field="pu" data-sec="'+sec+'" data-idx="'+i+'"></td>'+
           '<td style="font-weight:700;min-width:65px;color:var(--teal)" data-line-total="'+sec+':'+i+'">'+fN(tot)+'</td>'+
           '<td style="white-space:nowrap">'+
@@ -32187,6 +32218,7 @@ function _updateFALineTotal(tb, idx, subIdx){
     var subT=Math.round((Number(sub.qte)||0)*(Number(sub.pu)||0));
     var subCell=tb.querySelector('[data-sub-total="'+idx+':'+subIdx+'"]');
     if(subCell) subCell.textContent=fN(subT);
+    _qteAlerteMaj(tb.querySelector('input[data-sub-field="qte"][data-idx="'+idx+'"][data-sub-idx="'+subIdx+'"]'), sub);
     // Si la mère est une TASK, sa cellule total = somme des sub-lignes chiffrées
     var hasSubs=Array.isArray(l.subLines)&&l.subLines.length>0;
     // Meme regle que cFAtot pour que l'affichage et le total ne divergent jamais.
@@ -32209,6 +32241,7 @@ function _updateFALineTotal(tb, idx, subIdx){
   }
   var cell=tb.querySelector('[data-line-total="'+idx+'"]');
   if(cell) cell.textContent=fN(Math.round(tot));
+  if(!isTaskMain2) _qteAlerteMaj(tb.querySelector('input[data-field="qte"][data-idx="'+idx+'"]'), l);
 }
 
 function rFAlines(){
@@ -32258,7 +32291,7 @@ function rFAlines(){
       '<td><textarea rows="1" style="width:100%;min-width:150px;resize:vertical;font-family:inherit;font-size:inherit;line-height:1.3;padding:4px 6px" data-field="designation" data-idx="'+i+'">'+esc(l.designation||'')+'</textarea>'+typeBadge+'</td>'+
       '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<select data-field="tgc" data-idx="'+i+'">'+tgcOpts+'</select>'))+'</td>'+
       '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<select data-field="unite" data-idx="'+i+'">'+uteOpts+'</select>'))+'</td>'+
-      '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<input type="number" style="width:50px" value="'+(l.qte||1)+'" data-field="qte" data-idx="'+i+'">'))+'</td>'+
+      '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<input type="number" style="width:50px" value="'+_qteSaisie(l.qte)+'"'+_qteAlerteAttr(l)+' data-field="qte" data-idx="'+i+'">'))+'</td>'+
       '<td>'+(isTaskMain?'<span style="color:var(--muted);font-size:10px">—</span>':('<input type="number" style="width:75px" value="'+(l.pu||0)+'" data-field="pu" data-idx="'+i+'">'))+'</td>'+
       '<td style="font-weight:700;color:var(--teal)" data-line-total="'+i+'">'+fN(Math.round(motherTotal))+'</td>'+
       '<td><button class="fa-del-btn" data-idx="'+i+'" style="background:none;border:none;color:var(--red);cursor:pointer">✕</button></td>'+
@@ -32284,7 +32317,7 @@ function rFAlines(){
             '</td>'+
             '<td><select data-sub-field="tgc" data-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10px">'+subTgcOpts+'</select></td>'+
             '<td><select data-sub-field="unite" data-idx="'+i+'" data-sub-idx="'+si+'" style="font-size:10px">'+subUteOpts+'</select></td>'+
-            '<td><input type="number" style="width:50px;font-size:11px" value="'+(sub.qte||1)+'" data-sub-field="qte" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
+            '<td><input type="number" style="width:50px;font-size:11px" value="'+_qteSaisie(sub.qte)+'"'+_qteAlerteAttr(sub)+' data-sub-field="qte" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
             '<td><input type="number" style="width:75px;font-size:11px" value="'+(sub.pu||0)+'" data-sub-field="pu" data-idx="'+i+'" data-sub-idx="'+si+'"></td>'+
             '<td style="font-weight:600;color:var(--teal);font-size:11px" data-sub-total="'+i+':'+si+'">'+fN(subTot)+'</td>'+
             '<td><button class="fa-subdel-btn" data-idx="'+i+'" data-sub-idx="'+si+'" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:11px" title="Supprimer cette sous-ligne">✕</button></td>'+
