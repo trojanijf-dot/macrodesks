@@ -50386,6 +50386,7 @@ function bFA(f){
   // Ligne 4 : Email
   // N° de devis affiché — SOURCE UNIQUE partagée avec l'impression (buildPaginatedFA).
   var devisNumLink=_faDevisNumAffiche(f);
+  var _acBlocs=_faAcompteBlocs(f,devisNumLink);   // même règle que l'impression
   return'<div class="doc">'+
     '<div class="doc-head">'+
       '<div style="margin-left:0"><img src="'+LG_PLACEHOLDER+'" style="height:50px;width:auto;display:block;margin:0 auto 4px" alt="CALINSTRUM"><div style="font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:1px;text-align:center">CALINSTRUM</div></div>'+
@@ -50404,6 +50405,7 @@ function bFA(f){
       '<div><span class="dlbl">BC Client</span>'+esc(f.bcClientSLN||f._importPONum||f.po||_bcHebdoNumsLabel(f)||'—')+'</div>'+
       '<div><span class="dlbl">Devis N°</span>'+esc(devisNumLink||'—')+'</div>'+
     '</div>'+
+    _acBlocs.bandeau+
     '<div class="doc-parties">'+
       '<div class="doc-party">'+
         '<h4>CALINSTRUM SARL</h4>'+
@@ -50423,7 +50425,7 @@ function bFA(f){
         '</p>'+
       '</div>'+
     '</div>'+
-    '<p style="font-size:13px;margin-bottom:8px"><strong>Objet :</strong> '+esc(_faObjetClient(f.objet,f))+'</p>'+
+    '<p style="font-size:13px;margin-bottom:8px"><strong>Objet :</strong> '+esc(_faObjetClient(f.objet,f))+'</p>'+_acBlocs.recap+
     '<table class="doc-tbl" style="page-break-inside:auto">'+
     '<colgroup><col class="c-num"><col class="c-ref"><col class="c-des"><col class="c-tgc"><col class="c-ute"><col class="c-qte"><col class="c-pu"><col class="c-ttc"></colgroup>'+
     '<thead>'+
@@ -51620,6 +51622,49 @@ function buildPaginatedDV(d, logoSrc, sigSrc){
 //   - Bloc final : juste Délai (pas Validité, Paiement, Délai des travaux)
 //   - Tag de section géré via type='section_banner' (déjà inséré par generateFactureFromDV)
 // =============================================================================
+// [22/05/2026] Bandeau + récap facture PARTIELLE (Variante A — transparent), si
+// f.acompteType ('acompte' ou 'solde') et f.parentId (facture mère).
+// ⛔ SOURCE UNIQUE de l'aperçu (bFA) ET de l'impression (buildPaginatedFA) : seule
+//    l'impression le construisait, l'aperçu d'un acompte n'avait ni bandeau ni récap.
+// « Reste à facturer » = devis total − factures partielles émises JUSQU'À celle-ci
+// (même rang ou avant) : un acompte suivant ne change pas ce qu'affiche une facture
+// déjà envoyée quand on la réimprime.
+function _faAcompteBlocs(f, devisNumLink){
+  var out={bandeau:'', recap:''};
+  if(!f || !f.acompteType || !f.parentId) return out;
+  var _pf=(DB.factures||[]).find(function(x){return x.id===f.parentId;});
+  var _parentTtc=_pf?(_pf.ttc||0):0;
+  var _pct=f.acomptePct||0;
+  var _isSolde=(f.acompteType==='solde');
+  // Rang de l'acompte (1, 2...) parmi les acomptes de la mère
+  var _rang=1;
+  if(!_isSolde && _pf){
+    var _ac=(DB.factures||[]).filter(function(x){return x.parentId===f.parentId && x.acompteType==='acompte';})
+      .sort(function(a,b){return (a.id||0)-(b.id||0);});
+    var _i=_ac.findIndex(function(x){return x.id===f.id;});
+    _rang=_i>=0?_i+1:_ac.length;
+  }
+  var _titreBandeau=_isSolde?'Facture de solde':('Facture partielle — Acompte '+_rang);
+  out.bandeau='<div style="background:#eaf3fb;border:0.5px solid #b5d4f4;border-radius:4px;padding:8px 11px;margin-bottom:10px;font-size:12px;color:#0c447c;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+    '<strong>'+_titreBandeau+'</strong> · Avancement facturé : '+_pct+'% du devis '+esc(devisNumLink||'—')+'<br>'+
+    '<span style="color:#185fa5">'+(_isSolde?'Solde des travaux — clôture de la facturation de ce devis':'Travaux réalisés à date · le solde fera l\'objet d\'une facturation ultérieure')+'</span>'+
+  '</div>';
+  if(_parentTtc>0){
+    var _cumulTtc=(DB.factures||[]).filter(function(x){
+        if(x.parentId!==f.parentId) return false;
+        if(x.id===f.id) return true;
+        if(_isSolde) return true;                       // le solde clôt : tout ce qui précède
+        return x.acompteType==='acompte' && (x.id||0)<(f.id||0);
+      })
+      .reduce(function(s,x){return s+(x.ttc||0);},0);
+    var _reste=Math.max(0,_parentTtc-_cumulTtc);
+    var _restePct=Math.round(_reste/_parentTtc*100);
+    out.recap='<div style="background:#f8fafc;border-radius:4px;padding:7px 10px;margin-top:8px;font-size:11px;color:#475569;line-height:1.5;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
+      '<strong>Récapitulatif facturation :</strong> Devis total '+fN(_parentTtc)+' XPF · Cette facture ('+(_isSolde?'Solde':'Acompte '+_rang)+') : '+fN(f.ttc||0)+' XPF ('+_pct+'%) · Reste à facturer : '+fN(_reste)+' XPF ('+_restePct+'%)'+
+    '</div>';
+  }
+  return out;
+}
 function buildPaginatedFA(f, logoSrc, sigSrc){
   var isExo=isClientExo(f.client);
   var clientDetail=getClientDetail(f.client);
@@ -51627,38 +51672,9 @@ function buildPaginatedFA(f, logoSrc, sigSrc){
   // ⛔ Ne JAMAIS recopier ce calcul ici : c'est la duplication qui a produit la
   //    divergence aperçu/impression du champ « Devis N° » (devis-miroir imprimé).
   var devisNumLink=_faDevisNumAffiche(f);
-  // [22/05/2026] Bandeau + récap facture PARTIELLE (Variante A — transparent).
-  // Construit si f.acompteType est défini ('acompte' ou 'solde').
-  var _acBanner='', _acRecap='';
-  if(f.acompteType && f.parentId){
-    var _pf=(DB.factures||[]).find(function(x){return x.id===f.parentId;});
-    var _parentTtc=_pf?(_pf.ttc||0):0;
-    var _pct=f.acomptePct||0;
-    var _isSolde=(f.acompteType==='solde');
-    // Rang de l'acompte (1, 2...) parmi les acomptes de la mère
-    var _rang=1;
-    if(!_isSolde && _pf){
-      var _ac=(DB.factures||[]).filter(function(x){return x.parentId===f.parentId && x.acompteType==='acompte';})
-        .sort(function(a,b){return (a.id||0)-(b.id||0);});
-      var _i=_ac.findIndex(function(x){return x.id===f.id;});
-      _rang=_i>=0?_i+1:_ac.length;
-    }
-    var _titreBandeau=_isSolde?'Facture de solde':('Facture partielle — Acompte '+_rang);
-    _acBanner='<div style="background:#eaf3fb;border:0.5px solid #b5d4f4;border-radius:4px;padding:8px 11px;margin-bottom:10px;font-size:12px;color:#0c447c;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
-      '<strong>'+_titreBandeau+'</strong> · Avancement facturé : '+_pct+'% du devis '+esc(devisNumLink||'—')+'<br>'+
-      '<span style="color:#185fa5">'+(_isSolde?'Solde des travaux — clôture de la facturation de ce devis':'Travaux réalisés à date · le solde fera l\'objet d\'une facturation ultérieure')+'</span>'+
-    '</div>';
-    // Récap : cumul déjà facturé sur la mère
-    if(_parentTtc>0){
-      var _cumulTtc=(DB.factures||[]).filter(function(x){return x.parentId===f.parentId;})
-        .reduce(function(s,x){return s+(x.ttc||0);},0);
-      var _reste=Math.max(0,_parentTtc-_cumulTtc);
-      var _restePct=Math.round(_reste/_parentTtc*100);
-      _acRecap='<div style="background:#f8fafc;border-radius:4px;padding:7px 10px;margin-top:8px;font-size:11px;color:#475569;line-height:1.5;-webkit-print-color-adjust:exact;print-color-adjust:exact">'+
-        '<strong>Récapitulatif facturation :</strong> Devis total '+fN(_parentTtc)+' XPF · Cette facture ('+(_isSolde?'Solde':'Acompte '+_rang)+') : '+fN(f.ttc||0)+' XPF ('+_pct+'%) · Reste à facturer : '+fN(_reste)+' XPF ('+_restePct+'%)'+
-      '</div>';
-    }
-  }
+  // Bandeau + récap facture PARTIELLE : règle unique partagée avec l'aperçu (bFA).
+  var _acBlocs=_faAcompteBlocs(f,devisNumLink);
+  var _acBanner=_acBlocs.bandeau, _acRecap=_acBlocs.recap;
   // === Préparation allL : array plat avec {sec} sur chaque ligne ===
   var SEC_LABELS={fourniture:'FOURNITURE',service:"MAIN D'OEUVRE",fret:'FRET / FRAIS DIVERS'};
   var allL=[];
