@@ -4388,7 +4388,7 @@ function admPreviewPrint(){
     <div class="form-group"><label>Désignation <span class="req">*</span></label><textarea class="form-input" id="art-nom" rows="2" style="resize:vertical;font-family:inherit" placeholder="ex: TRANSMETTEUR DE PRESSION RELATIVE 3051T -1..275BARG 1/2 BSP ATEX"></textarea></div>
     <div class="form-row">
       <div class="form-group"><label>Unité</label>
-        <select class="form-select" id="art-unite"><option>U</option><option>Lot</option><option>H sup</option><option>H tech</option><option>Forfait</option><option>M</option><option>Kg</option></select>
+        <select class="form-select" id="art-unite"><option>U</option><option>Lot</option><option>H sup</option><option>H tech</option><option>Forfait</option><option>ML</option><option>Kg</option></select>
       </div>
       <div class="form-group"><label>TGC %</label>
         <select class="form-select" id="art-tgc"><option value="0">0%</option><option value="6">6%</option><option value="11">11%</option><option value="22">22%</option></select>
@@ -5993,6 +5993,10 @@ setTimeout(function(){
     try{ normalizeAllUnites(); }
     catch(e){ console.warn('[CALINSTRUM] Normalisation unités échouée :', e); }
   }
+  if(typeof migrateUniteML==='function'){
+    try{ migrateUniteML(); }
+    catch(e){ console.warn('[CALINSTRUM] Migration unité ML échouée :', e); }
+  }
   // Migration des prix Catalogue : split prix → prixVenteXPF + prixAchatAUD
   // + application de la grille tarifaire officielle 2026 (corrige 3051TG3 et complète prixAchatAUD).
   if(typeof migrateCataloguePrices==='function'){
@@ -6427,13 +6431,17 @@ function nxt(t, prefix){
 // navigateur affichait 'U' (1ère option) TOUT EN gardant 'forfait' en mémoire →
 // modale qui ment + impression incohérente. Solution : normaliser les données +
 // rendre le menu tolérant à la casse et préservant les valeurs inconnues.
-var UNITE_CANON=['U','Lot','H sup','H tech','Forfait','M','Kg'];
+var UNITE_CANON=['U','Lot','H sup','H tech','Forfait','ML','Kg'];
+// [20/10/2026] Longueurs en « ML » (mètre linéaire) : l'ancienne unité « M » en est
+// l'alias, reconnue partout (menus, imports) — cf migrateUniteML pour les données.
+var UNITE_ALIAS={'m':'ML'};
 // Ramène une unité à sa forme canonique (insensible à la casse). Valeur inconnue
 // (non vide) → préservée telle quelle. Vide/null → renvoyé tel quel.
 function _normUnite(u){
   if(u==null) return u;
   var s=String(u).trim();
   if(!s) return s;
+  if(UNITE_ALIAS[s.toLowerCase()]) return UNITE_ALIAS[s.toLowerCase()];
   for(var i=0;i<UNITE_CANON.length;i++){
     if(UNITE_CANON[i].toLowerCase()===s.toLowerCase()) return UNITE_CANON[i];
   }
@@ -6472,10 +6480,11 @@ function _qteAlerteMaj(inp,l){
 // façon TOLÉRANTE (casse), et en ajoutant la valeur si elle n'est dans aucune
 // option (jamais de reset silencieux vers 'U').
 function _uteOpts(cur, base){
-  base=(base&&base.length)?base:['U','Lot','H sup','H tech','Forfait'];
+  base=(base&&base.length)?base:['U','Lot','H sup','H tech','Forfait','ML'];
   var s=(cur==null?'':String(cur)).trim();
+  var sN=String(_normUnite(s)||'');   // « M » enregistré → sélectionne « ML »
   var sel=null;
-  for(var i=0;i<base.length;i++){ if(base[i].toLowerCase()===s.toLowerCase()){ sel=base[i]; break; } }
+  for(var i=0;i<base.length;i++){ if(base[i].toLowerCase()===sN.toLowerCase()){ sel=base[i]; break; } }
   var opts=base.slice();
   if(!sel && s){ opts.unshift(s); sel=s; } // valeur custom préservée et sélectionnée
   if(!sel) sel=base[0];
@@ -6500,6 +6509,30 @@ function normalizeAllUnites(){
   });
   DB._unitesNormalizedV1=true;
   if(changed>0){ console.log('[CALINSTRUM] Normalisation unités : '+changed+' ligne(s) corrigée(s)'); saveDB(); }
+  return changed;
+}
+// Migration one-shot « M » → « ML » (mètre linéaire). Guard DB._uniteMLV1.
+// Devis, articles du catalogue et pré-factures (non émises). ⛔ Une facture ÉMISE
+// n'est jamais réécrite : elle garde l'unité envoyée au client.
+function migrateUniteML(){
+  if(!DB || DB._uniteMLV1) return 0;
+  var changed=0;
+  function fix(o){ if(o && o.unite!=null && String(o.unite).trim().toLowerCase()==='m'){ o.unite='ML'; changed++; } }
+  function fixArr(arr){
+    if(!Array.isArray(arr)) return;
+    arr.forEach(function(l){ if(!l) return; fix(l); if(Array.isArray(l.subLines)) l.subLines.forEach(fix); });
+  }
+  (DB.devis||[]).forEach(function(d){
+    if(d && d.lines){ ['fourniture','service','fret'].forEach(function(s){ fixArr(d.lines[s]); }); }
+  });
+  (DB.articles||[]).forEach(fix);
+  (DB.factures||[]).forEach(function(f){
+    if(!f || !isPrebilled(f)) return;
+    if(Array.isArray(f.lines)) fixArr(f.lines);
+    else if(f.lines){ ['fourniture','service','fret'].forEach(function(s){ fixArr(f.lines[s]); }); }
+  });
+  DB._uniteMLV1=true;
+  if(changed>0){ console.log('[CALINSTRUM] Unité M → ML : '+changed+' ligne(s)'); saveDB(); }
   return changed;
 }
 
@@ -23920,7 +23953,7 @@ function rDVlines(){
       if((isKitMain||isTaskMain) && !Array.isArray(l.subLines)) l.subLines=[];
 
       var tgcOpts=[0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(l.tgc)===v?' selected':'')+'>'+v+'%</option>';}).join('');
-      var uteOpts=_uteOpts(l.unite, ['U','Lot','H sup','H tech','Forfait','M']);
+      var uteOpts=_uteOpts(l.unite, ['U','Lot','H sup','H tech','Forfait','ML']);
       var tot=Math.round((l.qte||0)*(l.pu||0)); // HT pur — cf note computeTaskTotal
 
       // === Sous-row AUD calculator (fourniture uniquement, sauf TASK où ça n'a pas de sens) ===
@@ -23976,7 +24009,7 @@ function rDVlines(){
         }
         var rowspan=subs.length;
         var taskTgcOpts=function(curT){return [0,6,11,22].map(function(v){return'<option value="'+v+'"'+(Number(curT)===v?' selected':'')+'>'+v+'%</option>';}).join('');};
-        var taskUteOpts=function(curU){return _uteOpts(curU, ['U','Lot','H sup','H tech','Forfait','M']);};
+        var taskUteOpts=function(curU){return _uteOpts(curU, ['U','Lot','H sup','H tech','Forfait','ML']);};
         var totalTask=computeTaskTotal(l);
 
         // Helper : génère le HTML <td>×N pour une sous-ligne (TGC, Uté, Qté, PU, Total).
