@@ -7832,6 +7832,25 @@ function phaseSelect(inv){
 //     facture n'est plus considérée comme officiellement émise.
 //   - Si on passe vers une phase billed (livre/recu) depuis une phase non-billed
 //     ET que dateEnvoi est vide → on propose de la fixer à aujourd'hui (auto-promotion).
+// FACTURE MÈRE D'ACOMPTES : la pré-facture dont on a tiré des factures partielles
+// (acomptes / solde, cf parentId). Elle est le CADRE de facturation : la passer
+// « émise » compterait le travail une seconde fois en plus de ses acomptes (CA,
+// reste à recouvrer). Le reste se facture par une facture de SOLDE.
+// [23/10/2026] Une mère basculée en « Réceptionné PV » (facturée 2 fois) passait
+// sans aucun signal. L'utilisateur garde la main : on PRÉVIENT (menu Phase, section
+// Acomptes), et seule la propagation AUTOMATIQUE devis → facture l'épargne.
+function _faAcomptesDeMere(fa){
+  if(!fa) return [];
+  var id=fa._factureId||fa.grcFactureId||fa.id;
+  return (DB.factures||[]).filter(function(x){return x && x.parentId===id;});
+}
+function _faMereAlerteTexte(num, acomptes){
+  var pct=acomptes.reduce(function(s,a){return s+(Number(a.acomptePct)||0);},0);
+  return 'La facture '+num+' est la facture MÈRE de '+acomptes.length+' facture(s) partielle(s) déjà créée(s) ('+
+    acomptes.map(function(a){return a.num;}).join(', ')+' — '+pct+'% du total).\n\n'+
+    'La passer « émise » facturerait le travail une seconde fois (CA et reste à recouvrer comptés en double).\n'+
+    'Le reste se facture par une facture de SOLDE : onglet Paiement → « Créer facture d\'acompte » → Solde.';
+}
 function setSUIVIPhase(id,newPhase){
   // FIX SYNC : la variable globale `invoices` n'est rafraîchie que par renderSuivi().
   // Si on appelle setSUIVIPhase depuis la page Factures sans avoir visité Suivi,
@@ -7847,6 +7866,16 @@ function setSUIVIPhase(id,newPhase){
 
   var newBilled = PHASES[newPhase] && PHASES[newPhase].billed===true;
   var oldBilled = PHASES[oldPhase] && PHASES[oldPhase].billed===true;
+
+  // Facture mère d'acomptes passée émise : prévenir, l'utilisateur décide.
+  if(newBilled && !oldBilled){
+    var _acMere=_faAcomptesDeMere(inv);
+    if(_acMere.length && !confirm('⚠ '+_faMereAlerteTexte(inv.num,_acMere)+'\n\nLa passer émise quand même ?')){
+      inv.phase=oldPhase;
+      renderSuivi();
+      return;
+    }
+  }
 
   // CAS 1 — RÉTROGRADATION : phase billed → non-billed
   // Les dates d'envoi/butoir n'ont plus de sens : on propose de les effacer.
@@ -8031,6 +8060,13 @@ function _addPhaseToDevisHistory(d, newPhaseKey, opts){
 // Règle 1 — Facture passe en billed → propage au devis
 function propagateFacturePhaseToDevis(inv, newPhase){
   if(!inv || inv._propagating) return;
+  // ⛔ Un ACOMPTE émis ne dit pas « chantier terminé / matériel livré » : il ne
+  //    propage rien au devis. [23/10/2026] Chaîne réelle : acompte 90 % émis →
+  //    devis passé « Fin chantier + PV » → au saveDV suivant, la facture MÈRE
+  //    basculée « Réceptionné PV » (émise, comptée en double), sans aucune question.
+  //    Seule la facture de SOLDE clôt le dossier.
+  var _faSrc=(DB.factures||[]).find(function(x){return x && x.id===(inv._factureId||inv.grcFactureId||inv.id);})||inv;
+  if(_faSrc.acompteType==='acompte') return;
   var devisPhaseKey=_facturePhaseToDevisPhase(newPhase, inv.type);
   if(!devisPhaseKey) return;
   var d=_findLinkedDevisFromFacture(inv);
@@ -8078,6 +8114,8 @@ function propagateDevisPhaseToFacture(d){
   try{
     fas.forEach(function(fa){
       if(fa._propagating) return;
+      // Mère d'acomptes : jamais émise par une bascule AUTOMATIQUE (cf _faAcomptesDeMere).
+      if(_faAcomptesDeMere(fa).length) return;
       var oldFP=fa.phase||'';
       var oldBilled=PHASES[oldFP] && PHASES[oldFP].billed===true;
       // Ne pas écraser si déjà billed (l'utilisateur a peut-être choisi livre vs recu manuellement)
@@ -33478,6 +33516,9 @@ function generateAcompteInvoice(){
     acompteLibelle: libelle,
     acompteMethod: method // [22/05/2026] 'pct' ou 'lines'
   };
+  // Une facture partielle est ÉMISE au client : sa phase est posée ici, explicitement,
+  // au lieu d'être déduite au rechargement suivant (migrateLegacyEmisePhase).
+  newFA.phase=getDefaultPhase(newFA);
   DB.factures.push(newFA);
   syncFactureToSuivi(newFA);
   saveDB();
@@ -33530,6 +33571,13 @@ function renderAcomptesList(){
   if(hintEl){
     var restant=100-pctEmis;
     hintEl.innerHTML='Cumul émis : <strong style="color:#3b82f6">'+pctEmis+'%</strong> — Reste disponible : <strong style="color:'+(restant>0?'#10b981':'#f87171')+'">'+restant+'%</strong>';
+    // Mère passée « émise » alors que ses acomptes le sont déjà : double facturation.
+    var _phM=parent?getPhase(parent):null;
+    if(_phM && _phM.billed===true){
+      hintEl.innerHTML+='<div data-mere-emise="1" style="margin-top:6px;padding:6px 8px;border:1px solid rgba(244,63,94,.5);background:rgba(244,63,94,.1);border-radius:4px;color:#fca5a5;font-style:normal;line-height:1.45">'+
+        '⚠ Cette facture mère est en phase « '+esc(_phM.label)+' » (émise) : elle est comptée <strong>en plus</strong> de ses acomptes. '+
+        'Repasse sa phase en « Chantier en cours » (non facturée) ; le reste se facture par une facture de <strong>Solde</strong>.</div>';
+    }
   }
 }
 
