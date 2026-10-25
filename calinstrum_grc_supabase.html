@@ -15253,22 +15253,29 @@ function syncBCToFacture(bc){
     dvLie=(DB.devis||[]).find(function(d){return d.id===_id;});
     return !!dvLie;
   });
-  // Multi-devis (1 BC sur 22 dans l'export du 01/06) : on garde volontairement
-  // la sémantique historique — le PREMIER devis résolu fournit les lignes. On
-  // n'agrège PAS les devis : si chacun porte déjà sa propre facture, agréger
-  // double-facturerait. On le signale pour que ce soit vérifiable.
-  if(_dvIds.length>1){
-    console.warn('[syncBCToFacture] BC '+(bc.num||'?')+' lié à '+_dvIds.length+
-      ' devis — seul '+((dvLie&&dvLie.num)||'?')+' alimente la facture. À vérifier.');
-  }
+  // Multi-devis : la facture du PO reprend TOUS ses devis, sauf ceux qui portent
+  // déjà une AUTRE facture (les agréger facturerait deux fois).
+  // [26/10/2026] Le PREMIER devis seul alimentait la facture : un PO couvrant deux
+  // devis réécrivait sa facture avec la moitié des lignes (4 902 024 → 2 816 017).
+  var _dvTous=_dvIds.map(function(_id){return (DB.devis||[]).find(function(d){return d.id===_id;});})
+    .filter(function(d){
+      if(!d) return false;
+      if(!d.linkFactureId) return true;
+      var _fl=(DB.factures||[]).find(function(x){return x.id===d.linkFactureId;});
+      return !_fl || _fl._fromBC===bc.id || String(_fl.num||'').toLowerCase()===String(faNum).toLowerCase();
+    });
+  if(!_dvTous.length && dvLie) _dvTous=[dvLie];
   var ttc=0;
   var faLines=[];
   if(dvLie){
-    // Reprendre les lignes structurées du devis (3 catégories) en gardant headers/KIT
-    var lf=dvLie.lines||{};
-    var allDvLines=[].concat(lf.fourniture||[],lf.service||[],lf.fret||[]);
+    // Reprendre les lignes structurées des devis (3 catégories) en gardant headers/KIT
+    var allDvLines=[];
+    _dvTous.forEach(function(dv){
+      var lf=dv.lines||{};
+      allDvLines=allDvLines.concat(lf.fourniture||[],lf.service||[],lf.fret||[]);
+    });
     faLines=allDvLines.map(function(l){return JSON.parse(JSON.stringify(l));});
-    ttc=Number(dvLie.ttc)||0;
+    ttc=_dvTous.reduce(function(s,dv){return s+(Number(dv.ttc)||0);},0);
     // Si pas de ttc figé, recalculer
     if(!ttc){
       ttc=allDvLines.reduce(function(s,l){
@@ -15348,7 +15355,18 @@ function syncBCToFacture(bc){
     }
   }
   if(existing){
-    // === MISE À JOUR (idempotente) ===
+    // ⛔⛔ FACTURE ÉMISE = JAMAIS RÉÉCRITE (lignes, montants, contact…). On pose
+    //     seulement le lien BC ↔ facture. Toute correction passe par un avoir.
+    //     [26/10/2026] SLN-F096, émise le 30/09 à 4 902 024 (2 devis), réécrite à
+    //     2 816 017 à la confirmation du PO : la seule protection était la question
+    //     « modifiée manuellement, écraser ? », qui ne disait pas que la facture
+    //     était émise. Même règle que propagateDevisLinesToFacture (garde-fou 1).
+    if(typeof isPrebilled==='function' && !isPrebilled(existing)){
+      existing._fromBC=bc.id;
+      bc.linkFactureId=existing.id;
+      return {action:'linked',faNum:existing.num,faId:existing.id,note:'Facture émise : jamais réécrite'};
+    }
+    // === MISE À JOUR d'une PRÉ-FACTURE (idempotente) ===
     // Plusieurs niveaux de protection contre l'écrasement involontaire :
     //   1. Si la facture a été éditée manuellement (saveFA → _manuallyEditedAt) : on
     //      DEMANDE l'autorisation avant d'écraser. Si l'utilisateur refuse, on ne touche
