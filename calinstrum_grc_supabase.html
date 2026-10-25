@@ -1050,6 +1050,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="nav('params');renderParams()" title="Listes déroulantes · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">⚙️</span><i class="ti ti-list ico-pro"></i></span>Listes déroulantes</button>
   <button class="sb-item" onclick="nav('coutrevient');renderCoutRevient()" title="Coût de revient débarqué · seuils commerciaux et forfaits transitaire du moteur landed cost"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-calculator ico-pro"></i></span>Coût de revient</button>
   <div class="sb-sec">Données</div>
+  <button class="sb-item" onclick="ouvrirControlePdf()" title="Compare chaque facture émise à son PDF archivé (celui envoyé au client) : montant TTC et lignes"><span class="ico"><span class="ico-classic">🛡</span><i class="ti ti-shield-check ico-pro"></i></span>Contrôle PDF</button>
   <button class="sb-item" onclick="exportJSON()"><span class="ico"><span class="ico-classic">💾</span><i class="ti ti-download ico-pro"></i></span>Exporter JSON</button>
   <button class="sb-item" onclick="document.getElementById('impFile').click()"><span class="ico"><span class="ico-classic">📁</span><i class="ti ti-upload ico-pro"></i></span>Importer JSON</button>
   <input type="file" id="impFile" accept=".json" style="display:none" onchange="importJSON(this)">
@@ -1215,6 +1216,7 @@ body.has-dashboard-bg #page-dashboard .metric{
       </span>
     </div>
     <div id="admExpCoverage" style="margin-top:10px;font-size:11px;color:var(--muted)"></div>
+    <div id="admExpControlePdf" style="font-size:11px;color:var(--muted)"></div>
   </div>
   <div id="adminBody"></div>
 </div>
@@ -1231,9 +1233,9 @@ body.has-dashboard-bg #page-dashboard .metric{
 // ET sur le PDF exporté pour que l'expert-comptable comprenne le périmètre.
 var ADMIN_C1='#3987e5',ADMIN_C2='#d95926',ADMIN_C3='#199e70',ADMIN_C4='#c98500',ADMIN_C5='#d55181',ADMIN_C6='#9085e9';
 var ADMIN_RATE_COLOR={'3':ADMIN_C1,'6':ADMIN_C2,'11':ADMIN_C3,'22':ADMIN_C4};
-// Bascule écran uniquement (donut "CA par client") — 'detail' = par contact réel,
-// 'prefix' = groupé par entité (SLN/PRNC/AEI...). L'export PDF reste toujours
-// figé sur 'prefix', indépendamment de ce choix (cf printAdminReport()).
+// Bascule du donut "CA par client" — 'detail' = par contact réel, 'prefix' =
+// groupé par entité (SLN/PRNC/AEI...). [27/10/2026] L'aperçu et les PDF suivent
+// ce choix (ils étaient figés : aperçu en 'detail', synthèse seule en 'prefix').
 var _adminClientMode='detail';
 function _adminSetClientMode(mode){
   _adminClientMode=mode;
@@ -1790,6 +1792,7 @@ function renderAdmin(){
   var body=document.getElementById('adminBody');
   if(body) body.innerHTML=_adminReportHtml(r,true,_adminClientMode==='prefix');
   if(typeof admExpRefreshCoverage==='function') admExpRefreshCoverage(r);
+  if(typeof admExpRefreshControlePdf==='function') admExpRefreshControlePdf(r);
 }
 
 // Export PDF : nouvelle fenêtre dédiée (pas le pipeline .doc des devis/factures,
@@ -1797,6 +1800,7 @@ function renderAdmin(){
 // doPrint(). Pagination naturelle du tableau (thead répété, tr non coupée).
 function printAdminReport(){
   var r=window._adminLastReport || computeAdminReport(document.getElementById('admin-year')?document.getElementById('admin-year').value:String(new Date().getFullYear()));
+  if(typeof _ctlPdfAvantExport==='function' && !_ctlPdfAvantExport(r.factures)) return;   // factures ≠ PDF archivés : prévenir
   var w=window.open('','_blank','');
   if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
   var css='@page{size:A4 portrait;margin:14mm 12mm;}'+
@@ -1812,7 +1816,7 @@ function printAdminReport(){
   var html='<div class="admhd"><div><h1>CALINSTRUM SARL — Export Facturation '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
-    _adminReportHtml(r,false,true);
+    _adminReportHtml(r,false,_adminClientMode==='prefix'); // le PDF suit le choix écran (Gros Clients / Clients internes)
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Facturation '+esc(_admPeriodLabel(r))+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
@@ -1954,6 +1958,7 @@ function printAdminReportPeriod(){
   if(!range.start||!range.end||range.start>range.end){alert('Période invalide.');return;}
   var r=computeAdminReport(range.start,range.end);
   window._adminLastReport=r;
+  if(typeof _ctlPdfAvantExport==='function' && !_ctlPdfAvantExport(r.factures)) return;   // factures ≠ PDF archivés : prévenir
   var w=window.open('','_blank','');
   if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
   var css='@page{size:A4 portrait;margin:14mm 12mm;}'+
@@ -1969,7 +1974,7 @@ function printAdminReportPeriod(){
   var html='<div class="admhd"><div><h1>CALINSTRUM SARL — Export Facturation '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
-    _adminReportHtml(r,false,true); // rendu SVG natif (pas de staticTables) -- fiable en impression navigateur
+    _adminReportHtml(r,false,_adminClientMode==='prefix'); // choix écran Gros Clients / Clients internes ; rendu SVG natif (pas de staticTables) -- fiable en impression navigateur
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Facturation '+esc(_admPeriodLabel(r))+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
   w.document.close();
   w.focus();
@@ -2047,7 +2052,7 @@ function _admPrvSynthHtml(r){
   return '<div class="admhd"><div><h1>CALINSTRUM SARL — Export Facturation '+esc(r.year)+'</h1>'+
       '<div class="sub">RIDET '+CI.ridet+' · Période '+fD(r.startDate)+' au '+fD(r.endDate)+' · Édité le '+fD(td())+'</div></div>'+
       '<img src="'+LG_PLACEHOLDER+'" style="height:44px" alt="CALINSTRUM"></div>'+
-    _adminReportHtml(r,false,false); // SVG natif, jamais staticTables/canvas
+    _adminReportHtml(r,false,_adminClientMode==='prefix'); // choix écran Gros Clients / Clients internes ; SVG natif, jamais staticTables/canvas
 }
 
 // Bloc "factures jointes" : intercalaire + une <img> par page de PDF archivé.
@@ -2217,6 +2222,7 @@ function admPreviewPrint(){
   if(_admPrvState.busy){alert('Lecture des factures archivées en cours — réessaie dans quelques secondes.');return;}
   var r=window._adminLastReport;
   if(!r){alert('Aperçu vide.');return;}
+  if(typeof _ctlPdfAvantExport==='function' && !_ctlPdfAvantExport(r.factures)) return;   // factures ≠ PDF archivés : prévenir
   var inc=document.getElementById('admPrvIncFa');
   var withFa=inc?inc.checked:true;
   var w=window.open('','_blank','');
@@ -15212,7 +15218,7 @@ function syncBCToFacture(bc){
   // Multi-devis : la facture du PO reprend TOUS ses devis, sauf ceux qui portent
   // déjà une AUTRE facture (les agréger facturerait deux fois).
   // [26/10/2026] Le PREMIER devis seul alimentait la facture : un PO couvrant deux
-  // devis réécrivait sa facture avec la moitié des lignes (4 000 000 → 2 000 000).
+  // devis réécrivait sa facture avec les lignes d'un seul devis (moitié du montant).
   var _dvTous=_dvIds.map(function(_id){return (DB.devis||[]).find(function(d){return d.id===_id;});})
     .filter(function(d){
       if(!d) return false;
@@ -15313,8 +15319,8 @@ function syncBCToFacture(bc){
   if(existing){
     // ⛔⛔ FACTURE ÉMISE = JAMAIS RÉÉCRITE (lignes, montants, contact…). On pose
     //     seulement le lien BC ↔ facture. Toute correction passe par un avoir.
-    //     [26/10/2026] SLN-F896, émise le 30/09 à 4 000 000 (2 devis), réécrite à
-    //     2 000 000 à la confirmation du PO : la seule protection était la question
+    //     [26/10/2026] Une facture émise (2 devis) a été réécrite à la moitié de son
+    //     montant à la confirmation du PO : la seule protection était la question
     //     « modifiée manuellement, écraser ? », qui ne disait pas que la facture
     //     était émise. Même règle que propagateDevisLinesToFacture (garde-fou 1).
     if(typeof isPrebilled==='function' && !isPrebilled(existing)){
@@ -45600,6 +45606,226 @@ function onFaPdfArchiveChosen(input){
   };
   reader.readAsArrayBuffer(f);
   input.value='';
+}
+
+// =============================================================================
+// CONTRÔLE FACTURES ÉMISES ↔ PDF ARCHIVÉS (27/10/2026)
+// =============================================================================
+// Le PDF archivé (celui envoyé au client) FAIT FOI. Chaque facture émise est
+// relue dans SON PDF : montant TTC + chaque ligne chiffrée du GRC (réf. + total).
+// [26/10/2026] Une facture émise a été réécrite à la moitié de son montant par une
+// fonction du GRC ; rien ne le signalait. Ce contrôle attrape n'importe quelle
+// dérive, quel que soit le chemin qui l'a produite.
+// Verdicts : ok · ecart · scan (PDF sans texte : à regarder, « ✓ Vérifié ») ·
+// vu (scan vérifié, facture inchangée depuis) · sans (aucun PDF archivé) · erreur.
+var _ctlPdfCache={};          // factureId → résultat (avec la signature de la facture contrôlée)
+var _ctlPdfFiltre='alertes';
+var _ctlPdfEnCours=null;      // promesse du contrôle en cours (pas deux contrôles en parallèle)
+function _ctlPdfSansEspace(s){ return String(s||'').replace(/[\s  ]+/g,'').toUpperCase(); }
+function _ctlPdfFacturesEmises(){
+  return (DB.factures||[]).filter(function(f){ return f && f.num && !isPrebilled(f); });
+}
+// Lignes chiffrées que le PDF doit montrer : {ref, designation, total} (même règle
+// que l'impression : qte × pu arrondi ; TÂCHE = ses sous-lignes chiffrées).
+function _ctlPdfLignesGRC(f){
+  var arr=Array.isArray(f.lines)?f.lines:[].concat((f.lines||{}).fourniture||[],(f.lines||{}).service||[],(f.lines||{}).fret||[]);
+  var out=[];
+  // totalTgc : avant le 13/07/2026 la colonne « Total HT » imprimait le montant
+  // TGC comprise (cf fix-total-ht) — un PDF émis à cette époque montre cette forme.
+  var pousser=function(ref,des,q,pu,tgc){
+    var t=Math.round((Number(q)||0)*(Number(pu)||0));
+    if(t) out.push({ref:ref||'',designation:des||'',total:t,totalTgc:Math.round(t*(1+(Number(tgc)||0)/100))});
+  };
+  arr.forEach(function(l,i){
+    if(!l||l.type==='header'||l.type==='section_banner') return;
+    if(_isTaskCarrier(arr,i)){
+      (l.subLines||[]).forEach(function(s){ pousser(s.ref||l.ref,s.designation||l.designation,s.qte,s.pu,s.tgc); });
+      return;
+    }
+    pousser(l.ref,l.designation,l.qte,l.pu,l.tgc);
+  });
+  return out;
+}
+// Signature de ce qui est contrôlé (TTC + lignes) : un résultat en cache ne vaut
+// que pour la facture telle qu'elle était au contrôle.
+function _ctlPdfSig(f){
+  var s=JSON.stringify({ttc:Math.round(Number(f.ttc)||0),l:_ctlPdfLignesGRC(f)}), h=0;
+  for(var i=0;i<s.length;i++){ h=((h<<5)-h+s.charCodeAt(i))|0; }
+  return String(h)+':'+s.length;
+}
+function _ctlPdfTexte(blob){
+  return blob.arrayBuffer().then(function(buf){
+    // bytes.slice(0) : pdf.js détache le buffer source.
+    return pdfjsLib.getDocument({data:new Uint8Array(buf).slice(0)}).promise;
+  }).then(function(pdf){
+    var items=[], chain=Promise.resolve();
+    for(var p=1;p<=pdf.numPages;p++){ (function(n){
+      chain=chain.then(function(){ return pdf.getPage(n).then(function(pg){ return pg.getTextContent(); }).then(function(tc){
+        tc.items.forEach(function(it){ var s=String(it.str||'').replace(/[  ]/g,' ').trim(); if(s) items.push(s); });
+      }); });
+    })(p); }
+    return chain.then(function(){ return items; });
+  });
+}
+// Montant TTC lu dans le PDF. Format GRC : « Montant à payer TTC (XPF) » puis le
+// nombre ; ancien format (Excel) : « Montant à payer TTC en XPF », sinon le dernier
+// nombre avant « Banque ».
+// Le rendu PDF découpe « 1 234 567 » en morceaux (« 1 », « 234 », « 567 ») : on lit
+// le texte RECOLLÉ, un nombre = 1 à 3 chiffres puis des groupes de 3 (« 1 234 567 »).
+var _CTL_PDF_NB='\\d{1,3}(?: \\d{3})*';
+function _ctlPdfTexteRecolle(items){ return ' '+items.join(' ').replace(/\s+/g,' ')+' '; }
+function _ctlPdfTtc(items){
+  var estNombre=function(s){ return /^[\d ]+$/.test(s) && /\d/.test(s); };
+  var t=_ctlPdfTexteRecolle(items);
+  var mG=t.match(new RegExp('Montant à payer TTC \\(XPF\\) ('+_CTL_PDF_NB+')(?!\\d)'));
+  if(mG) return {ttc:Number(mG[1].replace(/\D/g,'')), format:'grc'};
+  var mA=t.match(new RegExp('Montant à payer TTC en XPF ('+_CTL_PDF_NB+')(?!\\d)'));
+  if(mA) return {ttc:Number(mA[1].replace(/\D/g,'')), format:'ancien'};
+  // Ancien format sans libellé : dernier nombre (morceau entier) avant « Banque ».
+  var b=-1; for(var k=0;k<items.length;k++){ if(/^Banque/i.test(items[k])){ b=k; break; } }
+  for(var m=(b>0?b:items.length)-1;m>=0;m--){ if(estNombre(items[m])) return {ttc:Number(items[m].replace(/\D/g,'')), format:'ancien'}; }
+  return {ttc:null, format:'?'};
+}
+function _ctlPdfFacture(f){
+  var base={id:f.id, num:f.num, client:f.client, grcTtc:Math.round(Number(f.ttc)||0), sig:_ctlPdfSig(f), pdfTtc:null, manquantes:[], format:''};
+  return _getFacturePdfRecord(f.id).then(function(rec){
+    if(!rec||!rec.blob){ base.statut='sans'; return base; }
+    return _ctlPdfTexte(rec.blob).then(function(items){
+      var lettres=items.join('').replace(/[^A-Za-z]/g,'').length;
+      var lu=_ctlPdfTtc(items);
+      if(lettres<40 || lu.ttc==null){
+        base.statut=(f._ctlPdfVu && f._ctlPdfVu.sig===base.sig)?'vu':'scan';
+        return base;
+      }
+      base.pdfTtc=lu.ttc; base.format=lu.format;
+      // Lignes : uniquement sur les PDF au format GRC (les anciens PDF Excel n'ont
+      // pas les mêmes libellés) — le TTC, lui, est toujours comparé.
+      if(lu.format==='grc'){
+        var recolle=_ctlPdfTexteRecolle(items), texte=_ctlPdfSansEspace(items.join(''));
+        _ctlPdfLignesGRC(f).forEach(function(l){
+          // Montant écrit comme à l'impression (« 1 234 567 »), non collé à un autre chiffre.
+          var present=function(v){ var ecrit=String(v).replace(/\B(?=(\d{3})+(?!\d))/g,' '); return new RegExp('(^|[^\\d])'+ecrit+'(?!\\d)').test(recolle); };
+          var totalOk=present(l.total) || (l.totalTgc!==l.total && present(l.totalTgc));
+          var refOk=!l.ref || texte.indexOf(_ctlPdfSansEspace(l.ref).slice(0,40))>=0;
+          if(!totalOk || !refOk) base.manquantes.push({ref:l.ref, designation:l.designation, total:l.total, refOk:refOk, totalOk:totalOk});
+        });
+      }
+      base.statut=(Math.abs(base.pdfTtc-base.grcTtc)>=1 || base.manquantes.length)?'ecart':'ok';
+      return base;
+    });
+  }).catch(function(e){ base.statut='erreur'; base.erreur=String(e&&e.message||e); return base; });
+}
+// Contrôle d'une liste de factures (toutes les émises par défaut), une par une.
+function controlerFacturesPdf(factures, onProgress){
+  if(_ctlPdfEnCours) return _ctlPdfEnCours;
+  var liste=factures||_ctlPdfFacturesEmises(), res=[];
+  _ctlPdfEnCours=loadPdfJs().then(function(){
+    var chain=Promise.resolve();
+    liste.forEach(function(f,i){
+      chain=chain.then(function(){ return _ctlPdfFacture(f).then(function(r){ _ctlPdfCache[f.id]=r; res.push(r); if(onProgress) onProgress(i+1,liste.length); }); });
+    });
+    return chain.then(function(){ return res; });
+  }).finally(function(){ _ctlPdfEnCours=null; });
+  return _ctlPdfEnCours;
+}
+// Résultat en cache encore valable (la facture n'a pas changé depuis le contrôle).
+function _ctlPdfResultat(f){
+  var r=_ctlPdfCache[f.id];
+  return (r && r.sig===_ctlPdfSig(f)) ? r : null;
+}
+function _ctlPdfMarquerVu(id){
+  var f=(DB.factures||[]).find(function(x){return x.id===id;}); if(!f) return;
+  f._ctlPdfVu={sig:_ctlPdfSig(f), date:new Date().toISOString()};
+  if(_ctlPdfCache[id]) _ctlPdfCache[id].statut='vu';
+  saveDB(); _ctlPdfRendre();
+}
+var _CTL_PDF_TAG={ok:['✓ conforme','var(--green)'],ecart:['✗ écart','var(--red)'],scan:['📷 scan — à regarder','var(--amber)'],vu:['📷 scan vérifié','var(--green)'],sans:['∅ pas de PDF archivé','var(--muted)'],erreur:['⚠ PDF illisible','var(--amber)']};
+function ouvrirControlePdf(){
+  var ancien=document.getElementById('mCTLPDF'); if(ancien) ancien.remove();
+  var m=document.createElement('div'); m.id='mCTLPDF'; m.className='modal-overlay open';
+  m.innerHTML='<div class="modal modal-lg"><div class="modal-header"><h3>🛡 Contrôle des factures émises ↔ PDF archivés</h3><button class="modal-close" onclick="document.getElementById(\'mCTLPDF\').remove()">✕</button></div>'+
+    '<div class="modal-body" id="ctlPdfCorps"><div style="color:var(--muted)">Lecture des PDF archivés…</div></div></div>';
+  document.body.appendChild(m);
+  controlerFacturesPdf(null,function(i,n){ var c=document.getElementById('ctlPdfCorps'); if(c) c.innerHTML='<div style="color:var(--muted)">Lecture des PDF archivés… '+i+' / '+n+'</div>'; })
+    .then(function(){ _ctlPdfRendre(); });
+}
+function _ctlPdfRendre(){
+  var corps=document.getElementById('ctlPdfCorps'); if(!corps) return;
+  var ordre={ecart:0,erreur:1,scan:2,sans:3,vu:4,ok:5};
+  var tous=_ctlPdfFacturesEmises().map(function(f){ return {f:f, r:_ctlPdfResultat(f)}; }).filter(function(x){return x.r;})
+    .sort(function(a,b){ return (ordre[a.r.statut]-ordre[b.r.statut]) || String(b.f.date||'').localeCompare(String(a.f.date||'')); });
+  var n={}; tous.forEach(function(x){ n[x.r.statut]=(n[x.r.statut]||0)+1; });
+  var vis=tous.filter(function(x){ var s=x.r.statut;
+    return _ctlPdfFiltre==='tous' || (_ctlPdfFiltre==='alertes'&&(s==='ecart'||s==='erreur'||s==='scan')) || (_ctlPdfFiltre==='sans'&&s==='sans'); });
+  var kpi=function(v,lab,col){ return '<div style="flex:1;min-width:120px;background:var(--panel2,#161b24);border:1px solid var(--border);border-radius:8px;padding:8px 10px"><div style="font-size:18px;font-weight:800;color:'+col+'">'+v+'</div><div style="font-size:10.5px;color:var(--muted)">'+lab+'</div></div>'; };
+  var chip=function(k,lab){ return '<button type="button" class="btn btn-ghost btn-sm" style="'+(_ctlPdfFiltre===k?'border-color:var(--teal);color:var(--teal)':'')+'" onclick="_ctlPdfFiltre=\''+k+'\';_ctlPdfRendre()">'+lab+'</button>'; };
+  var rows=vis.map(function(x){
+    var r=x.r, g=_CTL_PDF_TAG[r.statut], det='';
+    if(r.statut==='ecart'){
+      var d=r.pdfTtc-r.grcTtc;
+      if(Math.abs(d)>=1) det+='<div>Montant : GRC <b>'+fN(r.grcTtc)+'</b> ≠ PDF <b>'+fN(r.pdfTtc)+'</b> ('+(d>0?'il manque ':'en trop : ')+fN(Math.abs(d))+' XPF dans le GRC)</div>';
+      r.manquantes.slice(0,4).forEach(function(l){ det+='<div>Ligne du GRC introuvable sur le PDF : <span style="font-family:var(--mono)">'+esc(l.ref||'—')+'</span> '+esc(String(l.designation||'').slice(0,40))+' — '+fN(l.total)+(l.totalOk?'':' (montant absent)')+(l.refOk?'':' (réf. absente)')+'</div>'; });
+      if(r.manquantes.length>4) det+='<div>… '+(r.manquantes.length-4)+' autre(s) ligne(s)</div>';
+    } else if(r.statut==='erreur') det='<div>'+esc(r.erreur||'')+'</div>';
+    else if(r.statut==='scan') det='<div>PDF sans texte (imprimé, signé, scanné) : à comparer à l\'œil — GRC '+fN(r.grcTtc)+' XPF.</div>';
+    else if(r.statut==='sans') det='<div>Aucun PDF archivé : rien à quoi comparer.</div>';
+    var actions=(r.statut!=='sans'?'<button class="btn btn-ghost btn-sm" onclick="_openFacturePdfBlob('+x.f.id+')" title="Voir le PDF archivé">👁 PDF</button> ':'')+
+      (r.statut==='scan'?'<button class="btn btn-ghost btn-sm" onclick="_ctlPdfMarquerVu('+x.f.id+')" title="J\'ai comparé le PDF à la facture : conforme">✓ Vérifié</button> ':'')+
+      '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'mCTLPDF\').remove();openFA('+x.f.id+')">Ouvrir</button>';
+    return '<tr style="border-top:1px solid var(--border)'+(r.statut==='ecart'?';background:rgba(248,113,113,.05)':'')+'">'+
+      '<td style="padding:6px"><b>'+esc(x.f.num)+'</b><div style="color:var(--muted);font-size:10.5px">'+fD(x.f.date)+'</div></td>'+
+      '<td style="padding:6px;font-size:11px">'+esc(String(x.f.client||'').slice(0,32))+'</td>'+
+      '<td style="padding:6px;text-align:right;white-space:nowrap" data-money>'+fN(r.grcTtc)+'</td>'+
+      '<td style="padding:6px;text-align:right;white-space:nowrap" data-money>'+(r.pdfTtc!=null?fN(r.pdfTtc):'—')+'</td>'+
+      '<td style="padding:6px"><span style="color:'+g[1]+';font-weight:700;white-space:nowrap">'+g[0]+'</span><div style="font-size:10.5px;color:var(--muted);margin-top:3px">'+det+'</div></td>'+
+      '<td style="padding:6px;white-space:nowrap;text-align:right">'+actions+'</td></tr>';
+  }).join('') || '<tr><td colspan="6" style="padding:12px;color:var(--muted)">'+(_ctlPdfFiltre==='alertes'?'✓ Aucun écart : toutes les factures contrôlées correspondent à leur PDF archivé.':'Aucune facture dans ce filtre.')+'</td></tr>';
+  corps.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+      kpi((n.ok||0)+(n.vu||0),'conformes au PDF','var(--green)')+kpi(n.ecart||0,'écart(s) avec le PDF',(n.ecart?'var(--red)':'var(--muted)'))+
+      kpi((n.scan||0)+(n.erreur||0),'PDF scannés / illisibles — à regarder','var(--amber)')+kpi(n.sans||0,'sans PDF archivé','var(--muted)')+'</div>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">'+chip('alertes','À traiter')+chip('sans','Sans PDF')+chip('tous','Tout ('+tous.length+')')+
+      '<button type="button" class="btn btn-ghost btn-sm" onclick="_ctlPdfCache={};ouvrirControlePdf()">↻ Relancer</button>'+
+      '<span style="margin-left:auto;color:var(--muted);font-size:11px">Le PDF archivé (envoyé au client) fait foi.</span></div>'+
+    '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase"><th style="text-align:left;padding:6px">Facture</th><th style="text-align:left;padding:6px">Client</th><th style="text-align:right;padding:6px">GRC TTC</th><th style="text-align:right;padding:6px">PDF TTC</th><th style="text-align:left;padding:6px">Verdict</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+// Écarts connus pour une liste de factures (export Administratif). Synchrone : lit
+// le cache rempli par le contrôle lancé à l'ouverture de la page Administratif.
+function _ctlPdfEcarts(factures){
+  var ecarts=[], nonControlees=0;
+  (factures||[]).forEach(function(f){
+    var r=_ctlPdfResultat(f);
+    if(!r){ nonControlees++; return; }
+    if(r.statut==='ecart') ecarts.push(r);
+  });
+  return {ecarts:ecarts, nonControlees:nonControlees};
+}
+// Avant tout export Administratif : prévenir (sans bloquer) si une facture de la
+// période ne correspond pas à son PDF archivé. Renvoie true pour exporter.
+function _ctlPdfAvantExport(factures){
+  var e=_ctlPdfEcarts(factures);
+  if(!e.ecarts.length) return true;
+  var lignes=e.ecarts.slice(0,6).map(function(r){ return '• '+r.num+' : GRC '+fN(r.grcTtc)+' ≠ PDF '+(r.pdfTtc!=null?fN(r.pdfTtc):'?'); }).join('\n');
+  var ok=confirm('⚠ '+e.ecarts.length+' facture(s) de la période ne correspondent pas à leur PDF archivé :\n\n'+lignes+(e.ecarts.length>6?'\n…':'')+
+    '\n\nLes chiffres envoyés à l\'expert-comptable seraient faux.\n\n[OK] = exporter quand même\n[Annuler] = voir les écarts');
+  if(!ok){ _ctlPdfFiltre='alertes'; ouvrirControlePdf(); }
+  return ok;
+}
+// Bandeau de la page Administratif : résultat du contrôle des factures de la période.
+function admExpRefreshControlePdf(r){
+  var wrap=document.getElementById('admExpControlePdf');
+  if(!wrap || !r || !r.factures || !r.factures.length){ if(wrap) wrap.innerHTML=''; return; }
+  wrap.innerHTML='<span style="color:var(--muted-soft)">🛡 Contrôle des factures ↔ PDF archivés…</span>';
+  controlerFacturesPdf(r.factures).then(function(){
+    var res=r.factures.map(function(f){return _ctlPdfResultat(f);}).filter(Boolean);
+    var ec=res.filter(function(x){return x.statut==='ecart';}), sc=res.filter(function(x){return x.statut==='scan'||x.statut==='erreur';});
+    var okN=res.filter(function(x){return x.statut==='ok'||x.statut==='vu';}).length;
+    var voir=' <a href="#" style="color:inherit;text-decoration:underline" onclick="event.preventDefault();ouvrirControlePdf()">voir le détail</a>';
+    if(ec.length){
+      wrap.innerHTML='<div style="background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.5);border-radius:8px;padding:9px 12px;color:#f87171;margin-top:6px">⛔ '+ec.length+' facture(s) ne correspondent pas à leur PDF archivé : '+ec.map(function(x){return esc(x.num)+' (GRC '+fN(x.grcTtc)+' ≠ PDF '+(x.pdfTtc!=null?fN(x.pdfTtc):'?')+')';}).join(', ')+' — les chiffres seraient faux.'+voir+'</div>';
+    } else {
+      wrap.innerHTML='<div style="background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.3);border-radius:8px;padding:9px 12px;color:#34d399;margin-top:6px">🛡 '+okN+' facture(s) identiques à leur PDF archivé'+(sc.length?' · <span style="color:#f0b429">'+sc.length+' PDF scanné(s) à regarder</span>':'')+'.'+voir+'</div>';
+    }
+  });
 }
 
 // N° de semaine ISO 8601
