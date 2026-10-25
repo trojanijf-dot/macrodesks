@@ -1415,6 +1415,24 @@ function _adminDonutSVG(segments, centerLabel, centerSub, filterType){
     '<text x="60" y="70" text-anchor="middle" font-size="7" fill="var(--muted-soft)">'+esc(centerSub||'')+'</text>'+
   '</svg>';
 }
+// Détail compact du segment « Autres (N) » : les clients regroupés, sur une ligne
+// en petits caractères (« Client 2,1 M · Client 980 k »). Partagé écran + PDF.
+function _adminMontantCourt(v){
+  v=Math.abs(Number(v)||0);
+  if(v>=1e6) return (Math.round(v/1e5)/10).toString().replace('.',',')+' M';
+  if(v>=1e3) return Math.round(v/1e3)+' k';
+  return String(Math.round(v));
+}
+function _adminAutresDetailHtml(s){
+  if(!s || !Array.isArray(s.detail) || !s.detail.length) return '';
+  // Un client par ligne, compact : nom à gauche, montant à droite.
+  return '<div style="flex-basis:100%;display:grid;grid-template-columns:1fr;row-gap:1px;padding-left:12px;margin-top:3px;font-size:.85em;line-height:1.35;color:var(--muted,#64748b)">'+
+    s.detail.map(function(c){
+      return '<div style="display:flex;justify-content:space-between;gap:6px;min-width:0">'+
+        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(c.label)+'">'+esc(c.label)+'</span>'+
+        '<span style="white-space:nowrap">'+_adminMontantCourt(c.value)+'</span></div>';
+    }).join('')+'</div>';
+}
 function _adminLegendHtml(segments,total,filterType){
   var activeKey=(filterType && admDetailFilter && admDetailFilter.type===filterType)?admDetailFilter.key:null;
   return '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;font-size:10.5px">'+
@@ -1427,7 +1445,8 @@ function _adminLegendHtml(segments,total,filterType){
       var attrs=clickable
         ? (' onclick="admApplyFilter(\''+filterType+'\',\''+_admJsAttr(s.key)+'\',\''+_admJsAttr(s.label)+'\')" style="cursor:pointer;'+(isActive?'font-weight:800;':'')+(dim?'opacity:.45;':'')+'"')
         : '';
-      return '<div'+attrs+'><span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:'+s.color+'"></span>'+esc(s.label)+' — '+fN(v)+' XPF ('+pct+'%)</span></div>';
+      if(s.detail && !attrs) attrs=' style="flex-basis:100%"';   // « Autres » : sa ligne de détail prend la largeur
+      return '<div'+attrs+'><span style="display:flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:'+s.color+'"></span>'+esc(s.label)+' — '+fN(v)+' XPF ('+pct+'%)</span>'+_adminAutresDetailHtml(s)+'</div>';
     }).join('')+
   '</div>';
 }
@@ -1536,7 +1555,7 @@ function _adminDrawDonutCanvas(canvasId,legendId,segments,centerLabel,centerSub,
   if(legend){
     legend.innerHTML=segments.filter(function(s){return s.value;}).map(function(s){
       var pct=total?Math.round(Math.abs(s.value)/total*100):0;
-      return '<div style="display:flex;align-items:center;gap:4px"><span style="width:7px;height:7px;border-radius:2px;background:'+s.color+';flex-shrink:0;display:inline-block"></span>'+esc(s.label)+' — '+fN(Math.abs(s.value))+' '+unit+' ('+pct+'%)</div>';
+      return '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap'+(s.detail?';flex-basis:100%':'')+'"><span style="width:7px;height:7px;border-radius:2px;background:'+s.color+';flex-shrink:0;display:inline-block"></span>'+esc(s.label)+' — '+fN(Math.abs(s.value))+' '+unit+' ('+pct+'%)'+_adminAutresDetailHtml(s)+'</div>';
     }).join('');
   }
 }
@@ -1583,7 +1602,7 @@ function _adminReportHtml(r,includeScope,groupClientByPrefix,staticTables){
   var restSum=rest.reduce(function(s,x){return s+x.value;},0);
   var clientSegs=top.map(function(c,i){return {label:c.label,value:c.value,key:c.key,color:[ADMIN_C1,ADMIN_C2,ADMIN_C3,ADMIN_C4,ADMIN_C5][i]||ADMIN_C6};});
   // "Autres" agrège plusieurs clients — pas de clé unique, donc non cliquable.
-  if(rest.length) clientSegs.push({label:'Autres ('+rest.length+')',value:restSum,key:null,color:ADMIN_C6});
+  if(rest.length) clientSegs.push({label:'Autres ('+rest.length+')',value:restSum,key:null,color:ADMIN_C6,detail:rest});
   var clientTotal=clientSegs.reduce(function(s,x){return s+Math.abs(x.value);},0);
 
   var rateKeys=Object.keys(r.tgcByRate).sort(function(a,b){return Number(a)-Number(b);});
