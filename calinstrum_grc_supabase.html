@@ -6017,6 +6017,10 @@ setTimeout(function(){
     try{ normalizeAllUnites(); }
     catch(e){ console.warn('[CALINSTRUM] Normalisation unités échouée :', e); }
   }
+  if(typeof migratePOLivresFacturesEmises==='function'){
+    try{ migratePOLivresFacturesEmises(); }
+    catch(e){ console.warn('[CALINSTRUM] Rattrapage PO livrés échoué :', e); }
+  }
   if(typeof migrateUniteML==='function'){
     try{ migrateUniteML(); }
     catch(e){ console.warn('[CALINSTRUM] Migration unité ML échouée :', e); }
@@ -7863,6 +7867,51 @@ function phaseSelect(inv){
 // [23/10/2026] Une mère basculée en « Réceptionné PV » (facturée 2 fois) passait
 // sans aucun signal. L'utilisateur garde la main : on PRÉVIENT (menu Phase, section
 // Acomptes), et seule la propagation AUTOMATIQUE devis → facture l'épargne.
+// PO EMERSON D'UNE FACTURE : lien explicite (_fromBC / linkFactureId), sinon n° de
+// facture déduit du PO (buildFactureNumFromBC, client compris), sinon devis commun.
+function _bcsDeFacture(fa){
+  if(!fa) return [];
+  var f=(DB.factures||[]).find(function(x){return x && x.id===(fa._factureId||fa.grcFactureId||fa.id);})||fa;
+  var num=String(f.num||'').toLowerCase();
+  var dv=f.devisLieId!=null?Number(f.devisLieId):null;
+  return (DB.bcs||[]).filter(function(b){
+    if(!b) return false;
+    if(f._fromBC===b.id || b.linkFactureId===f.id) return true;
+    var n=(typeof buildFactureNumFromBC==='function')?String(buildFactureNumFromBC(b)||'').toLowerCase():'';
+    if(n && n===num) return true;
+    if(dv!=null && typeof getBCsDevisIds==='function' && getBCsDevisIds(b).indexOf(dv)>=0) return true;
+    return false;
+  });
+}
+// La facture est émise (livrée / PV reçu) → ses PO « Confirmé » passent « Livré ».
+// Ni « En attente » (jamais commandé), ni « Annulé » ne sont touchés. [29/10/2026]
+// Jusque-là le statut du PO restait « Confirmé » tant qu'on ne le changeait pas
+// à la main. Renvoie la liste des PO passés « Livré ».
+function _bcLivrerPourFacture(fa, avecMessage){
+  var f=(DB.factures||[]).find(function(x){return x && x.id===(fa._factureId||fa.grcFactureId||fa.id);})||fa;
+  if(!f || (typeof isPrebilled==='function' && isPrebilled(f))) return [];
+  var faits=[];
+  _bcsDeFacture(f).forEach(function(b){
+    if(b.status!=='Confirmé') return;
+    b.status='Livré';
+    faits.push(b.num||'?');
+  });
+  if(faits.length){
+    if(typeof saveDB==='function') saveDB();
+    if(typeof renderBC==='function'){try{renderBC();}catch(e){}}
+    if(avecMessage && typeof showBCSaveToast==='function') showBCSaveToast('✓ PO '+faits.join(', ')+' passé(s) « Livré » ('+(f.num||'facture')+' émise)');
+  }
+  return faits;
+}
+// Rattrapage UNE fois : factures déjà émises dont le PO est resté « Confirmé ».
+function migratePOLivresFacturesEmises(){
+  if(!DB || DB._poLivresV1) return 0;
+  var n=0;
+  (DB.factures||[]).forEach(function(f){ if(f && !isPrebilled(f)) n+=_bcLivrerPourFacture(f,false).length; });
+  DB._poLivresV1=true;
+  if(n){ console.log('[CALINSTRUM] PO passés « Livré » (factures déjà émises) : '+n); saveDB(); }
+  return n;
+}
 function _faAcomptesDeMere(fa){
   if(!fa) return [];
   var id=fa._factureId||fa.grcFactureId||fa.id;
@@ -7947,6 +7996,12 @@ function setSUIVIPhase(id,newPhase){
   }
 
   commitInvoiceChange(inv);
+
+  // Facture passée émise (Livré client / Réceptionné PV) → son PO Emerson
+  // « Confirmé » passe « Livré » (cf _bcLivrerPourFacture).
+  if(newBilled && typeof _bcLivrerPourFacture==='function'){
+    try{ _bcLivrerPourFacture(inv, true); }catch(e){console.warn('_bcLivrerPourFacture failed:',e);}
+  }
 
   // ⭐ RÈGLE 1 — Propagation Facture → Devis (phaseHistory)
   // Quand la phase facture devient billed (livre / recu), on ajoute l'entrée
@@ -8153,6 +8208,8 @@ function propagateDevisPhaseToFacture(d){
         }
         // Synchroniser le miroir Suivi
         if(typeof syncFactureToSuivi==='function') syncFactureToSuivi(fa);
+        // Facture devenue émise par le devis → son PO « Confirmé » passe « Livré ».
+        if(PHASES[facturePhaseKey] && PHASES[facturePhaseKey].billed===true && typeof _bcLivrerPourFacture==='function') _bcLivrerPourFacture(fa,false);
       } finally {
         delete fa._propagating;
       }
