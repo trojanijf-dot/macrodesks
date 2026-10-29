@@ -6539,6 +6539,19 @@ function normalizeAllUnites(){
   if(changed>0){ console.log('[CALINSTRUM] Normalisation unités : '+changed+' ligne(s) corrigée(s)'); saveDB(); }
   return changed;
 }
+// ⛔⛔ MIGRATIONS DE DONNÉES : À LANCER APRÈS LE CHARGEMENT DU CLOUD.
+// Le bloc setTimeout du démarrage tourne sur le cache LOCAL ; _loadFromSupabase
+// REMPLACE ensuite tout DB par le cloud, et aucun envoi n'est permis avant ce
+// chargement (_bootDone). Une migration lancée seulement au démarrage est donc
+// perdue, marque « fait » comprise. [29/10/2026] « M → ML » (20/10) et « PO livrés »
+// (29/10) n'avaient jamais atteint les vraies données. Appelée par _bootApp (en
+// ligne), après le chargement ; les migrations se sauvegardent → envoi au cloud.
+function _migrationsApresCloud(){
+  var n=0;
+  if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
+  if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
+  return n;
+}
 // Migration one-shot « M » → « ML » (mètre linéaire). Guard DB._uniteMLV1.
 // Devis, articles du catalogue et pré-factures (non émises). ⛔ Une facture ÉMISE
 // n'est jamais réécrite : elle garde l'unité envoyée au client.
@@ -57850,6 +57863,11 @@ function critProceed(){
           if (typeof renderDV === 'function' && document.getElementById('page-devis')) renderDV();
         } catch(e){}
       }).catch(function(e){ console.warn('refreshDevisPdfCacheCloud failed:', e); });
+    }
+    // Migrations de données sur les VRAIES données (cloud), une fois l'envoi permis
+    // (_bootDone) — cf _migrationsApresCloud.
+    if (!offlineMode && typeof window._migrationsApresCloud === 'function') {
+      try { window._migrationsApresCloud(); } catch(e) { console.warn('_migrationsApresCloud failed:', e); }
     }
     // Re-render via nav() pour refléter les vraies données fraîchement chargées.
     try { if (typeof nav === 'function') nav('dashboard'); } catch(e) { console.warn('nav failed:', e); }
