@@ -6531,7 +6531,9 @@ function normalizeAllUnites(){
       if(Array.isArray(l.subLines)) fixArr(l.subLines);
     });
   }
-  (DB.factures||[]).forEach(function(f){ if(f && Array.isArray(f.lines)) fixArr(f.lines); });
+  // ⛔ Factures ÉMISES jamais réécrites (elles gardent l'unité envoyée au client) :
+  // pré-factures seulement. [29/10/2026] — _normUnite convertit aussi « M » en « ML ».
+  (DB.factures||[]).forEach(function(f){ if(f && Array.isArray(f.lines) && (typeof isPrebilled!=='function' || isPrebilled(f))) fixArr(f.lines); });
   (DB.devis||[]).forEach(function(d){
     if(d && d.lines){ ['fourniture','service','fret'].forEach(function(s){ fixArr(d.lines[s]); }); }
   });
@@ -6548,6 +6550,8 @@ function normalizeAllUnites(){
 // ligne), après le chargement ; les migrations se sauvegardent → envoi au cloud.
 function _migrationsApresCloud(){
   var n=0;
+  if(typeof normalizeAllUnites==='function'){ try{ n+=normalizeAllUnites(); }catch(e){ console.warn('[CALINSTRUM] normalizeAllUnites (après cloud) :',e); } }
+  if(typeof migrateDateReceptionBC==='function'){ try{ n+=migrateDateReceptionBC(); }catch(e){ console.warn('[CALINSTRUM] migrateDateReceptionBC (après cloud) :',e); } }
   if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
   return n;
