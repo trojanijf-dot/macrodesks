@@ -2673,6 +2673,7 @@ function admPreviewPrint(){
     </select>
   </div>
   <div class="client-tabs no-print" id="bcClientTabs"></div>
+  <div class="no-print" id="bcStatutTotaux" style="display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 12px"></div>
   <div class="tbl-wrap">
     <table><thead><tr><th>N° PO</th><th>Date</th><th>Fournisseur</th><th>Client final</th><th>BC Client(s)</th><th>Description</th><th>Devise</th><th>Montant</th><th>Statut</th><th class="no-print">Actions</th></tr></thead>
     <tbody id="tbBC"></tbody></table>
@@ -41782,6 +41783,31 @@ function showBCSaveToast(msg){
     setTimeout(function(){if(t.parentNode)t.remove();},250);
   },2000);
 }
+// Totaux par statut (En attente · Confirmé · Livré · Annulé · Total) : nombre de PO
+// et total PAR DEVISE (jamais de devises additionnées entre elles). Suivent la
+// recherche et le client choisi, pas le filtre statut ; un clic = filtre statut.
+function _bcRendreTotauxStatut(s, client, fs){
+  var w=document.getElementById('bcStatutTotaux'); if(!w) return;
+  var base=(DB.bcs||[]).filter(function(x){
+    if(s && (x.num+(x.lines||[]).map(function(l){return l.desc;}).join(' ')).toLowerCase().indexOf(s)<0) return false;
+    if(client && (x.clientFinal||'Emerson')!==client) return false;
+    return true;
+  });
+  var montant=function(liste){
+    var par={}; liste.forEach(function(b){ var dv=b.devise||'AUD'; par[dv]=(par[dv]||0)+(Number(b.total)||0); });
+    var k=Object.keys(par); if(!k.length) k=['AUD'];
+    return k.map(function(dv){ return fN(par[dv]||0)+' '+esc(dv); }).join(' · ');
+  };
+  var col={'En attente':'var(--text)','Confirmé':'#60a5fa','Livré':'var(--green,#34d399)','Annulé':'var(--muted)','':'var(--teal)'};
+  var cases=[['En attente','En attente'],['Confirmé','Confirmé'],['Livré','Livré'],['Annulé','Annulé'],['','Total']];
+  w.innerHTML=cases.map(function(c){
+    var liste=c[0]?base.filter(function(b){return b.status===c[0];}):base;
+    var actif=(fs||'')===c[0];
+    return '<div data-statut="'+c[0]+'" data-actif="'+(actif?1:0)+'" onclick="var e=document.getElementById(\'fBCst\');if(e){e.value=\''+c[0]+'\';}renderBC()" title="Filtrer : '+c[1]+'" style="flex:1;min-width:150px;cursor:pointer;background:var(--panel2,#161b24);border:1px solid '+(actif?'var(--teal)':'var(--border)')+';'+(actif?'box-shadow:0 0 0 1px var(--teal) inset;':'')+'border-radius:10px;padding:8px 12px">'+
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:flex;justify-content:space-between;gap:8px"><span>'+c[1]+'</span><span><span data-nb>'+liste.length+'</span> PO</span></div>'+
+      '<div data-money style="font-size:17px;font-weight:800;margin-top:2px;color:'+col[c[0]]+';white-space:nowrap">'+montant(liste)+'</div></div>';
+  }).join('');
+}
 function renderBC(){
   var s=(gvg('sBC')||'').toLowerCase(),fs=gvg('fBCst');
   // Onglets clients (pour BC = Fournisseurs, mais on a 1 seul Emerson en pratique).
@@ -41796,6 +41822,7 @@ function renderBC(){
     return (b.clientFinal||'Emerson')===st.activeClient;
   }):dataPre;
   var sm={'En attente':'b-draft',Confirmé:'b-sent',Livré:'b-delivered',Annulé:'b-refused'};
+  _bcRendreTotauxStatut(s, st.activeClient, fs);
   var tb=document.getElementById('tbBC');if(!tb)return;
   function renderBCRow(x){
     // === Cellule BC Client(s) ===
