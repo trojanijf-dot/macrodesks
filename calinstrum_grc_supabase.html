@@ -7924,7 +7924,10 @@ function _faMereAlerteTexte(num, acomptes){
     'La passer « émise » facturerait le travail une seconde fois (CA et reste à recouvrer comptés en double).\n'+
     'Le reste se facture par une facture de SOLDE : onglet Paiement → « Créer facture d\'acompte » → Solde.';
 }
-function setSUIVIPhase(id,newPhase){
+// opts (facultatif) : {dateEnvoi:'AAAA-MM-JJ', sansQuestion:true} — émission décidée
+// ailleurs (impression / archivage d'une pré-facture, cf _faPreFactureEnvoyee).
+function setSUIVIPhase(id,newPhase,opts){
+  opts=opts||{};
   // FIX SYNC : la variable globale `invoices` n'est rafraîchie que par renderSuivi().
   // Si on appelle setSUIVIPhase depuis la page Factures sans avoir visité Suivi,
   // invoices peut être stale → find() ne trouve rien → opération silencieuse.
@@ -7987,10 +7990,16 @@ function setSUIVIPhase(id,newPhase){
       inv.dateButoir=_echeanceFacture(_dL,_faL?_faL.delai:'');
     }
   } else if(newBilled && !oldBilled && !inv.dateEnvoi){
-    var _echAuto=_echeanceFacture(td(),'');
-    if(confirm('🎉 La facture '+inv.num+' passe en phase "'+PHASES[newPhase].label+'".\n\nVoulez-vous la considérer comme officiellement émise aujourd\'hui ?\n\n• Date d\'envoi = '+td()+'\n• Échéance = '+_echAuto+' (30 jours fin de mois)\n• Statut = En attente de paiement')){
-      inv.dateEnvoi=td();
+    // [29/10/2026] Date d'émission = la DATE DE LA FACTURE (celle imprimée sur le PDF
+    // envoyé), plus aujourd'hui : deux pré-factures datées et envoyées un jour,
+    // passées émises plus tard, auraient reçu une date d'envoi et une échéance fausses.
+    var _faE=(DB.factures||[]).find(function(x){return x.id===(inv._factureId||inv.grcFactureId||inv.id);});
+    var _dE=opts.dateEnvoi||(_faE&&_faE.date)||td();
+    var _echAuto=_echeanceFacture(_dE,_faE?_faE.delai:'');
+    if(opts.sansQuestion || confirm('🎉 La facture '+inv.num+' passe en phase "'+PHASES[newPhase].label+'".\n\nLa considérer comme officiellement émise le '+fD(_dE)+(_faE&&_faE.date===_dE?' (date de la facture, celle imprimée)':'')+' ?\n\n• Date d\'envoi = '+fD(_dE)+'\n• Échéance = '+fD(_echAuto)+' (30 jours fin de mois)\n• Statut = En attente de paiement')){
+      inv.dateEnvoi=_dE;
       inv.dateButoir=_echAuto;
+      if(_faE) _faE.dateButoir=_echAuto;
       if(inv.statut!=='paid'&&inv.statut!=='partial')inv.statut='pending';
     }
   }
@@ -45643,6 +45652,33 @@ function onFaPdfArchiveDelete(factureId){
   _deleteFacturePdf(factureId,function(){renderFaPdfArchiveBlock(factureId);});
 }
 
+// PRÉ-FACTURE ENVOYÉE AU CLIENT ? Une pré-facture (phase non facturée) n'est pas
+// émise pour le GRC : hors CA, sans échéance. L'imprimer ou archiver son PDF, c'est
+// en général l'envoyer → on propose de l'émettre à SA date (celle imprimée).
+// [29/10/2026] Deux factures imprimées, envoyées et archivées le même jour sont
+// restées en « Dédouanement ACT » : rien ne le signalait.
+// Jamais pour une facture MÈRE d'acomptes (elle n'est jamais émise).
+function _faPreFactureEnvoyee(f, origine){
+  if(!f || typeof isPrebilled!=='function' || !isPrebilled(f)) return false;
+  if(typeof _faAcomptesDeMere==='function' && _faAcomptesDeMere(f).length) return false;
+  var ph=getPhase(f), phE=getDefaultPhase(f), dE=f.date||td();
+  var ech=_echeanceFacture(dE,f.delai);
+  var q='⚠ '+f.num+' est une PRÉ-FACTURE (phase « '+ph.label+' ») : le GRC ne la compte pas comme émise (hors CA, pas d\'échéance).\n\n'+
+    (origine==='archive'?'Vous archivez son PDF':'Vous l\'imprimez')+' : l\'envoyez-vous au client ?\n\n'+
+    '[OK] = la passer « '+PHASES[phE].label+' », émise le '+fD(dE)+' (date de la facture), échéance '+fD(ech)+'\n'+
+    '[Annuler] = '+(origine==='archive'?'archiver':'imprimer')+' sans rien changer';
+  if(!confirm(q)) return false;
+  var inv=(typeof getSuiviSource==='function')?getSuiviSource().find(function(x){return x.num===f.num;}):null;
+  if(inv && typeof setSUIVIPhase==='function'){
+    setSUIVIPhase(inv.id, phE, {dateEnvoi:dE, sansQuestion:true});
+  } else {
+    f.phase=phE; f.dateButoir=ech;
+    if(typeof syncFactureToSuivi==='function') syncFactureToSuivi(f);
+    if(typeof _bcLivrerPourFacture==='function') _bcLivrerPourFacture(f,true);
+    saveDB();
+  }
+  return true;
+}
 function onFaPdfArchiveChosen(input){
   var f=input.files&&input.files[0];
   if(!f)return;
@@ -45659,6 +45695,8 @@ function onFaPdfArchiveChosen(input){
     _storeFacturePdf(factureId,f.name,bytes,numFacture,function(){
       renderFaPdfArchiveBlock(factureId);
       if(typeof showBCSaveToast==='function')showBCSaveToast('✓ PDF archivé pour '+numFacture);
+      // Archiver le PDF d'une pré-facture = il est parti chez le client : proposer de l'émettre.
+      if(fRec && typeof _faPreFactureEnvoyee==='function'){ try{ _faPreFactureEnvoyee(fRec,'archive'); }catch(e){ console.warn('_faPreFactureEnvoyee:',e); } }
     });
   };
   reader.readAsArrayBuffer(f);
@@ -45804,7 +45842,20 @@ function ouvrirControlePdf(){
     '<div class="modal-body" id="ctlPdfCorps"><div style="color:var(--muted)">Lecture des PDF archivés…</div></div></div>';
   document.body.appendChild(m);
   controlerFacturesPdf(null,function(i,n){ var c=document.getElementById('ctlPdfCorps'); if(c) c.innerHTML='<div style="color:var(--muted)">Lecture des PDF archivés… '+i+' / '+n+'</div>'; })
-    .then(function(){ _ctlPdfRendre(); });
+    .then(function(){ return _ctlPdfPreFacturesArchivees(); })
+    .then(function(pre){ _ctlPdfPreArch=pre||[]; _ctlPdfRendre(); });
+}
+// Pré-factures (non émises) dont le PDF est archivé : probablement envoyées au client
+// sans être passées émises (cf _faPreFactureEnvoyee). Mères d'acomptes exclues.
+var _ctlPdfPreArch=[];
+function _ctlPdfPreFacturesArchivees(){
+  var pre=(DB.factures||[]).filter(function(f){ return f && f.num && isPrebilled(f) && !(typeof _faAcomptesDeMere==='function' && _faAcomptesDeMere(f).length); });
+  return Promise.all(pre.map(function(f){ return _getFacturePdfRecord(f.id).then(function(rec){ return rec&&rec.blob?f:null; }); }))
+    .then(function(l){ return l.filter(Boolean); });
+}
+function _ctlPdfEmettrePre(id){
+  var f=(DB.factures||[]).find(function(x){return x.id===id;}); if(!f) return;
+  if(_faPreFactureEnvoyee(f,'archive')){ _ctlPdfPreArch=_ctlPdfPreArch.filter(function(x){return x.id!==id;}); _ctlPdfRendre(); }
 }
 function _ctlPdfRendre(){
   var corps=document.getElementById('ctlPdfCorps'); if(!corps) return;
@@ -45837,7 +45888,12 @@ function _ctlPdfRendre(){
       '<td style="padding:6px"><span style="color:'+g[1]+';font-weight:700;white-space:nowrap">'+g[0]+'</span><div style="font-size:10.5px;color:var(--muted);margin-top:3px">'+det+'</div></td>'+
       '<td style="padding:6px;white-space:nowrap;text-align:right">'+actions+'</td></tr>';
   }).join('') || '<tr><td colspan="6" style="padding:12px;color:var(--muted)">'+(_ctlPdfFiltre==='alertes'?'✓ Aucun écart : toutes les factures contrôlées correspondent à leur PDF archivé.':'Aucune facture dans ce filtre.')+'</td></tr>';
-  corps.innerHTML='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+  var blocPre=!_ctlPdfPreArch.length?'':'<div style="background:rgba(240,180,41,.08);border:1px solid rgba(240,180,41,.45);border-radius:8px;padding:9px 12px;margin-bottom:10px">'+
+      '<div style="color:#f0b429;font-weight:700;margin-bottom:4px">📤 '+_ctlPdfPreArch.length+' pré-facture(s) dont le PDF est archivé — envoyée(s) au client ?</div>'+
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Elles ne sont pas comptées comme émises (hors CA, sans échéance). Si elles sont parties chez le client, émettez-les à leur date.</div>'+
+      _ctlPdfPreArch.map(function(f){ return '<div style="display:flex;gap:8px;align-items:center;padding:3px 0;border-top:1px solid var(--border)"><b>'+esc(f.num)+'</b><span style="font-size:11px;color:var(--muted)">'+esc(String(f.client||'').slice(0,30))+' · '+fD(f.date)+' · phase « '+esc(getPhase(f).label)+' »</span>'+
+        '<span style="margin-left:auto;white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="_openFacturePdfBlob('+f.id+')">👁 PDF</button> <button class="btn btn-ghost btn-sm" style="border-color:#f0b429;color:#f0b429" onclick="_ctlPdfEmettrePre('+f.id+')">Émettre à sa date</button></span></div>'; }).join('')+'</div>';
+  corps.innerHTML=blocPre+'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
       kpi((n.ok||0)+(n.vu||0),'conformes au PDF','var(--green)')+kpi(n.ecart||0,'écart(s) avec le PDF',(n.ecart?'var(--red)':'var(--muted)'))+
       kpi((n.scan||0)+(n.erreur||0),'PDF scannés / illisibles — à regarder','var(--amber)')+kpi(n.sans||0,'sans PDF archivé','var(--muted)')+'</div>'+
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">'+chip('alertes','À traiter')+chip('sans','Sans PDF')+chip('tous','Tout ('+tous.length+')')+
@@ -53650,6 +53706,12 @@ function doPrint(){
   var isDevisDoc=docTitle && /^Devis\s/i.test(docTitle);
   // Détection facture (titre commence par "Facture")
   var isFactureDoc=docTitle && /^Facture\s/i.test(docTitle);
+  // Imprimer une PRÉ-FACTURE, c'est souvent l'envoyer au client : proposer de l'émettre
+  // (cf _faPreFactureEnvoyee). L'impression a lieu dans tous les cas.
+  if(isFactureDoc && window._prvFaSourceId!=null && typeof _faPreFactureEnvoyee==='function'){
+    var _fSrcImp=(DB.factures||[]).find(function(x){return x.id===window._prvFaSourceId;});
+    if(_fSrcImp){ try{ _faPreFactureEnvoyee(_fSrcImp,'impression'); }catch(e){ console.warn('_faPreFactureEnvoyee:',e); } }
+  }
   // Détection d'un BC (Purchase Order) pour appliquer la police Arial globale
   var isBCDoc=docTitle && /^BC\s|Purchase\s*Order|^PO\s/i.test(docTitle);
   // [2026-06-15] DEVIS — mention légale rouge ÉPINGLÉE dans la marge d'impression
