@@ -4856,7 +4856,22 @@ function dedupeDB(db){
     if(removed>0)console.warn('[dedupe '+label+'] '+removed+' doublon(s) supprimé(s)');
     return kept;
   }
-  db.factures=dedupeArr(db.factures,['dateEncaissement','versements','suiviId','paye','dvlie','notes'],'factures');
+  // [30/10/2026] Deux factures DIFFÉRENTES au même n° (date, montant, client ou
+  // objet) ne sont plus fusionnées en silence — l'une disparaissait sans un mot.
+  // Elles restent toutes les deux et sont signalées (_alerterDoublonsFactures).
+  // Les copies identiques (synchronisation) sont fusionnées comme avant.
+  db.factures=dedupeArr(db.factures,['dateEncaissement','versements','suiviId','paye','dvlie','notes'],'factures',function(f){
+    var n=(f.num||'').toLowerCase().trim(); if(!n) return '';
+    return [n, f.date||'', Math.round(Number(f.ttc)||0), f.client||'', String(f.objet||'').trim()].join('|');
+  });
+  var _faParNum={};
+  (db.factures||[]).forEach(function(f){ var k=(f&&f.num||'').toLowerCase().trim(); if(k)(_faParNum[k]=_faParNum[k]||[]).push(f); });
+  window._grcDoublonsFactures=window._grcDoublonsFactures||[];
+  Object.keys(_faParNum).forEach(function(k){
+    if(_faParNum[k].length<2) return;
+    if(window._grcDoublonsFactures.some(function(x){return String(x.num).toLowerCase().trim()===k;})) return;
+    window._grcDoublonsFactures.push({num:_faParNum[k][0].num, ids:_faParNum[k].map(function(f){return f.id;})});
+  });
   db.invoices=dedupeArr(db.invoices,['dateEncaissement','po','comment','phase','grcFactureId','_factureId'],'invoices');
   // Extension dédup aux DEVIS : observé in-the-wild des duplicates (même num,
   // ids différents). Garde la copie la plus riche (lignes/références/statut).
@@ -6558,7 +6573,37 @@ function _migrationsApresCloud(){
   if(typeof migrateDateReceptionBC==='function'){ try{ n+=migrateDateReceptionBC(); }catch(e){ console.warn('[CALINSTRUM] migrateDateReceptionBC (après cloud) :',e); } }
   if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
+  if(typeof migrateSuiviLiensAutreFacture==='function'){ try{ n+=migrateSuiviLiensAutreFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSuiviLiensAutreFacture (après cloud) :',e); } }
+  setTimeout(function(){ try{ _alerterDoublonsFactures(); }catch(e){} }, 1500);
   return n;
+}
+// Facture rattachée à la ligne Suivi d'une AUTRE facture (cf syncFactureToSuivi) :
+// elle reçoit sa propre ligne ; la ligne de l'autre n'est pas touchée. Idempotent.
+function migrateSuiviLiensAutreFacture(){
+  var n=0;
+  (DB.factures||[]).forEach(function(f){
+    if(!f || f.suiviId==null) return;
+    var s=(DB.invoices||[]).find(function(x){return x.id===f.suiviId;}); if(!s) return;
+    var p=s.grcFactureId!=null?s.grcFactureId:s._factureId;
+    if(p==null || String(p)===String(f.id)) return;
+    if(!(DB.factures||[]).some(function(x){return x && String(x.id)===String(p);})) return;
+    syncFactureToSuivi(f); n++;
+    console.log('[CALINSTRUM] '+f.num+' : propre ligne de Suivi (était rattachée à celle d\'une autre facture)');
+  });
+  if(n) saveDB();
+  return n;
+}
+// Autre facture (que excluId) qui porte déjà ce n° — sinon null.
+function _faNumPrisPar(num,excluId){
+  var k=String(num||'').toLowerCase().replace(/\s+/g,' ').trim(); if(!k) return null;
+  return (DB.factures||[]).find(function(x){ return x && x.id!==excluId && String(x.num||'').toLowerCase().replace(/\s+/g,' ').trim()===k; })||null;
+}
+// N° de facture portés par plusieurs factures DIFFÉRENTES (cf dedupeDB) : alerte une fois.
+function _alerterDoublonsFactures(){
+  var l=window._grcDoublonsFactures||[]; if(!l.length) return;
+  window._grcDoublonsFactures=[];
+  alert('⚠ N° de facture en double :\n\n'+l.map(function(x){return '• '+x.num+' — '+x.ids.length+' factures différentes';}).join('\n')+
+    '\n\nAucune n\'a été supprimée. Ouvrez celle qui ne devrait pas porter ce n° et changez son n° : le GRC proposera le prochain n° libre.');
 }
 // Migration one-shot « M » → « ML » (mètre linéaire). Guard DB._uniteMLV1.
 // Devis, articles du catalogue et pré-factures (non émises). ⛔ Une facture ÉMISE
@@ -34286,6 +34331,15 @@ async function saveFA(){
     if(_cadre) f.dvliePrint=_cadre;
   }
   if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
+  // [30/10/2026] Un n° de facture = UNE facture. Un 2e n° identique avait été
+  // enregistrée sur le n° d'une facture payée. On propose le prochain n° libre.
+  var _numPris=_faNumPrisPar(f.num,eFAid);
+  if(_numPris){
+    var _libre=nxt('fa',String(f.num).trim().replace(/-F\d+.*$/i,''));
+    if(!confirm('⛔ Le n° '+f.num+' est déjà pris par une autre facture : '+_numPris.num+' du '+fD(_numPris.date)+' — '+String(_numPris.objet||'').slice(0,60)+' ('+(_numPris.status||'')+').\n\nDeux factures ne peuvent pas porter le même n°.\n\n[OK] = enregistrer sous le prochain n° libre : '+_libre+'\n[Annuler] = revenir à la facture sans rien enregistrer')) return;
+    f.num=_libre;
+    var _faNumInput=document.getElementById('fa-num'); if(_faNumInput) _faNumInput.value=_libre;
+  }
   // [30/10/2026] BC client cohérent : du bon client, celui du devis, daté plausiblement.
   if(typeof _bcCoherence==='function' && !_bcCoherenceConfirm(f,'facture',_bcCoherence(f,'facture'))) return;
   // Suivi BC hebdomadaire : getFA() a DÉJÀ appliqué _faPendingBcConsumption sur
@@ -34413,6 +34467,15 @@ function syncFactureToSuivi(f){
   if(idx<0){
     idx=DB.invoices.findIndex(function(x){return x.num===f.num;});
     if(idx>=0) f.suiviId=DB.invoices[idx].id; // créer le lien
+  }
+  // [30/10/2026] Jamais la ligne Suivi d'une AUTRE facture. Une 2e facture au même
+  // n° se rattachait (par le n°) à la ligne de la facture payée et la réécrivait :
+  // statut « en attente », encaissement effacé. Elle reçoit sa propre ligne.
+  if(idx>=0){
+    var _proprio=DB.invoices[idx].grcFactureId!=null?DB.invoices[idx].grcFactureId:DB.invoices[idx]._factureId;
+    if(_proprio!=null && String(_proprio)!==String(f.id) && (DB.factures||[]).some(function(x){return x && String(x.id)===String(_proprio);})){
+      idx=-1; f.suiviId=null;
+    }
   }
   // === COHÉRENCE PHASE ↔ DATES ===
   // Voir getSuiviSource() pour le rationnel : on ne propage dateEnvoi/dateButoir
