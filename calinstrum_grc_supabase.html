@@ -1050,6 +1050,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="nav('params');renderParams()" title="Listes déroulantes · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">⚙️</span><i class="ti ti-list ico-pro"></i></span>Listes déroulantes</button>
   <button class="sb-item" onclick="nav('coutrevient');renderCoutRevient()" title="Coût de revient débarqué · seuils commerciaux et forfaits transitaire du moteur landed cost"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-calculator ico-pro"></i></span>Coût de revient</button>
   <div class="sb-sec">Données</div>
+  <button class="sb-item" onclick="ouvrirControleBC()" title="BC clients : du bon client, identiques au devis, dates cohérentes"><span class="ico"><span class="ico-classic">🔎</span><i class="ti ti-file-search ico-pro"></i></span>Contrôle BC client</button>
   <button class="sb-item" onclick="ouvrirControlePdf()" title="Compare chaque facture émise à son PDF archivé (celui envoyé au client) : montant TTC et lignes"><span class="ico"><span class="ico-classic">🛡</span><i class="ti ti-shield-check ico-pro"></i></span>Contrôle PDF</button>
   <button class="sb-item" onclick="exportJSON()"><span class="ico"><span class="ico-classic">💾</span><i class="ti ti-download ico-pro"></i></span>Exporter JSON</button>
   <button class="sb-item" onclick="document.getElementById('impFile').click()"><span class="ico"><span class="ico-classic">📁</span><i class="ti ti-upload ico-pro"></i></span>Importer JSON</button>
@@ -6553,6 +6554,7 @@ function normalizeAllUnites(){
 function _migrationsApresCloud(){
   var n=0;
   if(typeof normalizeAllUnites==='function'){ try{ n+=normalizeAllUnites(); }catch(e){ console.warn('[CALINSTRUM] normalizeAllUnites (après cloud) :',e); } }
+  if(typeof migrateBCPreFacturesEtrangers==='function'){ try{ n+=migrateBCPreFacturesEtrangers(); }catch(e){ console.warn('[CALINSTRUM] migrateBCPreFacturesEtrangers (après cloud) :',e); } }
   if(typeof migrateDateReceptionBC==='function'){ try{ n+=migrateDateReceptionBC(); }catch(e){ console.warn('[CALINSTRUM] migrateDateReceptionBC (après cloud) :',e); } }
   if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
@@ -23017,6 +23019,162 @@ function _contactCle(s){
 // Un BC client appartient à UN client. Devis d'un AUTRE client (préfixe différent) qui
 // portent le même n° de BC (comparaison _bcNumKey : espaces et zéros de tête ignorés).
 // Les révisions d'un même devis et les devis du même client partageant un BC sont normaux.
+// =============================================================================
+// COHÉRENCE DU BC CLIENT — devis ET factures (30/10/2026)
+// =============================================================================
+// Cas réel : une pré-facture créée quand son devis portait par erreur le BC
+// d'un autre client ; le devis a été corrigé, la pré-facture non (rien ne
+// reportait le BC). Quatre règles, une seule source :
+//   ⛔ autreClient : le n° de BC est porté par un document d'un AUTRE client ;
+//   ⛔ devis       : le BC de la facture diffère de celui de son devis ;
+//   ⚠ date        : BC daté de plus de 30 j avant la PREMIÈRE version du devis.
+//     Comparer à la 1re version (une révision porte sa propre date) ; un PO RÉUTILISÉ
+//     (même BC pour ≥ 2 devis du même client) est exclu. Mesuré sur la base :
+//     règle brute = 14 alertes (révisions, PO réutilisés), règle fine = 2 à vérifier.
+//     « ✓ Vérifié » (doc._bcVu) la fait taire tant que BC et dates ne changent pas.
+//   ⚠ deuxBC      : les deux champs BC du devis désignent deux lignes de PO différentes
+//     (sauf PO réutilisé : le client y ajoute du matériel pour un autre devis).
+var _BC_DATE_JOURS=30;
+// Clé de comparaison : _bcNumKey + le tiret bas vaut un tiret (« 123456_01 » = « 123456-01 »).
+function _bcCle(v){ return _bcNumKey(String(v==null?'':v).replace(/_/g,'-')); }
+function _faBCNum(f){ var t=function(v){return String(v==null?'':v).trim();}; return f?(t(f.bcClientSLN)||t(f._importPONum)||''):''; }
+function _faBCDate(f){ return f?(f.bcClientSLNDate||f.dateReceptionBC||''):''; }
+function _dvPremiereDate(d){
+  if(!d) return '';
+  var base=_dvBaseNum(d);
+  var ds=(DB.devis||[]).filter(function(x){return x && _dvBaseNum(x)===base;}).map(function(x){return x.date||'';}).concat([d.date||'']).filter(Boolean).sort();
+  return ds[0]||'';
+}
+function _bcPOReutilise(client,num){
+  var k=_bcCle(num).split('/')[0]; if(!k) return false;
+  var pfx=getClientPrefix(client||'');
+  var bases={};
+  (DB.devis||[]).forEach(function(x){ if(x && getClientPrefix(x.client||'')===pfx && _bcCle(_dvBCClientNum(x)).split('/')[0]===k) bases[_dvBaseNum(x)]=1; });
+  return Object.keys(bases).length>=2;
+}
+// Documents d'un AUTRE client portant ce n° de BC (devis actifs + factures).
+function _bcPorteParAutresClients(doc,num){
+  var k=_bcCle(num); if(!k||k.length<4) return [];
+  var pfx=getClientPrefix(doc.client||'');
+  var devis=(DB.devis||[]).filter(function(x){ return x && x!==doc && x.id!==doc.id && !_dvIsSuperseded(x) && getClientPrefix(x.client||'')!==pfx && _bcCle(_dvBCClientNum(x))===k; });
+  var facs=(DB.factures||[]).filter(function(x){ return x && x!==doc && x.id!==doc.id && getClientPrefix(x.client||'')!==pfx && _bcCle(_faBCNum(x))===k; });
+  return devis.concat(facs);
+}
+// Deux écritures du même BC ? « L12345 » = « L12345 / 0001 », « 456789 » = « 00456789-01 » ;
+// mais « …/0001 » ≠ « …/0002 » (deux lignes d'un même PO = deux commandes).
+function _bcMemeBC(a,b){
+  var parts=function(v){ var k=_bcCle(v), m=k.match(/^(.*?)[\/-](\d+)$/); return m?{base:m[1].replace(/^0+/,''),ligne:m[2].replace(/^0+/,'')}:{base:k.replace(/^0+/,''),ligne:''}; };
+  var x=parts(a), y=parts(b);
+  return x.base===y.base && (!x.ligne || !y.ligne || x.ligne===y.ligne);
+}
+function _bcSigDate(num,dateBC,premiere){ return _bcCle(num)+'|'+(dateBC||'')+'|'+(premiere||''); }
+// Incohérences d'un document. type : 'devis' | 'facture'.
+function _bcCoherence(doc,type){
+  var out=[]; if(!doc) return out;
+  var num=type==='devis'?_dvBCClientNum(doc):_faBCNum(doc);
+  if(!num) return out;
+  var autres=_bcPorteParAutresClients(doc,num);
+  if(autres.length) out.push({niveau:'erreur',code:'autreClient',texte:'le BC « '+num+' » est celui d\'un autre client : '+autres.slice(0,4).map(function(x){return x.num+(x.rev?' '+x.rev:'')+' ('+getClientPrefix(x.client||'')+')';}).join(', ')});
+  var dv=type==='devis'?doc:(typeof _findLinkedDevisFromFacture==='function'?_findLinkedDevisFromFacture(doc):null);
+  // Seulement si la facture est EXPLICITEMENT liée à son devis (devisLieId) : les anciennes
+  // factures rattachées par le seul texte « dvlie » peuvent couvrir plusieurs devis/BC.
+  // Un devis CADRE couvre plusieurs BC par nature.
+  if(type==='facture' && dv && doc.devisLieId!=null && dv.status!=='Cadre'){
+    var bd=_dvBCClientNum(dv);
+    if(bd && _bcCle(bd)!==_bcCle(num)) out.push({niveau:'erreur',code:'devis',texte:'le BC de la facture (« '+num+' ») diffère de celui de son devis '+dv.num+(dv.rev?' '+dv.rev:'')+' (« '+bd+' »)'});
+  }
+  // Un devis qui porte DEUX n° différents dans ses deux champs de BC client.
+  if(type==='devis' && doc.bcClientSLN && doc.bcClientRef && !_bcMemeBC(doc.bcClientSLN,doc.bcClientRef) && !_bcPOReutilise(doc.client,doc.bcClientSLN))
+    out.push({niveau:'verifier',code:'deuxBC',texte:'le devis porte deux BC différents : « '+doc.bcClientSLN+' » et « '+doc.bcClientRef+' »'});
+  var dateBC=type==='devis'?(doc.bcClientSLNDate||doc.bcClientDate||''):_faBCDate(doc);
+  var premiere=dv?_dvPremiereDate(dv):'';
+  if(dateBC && premiere && !_bcPOReutilise(doc.client,num)){
+    var j=Math.round((new Date(premiere)-new Date(dateBC))/864e5);
+    var sig=_bcSigDate(num,dateBC,premiere);
+    if(j>_BC_DATE_JOURS && !(doc._bcVu && doc._bcVu.sig===sig))
+      out.push({niveau:'verifier',code:'date',sig:sig,texte:'le BC « '+num+' » est daté du '+fD(dateBC)+', '+j+' j AVANT la première version du devis '+(dv?dv.num:'')+' ('+fD(premiere)+')'});
+  }
+  return out;
+}
+// Tous les documents incohérents (devis actifs, factures).
+function _bcCoherenceTous(){
+  var res=[];
+  (DB.devis||[]).forEach(function(d){ if(!d||_dvIsSuperseded(d)) return; var i=_bcCoherence(d,'devis'); if(i.length) res.push({type:'devis',doc:d,issues:i}); });
+  (DB.factures||[]).forEach(function(f){ if(!f) return; var i=_bcCoherence(f,'facture'); if(i.length) res.push({type:'facture',doc:f,issues:i}); });
+  return res;
+}
+function _bcCoherenceConfirm(doc,type,issues){
+  if(!issues.length) return true;
+  return confirm('⚠ BC client de '+doc.num+(doc.rev?' '+doc.rev:'')+' :\n\n'+issues.map(function(x){return (x.niveau==='erreur'?'⛔ ':'⚠ ')+x.texte;}).join('\n\n')+
+    '\n\nOK = enregistrer quand même · Annuler = corriger');
+}
+// Report du BC d'un devis vers sa PRÉ-facture (jamais une facture émise). Seulement
+// si la pré-facture portait l'ANCIEN BC du devis (ou aucun) : sinon elle a été
+// corrigée à la main, on n'y touche pas.
+function propagateDevisBCToFacture(d,dAvant){
+  if(!d||!dAvant) return [];
+  var nv=_dvBCClientNum(d), av=_dvBCClientNum(dAvant);
+  var dNv=d.bcClientSLNDate||d.bcClientDate||'', dAv=dAvant.bcClientSLNDate||dAvant.bcClientDate||'';
+  if(!nv || (_bcCle(nv)===_bcCle(av) && dNv===dAv)) return [];
+  var res=[];
+  (DB.factures||[]).forEach(function(f){
+    if(!f || !(f.id===d.linkFactureId || Number(f.devisLieId)===d.id)) return;
+    if(!isPrebilled(f)){ if(_bcCle(_faBCNum(f))!==_bcCle(nv)) res.push({num:f.num,emise:true}); return; }
+    var bcF=_faBCNum(f);
+    if(bcF && _bcCle(bcF)!==_bcCle(av)) return;
+    f.bcClientSLN=nv; f.bcClientSLNDate=dNv; if(dNv) f.dateReceptionBC=dNv;
+    if(f._importPONum && _bcCle(f._importPONum)===_bcCle(av)) f._importPONum=nv;
+    if(typeof syncFactureToSuivi==='function') syncFactureToSuivi(f);
+    res.push({num:f.num,maj:true});
+  });
+  var em=res.filter(function(x){return x.emise;});
+  if(em.length) alert('⚠ Le BC du devis '+d.num+' a changé (« '+nv+' »).\n\nLa facture ÉMISE '+em.map(function(x){return x.num;}).join(', ')+' n\'est pas modifiée (elle porte encore l\'ancien BC) : un avoir / une refacturation est nécessaire si le BC imprimé est faux.');
+  return res;
+}
+// Réparation (après chargement du cloud) : PRÉ-factures portant le BC d'un AUTRE
+// client alors que leur devis a son propre BC → elles reprennent celui du devis.
+function migrateBCPreFacturesEtrangers(){
+  var n=0;
+  (DB.factures||[]).forEach(function(f){
+    if(!f || !isPrebilled(f)) return;
+    var num=_faBCNum(f); if(!num || !_bcPorteParAutresClients(f,num).length) return;
+    var dv=(typeof _findLinkedDevisFromFacture==='function')?_findLinkedDevisFromFacture(f):null; if(!dv) return;
+    var bd=_dvBCClientNum(dv); if(!bd || _bcCle(bd)===_bcCle(num) || _bcPorteParAutresClients(dv,bd).length) return;
+    var dd=dv.bcClientSLNDate||dv.bcClientDate||'';
+    var ancien=num;
+    f.bcClientSLN=bd; f.bcClientSLNDate=dd; if(dd) f.dateReceptionBC=dd;
+    if(f._importPONum && _bcCle(f._importPONum)===_bcCle(ancien)) f._importPONum=bd;
+    if(typeof syncFactureToSuivi==='function') syncFactureToSuivi(f);
+    console.log('[CALINSTRUM] '+f.num+' : BC d\'un autre client remplacé par celui de son devis');
+    n++;
+  });
+  if(n) saveDB();
+  return n;
+}
+function _bcMarquerVu(type,id){
+  var arr=type==='devis'?DB.devis:DB.factures; var doc=(arr||[]).find(function(x){return x.id===id;}); if(!doc) return;
+  var i=_bcCoherence(doc,type).filter(function(x){return x.code==='date';})[0]; if(!i) return;
+  doc._bcVu={sig:i.sig,date:new Date().toISOString()}; saveDB(); ouvrirControleBC();
+}
+function ouvrirControleBC(){
+  var ancien=document.getElementById('mCTLBC'); if(ancien) ancien.remove();
+  var tous=_bcCoherenceTous().sort(function(a,b){ var e=function(x){return x.issues.some(function(i){return i.niveau==='erreur';})?0:1;}; return e(a)-e(b); });
+  var nE=tous.filter(function(x){return x.issues.some(function(i){return i.niveau==='erreur';});}).length;
+  var rows=tous.map(function(x){
+    var d=x.doc, erreur=x.issues.some(function(i){return i.niveau==='erreur';});
+    var aDate=x.issues.some(function(i){return i.code==='date';});
+    var ouvrir=x.type==='devis'?'openDV('+d.id+')':'openFA('+d.id+')';
+    return '<tr style="border-top:1px solid var(--border)'+(erreur?';background:rgba(248,113,113,.05)':'')+'"><td style="padding:6px"><b>'+esc(d.num+(d.rev?' '+d.rev:''))+'</b><div style="font-size:10.5px;color:var(--muted)">'+(x.type==='devis'?'devis':(isPrebilled(d)?'pré-facture':'facture émise'))+' · '+esc(String(d.client||'').slice(0,30))+'</div></td>'+
+      '<td style="padding:6px;font-size:11px">'+x.issues.map(function(i){return '<div style="color:'+(i.niveau==='erreur'?'var(--red)':'var(--amber)')+'">'+(i.niveau==='erreur'?'⛔ ':'⚠ ')+esc(i.texte)+'</div>';}).join('')+'</td>'+
+      '<td style="padding:6px;white-space:nowrap;text-align:right">'+(aDate&&!erreur?'<button class="btn btn-ghost btn-sm" onclick="_bcMarquerVu(\''+x.type+'\','+d.id+')" title="C\'est normal (ex. BC reçu avant le devis) : ne plus signaler tant que rien ne change">✓ Vérifié</button> ':'')+
+      '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'mCTLBC\').remove();'+ouvrir+'">Ouvrir</button></td></tr>';
+  }).join('')||'<tr><td colspan="3" style="padding:12px;color:var(--green)">✓ Aucune incohérence : chaque BC client appartient à son client, correspond au devis, et ses dates sont cohérentes.</td></tr>';
+  var m=document.createElement('div'); m.id='mCTLBC'; m.className='modal-overlay open';
+  m.innerHTML='<div class="modal modal-lg"><div class="modal-header"><h3>🔎 Contrôle des BC clients</h3><button class="modal-close" onclick="document.getElementById(\'mCTLBC\').remove()">✕</button></div>'+
+    '<div class="modal-body"><div style="font-size:11px;color:var(--muted);margin-bottom:8px">⛔ '+nE+' erreur(s) · ⚠ '+(tous.length-nE)+' à vérifier. Règles : un BC appartient à UN client ; le BC d\'une facture = celui de son devis ; un BC daté de plus de '+_BC_DATE_JOURS+' j avant la 1re version du devis est à vérifier (sauf PO réutilisé pour plusieurs devis).</div>'+
+    '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase"><th style="text-align:left;padding:6px">Document</th><th style="text-align:left;padding:6px">Incohérence</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  document.body.appendChild(m);
+}
 function _dvBCClientAutresClients(d,liste){
   var num=_dvBCClientNum(d), k=_bcNumKey(num);
   if(!k || k.length<4) return [];
@@ -25408,6 +25566,8 @@ async function saveDV(){
         '\n\nDeux devis pour la même commande ? (Si l\'un est un devis de prix de référence, passe-le en « Cadre ».)\n\n'+
         'OK = enregistrer quand même · Annuler = vérifier')) return;
   }
+  // [30/10/2026] BC daté bien avant la 1re version du devis : à vérifier (cf _bcCoherence).
+  if(typeof _bcCoherence==='function' && !_bcCoherenceConfirm(d,'devis',_bcCoherence(d,'devis').filter(function(x){return x.code==='date';}))) return;
   // Version du devis AVANT cet enregistrement : c'est elle qui permet de savoir si
   // la facture liée a été modifiée à la main (cf propagateDevisLinesToFacture).
   var _dAvant=null;
@@ -25418,6 +25578,10 @@ async function saveDV(){
   // « émise » dans ce même enregistrement ; la protection doit juger l'état d'avant.
   if(typeof propagateDevisLinesToFacture==='function'){
     try{ propagateDevisLinesToFacture(d,_dAvant); }catch(e){console.warn('propagateDevisLinesToFacture (saveDV):',e);}
+  }
+  // BC client changé sur le devis → sa pré-facture suit (cf propagateDevisBCToFacture).
+  if(typeof propagateDevisBCToFacture==='function'){
+    try{ propagateDevisBCToFacture(d,_dAvant); }catch(e){console.warn('propagateDevisBCToFacture (saveDV):',e);}
   }
   // Si statut Cadre : synchroniser les lignes vers le catalogue articles (DB.articles)
   // Permet aux BC SLN GMAO de matcher leurs articles avec les prix de la grille
@@ -34111,6 +34275,8 @@ async function saveFA(){
     if(_cadre) f.dvliePrint=_cadre;
   }
   if(!f.num||!f.client||!f.objet){alert('Champs manquants: N°, Client, Objet');return;}
+  // [30/10/2026] BC client cohérent : du bon client, celui du devis, daté plausiblement.
+  if(typeof _bcCoherence==='function' && !_bcCoherenceConfirm(f,'facture',_bcCoherence(f,'facture'))) return;
   // Suivi BC hebdomadaire : getFA() a DÉJÀ appliqué _faPendingBcConsumption sur
   // `f` (nécessaire pour que l'APERÇU en bénéficie aussi, cf getFA()). Ici on
   // se contente de nullifier l'état — APRÈS la validation, pour ne pas le
