@@ -8184,9 +8184,18 @@ function propagateFacturePhaseToDevis(inv, newPhase){
   inv._propagating=true;
   try{
     _addPhaseToDevisHistory(d, devisPhaseKey, {date:inv.dateEnvoi||td()});
+    _dvPasserFacture(d);
   } finally {
     delete inv._propagating;
   }
+}
+// Facture émise → son devis « Accepté » passe « Facturé ». [30/10/2026] Une
+// pré-facture archivée puis émise laissait le devis « Accepté ». Un devis Cadre
+// ou déjà Facturé / Obsolète / Refusé n'est pas touché ; statut précédent gardé.
+function _dvPasserFacture(d){
+  if(!d || d.status!=='Accepté') return false;
+  d._previousStatus=d.status; d.status='Facturé';
+  return true;
 }
 
 // Règle 3 — Facture passe en Payée/Partielle → propage 'facture' au devis
@@ -8240,6 +8249,8 @@ function propagateDevisPhaseToFacture(d){
         if(typeof syncFactureToSuivi==='function') syncFactureToSuivi(fa);
         // Facture devenue émise par le devis → son PO « Confirmé » passe « Livré ».
         if(PHASES[facturePhaseKey] && PHASES[facturePhaseKey].billed===true && typeof _bcLivrerPourFacture==='function') _bcLivrerPourFacture(fa,false);
+        // … et le devis « Accepté » passe « Facturé » (hors acompte).
+        if(PHASES[facturePhaseKey] && PHASES[facturePhaseKey].billed===true && fa.acompteType!=='acompte') _dvPasserFacture(d);
       } finally {
         delete fa._propagating;
       }
