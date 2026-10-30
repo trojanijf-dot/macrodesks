@@ -1050,6 +1050,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="nav('params');renderParams()" title="Listes déroulantes · Alt+W/X pour naviguer"><span class="ico"><span class="ico-classic">⚙️</span><i class="ti ti-list ico-pro"></i></span>Listes déroulantes</button>
   <button class="sb-item" onclick="nav('coutrevient');renderCoutRevient()" title="Coût de revient débarqué · seuils commerciaux et forfaits transitaire du moteur landed cost"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-calculator ico-pro"></i></span>Coût de revient</button>
   <div class="sb-sec">Données</div>
+  <button class="sb-item" onclick="ouvrirJournal()" title="Journal d'activité : ce qui a été fait pendant la session et les 5 derniers jours"><span class="ico"><span class="ico-classic">🕘</span><i class="ti ti-clock-hour-4 ico-pro"></i></span>Journal <span id="jrBadgeSide" style="display:none;margin-left:auto;font-size:10px;background:var(--teal);color:#06261f;border-radius:999px;padding:0 6px;font-weight:700"></span></button>
   <button class="sb-item" onclick="ouvrirControleBC()" title="BC clients : du bon client, identiques au devis, dates cohérentes"><span class="ico"><span class="ico-classic">🔎</span><i class="ti ti-file-search ico-pro"></i></span>Contrôle BC client</button>
   <button class="sb-item" onclick="ouvrirControlePdf()" title="Compare chaque facture émise à son PDF archivé (celui envoyé au client) : montant TTC et lignes"><span class="ico"><span class="ico-classic">🛡</span><i class="ti ti-shield-check ico-pro"></i></span>Contrôle PDF</button>
   <button class="sb-item" onclick="exportJSON()"><span class="ico"><span class="ico-classic">💾</span><i class="ti ti-download ico-pro"></i></span>Exporter JSON</button>
@@ -1076,6 +1077,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   </div>
   <div class="no-print" style="display:flex;gap:8px;align-items:center">
     <div id="alert-pill" class="pill pill-red" style="display:none;cursor:pointer;user-select:none" onclick="goToAlerts()" title="Cliquer pour voir les factures en retard ou à échéance proche"><div class="dot"></div><span id="alert-count">0 alertes</span></div>
+    <button class="btn btn-ghost btn-sm" id="jrBtnTop" onclick="ouvrirJournal()" style="color:var(--teal);border-color:rgba(45,212,191,0.45)" title="Journal d'activité : session en cours et 5 derniers jours">🕘 Journal <span id="jrBadgeTop" style="display:none;font-size:9px;background:var(--teal);color:#06261f;border-radius:999px;padding:0 5px;font-weight:700"></span></button>
     <button class="btn btn-ghost btn-sm" id="globalUndoBtn" onclick="doUndo()" disabled style="opacity:0.4;color:#fcd34d;border-color:rgba(252,211,77,0.3)" title="Aucune action à annuler"><span class="ico-classic">↶</span><i class="ti ti-arrow-back-up ico-pro" style="font-size:13px"></i> Annuler <span id="globalUndoCount" style="font-size:9px;color:var(--muted)"></span></button>
     <div id="autoSaveIndicator" style="display:flex;align-items:center;gap:5px;padding:3px 9px;background:rgba(45,212,191,0.1);border:1px solid rgba(45,212,191,0.3);border-radius:12px;font-size:10px;color:var(--muted)" title="Indicateur de sauvegarde automatique">
       <span id="autoSaveDot" style="width:7px;height:7px;border-radius:50%;background:var(--teal);display:inline-block"></span>
@@ -4945,6 +4947,8 @@ function saveDB(){
   //    En cas d'échec réseau : ne casse rien, le filet local fait foi et le push
   //    sera retenté au prochain saveDB() (ou via l'autosave 30s déjà en place).
   try{ if(typeof _supaSyncSchedule==='function') _supaSyncSchedule(); }catch(e){ console.warn('supabase schedule failed:',e); }
+  // 3) Journal d'activité (comparaison regroupée, cf _jrCapturer).
+  try{ if(typeof _jrPlanifier==='function') _jrPlanifier(); }catch(e){}
 }
 
 // =============================================================================
@@ -6568,12 +6572,15 @@ function normalizeAllUnites(){
 // ligne), après le chargement ; les migrations se sauvegardent → envoi au cloud.
 function _migrationsApresCloud(){
   var n=0;
+  _jrAuto++; // tout ce qui suit est fait par le GRC (journal : « GRC auto »)
   if(typeof normalizeAllUnites==='function'){ try{ n+=normalizeAllUnites(); }catch(e){ console.warn('[CALINSTRUM] normalizeAllUnites (après cloud) :',e); } }
   if(typeof migrateBCPreFacturesEtrangers==='function'){ try{ n+=migrateBCPreFacturesEtrangers(); }catch(e){ console.warn('[CALINSTRUM] migrateBCPreFacturesEtrangers (après cloud) :',e); } }
   if(typeof migrateDateReceptionBC==='function'){ try{ n+=migrateDateReceptionBC(); }catch(e){ console.warn('[CALINSTRUM] migrateDateReceptionBC (après cloud) :',e); } }
   if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
   if(typeof migrateSuiviLiensAutreFacture==='function'){ try{ n+=migrateSuiviLiensAutreFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSuiviLiensAutreFacture (après cloud) :',e); } }
+  try{ _jrCapturer(); }catch(e){}
+  _jrAuto--;
   setTimeout(function(){ try{ _alerterDoublonsFactures(); }catch(e){} }, 1500);
   return n;
 }
@@ -6589,6 +6596,8 @@ function migrateSuiviLiensAutreFacture(){
     if(!(DB.factures||[]).some(function(x){return x && String(x.id)===String(p);})) return;
     syncFactureToSuivi(f); n++;
     console.log('[CALINSTRUM] '+f.num+' : propre ligne de Suivi (était rattachée à celle d\'une autre facture)');
+    var _autreF=(DB.factures||[]).find(function(x){return x && String(x.id)===String(p);});
+    _jrAjouter({qui:'GRC auto',auto:true,col:'factures',docId:f.id,num:f.num,action:'mod',champs:[],note:'reçoit sa propre ligne de Suivi (elle était rattachée à celle de '+((_autreF&&_autreF.num)||'une autre facture')+')'});
   });
   if(n) saveDB();
   return n;
@@ -6604,6 +6613,204 @@ function _alerterDoublonsFactures(){
   window._grcDoublonsFactures=[];
   alert('⚠ N° de facture en double :\n\n'+l.map(function(x){return '• '+x.num+' — '+x.ids.length+' factures différentes';}).join('\n')+
     '\n\nAucune n\'a été supprimée. Ouvrez celle qui ne devrait pas porter ce n° et changez son n° : le GRC proposera le prochain n° libre.');
+  l.forEach(function(x){ _jrAjouter({qui:'GRC auto',auto:true,col:'factures',num:x.num,action:'alerte',note:x.ids.length+' factures différentes portent ce n° — aucune supprimée'}); });
+}
+
+// =============================================================================
+// JOURNAL D'ACTIVITÉ (30/10/2026)
+// =============================================================================
+// « Ce qui a été fait » pendant la session et sur les 5 derniers jours : créations,
+// modifications champ par champ (avant → après), phases, émissions, suppressions,
+// et tout ce que le GRC fait TOUT SEUL (réparations au chargement, PO passé Livré,
+// devis passé Facturé…), marqué « GRC auto ».
+// Mécanique : photo des documents ; à chaque saveDB (regroupé), la nouvelle photo
+// est comparée à la précédente. Rien n'est journalisé avant la photo de départ,
+// prise au démarrage APRÈS le chargement du cloud (cf _bootApp) : ni le cache local
+// remplacé par le cloud, ni les changements arrivés d'un autre poste (_jrRebase)
+// ne passent pour des actions d'ici.
+// Stockage : DB.journal, synchronisé par le canal params ; purgé au-delà de 5 jours.
+var JOURNAL_JOURS=5, JOURNAL_MAX=3000;
+var _JR_COLS={factures:'Facture',devis:'Devis',bcs:'Bon de commande',bls:'Bon de livraison',avoirs:'Avoir'};
+var _JR_IGNORE={_manuallyEditedAt:1,_modifiedAt:1,_updatedAt:1,_propagating:1,_lastSyncedAt:1,suiviId:1,_previousStatus:1};
+var _JR_LIB={num:'N°',rev:'Révision',date:'Date',client:'Client',objet:'Objet',phase:'Phase',status:'Statut',type:'Type',
+  ttc:'Montant TTC',ht:'Montant HT',tgc:'TGC',total:'Total',paye:'Payé',bcClientSLN:'N° BC client',bcClientSLNDate:'Date BC client',
+  bcClientRef:'Réf. BC client',bcClientDate:'Date BC client (réf.)',_importPONum:'N° PO client',dateReceptionBC:'Date réception BC',
+  dateEncaissement:'Date encaissement',dateButoir:'Échéance',delai:'Délai',dvlie:'Devis lié',dvliePrint:'Devis imprimé',devisLieId:'Lien devis',
+  linkFactureId:'Facture liée',notes:'Notes',contact:'Contact',email:'E-mail',adresse:'Adresse',versements:'Versements',
+  phaseHistory:'Traçabilité',lines:'Lignes',lignes:'Lignes',clientFinal:'Client final',_bcVu:'BC vérifié'};
+var _JR_ARGENT={ttc:1,ht:1,tgc:1,total:1,paye:1};
+var _jrSnap=null, _jrSessionDebut=Date.now(), _jrAuto=0, _jrAutoIds={}, _jrTimer=null, _jrEcrit=false;
+function _jrPoste(){ try{ var p=localStorage.getItem('ci_grc3_poste'); if(!p){ p='P'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); localStorage.setItem('ci_grc3_poste',p); } return p; }catch(e){ return 'P?'; } }
+function _jrQui(){ try{ if(window._grcUserId && window._supaGetAlias) return window._supaGetAlias(window._grcUserId).alias; }catch(e){} return 'Moi'; }
+function _jrPhoto(){
+  var s={};
+  Object.keys(_JR_COLS).forEach(function(c){ s[c]={}; (DB[c]||[]).forEach(function(x){ if(!x||x.id==null) return;
+    var o={}; Object.keys(x).forEach(function(k){ if(!_JR_IGNORE[k]) o[k]=x[k]; }); s[c][String(x.id)]=JSON.stringify(o); }); });
+  return s;
+}
+function _jrBaseline(){ _jrSnap=_jrPhoto(); }
+// Changement arrivé d'un autre poste (Realtime) : on l'intègre à la photo sans le journaliser ici.
+function _jrRebase(col,id){
+  if(!_jrSnap || !_JR_COLS[col]) return;
+  var x=(DB[col]||[]).find(function(r){return r && String(r.id)===String(id);});
+  if(!x){ delete _jrSnap[col][String(id)]; return; }
+  var o={}; Object.keys(x).forEach(function(k){ if(!_JR_IGNORE[k]) o[k]=x[k]; }); _jrSnap[col][String(id)]=JSON.stringify(o);
+}
+// Document modifié par le GRC à la suite d'une action (PO passé Livré, devis passé Facturé…).
+function _jrMarquerAuto(doc,raison){ if(doc && doc.id!=null) _jrAutoIds[String(doc.id)]=raison||'automatique'; }
+function _jrPlanifier(){ if(!_jrSnap || _jrEcrit) return; if(_jrTimer) return; _jrTimer=setTimeout(function(){ _jrTimer=null; _jrCapturer(); },60); }
+function _jrCourt(v){
+  if(v==null || v==='') return '(vide)';
+  if(typeof v==='object') return Array.isArray(v)?v.length+' élément(s)':'…';
+  var s=String(v); return s.length>70?s.slice(0,67)+'…':s;
+}
+function _jrValeur(k,v,doc){
+  if(k==='phase'){ if(v && typeof PHASES!=='undefined' && PHASES[v]) return PHASES[v].label; if(v && typeof PHASES_META!=='undefined' && PHASES_META[v]) return PHASES_META[v].label; return v||'(vide)'; }
+  if(k==='phaseHistory'){ var h=Array.isArray(v)?v:[]; var d=h[h.length-1]; if(!d) return '(vide)';
+    var m=(typeof PHASES_META!=='undefined' && PHASES_META[d.phase])?PHASES_META[d.phase].label:d.phase; return m+(d.date?' · '+fD(d.date):''); }
+  if(k==='lines'||k==='lignes'){ if(Array.isArray(v)) return v.length+' ligne(s)'; if(v&&typeof v==='object'){ var n=0; Object.keys(v).forEach(function(s){ if(Array.isArray(v[s])) n+=v[s].length; }); return n+' ligne(s)'; } return '(vide)'; }
+  if(k==='_bcVu') return v?'oui':'non';
+  if(/date|Date|Butoir/.test(k) && /^\d{4}-\d{2}-\d{2}/.test(String(v||''))) return fD(String(v).slice(0,10));
+  return _jrCourt(v);
+}
+function _jrEstEmise(col,o){ return col==='factures' && o && typeof isPrebilled==='function' && !isPrebilled(o); }
+function _jrCapturer(){
+  if(!_jrSnap) return 0;
+  var neuf=_jrPhoto(), qui=_jrQui(), autoGlobal=_jrAuto>0, n=0;
+  Object.keys(_JR_COLS).forEach(function(c){
+    var a=_jrSnap[c]||{}, b=neuf[c]||{};
+    Object.keys(b).forEach(function(id){
+      if(a[id]===b[id]) return;
+      var nv=JSON.parse(b[id]), av=a[id]?JSON.parse(a[id]):null;
+      var raison=_jrAutoIds[id], auto=autoGlobal||!!raison;
+      var e={qui:auto?'GRC auto':qui,auto:auto,col:c,docId:nv.id,num:nv.num||'',rev:nv.rev||'',note:raison||''};
+      if(!av){ e.action='cre'; e.champs=[]; if(nv.objet) e.note=(e.note?e.note+' · ':'')+_jrCourt(nv.objet); }
+      else {
+        var champs=[];
+        Object.keys(Object.assign({},av,nv)).forEach(function(k){
+          if(JSON.stringify(av[k])===JSON.stringify(nv[k])) return;
+          champs.push({c:_JR_LIB[k]||k, a:_jrValeur(k,av[k],av), n:_jrValeur(k,nv[k],nv), m:!!_JR_ARGENT[k]});
+        });
+        if(!champs.length) return;
+        e.champs=champs.slice(0,12);
+        if(!_jrEstEmise(c,av) && _jrEstEmise(c,nv)) e.action='emi';
+        else if(av.phase!==nv.phase || av.status!==nv.status) e.action='pha';
+        else e.action='mod';
+      }
+      _jrAjouter(e); n++;
+    });
+    Object.keys(a).forEach(function(id){
+      if(b[id]) return;
+      var av=JSON.parse(a[id]);
+      _jrAjouter({qui:autoGlobal?'GRC auto':qui,auto:autoGlobal,col:c,docId:av.id,num:av.num||'',rev:av.rev||'',action:'sup',champs:[],note:_jrCourt(av.objet||av.client||'')}); n++;
+    });
+  });
+  _jrSnap=neuf; _jrAutoIds={};
+  if(n){ _jrEcrit=true; try{ saveDB(); }finally{ _jrEcrit=false; } _jrMajBadges(); }
+  return n;
+}
+function _jrAjouter(e){
+  if(!DB.journal || !Array.isArray(DB.journal)) DB.journal=[];
+  e.id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  e.ts=e.ts||Date.now(); e.poste=_jrPoste();
+  DB.journal.push(e);
+  var lim=_jrDebutJours();
+  DB.journal=DB.journal.filter(function(x){return x && x.ts>=lim;});
+  if(DB.journal.length>JOURNAL_MAX) DB.journal=DB.journal.slice(-JOURNAL_MAX);
+}
+// Début du 1er des 5 derniers jours (aujourd'hui compris), à minuit.
+function _jrDebutJours(){ var d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-(JOURNAL_JOURS-1)); return d.getTime(); }
+function _jrSession(){ var p=_jrPoste(); return (DB.journal||[]).filter(function(x){return x && x.poste===p && x.ts>=_jrSessionDebut;}); }
+function _jrMajBadges(){
+  var n=_jrSession().length;
+  ['jrBadgeSide','jrBadgeTop'].forEach(function(id){ var el=document.getElementById(id); if(el){ el.textContent=n||''; el.style.display=n?'':'none'; } });
+  if(document.getElementById('mJOURNAL')) _jrRendre();
+}
+// Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
+var GRC_MAJ=[
+  ['2026-10-30','Journal d\'activité (ce menu). Factures : un n° ne peut plus être pris deux fois (le prochain n° libre est proposé), une facture n\'écrase plus jamais la ligne de Suivi d\'une autre, une facture en double est signalée au lieu d\'être supprimée en silence.'],
+  ['2026-10-30','Le devis passe « Facturé » tout seul quand sa facture est émise.'],
+  ['2026-10-30','Contrôle des BC clients (menu 🔎) ; la pré-facture suit le BC de son devis.'],
+  ['2026-10-30','Administratif : les barres du CA mensuel sont alignées sous leur mois.'],
+  ['2026-10-29','Bons de commande : totaux par statut.'],
+  ['2026-10-29','Corrections de données appliquées après le chargement du cloud (date de réception du BC, unités).'],
+  ['2026-10-29','Pré-facture imprimée ou archivée : le GRC propose de l\'émettre à sa date.'],
+  ['2026-10-29','Le PO Emerson passe « Livré » tout seul quand sa facture est émise.'],
+  ['2026-10-26','Contrôle des factures émises contre leurs PDF archivés (menu 🛡).'],
+  ['2026-10-26','Une facture émise n\'est plus jamais réécrite par la confirmation d\'un PO.'],
+  ['2026-10-26','Administratif : détail des clients regroupés sous « Autres ».']
+];
+var _jrEtat={onglet:'session',filtre:'tout',type:'',q:''};
+function ouvrirJournal(){
+  var ancien=document.getElementById('mJOURNAL'); if(ancien) ancien.remove();
+  if(_jrSnap) _jrCapturer();
+  var m=document.createElement('div'); m.id='mJOURNAL'; m.className='modal-overlay open';
+  m.innerHTML='<div class="modal modal-lg" style="max-width:1100px"><div class="modal-header"><h3>🕘 Journal d\'activité</h3><button class="modal-close" onclick="document.getElementById(\'mJOURNAL\').remove()">✕</button></div>'+
+    '<div class="modal-body" id="jrCorps"></div></div>';
+  document.body.appendChild(m);
+  _jrRendre();
+}
+function _jrChoisir(k,v){ _jrEtat[k]=v; _jrRendre(); }
+function _jrOuvrirDoc(col,id){
+  var x=(DB[col]||[]).find(function(r){return r && String(r.id)===String(id);});
+  if(!x){ alert('Ce document n\'existe plus (supprimé).'); return; }
+  var m=document.getElementById('mJOURNAL'); if(m) m.remove();
+  if(col==='factures') openFA(x.id); else if(col==='devis') openDV(x.id); else if(col==='bcs') openBC(x.id); else if(col==='bls') openBL(x.id);
+}
+var _JR_ACT={cre:['Créé','#34d399'],mod:['Modifié','#c9d1d9'],pha:['Phase / statut','#fbbf24'],emi:['Émise','#2dd4bf'],sup:['Supprimé','#f87171'],alerte:['Alerte','#f87171']};
+function _jrRendre(){
+  var corps=document.getElementById('jrCorps'); if(!corps) return;
+  var E=_jrEtat, sess=_jrSession(), jours=(DB.journal||[]).filter(function(x){return x && x.ts>=_jrDebutJours();});
+  var onglet=function(k,lib,sous){ var on=E.onglet===k; return '<button class="btn btn-ghost btn-sm" data-jr-onglet="'+k+'" onclick="_jrChoisir(\'onglet\',\''+k+'\')" style="border-radius:999px;'+(on?'border-color:var(--teal);color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset':'')+'">'+lib+' <span style="color:var(--muted);font-size:10px">'+sous+'</span></button>'; };
+  var h='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">'+
+    onglet('session','Session en cours','depuis '+new Date(_jrSessionDebut).toTimeString().slice(0,5)+' · '+sess.length+' action'+(sess.length>1?'s':''))+
+    onglet('jours','5 derniers jours',fD(new Date(_jrDebutJours()).toISOString().slice(0,10))+' → aujourd\'hui · '+jours.length)+
+    onglet('maj','Mises à jour du GRC','versions mises en ligne')+'</div>';
+  if(E.onglet==='maj'){
+    h+=GRC_MAJ.map(function(x){ return '<div style="background:var(--surface,#161b24);border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:5px;font-size:12px"><span style="font-family:monospace;font-size:11px;color:var(--muted);margin-right:8px">'+fD(x[0])+'</span>'+esc(x[1])+'</div>'; }).join('');
+    corps.innerHTML=h; return;
+  }
+  var liste=(E.onglet==='session'?sess:jours).slice().sort(function(a,b){return b.ts-a.ts;});
+  liste=liste.filter(function(x){
+    if(E.filtre==='moi' && x.auto) return false;
+    if(E.filtre==='auto' && !x.auto) return false;
+    if(E.filtre==='alertes' && x.action!=='sup' && x.action!=='alerte') return false;
+    if(E.type && x.col!==E.type) return false;
+    if(E.q){ var t=(x.num+' '+(x.note||'')+' '+(x.champs||[]).map(function(c){return c.c+' '+c.a+' '+c.n;}).join(' ')).toLowerCase(); if(t.indexOf(E.q.toLowerCase())<0) return false; }
+    return true;
+  });
+  var filtre=function(k,lib){ var on=E.filtre===k; return '<button class="btn btn-ghost btn-sm" data-jr-filtre="'+k+'" onclick="_jrChoisir(\'filtre\',\''+k+'\')" style="'+(on?'color:var(--text);border-color:#4b5869':'color:var(--muted)')+'">'+lib+'</button>'; };
+  h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">'+filtre('tout','Tout')+filtre('moi','👤 Mes actions')+filtre('auto','🤖 Automatique')+filtre('alertes','⚠ Suppressions & alertes')+
+    '<select class="form-select" style="width:auto;font-size:11px;padding:3px 8px" onchange="_jrChoisir(\'type\',this.value)"><option value="">Tous types</option>'+
+      Object.keys(_JR_COLS).map(function(c){return '<option value="'+c+'"'+(E.type===c?' selected':'')+'>'+_JR_COLS[c]+'</option>';}).join('')+'</select>'+
+    '<input class="form-input" id="jrRecherche" style="flex:1;min-width:180px;font-size:11px;padding:4px 9px" placeholder="🔍 n° de document, client, champ…" value="'+esc(E.q)+'" oninput="_jrEtat.q=this.value;clearTimeout(window._jrQT);window._jrQT=setTimeout(function(){_jrRendre();var i=document.getElementById(\'jrRecherche\');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},250)"></div>';
+  var cpt=function(f){return liste.filter(f).length;};
+  var kpi=function(lib,v,col){ return '<div style="flex:1;min-width:110px;background:var(--surface,#161b24);border:1px solid var(--border);border-radius:10px;padding:7px 10px"><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">'+lib+'</div><div style="font-size:17px;font-weight:800;color:'+col+'">'+v+'</div></div>'; };
+  h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'+
+    kpi('Créés',cpt(function(x){return x.action==='cre';}),'#34d399')+kpi('Modifiés',cpt(function(x){return x.action==='mod';}),'var(--text)')+
+    kpi('Phases / émissions',cpt(function(x){return x.action==='pha'||x.action==='emi';}),'#fbbf24')+kpi('Automatiques',cpt(function(x){return x.auto;}),'#a78bfa')+
+    kpi('Supprimés / alertes',cpt(function(x){return x.action==='sup'||x.action==='alerte';}),'#f87171')+'</div>';
+  if(!liste.length){ corps.innerHTML=h+'<div class="empty" style="padding:20px;color:var(--muted)">Aucune action'+(E.onglet==='session'?' depuis l\'ouverture du GRC sur ce poste.':' sur les 5 derniers jours.')+'</div>'; return; }
+  var jour='', jn=['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+  liste.forEach(function(x){
+    var d=new Date(x.ts), j=d.toISOString().slice(0,10);
+    var jl=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+    var cle=jl.getTime();
+    if(cle!==jour){ jour=cle; var auj=new Date(); auj.setHours(0,0,0,0);
+      h+='<div style="font-size:11px;font-weight:700;color:var(--teal);margin:12px 0 5px">'+(cle===auj.getTime()?'Aujourd\'hui · ':'')+jn[d.getDay()]+' '+String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'</div>'; }
+    var act=_JR_ACT[x.action]||['?','#888'], alerte=x.action==='sup'||x.action==='alerte';
+    var lien=x.docId!=null && x.action!=='sup'?'<b style="color:var(--teal);cursor:pointer;text-decoration:underline dotted" onclick="_jrOuvrirDoc(\''+x.col+'\',\''+x.docId+'\')">'+esc(x.num||'#'+x.docId)+(x.rev?' '+esc(x.rev):'')+'</b>':'<b>'+esc(x.num||'')+(x.rev?' '+esc(x.rev):'')+'</b>';
+    var det=(x.champs||[]).map(function(c){ var a=esc(c.a), n=esc(c.n); if(c.m){ a='<span data-money>'+a+'</span>'; n='<span data-money>'+n+'</span>'; }
+      return esc(c.c)+' : <s style="color:#6b7280">'+a+'</s> → <span style="color:var(--text)">'+n+'</span>'; }).join(' · ');
+    h+='<div data-jr-ev="'+x.action+'" style="display:grid;grid-template-columns:44px 110px 1fr auto;gap:10px;align-items:start;background:'+(alerte?'rgba(248,113,113,.06)':'var(--surface,#161b24)')+';border:1px solid '+(alerte?'rgba(248,113,113,.55)':'var(--border)')+';border-radius:8px;padding:7px 10px;margin-bottom:5px">'+
+      '<span style="font-family:monospace;font-size:11px;color:var(--muted)">'+d.toTimeString().slice(0,5)+'</span>'+
+      '<span style="font-size:10.5px;border-radius:999px;padding:1px 8px;white-space:nowrap;justify-self:start;'+(x.auto?'background:rgba(167,139,250,.12);color:#a78bfa;border:1px solid rgba(167,139,250,.35)':'background:rgba(96,165,250,.12);color:#60a5fa;border:1px solid rgba(96,165,250,.35)')+'">'+(x.auto?'🤖 GRC auto':'👤 '+esc(x.qui||''))+'</span>'+
+      '<div style="font-size:12px">'+lien+' <span style="color:var(--muted)">— '+(_JR_COLS[x.col]||x.col||'').toLowerCase()+'</span>'+
+        (det?'<div style="font-size:11px;color:var(--muted);margin-top:2px">'+det+'</div>':'')+
+        (x.note?'<div style="font-size:11px;color:'+(alerte?'#fca5a5':'var(--muted)')+';margin-top:2px">'+esc(x.note)+'</div>':'')+'</div>'+
+      '<span style="font-size:10px;border-radius:4px;padding:1px 6px;white-space:nowrap;color:'+act[1]+';border:1px solid '+act[1]+'66">'+act[0]+'</span></div>';
+  });
+  corps.innerHTML=h;
 }
 // Migration one-shot « M » → « ML » (mètre linéaire). Guard DB._uniteMLV1.
 // Devis, articles du catalogue et pré-factures (non émises). ⛔ Une facture ÉMISE
@@ -7960,6 +8167,7 @@ function _bcLivrerPourFacture(fa, avecMessage){
   _bcsDeFacture(f).forEach(function(b){
     if(b.status!=='Confirmé') return;
     b.status='Livré';
+    if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(b,'passé « Livré » : '+(f.num||'sa facture')+' émise');
     faits.push(b.num||'?');
   });
   if(faits.length){
@@ -8229,6 +8437,7 @@ function propagateFacturePhaseToDevis(inv, newPhase){
   inv._propagating=true;
   try{
     _addPhaseToDevisHistory(d, devisPhaseKey, {date:inv.dateEnvoi||td()});
+    if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(d,'phase reprise de sa facture');
     _dvPasserFacture(d);
   } finally {
     delete inv._propagating;
@@ -8240,6 +8449,7 @@ function propagateFacturePhaseToDevis(inv, newPhase){
 function _dvPasserFacture(d){
   if(!d || d.status!=='Accepté') return false;
   d._previousStatus=d.status; d.status='Facturé';
+  if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(d,'passé « Facturé » : sa facture est émise');
   return true;
 }
 
@@ -8286,6 +8496,7 @@ function propagateDevisPhaseToFacture(d){
       fa._propagating=true;
       try{
         fa.phase=facturePhaseKey;
+        if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(fa,'phase reprise de son devis');
         // Si dateEnvoi vide, on la fixe à la date de la phase devis ou aujourd'hui
         if(!fa.date && !fa.dateEnvoi){
           fa.date=current.date||td();
@@ -23179,6 +23390,7 @@ function propagateDevisBCToFacture(d,dAvant){
     var bcF=_faBCNum(f);
     if(bcF && _bcCle(bcF)!==_bcCle(av)) return;
     f.bcClientSLN=nv; f.bcClientSLNDate=dNv; if(dNv) f.dateReceptionBC=dNv;
+    if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(f,'BC repris de son devis');
     if(f._importPONum && _bcCle(f._importPONum)===_bcCle(av)) f._importPONum=nv;
     if(typeof syncFactureToSuivi==='function') syncFactureToSuivi(f);
     res.push({num:f.num,maj:true});
@@ -57616,6 +57828,8 @@ function critProceed(){
         return;
       }
 
+      // Journal : changement venu d'un autre poste → intégré à la photo, pas journalisé ici.
+      try { if (typeof _jrRebase === 'function') _jrRebase(table, idStr); } catch(e){}
       // Update localStorage cache (cohérence offline)
       try {
         var json = JSON.stringify(DB);
@@ -57838,7 +58052,7 @@ function critProceed(){
     // Fire-and-forget : ne bloque pas le chargement initial, mais sera dispo très vite.
     sbClient.auth.getUser().then(function(res){
       if (res && res.data && res.data.user) {
-        _currentUserId = res.data.user.id;
+        _currentUserId = res.data.user.id; window._grcUserId = _currentUserId; // journal d'activité (cf _jrQui)
         window._supaCurrentUserId = _currentUserId;
       }
     }).catch(function(){});
@@ -58138,6 +58352,8 @@ function critProceed(){
     }
     // Migrations de données sur les VRAIES données (cloud), une fois l'envoi permis
     // (_bootDone) — cf _migrationsApresCloud.
+    // Journal d'activité : photo de départ sur les données réelles (cf _jrBaseline).
+    try { if (typeof _jrBaseline === 'function') { _jrBaseline(); _jrMajBadges(); } } catch(e){}
     if (!offlineMode && typeof window._migrationsApresCloud === 'function') {
       try { window._migrationsApresCloud(); } catch(e) { console.warn('_migrationsApresCloud failed:', e); }
     }
