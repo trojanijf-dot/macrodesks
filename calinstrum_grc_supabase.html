@@ -6673,6 +6673,12 @@ function _jrValeur(k,v,doc){
   if(/date|Date|Butoir/.test(k) && /^\d{4}-\d{2}-\d{2}/.test(String(v||''))) return fD(String(v).slice(0,10));
   return _jrCourt(v);
 }
+function _jrVide(k,v){
+  if(v==null || v==='') return true;
+  if(Array.isArray(v)) return !v.length;
+  if(_JR_ARGENT[k] && Number(v)===0) return true;
+  return false;
+}
 function _jrEstEmise(col,o){ return col==='factures' && o && typeof isPrebilled==='function' && !isPrebilled(o); }
 function _jrCapturer(){
   if(!_jrSnap) return 0;
@@ -6689,7 +6695,15 @@ function _jrCapturer(){
         var champs=[];
         Object.keys(Object.assign({},av,nv)).forEach(function(k){
           if(JSON.stringify(av[k])===JSON.stringify(nv[k])) return;
-          champs.push({c:_JR_LIB[k]||k, a:_jrValeur(k,av[k],av), n:_jrValeur(k,nv[k],nv), m:!!_JR_ARGENT[k]});
+          // Vide = vide : « (vide) → (vide) » ou « Payé : (vide) → 0 » n'est pas une modification.
+          if(_jrVide(k,av[k]) && _jrVide(k,nv[k])) return;
+          var va=_jrValeur(k,av[k],av), vn=_jrValeur(k,nv[k],nv);
+          if(va===vn){
+            // Contenu changé, résumé identique (ex. lignes modifiées, même nombre) : on le dit.
+            if(av[k]!==null && typeof av[k]==='object' || nv[k]!==null && typeof nv[k]==='object') champs.push({c:_JR_LIB[k]||k, a:'', n:'modifié · '+vn, m:false});
+            return;
+          }
+          champs.push({c:_JR_LIB[k]||k, a:va, n:vn, m:!!_JR_ARGENT[k]});
         });
         if(!champs.length) return;
         e.champs=champs.slice(0,12);
@@ -6728,6 +6742,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-10-30','Journal : seules les vraies modifications sont listées (plus de « (vide) → (vide) »).'],
   ['2026-10-30','Journal d\'activité (ce menu). Factures : un n° ne peut plus être pris deux fois (le prochain n° libre est proposé), une facture n\'écrase plus jamais la ligne de Suivi d\'une autre, une facture en double est signalée au lieu d\'être supprimée en silence.'],
   ['2026-10-30','Le devis passe « Facturé » tout seul quand sa facture est émise.'],
   ['2026-10-30','Contrôle des BC clients (menu 🔎) ; la pré-facture suit le BC de son devis.'],
@@ -6801,6 +6816,7 @@ function _jrRendre(){
     var act=_JR_ACT[x.action]||['?','#888'], alerte=x.action==='sup'||x.action==='alerte';
     var lien=x.docId!=null && x.action!=='sup'?'<b style="color:var(--teal);cursor:pointer;text-decoration:underline dotted" onclick="_jrOuvrirDoc(\''+x.col+'\',\''+x.docId+'\')">'+esc(x.num||'#'+x.docId)+(x.rev?' '+esc(x.rev):'')+'</b>':'<b>'+esc(x.num||'')+(x.rev?' '+esc(x.rev):'')+'</b>';
     var det=(x.champs||[]).map(function(c){ var a=esc(c.a), n=esc(c.n); if(c.m){ a='<span data-money>'+a+'</span>'; n='<span data-money>'+n+'</span>'; }
+      if(c.a==='') return esc(c.c)+' : <span style="color:var(--text)">'+n+'</span>';
       return esc(c.c)+' : <s style="color:#6b7280">'+a+'</s> → <span style="color:var(--text)">'+n+'</span>'; }).join(' · ');
     h+='<div data-jr-ev="'+x.action+'" style="display:grid;grid-template-columns:44px 110px 1fr auto;gap:10px;align-items:start;background:'+(alerte?'rgba(248,113,113,.06)':'var(--surface,#161b24)')+';border:1px solid '+(alerte?'rgba(248,113,113,.55)':'var(--border)')+';border-radius:8px;padding:7px 10px;margin-bottom:5px">'+
       '<span style="font-family:monospace;font-size:11px;color:var(--muted)">'+d.toTimeString().slice(0,5)+'</span>'+
@@ -34687,6 +34703,9 @@ function syncFactureToSuivi(f){
     var _proprio=DB.invoices[idx].grcFactureId!=null?DB.invoices[idx].grcFactureId:DB.invoices[idx]._factureId;
     if(_proprio!=null && String(_proprio)!==String(f.id) && (DB.factures||[]).some(function(x){return x && String(x.id)===String(_proprio);})){
       idx=-1; f.suiviId=null;
+      // Sa propre ligne existe peut-être déjà : la reprendre plutôt qu'en créer une 2e.
+      idx=DB.invoices.findIndex(function(x){ var o=x.grcFactureId!=null?x.grcFactureId:x._factureId; return o!=null && String(o)===String(f.id); });
+      if(idx>=0) f.suiviId=DB.invoices[idx].id;
     }
   }
   // === COHÉRENCE PHASE ↔ DATES ===
