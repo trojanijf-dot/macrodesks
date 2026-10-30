@@ -1456,7 +1456,10 @@ function _adminLegendHtml(segments,total,filterType){
 function _adminBarChartSVG(monthlyHT,clickable){
   var max=Math.max.apply(null, monthlyHT.map(function(v){return Math.abs(v);}).concat([1]));
   var months=['J','F','M','A','M','J','J','A','S','O','N','D'];
-  var w=380,h=140,barW=22,gap=8,baseY=130,bars='';
+  // [30/10/2026] Les mois sont écrits DANS le SVG, sous chaque barre : avant, une
+  // ligne HTML étalée sur toute la carte ne suivait pas le SVG (largeur fixe, centré)
+  // → à l'écran les barres de janvier-mars tombaient sous « A / M ».
+  var w=380,h=152,barW=22,gap=8,baseY=130,bars='';
   var activeMonth=(clickable && admDetailFilter && admDetailFilter.type==='month')?admDetailFilter.key:null;
   monthlyHT.forEach(function(v,i){
     var x=6+i*(barW+gap);
@@ -1473,14 +1476,12 @@ function _adminBarChartSVG(monthlyHT,clickable){
     // en milliers de XPF pour rester lisible à cette largeur. Les barres montent au
     // maximum à 100 px sous baseY=130, donc y>=30 — la place au-dessus est garantie.
     if(v) bars+='<text x="'+(x+barW/2)+'" y="'+Math.max(9,y-4)+'" text-anchor="middle" font-size="8" font-weight="700" fill="var(--text,#e6edf3)" opacity="'+(dim?0.35:1)+'">'+fN(Math.round(v/1000))+'K</text>';
+    bars+='<text data-mois="'+i+'" x="'+(x+barW/2)+'" y="'+(baseY+14)+'" text-anchor="middle" font-size="9" fill="var(--muted-soft,#94a3b8)">'+months[i]+'</text>';
   });
   var totYear=monthlyHT.reduce(function(s,v){return s+(Number(v)||0);},0);
-  return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:140px">'+bars+
+  return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;height:'+h+'px">'+bars+
       '<line x1="0" y1="'+baseY+'" x2="'+w+'" y2="'+baseY+'" stroke="var(--border)" stroke-width="1"></line>'+
     '</svg>'+
-    '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted-soft);padding:0 4px">'+
-      months.map(function(m){return '<span>'+m+'</span>';}).join('')+
-    '</div>'+
     '<div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10.5px">'+
       '<span style="color:var(--muted)">Total période</span>'+
       '<span style="font-weight:800;color:'+ADMIN_C1+'">'+fN(totYear)+' XPF HT</span>'+
