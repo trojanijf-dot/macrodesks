@@ -7175,6 +7175,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-02','☁ Enregistrement cloud : seules les lignes réellement modifiées partent (plus la table entière). Une modification n’est plus écrasée par un écho tardif ni par un autre onglet/poste resté sur une version périmée, et fermer le GRC juste après une modification ne la perd plus : elle est envoyée à la réouverture (sauf si la même fiche a été modifiée ailleurs entre-temps : avertissement).'],
   ['2026-11-01','🛡 Contrôle PDF : la DATE de chaque facture émise est comparée à celle imprimée sur son PDF archivé (nouveau et ancien modèle). Écart = alerte rouge, avec « 📅 Date du PDF » pour corriger ; l’export Administratif prévient aussi quand une facture a quitté la période alors que son PDF y est daté.'],
   ['2026-11-01','🔒 Verrou des factures émises : toute modification de la date, du client, de l’objet, des montants ou des lignes d’une facture déjà envoyée est annoncée (avant → après) ; une modification venue d’ailleurs est signalée à l’ouverture du GRC. L’objet d’une facture émise n’est plus jamais régénéré.'],
   ['2026-11-01','Factures : une date d’encaissement saisie suffit pour qu’une facture soit « Payée » (sans versement), comme la page Règlements ; Auto-split date le versement du jour de l’encaissement.'],
@@ -57898,6 +57899,23 @@ function critProceed(){
   // fait au moins un fetch réussi, ces sets sont vides → aucun delete déclenché.
   var _lastSyncedIds = {};   // { tableName: Set<id_string> } pour devis/factures/bcs/bls/clients/articles/invoices
   var _lastSyncedParamsKeys = null;  // Set<string> pour la table params (null = pas encore initialisé)
+  // [02/11/2026] VERSION CLOUD DE CHAQUE LIGNE. Avant : un hash par TABLE, et chaque
+  // enregistrement renvoyait la table entière. Deux corrections de date de factures
+  // émises sont revenues en arrière le 01/11 :
+  //   - l'écho temps réel d'un envoi précédent (ancienne version) remplaçait une
+  //     ligne modifiée depuis, puis le hash de table était recalculé sur l'état
+  //     local → « tout est envoyé », la modification ne partait jamais ;
+  //   - un onglet/poste qui avait manqué un écho renvoyait ses lignes périmées ;
+  //   - fermer le GRC dans la seconde suivant une modification la perdait (le
+  //     chargement suivant remplace tout par le cloud).
+  // Désormais : _rowSynced[table][id] = hash canonique de la version présente dans
+  // le cloud (chargement, envoi réussi, écho). Seules les lignes qui s'en écartent
+  // partent ; un écho ne remplace jamais une ligne modifiée non encore envoyée ;
+  // les lignes non envoyées sont gardées dans PENDING_KEY et rejouées au chargement
+  // si personne ne les a modifiées ailleurs entre-temps. Params : idem par clé.
+  // Vérifié par ...\CLAUDE\GRC\test-persistance\test_sync_lignes_modifiees.js
+  var _rowSynced = {};      // { tableName: { id_string: hash } } ; params : _rowSynced._params[clé]
+  var PENDING_KEY = 'ci_grc3_pending';
 
   // ===== Phase 1 : Attribution (updated_by/updated_at) =====
   // Stockage HORS de DB pour éviter la pollution du système de sync (cf _hashParamsBucket).
@@ -58007,6 +58025,95 @@ function critProceed(){
       });
     }
     try { return _hash(JSON.stringify(picked)); } catch(e){ return String(Math.random()); }
+  }
+  // Hash d'une ligne indépendant de l'ordre des clés : le cloud (jsonb) renvoie les
+  // clés réordonnées, une ligne identique doit avoir le même hash.
+  function _canon(v){
+    if (v === null || typeof v !== 'object') return JSON.stringify(v);
+    if (typeof v.toJSON === 'function') return JSON.stringify(v);
+    if (Array.isArray(v)) return '[' + v.map(function(x){ return (x === undefined || typeof x === 'function') ? 'null' : _canon(x); }).join(',') + ']';
+    return '{' + Object.keys(v).sort().filter(function(k){ var x = v[k]; return x !== undefined && typeof x !== 'function'; })
+      .map(function(k){ return JSON.stringify(k) + ':' + _canon(v[k]); }).join(',') + '}';
+  }
+  function _rowHash(r){ try { return _hash(_canon(r)); } catch(e){ return String(Math.random()); } }
+  // Lignes d'une table dont le contenu diffère de la version cloud connue.
+  function _rowsDirty(tname, arr){
+    var known = _rowSynced[tname] || {}, out = [];
+    (arr || []).forEach(function(r){
+      if (!r || r.id == null) return;
+      var h = _rowHash(r);
+      if (known[String(r.id)] !== h) out.push({ r:r, h:h });
+    });
+    return out;
+  }
+  // Clés de la table params (tout DB hors tables) dont la valeur diffère du cloud.
+  function _paramsDirty(){
+    var known = _rowSynced._params || {}, out = [];
+    if (typeof DB !== 'object' || !DB) return out;
+    Object.keys(DB).forEach(function(k){
+      if (_isTableKey(k)) return;
+      var v = DB[k];
+      if (v === undefined || typeof v === 'function') return;
+      var h = _rowHash(v);
+      if (known[k] !== h) out.push({ key:k, value:v, h:h });
+    });
+    return out;
+  }
+  // Modifications pas encore envoyées → localStorage, avec la version cloud sur
+  // laquelle elles reposent (base). Rejouées par _pendingRejouer au chargement.
+  function _pendingEcrire(){
+    if (!_bootDone) return;
+    try {
+      var p = {}, n = 0;
+      TABLES.forEach(function(t){
+        var known = _rowSynced[t.name] || {};
+        _rowsDirty(t.name, DB[t.arr]).forEach(function(x){
+          var id = String(x.r.id);
+          (p[t.name] = p[t.name] || {})[id] = { base: known[id] || null, row: x.r }; n++;
+        });
+      });
+      var kp = _rowSynced._params || {};
+      _paramsDirty().forEach(function(x){ (p._params = p._params || {})[x.key] = { base: kp[x.key] || null, row: x.value }; n++; });
+      if (n) localStorage.setItem(PENDING_KEY, JSON.stringify(p)); else localStorage.removeItem(PENDING_KEY);
+    } catch(e){ console.warn('[supa sync] modifications en attente non mémorisées :', e); }
+  }
+  // Au chargement, APRÈS le fetch cloud : remet les modifications non envoyées de la
+  // session précédente, seulement si le cloud est encore dans la version sur laquelle
+  // elles reposent. Sinon (modifiée ailleurs entre-temps) : la version cloud reste,
+  // la modification écartée est gardée de côté et signalée.
+  function _pendingRejouer(pending){
+    if (!pending || typeof pending !== 'object') return;
+    var appliquees = 0, ecartees = [];
+    Object.keys(pending).forEach(function(tname){
+      var lignes = pending[tname] || {};
+      if (tname === '_params') {
+        Object.keys(lignes).forEach(function(k){
+          var e = lignes[k], cur = (k in DB) ? _rowHash(DB[k]) : null;
+          if (cur === _rowHash(e.row)) return;
+          if ((e.base || null) === cur) { DB[k] = e.row; appliquees++; }
+          else ecartees.push({ table:'params', id:k, row:e.row });
+        });
+        return;
+      }
+      var t = TABLES.filter(function(x){ return x.name === tname; })[0];
+      if (!t) return;
+      var arr = DB[t.arr] = DB[t.arr] || [];
+      Object.keys(lignes).forEach(function(id){
+        var e = lignes[id], idx = arr.findIndex(function(r){ return r && String(r.id) === id; });
+        var cur = idx >= 0 ? _rowHash(arr[idx]) : null;
+        if (cur === _rowHash(e.row)) return;
+        if ((e.base || null) === cur) { if (idx >= 0) arr[idx] = e.row; else arr.push(e.row); appliquees++; }
+        else ecartees.push({ table:tname, id:id, num:(e.row && e.row.num) || '', row:e.row });
+      });
+    });
+    if (appliquees) console.log('[supa sync] ' + appliquees + ' modification(s) de la session précédente, non envoyée(s) à la fermeture, remise(s) et envoyée(s)');
+    if (ecartees.length) {
+      console.warn('[supa sync] ' + ecartees.length + ' modification(s) non envoyée(s) écartée(s) : modifiée(s) ailleurs entre-temps →',
+        ecartees.map(function(x){ return x.table + ' ' + (x.num || x.id); }).join(', '));
+      try { localStorage.setItem('ci_grc3_pending_ecartees', JSON.stringify({ le:new Date().toISOString(), lignes:ecartees })); } catch(e){}
+      setTimeout(function(){ _toast('⚠ ' + ecartees.length + ' modification(s) non envoyée(s) à la dernière fermeture n\'ont pas été reprises : modifiées ailleurs entre-temps (' +
+        ecartees.map(function(x){ return x.num || x.id; }).slice(0, 4).join(', ') + ').', 'err'); }, 2500);
+    }
   }
 
   // ===== Init client =====
@@ -58490,7 +58597,22 @@ function critProceed(){
         var data = newRow && newRow.data;
         if (!data) return; // payload incomplet (rare)
         var idx = DB[table].findIndex(function(r){ return r && String(r.id) === idStr; });
-        if (idx >= 0) DB[table][idx] = data;
+        // [02/11/2026] Une ligne modifiée ici et pas encore envoyée n'est JAMAIS
+        // remplacée par un écho (ancienne version de notre propre envoi, ou version
+        // d'un autre poste) : elle part au prochain envoi. Cf _rowSynced.
+        var known = _rowSynced[table] = _rowSynced[table] || {};
+        var inH = _rowHash(data);
+        var localH = idx >= 0 ? _rowHash(DB[table][idx]) : null;
+        var localModifiee = idx >= 0 && localH !== known[idStr];
+        var supprimeeIci = idx < 0 && eventType === 'UPDATE' && _lastSyncedIds[table] && _lastSyncedIds[table].has(idStr);
+        known[idStr] = inH; // version désormais dans le cloud
+        if (supprimeeIci) {
+          // supprimée ici, suppression pas encore envoyée : ne pas la faire revenir
+        } else if (idx >= 0 && localH === inH) {
+          // identique : rien à remplacer
+        } else if (localModifiee) {
+          if (!isFromUs) console.warn('[supa realtime] ' + table + ' ' + idStr + ' modifiée sur un autre poste pendant une modification locale non envoyée : la version locale est gardée');
+        } else if (idx >= 0) DB[table][idx] = data;
         else DB[table].push(data);
         // Update _meta
         if (!_meta[table]) _meta[table] = {};
@@ -58498,15 +58620,15 @@ function critProceed(){
           created_at: newRow.created_at, created_by: newRow.created_by,
           updated_at: newRow.updated_at, updated_by: newRow.updated_by
         };
-        // Update tracking sync (sinon prochain push utilisateur croit qu'il y a un diff)
-        if (_lastSyncedIds[table]) _lastSyncedIds[table].add(idStr);
-        _lastSyncedHash[table] = _hashArr(DB[table]);
+        // Tracking sync : la ligne existe dans le cloud. (Plus de hash de TABLE
+        // recalculé ici : il marquait « envoyées » les modifications locales.)
+        if (!supprimeeIci && _lastSyncedIds[table]) _lastSyncedIds[table].add(idStr);
       } else if (eventType === 'DELETE') {
         var idx2 = DB[table].findIndex(function(r){ return r && String(r.id) === idStr; });
         if (idx2 >= 0) DB[table].splice(idx2, 1);
         if (_meta[table]) delete _meta[table][idStr];
         if (_lastSyncedIds[table]) _lastSyncedIds[table].delete(idStr);
-        _lastSyncedHash[table] = _hashArr(DB[table]);
+        if (_rowSynced[table]) delete _rowSynced[table][idStr];
       } else {
         // event inconnu (ne devrait pas arriver avec event:'*')
         return;
@@ -58784,6 +58906,22 @@ function critProceed(){
         return !(v === undefined || typeof v === 'function');
       })
     );
+    // [02/11/2026] Version cloud de chaque ligne / clé (cf _rowSynced), puis rejeu des
+    // modifications non envoyées à la dernière fermeture. La clé PENDING_KEY reste :
+    // _pendingEcrire la vide au premier envoi réussi (fermer avant ne perd rien).
+    _rowSynced = { _params:{} };
+    TABLES.forEach(function(t){
+      var k = _rowSynced[t.name] = {};
+      (DB[t.arr] || []).forEach(function(r){ if (r && r.id != null) k[String(r.id)] = _rowHash(r); });
+    });
+    Object.keys(DB).forEach(function(k){
+      if (_isTableKey(k)) return;
+      var v = DB[k];
+      if (v === undefined || typeof v === 'function') return;
+      _rowSynced._params[k] = _rowHash(v);
+    });
+    try { _pendingRejouer(JSON.parse(localStorage.getItem(PENDING_KEY) || 'null')); }
+    catch(e){ console.warn('[supa sync] rejeu des modifications non envoyées :', e); }
     // Garde-fous existants — MAINTENANT seulement, après le snapshot ci-dessus.
     // dedupeDB peut maintenant retirer des duplicates de DB sans casser le
     // tracking des ids Supabase à supprimer.
@@ -58821,18 +58959,35 @@ function critProceed(){
     if (_syncInFlight) { _syncPending = true; return; }
     _syncInFlight = true;
     try {
-      // Détecter les tables modifiées
+      // [02/11/2026] Détecter les LIGNES modifiées (et les suppressions) par table —
+      // jamais la table entière (cf _rowSynced).
       var changed = [];
       TABLES.forEach(function(t){
-        var h = _hashArr(DB[t.arr]);
-        if (h !== _lastSyncedHash[t.name]) changed.push({ t:t, h:h });
+        var dirty = _rowsDirty(t.name, DB[t.arr]);
+        var currentIds = new Set((DB[t.arr] || []).filter(function(r){ return r && r.id != null; })
+                                                  .map(function(r){ return String(r.id); }));
+        var idsToDelete = [];
+        var lastSynced = _lastSyncedIds[t.name];
+        // SAFETY : _lastSyncedIds jamais initialisé (pas de fetch réussi) → pas de delete.
+        if (lastSynced && lastSynced.size > 0) {
+          lastSynced.forEach(function(id){ if (!currentIds.has(id)) idsToDelete.push(id); });
+        }
+        if (dirty.length || idsToDelete.length) changed.push({ t:t, dirty:dirty, del:idsToDelete });
       });
-      var pH = _hashParamsBucket();
-      var paramsChanged = (pH !== _lastSyncedHash._params);
+      var pDirty = _paramsDirty();
+      var paramsKeysToDelete = [];
+      if (_lastSyncedParamsKeys && _lastSyncedParamsKeys.size > 0) {
+        _lastSyncedParamsKeys.forEach(function(k){
+          var v = DB[k];
+          if (_isTableKey(k) || v === undefined || typeof v === 'function') paramsKeysToDelete.push(k);
+        });
+      }
+      var paramsChanged = pDirty.length > 0 || paramsKeysToDelete.length > 0;
       if (changed.length === 0 && !paramsChanged) {
         _syncInFlight = false;
         return;
       }
+      _pendingEcrire(); // si le GRC est fermé pendant l'envoi : rejoué au chargement suivant
       var errors = [];
 
       // ===== Sync par TABLE : delete (si suppressions locales détectées) PUIS upsert =====
@@ -58844,15 +58999,8 @@ function critProceed(){
       // de fetch initial réussi), on saute la phase delete pour ce table → aucun
       // delete accidentel sur des données dont on ignore la présence cloud.
       var pushes = changed.map(function(c){
-        var rows = (DB[c.t.arr] || []).map(c.t.mirror).filter(function(r){ return r.id != null; });
-        var currentIds = new Set(rows.map(function(r){ return String(r.id); }));
-        var lastSynced = _lastSyncedIds[c.t.name];
-        var idsToDelete = [];
-        if (lastSynced && lastSynced.size > 0) {
-          lastSynced.forEach(function(id){
-            if (!currentIds.has(id)) idsToDelete.push(id);
-          });
-        }
+        var rows = c.dirty.map(function(x){ return c.t.mirror(x.r); });
+        var idsToDelete = c.del;
         var chain = Promise.resolve();
         if (idsToDelete.length > 0) {
           console.log('[supa sync] DELETE', c.t.name, idsToDelete.length, 'id(s) :', idsToDelete);
@@ -58875,33 +59023,23 @@ function critProceed(){
             });
           });
         }
-        // Succès complet (delete + upsert) → on met à jour le snapshot
+        // Succès complet (delete + upsert) → version cloud des lignes envoyées = celle
+        // envoyée (hash pris AVANT l'envoi : une ligne retouchée pendant l'envoi
+        // reste « modifiée » et repart au tour suivant).
         return chain.then(function(){
-          _lastSyncedIds[c.t.name] = currentIds;
-          _lastSyncedHash[c.t.name] = c.h;
+          var known = _rowSynced[c.t.name] = _rowSynced[c.t.name] || {};
+          var ids = _lastSyncedIds[c.t.name] = _lastSyncedIds[c.t.name] || new Set();
+          c.dirty.forEach(function(x){ known[String(x.r.id)] = x.h; ids.add(String(x.r.id)); });
+          idsToDelete.forEach(function(id){ delete known[id]; ids.delete(id); });
         }).catch(function(){
-          // Erreur déjà loggée dans errors → on n'updateNOT _lastSynced{Ids,Hash}
-          // pour que le prochain tick retente la sync de ce table.
+          // Erreur déjà loggée dans errors → rien n'est marqué envoyé : le prochain
+          // tick retente ces lignes.
         });
       });
 
-      // ===== Sync de la table params (key/value) =====
+      // ===== Sync de la table params (key/value) — seulement les clés modifiées =====
       if (paramsChanged) {
-        var paramRows = [];
-        var currentParamKeys = new Set();
-        Object.keys(DB).forEach(function(k){
-          if (_isTableKey(k)) return;
-          var v = DB[k];
-          if (v === undefined || typeof v === 'function') return;
-          paramRows.push({ key:k, value:v });
-          currentParamKeys.add(k);
-        });
-        var paramsKeysToDelete = [];
-        if (_lastSyncedParamsKeys && _lastSyncedParamsKeys.size > 0) {
-          _lastSyncedParamsKeys.forEach(function(k){
-            if (!currentParamKeys.has(k)) paramsKeysToDelete.push(k);
-          });
-        }
+        var paramRows = pDirty.map(function(x){ return { key:x.key, value:x.value }; });
         var paramsChain = Promise.resolve();
         if (paramsKeysToDelete.length > 0) {
           console.log('[supa sync] DELETE params key(s) :', paramsKeysToDelete);
@@ -58925,13 +59063,16 @@ function critProceed(){
           });
         }
         paramsChain = paramsChain.then(function(){
-          _lastSyncedParamsKeys = currentParamKeys;
-          _lastSyncedHash._params = pH;
+          var known = _rowSynced._params = _rowSynced._params || {};
+          var keys = _lastSyncedParamsKeys = _lastSyncedParamsKeys || new Set();
+          pDirty.forEach(function(x){ known[x.key] = x.h; keys.add(x.key); });
+          paramsKeysToDelete.forEach(function(k){ delete known[k]; keys.delete(k); });
         }).catch(function(){});
         pushes.push(paramsChain);
       }
 
       await Promise.all(pushes);
+      _pendingEcrire(); // envoyé → la copie de secours est vidée (ou réduite au reste)
       if (errors.length > 0) {
         console.warn('[supa sync] erreurs :', errors);
         _toast('⚠ Sync cloud partielle (' + errors.length + ' erreur' + (errors.length>1?'s':'') +
@@ -59041,6 +59182,8 @@ function critProceed(){
     if (!offlineMode && typeof window._migrationsApresCloud === 'function') {
       try { window._migrationsApresCloud(); } catch(e) { console.warn('_migrationsApresCloud failed:', e); }
     }
+    // Modifications rejouées de la session précédente (cf _pendingRejouer) : envoi.
+    if (!offlineMode) { try { window._supaSyncSchedule(); } catch(e){} }
     // Re-render via nav() pour refléter les vraies données fraîchement chargées.
     try { if (typeof nav === 'function') nav('dashboard'); } catch(e) { console.warn('nav failed:', e); }
     // PHASE 3 : activer Supabase Realtime (online uniquement). Push remote events
@@ -59071,6 +59214,11 @@ function critProceed(){
     _msg('Entrez vos identifiants pour vous connecter.', false);
     if (em) em.focus();
   }
+
+  // [02/11/2026] Fermeture avant l'envoi (1 s après la modification) : garder les
+  // lignes non envoyées pour le chargement suivant (cf _pendingEcrire/_pendingRejouer).
+  window.addEventListener('pagehide', function(){ try { _pendingEcrire(); } catch(e){} });
+  window.addEventListener('beforeunload', function(){ try { _pendingEcrire(); } catch(e){} });
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _boot);
