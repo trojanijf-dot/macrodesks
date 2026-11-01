@@ -1051,6 +1051,7 @@ body.has-dashboard-bg #page-dashboard .metric{
   <button class="sb-item" onclick="nav('coutrevient');renderCoutRevient()" title="Coût de revient débarqué · seuils commerciaux et forfaits transitaire du moteur landed cost"><span class="ico"><span class="ico-classic">💰</span><i class="ti ti-calculator ico-pro"></i></span>Coût de revient</button>
   <div class="sb-sec">Données</div>
   <button class="sb-item" onclick="ouvrirJournal()" title="Journal d'activité : ce qui a été fait pendant la session et les 5 derniers jours"><span class="ico"><span class="ico-classic">🕘</span><i class="ti ti-clock-hour-4 ico-pro"></i></span>Journal <span id="jrBadgeSide" style="display:none;margin-left:auto;font-size:10px;background:var(--teal);color:#06261f;border-radius:999px;padding:0 6px;font-weight:700"></span></button>
+  <button class="sb-item" onclick="ouvrirRapportAnnuel()" title="Rapport annuel du GRC : un seul PDF par année, sections au choix"><span class="ico"><span class="ico-classic">📘</span><i class="ti ti-book ico-pro"></i></span>Rapport annuel</button>
   <button class="sb-item" onclick="ouvrirControleBC()" title="BC clients : du bon client, identiques au devis, dates cohérentes"><span class="ico"><span class="ico-classic">🔎</span><i class="ti ti-file-search ico-pro"></i></span>Contrôle BC client</button>
   <button class="sb-item" onclick="ouvrirControlePdf()" title="Compare chaque facture émise à son PDF archivé (celui envoyé au client) : montant TTC et lignes"><span class="ico"><span class="ico-classic">🛡</span><i class="ti ti-shield-check ico-pro"></i></span>Contrôle PDF</button>
   <button class="sb-item" onclick="exportJSON()"><span class="ico"><span class="ico-classic">💾</span><i class="ti ti-download ico-pro"></i></span>Exporter JSON</button>
@@ -1090,7 +1091,7 @@ body.has-dashboard-bg #page-dashboard .metric{
     <button class="btn btn-ghost btn-sm btn-lock" onclick="lockApp()" title="Verrouiller l'application (Ctrl+L)"><span class="ico-classic">🔒</span><i class="ti ti-lock ico-pro" style="font-size:13px"></i> Verrouiller</button>
     <!-- Bouton ajouté pour l'intégration Supabase — délogue la session cloud puis reload. -->
     <button class="btn btn-ghost btn-sm" id="supaLogoutBtn" onclick="if(typeof _supaLogout==='function')_supaLogout()" title="Se déconnecter du compte cloud (Supabase)" style="display:none"><span class="ico-classic">🚪</span><i class="ti ti-logout ico-pro" style="font-size:13px"></i> Se déconnecter</button>
-    <button class="btn btn-ghost btn-sm" onclick="window.print()"><span class="ico-classic">🖨</span><i class="ti ti-printer ico-pro" style="font-size:13px"></i> Imprimer</button>
+    <button class="btn btn-ghost btn-sm" onclick="grcImprimer()" title="Imprimer cette page : options, aperçu papier, puis impression / PDF"><span class="ico-classic">🖨</span><i class="ti ti-printer ico-pro" style="font-size:13px"></i> Imprimer</button>
   </div>
 </div>
 <div id="content">
@@ -6603,6 +6604,309 @@ function migrateSuiviLiensAutreFacture(){
   if(n) saveDB();
   return n;
 }
+// =============================================================================
+// IMPRESSION DES PAGES + RAPPORT ANNUEL (01/11/2026)
+// =============================================================================
+// Le bouton « 🖨 Imprimer » imprimait l'écran tel quel (thème sombre, mois repliés).
+// Désormais : options adaptées à la page → aperçu papier → impression.
+// ⛔ Les chiffres viennent des MÊMES fonctions que l'écran (_faKpisCalc, _calcKpiDV,
+// _bcMontantParDevise, _reglLignes, _rentaAffaires/_rentaTotaux, getSuiviSource) :
+// aucun calcul refait à part. Toutes les lignes sont imprimées (rien de replié).
+// Lot 1 : dashboard, factures, devis, bons de commande, rapport annuel. Les pages qui
+// avaient déjà leur PDF le gardent ; les autres impriment l'écran comme avant.
+var IMP_PAGES={dashboard:'Tableau de bord',factures:'Factures',devis:'Devis',bc:'Bons de commande'};
+var IMP_MOIS=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+var IMP_CONTENU={
+  factures:[['','Toutes'],['emises','Émises'],['pre','Pré-factures'],['impayees','Impayées'],['retard','En retard'],['payees','Payées']],
+  devis:[['','Actives (hors versions remplacées)'],['Envoyé','Envoyés'],['Accepté','Acceptés'],['Facturé','Facturés'],['Refusé','Refusés'],['Brouillon','Brouillons'],['tout','Toutes, versions remplacées comprises']],
+  bc:[['','Tous'],['En attente','En attente'],['Confirmé','Confirmés'],['Livré','Livrés'],['Annulé','Annulés']]
+};
+var IMP_SECTIONS=[['synthese','Synthèse (tableau de bord, CA mensuel, top clients)',1],['devis','Devis (pipeline, taux de transformation)',1],
+  ['factures','Factures (émises, par mois)',1],['reglements','Règlements (encaissé, impayés, retards)',1],['bc','Bons de commande Emerson (achats, statuts, remplacements)',1],
+  ['renta','Rentabilité Emerson (marge par affaire)',1],['bl','Bons de livraison',0],['clients','Clients (CA de l\'année + coordonnées)',0]];
+var _impEtat=null;
+function _impPageCourante(){ var p=document.querySelector('.page.active'); return p?p.id.replace(/^page-/,''):''; }
+function grcImprimer(){
+  var pg=_impPageCourante();
+  if(IMP_PAGES[pg]) return ouvrirImpression(pg);
+  if(pg==='suivicmd' && typeof suiviCmdImprimerPDF==='function') return suiviCmdImprimerPDF();
+  if(pg==='pointage' && typeof ptPaiePrint==='function') return ptPaiePrint();
+  window.print();
+}
+function _impClient(x){ return extractClientGroup({client:x||''}); }
+function _impDateFa(i){ return i.dateEnvoi||i._dateCreation||i.dateReceptionBC||''; }
+function _impDansPeriode(d,o){ d=String(d||''); if(o.annee && d.slice(0,4)!==String(o.annee)) return false; if(o.mois && d.slice(5,7)!==o.mois) return false; return true; }
+function _impAnnees(){
+  var s={}; var add=function(d){ var y=String(d||'').slice(0,4); if(/^\d{4}$/.test(y)) s[y]=1; };
+  (DB.devis||[]).forEach(function(d){add(d.date);}); (DB.factures||[]).forEach(function(f){add(f.date);}); (DB.bcs||[]).forEach(function(b){add(b.date);});
+  var l=Object.keys(s).sort().reverse(); if(!l.length) l=[String(new Date().getFullYear())]; return l;
+}
+function _impClients(){
+  var s={}; (DB.factures||[]).concat(DB.devis||[]).forEach(function(x){ if(x&&x.client) s[_impClient(x.client)]=1; });
+  (DB.bcs||[]).forEach(function(b){ if(b&&b.clientFinal) s[_impClient(b.clientFinal)]=1; });
+  return Object.keys(s).filter(function(k){return k && k!=='Sans client';}).sort();
+}
+// Montant affiché (ou masqué si « Masquer les montants »)
+function _impM(o,v,dev){ return o.masquer?'•••':(fN(v)+(dev?' '+esc(dev):'')); }
+function _impCourt(s,n){ s=String(s||'').replace(/\s+/g,' ').trim(); return s.length>n?s.slice(0,n-1).replace(/[\s,;:\-—–/(+]+$/,'')+'…':s; }
+var IMP_MOIS_COURT=['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'];
+function _impPeriodeTxt(o){ return (o.mois?IMP_MOIS[Number(o.mois)-1]+' ':'')+(o.annee||'toutes années')+(o.client?' · client '+o.client:' · tous clients'); }
+function _impKpis(l){ var nc=l.length<=6?l.length:Math.ceil(l.length/2); return '<div class="kp" style="grid-template-columns:repeat('+nc+',1fr)">'+l.map(function(k){ return '<div><em>'+k[0]+'</em><strong'+(k[3]?' class="'+k[3]+'"':'')+'>'+k[1]+'</strong>'+(k[2]?'<small>'+k[2]+'</small>':'')+'</div>'; }).join('')+'</div>'; }
+// Groupes par mois (tri chronologique), lignes dépliées, sous-total par mois et total.
+function _impParMois(items,dateDe,ligneDe,colspan,totalDe){
+  var g={}; items.forEach(function(x){ var k=String(dateDe(x)||'').slice(0,7)||'sans date'; (g[k]=g[k]||[]).push(x); });
+  return Object.keys(g).sort().map(function(k){
+    var l=g[k].sort(function(a,b){return String(dateDe(a)||'').localeCompare(String(dateDe(b)||''));});
+    var lib=k==='sans date'?'Sans date':IMP_MOIS[Number(k.slice(5,7))-1]+' '+k.slice(0,4);
+    return '<tr class="grp"><td colspan="'+colspan+'">'+lib+' — '+l.length+' élément'+(l.length>1?'s':'')+(totalDe?' · '+totalDe(l):'')+'</td></tr>'+l.map(ligneDe).join('');
+  }).join('');
+}
+// ----- Factures (mêmes données et KPI que la page : getSuiviSource + _faKpisCalc) -----
+function _impFacturesData(o){
+  return getSuiviSource().filter(function(i){
+    if(!_impDansPeriode(_impDateFa(i),o)) return false;
+    if(o.client && _impClient(i.client)!==o.client) return false;
+    var pre=isPrebilled(i), st=pre?'prebilled':getStatus(i);
+    if(o.contenu==='emises') return !pre;
+    if(o.contenu==='pre') return pre;
+    if(o.contenu==='impayees') return !pre && st!=='paid';
+    if(o.contenu==='retard') return st==='late';
+    if(o.contenu==='payees') return st==='paid';
+    return true;
+  });
+}
+function _impFactures(o){
+  var data=_impFacturesData(o), k=_faKpisCalc(data), M=function(v){return _impM(o,v);};
+  var fa=function(i){ return (DB.factures||[]).find(function(f){return f.id===(i._factureId||i.grcFactureId);}); };
+  var stLib=function(i){ if(isPrebilled(i)) return '<span class="mut">Pré-facturée</span>'; var s=getStatus(i); return s==='paid'?'<span class="ok">Payée</span>':s==='late'?'<span class="late">En retard</span>':s==='partial'?'<span class="part">Partiel</span>':'<span class="att">En attente</span>'; };
+  var ht=function(l){ return l.reduce(function(s,i){var f=fa(i); return s+(f?Number(f.ht)||0:0);},0); };
+  var tg=function(l){ return l.reduce(function(s,i){var f=fa(i); return s+(f?Number(f.tgc)||0:0);},0); };
+  var tt=function(l){ return l.reduce(function(s,i){return s+(Number(i.montant)||0);},0); };
+  var h=_impKpis([['Total TTC',M(k.totalAll),k.nTotal+' facture(s)'],['Encaissé',M(k.paidSum),k.nPaid+' au statut « Payée »','ok'],['Reste à recouvrer',M(k.pendingSum+k.lateSum),(k.nPending+k.nLate)+' facture(s)'],['En retard',M(k.lateSum),k.nLate+' facture(s)','late'],['Pré-facturé (hors CA)',M(k.prebilledSum),k.nPrebilled+' pré-facture(s)','mut']].filter(function(x){ return o.contenu!=='emises' || x[0].indexOf('Pré-facturé')<0; }));
+  h+='<div class="note">Encaissé = factures au statut « Payée », comme les cartes de la page Factures (la page Règlements, elle, compte les encaissements saisis).</div>';
+  var lignes=_impParMois(data,_impDateFa,function(i){ var f=fa(i), ph=(typeof getPhase==='function'&&f)?getPhase(f):null, enc=(typeof _faGetEncaissement==='function')?_faGetEncaissement(i):'';
+      return '<tr><td class="num">'+esc(i.num||'')+'</td><td>'+fD(_impDateFa(i))+'</td><td class="cli">'+esc(i.client||'')+'</td><td class="obj">'+esc(_impCourt(i.intitule||i.objet,72))+'</td><td>'+esc(ph?ph.label:'')+'</td>'+
+        '<td class="n">'+(f?M(f.ht):'—')+'</td><td class="n">'+(f?M(f.tgc):'—')+'</td><td class="n b">'+M(i.montant)+'</td><td>'+(i.dateButoir?fD(i.dateButoir):'')+'</td><td>'+(enc?fD(enc):'')+'</td><td>'+stLib(i)+'</td></tr>'; },11,
+    o.totaux?function(l){return 'HT '+M(ht(l))+' · TGC '+M(tg(l))+' · TTC '+M(tt(l));}:null);
+  h+='<table><thead><tr><th>N°</th><th>Date</th><th>Client</th><th>Objet</th><th>Phase</th><th class="n">HT</th><th class="n">TGC</th><th class="n">TTC</th><th>Échéance</th><th>Encaissé le</th><th>Statut</th></tr></thead><tbody>'+
+    (lignes||'<tr><td colspan="11" class="vide">Aucune facture.</td></tr>')+
+    (o.totaux&&data.length?'<tr class="tot"><td colspan="5">Total — '+data.length+' facture(s)</td><td class="n">'+M(ht(data))+'</td><td class="n">'+M(tg(data))+'</td><td class="n">'+M(tt(data))+'</td><td colspan="3"></td></tr>':'')+'</tbody></table>';
+  return {titre:'Factures',html:h,n:data.length};
+}
+// ----- Devis (KPI : _calcKpiDV, comme la page ; TTC : _getDevisTTC comme la page) -----
+function _impDevisTTC(d){ return (typeof _getDevisTTC==='function'?_getDevisTTC(d):d.ttc)||0; }
+function _impDevis(o){
+  var base=(DB.devis||[]).filter(function(d){ return _impDansPeriode(d.date,o) && (!o.client || _impClient(d.client)===o.client); });
+  var fy0=fiscalYear, kpi; try{ if(o.annee) fiscalYear=Number(o.annee); kpi=_calcKpiDV(base); } finally{ fiscalYear=fy0; }
+  var data=base.filter(function(d){
+    if(o.contenu==='tout') return true;
+    if(_dvIsSuperseded(d)) return false;
+    return !o.contenu || d.status===o.contenu;
+  });
+  var M=function(v){return _impM(o,v);};
+  var sc=kpi.statusCount||{}, sm=kpi.statusMontant||{};
+  var h=_impKpis([['Devis comptés (envoyés, acceptés, facturés)',M(kpi.totalCounted),kpi.countCounted+' devis'],['Acceptés',M(sm['Accepté']||0),(sc['Accepté']||0)+' devis','ok'],['Facturés',M(sm['Facturé']||0),(sc['Facturé']||0)+' devis'],['En attente client',M(sm['Envoyé']||0),(sc['Envoyé']||0)+' devis','att'],['Taux de transformation',(kpi.tauxAccept!=null?Math.round(kpi.tauxAccept)+' %':'—'),'acceptés + facturés / tranchés']]);
+  var tt=function(l){return l.reduce(function(s,d){return s+_impDevisTTC(d);},0);};
+  var lignes=_impParMois(data,function(d){return d.date;},function(d){
+    var f=d.linkFactureId!=null?(DB.factures||[]).find(function(x){return x.id===d.linkFactureId;}):null;
+    return '<tr><td class="num">'+esc(d.num||'')+(d.rev?' '+esc(d.rev):'')+'</td><td>'+fD(d.date)+'</td><td class="cli">'+esc(d.client||'')+'</td><td class="obj">'+esc(_impCourt(d.objet,72))+'</td><td>'+esc(d.type||'')+'</td>'+
+      '<td>'+esc(d.status||'Brouillon')+(_dvIsSuperseded(d)?' <span class="mut">(remplacé)</span>':'')+'</td><td class="n b">'+M(_impDevisTTC(d))+'</td><td>'+esc(typeof _dvBCClientNum==='function'?_dvBCClientNum(d):'')+'</td><td>'+esc(f?f.num:'')+'</td></tr>'; },9,
+    o.totaux?function(l){return 'TTC '+M(tt(l));}:null);
+  h+='<table><thead><tr><th>N°</th><th>Date</th><th>Client</th><th>Objet</th><th>Type</th><th>Statut</th><th class="n">TTC</th><th>BC client</th><th>Facture</th></tr></thead><tbody>'+
+    (lignes||'<tr><td colspan="9" class="vide">Aucun devis.</td></tr>')+
+    (o.totaux&&data.length?'<tr class="tot"><td colspan="6">Total — '+data.length+' devis listés (tous statuts)</td><td class="n">'+M(tt(data))+'</td><td colspan="2"></td></tr>':'')+'</tbody></table>'+
+    '<div class="note">Indicateurs calculés comme sur la page Devis (année '+esc(o.annee||'')+(o.client?', client '+esc(o.client):'')+(o.mois?', '+IMP_MOIS[Number(o.mois)-1]:'')+').</div>';
+  return {titre:'Devis',html:h,n:data.length};
+}
+// ----- Bons de commande (totaux par statut : _bcMontantParDevise, comme la page) -----
+function _impBC(o){
+  var base=(DB.bcs||[]).filter(function(b){ return _impDansPeriode(b.date,o) && (!o.client || _impClient(b.clientFinal)===o.client); });
+  var data=base.filter(function(b){ return !o.contenu || b.status===o.contenu; });
+  var M=function(v,dv){return _impM(o,v,dv);};
+  var montant=function(l){ return o.masquer?'•••':_bcMontantParDevise(l); };
+  var h=_impKpis(BC_STATUTS_TOTAUX.map(function(c){ var l=c[0]?base.filter(function(b){return b.status===c[0];}):base; return [c[1],montant(l),l.length+' PO',c[0]==='Livré'?'ok':(c[0]==='Annulé'?'mut':'')]; })
+    .concat([['Coût Emerson (XPF)',M(base.reduce(function(s,b){return s+getBCCoutXPF(b);},0)),'au taux de chaque PO']]));
+  var nR=base.filter(_bcEstRemplacement);
+  if(nR.length) h+='<div class="note">🔁 '+nR.length+' PO de remplacement à nos frais : '+nR.map(function(b){return esc(b.num);}).join(', ')+'.</div>';
+  var lignes=_impParMois(data,function(b){return b.date;},function(b){
+    var l=(b.lines||[]).find(function(x){return x && x.type!=='header' && (x.desc||x.ref);});
+    var orig=_bcEstRemplacement(b)?(DB.bcs||[]).find(function(x){return String(x.id)===String(b.remplacement.remplace);}):null, par=_bcRemplacePar(b);
+    return '<tr><td class="num">'+esc(b.num||'')+(orig?'<div class="mut">🔁 remplace '+esc(orig.num)+'</div>':'')+(par.length?'<div class="late">pièce erronée</div>':'')+'</td><td>'+fD(b.date)+'</td><td class="cli">'+esc(b.clientFinal||'')+'</td><td>'+esc(b.linkBCclient||'')+'</td>'+
+      '<td class="obj">'+esc(l?_impCourt(l.desc||l.ref,62):'')+'</td><td class="n b">'+M(b.total,b.devise||'AUD')+'</td><td class="n">'+M(getBCCoutXPF(b))+'</td><td>'+esc(b.status||'')+'</td></tr>'; },8,
+    o.totaux?function(l){return montant(l);}:null);
+  h+='<table><thead><tr><th>N° PO</th><th>Date</th><th>Client final</th><th>BC client</th><th>Description</th><th class="n">Montant</th><th class="n">Coût XPF</th><th>Statut</th></tr></thead><tbody>'+
+    (lignes||'<tr><td colspan="8" class="vide">Aucun bon de commande.</td></tr>')+
+    (o.totaux&&data.length?'<tr class="tot"><td colspan="5">Total — '+data.length+' PO</td><td class="n">'+montant(data)+'</td><td class="n">'+M(data.reduce(function(s,b){return s+getBCCoutXPF(b);},0))+'</td><td></td></tr>':'')+'</tbody></table>';
+  return {titre:'Bons de commande Emerson',html:h,n:data.length};
+}
+// ----- Règlements (_reglLignes : règle d'échéance et encaissements de la page) -----
+function _impReglements(o){
+  var data=_reglLignes().filter(function(x){ return _impDansPeriode(x.date,o) && (!o.client || x.client===o.client || _impClient(x.client)===o.client); });
+  var M=function(v){return _impM(o,v);};
+  var fac=data.reduce(function(s,x){return s+x.ttc;},0), enc=data.reduce(function(s,x){return s+x.verse;},0);
+  var rel=data.filter(function(x){return x.retard>0 && x.reste>0;});
+  var h=_impKpis([['Facturé (émis)',M(fac),data.length+' facture(s)'],['Encaissé',M(enc),'règlements pointés','ok'],['Reste dû',M(fac-enc),data.filter(function(x){return x.reste>0;}).length+' facture(s)'],['À relancer (échues)',M(rel.reduce(function(s,x){return s+x.reste;},0)),rel.length+' facture(s)','late']]);
+  var lignes=_impParMois(data,function(x){return x.date;},function(x){
+    return '<tr><td class="num">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td><td class="cli">'+esc(x.client||'')+'</td><td class="obj">'+esc(_impCourt(x.objet,64))+'</td><td>'+fD(x.ech)+'</td><td class="n b">'+M(x.ttc)+'</td><td class="n">'+M(x.verse)+'</td><td class="n'+(x.reste>0&&x.retard>0?' late':'')+'">'+(x.reste>0?M(x.reste):'<span class="ok">soldée</span>')+'</td><td>'+(x.enc?fD(x.enc):'')+(x.reste>0&&x.retard>0?'<span class="late"> · '+x.retard+' j de retard</span>':'')+'</td></tr>'; },9,
+    o.totaux?function(l){return 'facturé '+M(l.reduce(function(s,x){return s+x.ttc;},0))+' · encaissé '+M(l.reduce(function(s,x){return s+x.verse;},0));}:null);
+  h+='<table><thead><tr><th>N°</th><th>Émise le</th><th>Client</th><th>Objet</th><th>Échéance</th><th class="n">TTC</th><th class="n">Encaissé</th><th class="n">Reste</th><th>Encaissement</th></tr></thead><tbody>'+(lignes||'<tr><td colspan="9" class="vide">Aucune facture émise.</td></tr>')+'</tbody></table>'+
+    '<div class="note">Échéance : 30 jours fin de mois à compter de l\'envoi · encaissé = règlements pointés (comme la page Règlements).</div>';
+  return {titre:'Règlements',html:h,n:data.length};
+}
+// ----- Rentabilité Emerson (_rentaAffaires / _rentaTotaux, comme la page) -----
+function _impRentaAffaires(o){ return _rentaAffaires().filter(function(a){ return _impDansPeriode(a.date,o) && (!o.client || a.client===o.client); }); }
+function _impRenta(o){
+  var aff=_impRentaAffaires(o), t=_rentaTotaux(aff), M=function(v){return _impM(o,v);};
+  var h=_impKpis([['CA fourniture HT',M(t.ca),t.nAffaires+' affaire(s)'],['Coût Emerson',M(t.cout),''],['Frais de transit',M(t.frais),t.fraisEstimes?'dont '+M(t.fraisEstimes)+' estimés':''],['Bénéfice net',M(t.benef),t.remplacement?'dont −'+M(t.remplacement)+' de remplacements':'',t.benef<0?'late':'ok'],['Marge nette',(t.ca?(Math.round(t.marge*10)/10).toLocaleString('fr-FR')+' %':'—'),'bénéfice / CA HT']]);
+  var rows=aff.slice().sort(function(a,b){return String(a.date).localeCompare(String(b.date));}).map(function(a){
+    return '<tr><td class="num">'+a.pos.map(function(b){return esc(b.num);}).join('<br>')+'</td><td>'+fD(a.date)+'</td><td class="cli">'+esc(a.contact||a.client)+'</td><td>'+a.factures.map(function(f){return esc(f.num);}).join(', ')+'</td>'+
+      '<td class="n">'+(a.sansFacture?'—':M(a.ca))+'</td><td class="n">'+M(a.cout)+'</td><td class="n">'+M(a.frais)+'</td><td class="n">'+(a.remplacement?M(a.remplacement):'')+'</td>'+
+      '<td class="n b'+(a.benef<0?' late':'')+'">'+(a.sansFacture?'—':M(a.benef))+'</td><td class="n">'+(a.sansFacture||a.marge==null?'—':(Math.round(a.marge*10)/10).toLocaleString('fr-FR')+' %')+'</td><td>'+(a.sansFacture?'<span class="mut">sans facture</span>':a.verifier?'<span class="late">à vérifier</span>':'')+'</td></tr>'; }).join('');
+  h+='<table><thead><tr><th>PO Emerson</th><th>Date</th><th>Client</th><th>Facture(s)</th><th class="n">CA HT</th><th class="n">Coût Emerson</th><th class="n">Frais</th><th class="n">Remplacement</th><th class="n">Bénéfice</th><th class="n">Marge</th><th>État</th></tr></thead><tbody>'+(rows||'<tr><td colspan="11" class="vide">Aucune affaire.</td></tr>')+'</tbody></table>'+
+    '<div class="note">Année = date du dernier PO de l\'affaire, comme le filtre de la page Rentabilité. Les affaires « à vérifier » sont exclues des totaux, comme à l\'écran.</div>';
+  return {titre:'Rentabilité Emerson',html:h,n:aff.length};
+}
+// ----- Bons de livraison -----
+function _impBL(o){
+  var data=(DB.bls||[]).filter(function(b){ return _impDansPeriode(b.date,o) && (!o.client || _impClient(b.client)===o.client); });
+  var lignes=_impParMois(data,function(b){return b.date;},function(b){
+    var f=b._linkedFactureId!=null?(DB.factures||[]).find(function(x){return x.id===b._linkedFactureId;}):null;
+    return '<tr><td class="num">'+esc(b.num||'')+'</td><td>'+fD(b.date)+'</td><td class="cli">'+esc(b.client||'')+'</td><td>'+esc(b.status||'')+'</td><td>'+esc(f?f.num:(b.linkFacture||''))+'</td><td>'+(b.lines||[]).filter(function(l){return l&&l.type!=='header';}).length+' ligne(s)</td></tr>'; },6,null);
+  return {titre:'Bons de livraison',html:'<table><thead><tr><th>N° BL</th><th>Date</th><th>Client</th><th>Statut</th><th>Facture</th><th>Contenu</th></tr></thead><tbody>'+(lignes||'<tr><td colspan="6" class="vide">Aucun bon de livraison.</td></tr>')+'</tbody></table>',n:data.length};
+}
+// ----- Clients : CA émis de l'année (factures émises de la page Factures) + coordonnées -----
+function _impClientsSec(o){
+  var emis=_impFacturesData({annee:o.annee,mois:o.mois,client:o.client,contenu:'emises'}), M=function(v){return _impM(o,v);};
+  var ca={}; emis.forEach(function(i){ var c=_impClient(i.client); ca[c]=(ca[c]||0)+(Number(i.montant)||0); });
+  var tot=Object.keys(ca).reduce(function(s,k){return s+ca[k];},0);
+  var cl=(DB.clients||[]).filter(function(c){ return !o.client || _impClient(c.nom||c.name||'')===o.client; });
+  var h='<table><thead><tr><th>Client</th><th class="n">CA émis TTC</th><th class="n">%</th></tr></thead><tbody>'+Object.keys(ca).sort(function(a,b){return ca[b]-ca[a];}).map(function(k){
+    return '<tr><td class="b">'+esc(k)+'</td><td class="n">'+M(ca[k])+'</td><td class="n">'+(tot?Math.round(ca[k]/tot*1000)/10:0).toLocaleString('fr-FR')+' %</td></tr>'; }).join('')+
+    '<tr class="tot"><td>Total</td><td class="n">'+M(tot)+'</td><td class="n">100 %</td></tr></tbody></table>';
+  h+='<h3>Coordonnées</h3><table><thead><tr><th>Client</th><th>Contact</th><th>E-mail</th><th>Téléphone</th></tr></thead><tbody>'+cl.map(function(c){
+    return '<tr><td class="b">'+esc(c.nom||c.name||'')+'</td><td>'+esc(c.contact||'')+'</td><td>'+esc(c.email||'')+'</td><td>'+esc(c.tel||c.telephone||'')+'</td></tr>'; }).join('')+'</tbody></table>';
+  return {titre:'Clients',html:h,n:cl.length};
+}
+// ----- Synthèse de l'année (tableau de bord imprimé) -----
+function _impSynthese(o){
+  var oo=Object.assign({},o,{mois:''}), M=function(v){return _impM(o,v);};
+  var reg=_reglLignes().filter(function(x){ return _impDansPeriode(x.date,oo) && (!o.client || x.client===o.client || _impClient(x.client)===o.client); });
+  var fac=reg.reduce(function(s,x){return s+x.ttc;},0), enc=reg.reduce(function(s,x){return s+x.verse;},0);
+  var rel=reg.filter(function(x){return x.retard>0 && x.reste>0;});
+  var pre=_impFacturesData(Object.assign({},oo,{contenu:'pre'}));
+  var base=(DB.devis||[]).filter(function(d){ return _impDansPeriode(d.date,oo) && (!o.client || _impClient(d.client)===o.client); });
+  var fy0=fiscalYear, kpi; try{ if(o.annee) fiscalYear=Number(o.annee); kpi=_calcKpiDV(base); } finally{ fiscalYear=fy0; }
+  var t=_rentaTotaux(_impRentaAffaires(oo));
+  var h=_impKpis([['Facturé (émis) TTC',M(fac),reg.length+' facture(s)'],['Encaissé',M(enc),'règlements pointés','ok'],['Reste dû',M(fac-enc),''],['À relancer',M(rel.reduce(function(s,x){return s+x.reste;},0)),rel.length+' échue(s)','late'],
+    ['Pré-facturé (hors CA)',M(pre.reduce(function(s,i){return s+(Number(i.montant)||0);},0)),pre.length+' pré-facture(s)','mut'],['Devis comptés',M(kpi.totalCounted),kpi.countCounted+' devis'],['Taux de transformation',(kpi.tauxAccept!=null?Math.round(kpi.tauxAccept)+' %':'—'),'acceptés + facturés / tranchés'],['Bénéfice Emerson',M(t.benef),t.ca?(Math.round(t.marge*10)/10).toLocaleString('fr-FR')+' % de marge':'',t.benef<0?'late':'ok']]);
+  // CA émis par mois (date d'émission) — barres
+  var mois=new Array(12).fill(0); reg.forEach(function(x){ var m=Number(String(x.date).slice(5,7)); if(m>=1&&m<=12) mois[m-1]+=x.ttc; });
+  var mx=Math.max.apply(null,mois)||1;
+  h+='<h3>CA émis par mois (TTC)</h3><div class="bars">'+mois.map(function(v,i){ return '<div class="bar"><div class="bv">'+(v&&!o.masquer?(Math.round(v/1e5)/10).toLocaleString('fr-FR')+' M':'')+'</div><div class="bf" style="height:'+Math.round(v/mx*100)+'%"></div><div class="bm">'+IMP_MOIS_COURT[i]+'</div></div>'; }).join('')+'</div>';
+  // Top clients (CA émis)
+  var ca={}; reg.forEach(function(x){ var c=_impClient(x.client); ca[c]=(ca[c]||0)+x.ttc; });
+  var top=Object.keys(ca).sort(function(a,b){return ca[b]-ca[a];}).slice(0,8);
+  h+='<div class="cols"><div><h3>Top clients (CA émis)</h3><table><thead><tr><th>Client</th><th class="n">TTC</th><th class="n">%</th></tr></thead><tbody>'+top.map(function(k){return '<tr><td class="b">'+esc(k)+'</td><td class="n">'+M(ca[k])+'</td><td class="n">'+(fac?Math.round(ca[k]/fac*1000)/10:0).toLocaleString('fr-FR')+' %</td></tr>';}).join('')+'</tbody></table></div>';
+  var ech=rel.slice().sort(function(a,b){return b.retard-a.retard;}).slice(0,10);
+  h+='<div><h3>À relancer (échues, les plus anciennes en premier)</h3><table><thead><tr><th>Facture</th><th>Client</th><th>Échéance</th><th class="n">Retard</th><th class="n">Reste dû</th></tr></thead><tbody>'+(ech.map(function(x){return '<tr><td class="num">'+esc(x.num)+'</td><td class="cli">'+esc(x.client||'')+'</td><td>'+fD(x.ech)+'</td><td class="n late">'+x.retard+' j</td><td class="n b">'+M(x.reste)+'</td></tr>';}).join('')||'<tr><td colspan="5" class="vide">Aucune facture échue.</td></tr>')+(rel.length>ech.length?'<tr><td colspan="5" class="mut">… et '+(rel.length-ech.length)+' autre(s)</td></tr>':'')+'</tbody></table></div></div>';
+  h+='<div class="note">Facturé, encaissé, reste et relances : règle de la page Règlements (factures émises, échéance 30 jours fin de mois, règlements pointés). Devis : comme la page Devis. Bénéfice : comme la page Rentabilité.</div>';
+  return {titre:'Synthèse',html:h,n:reg.length};
+}
+var IMP_BUILD={dashboard:_impSynthese,factures:_impFactures,devis:_impDevis,bc:_impBC,synthese:_impSynthese,reglements:_impReglements,renta:_impRenta,bl:_impBL,clients:_impClientsSec};
+// ----- Fenêtre papier : en-tête CALINSTRUM, pied de page numéroté, aperçu puis impression -----
+function _impCss(o){
+  return '@page{size:A4 '+(o.paysage?'landscape':'portrait')+';margin:12mm 11mm 14mm;@bottom-left{content:"'+(CI&&CI.nom?CI.nom.replace(/"/g,''):'CALINSTRUM')+' · GRC · document interne";font:8px Calibri,Arial,sans-serif;color:#8a96a3}@bottom-right{content:"page " counter(page) " / " counter(pages);font:8px Calibri,Arial,sans-serif;color:#8a96a3}}'+
+    'html,body{background:#fff;color-scheme:light}body{font-family:Calibri,Arial,sans-serif;color:#111;font-size:10px;margin:0}'+
+    '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #e46c12;padding-bottom:8px;margin-bottom:10px}'+
+    'h1{font-size:19px;color:#1b365d;margin:4px 0 2px}h2{font-size:15px;color:#1b365d;margin:0 0 8px;border-bottom:1.5px solid #e46c12;padding-bottom:3px}h3{font-size:11.5px;color:#1b365d;margin:12px 0 5px}'+
+    '.sub{color:#5b6b7a;font-size:10.5px}table{width:100%;border-collapse:collapse;margin-bottom:6px}'+
+    'th{background:#1b365d;color:#fff;text-align:left;font-size:9px;padding:5px 6px}td{padding:3.5px 6px;border-bottom:1px solid #e5e9ef;vertical-align:top}'+
+    'th.n,td.n{text-align:right;white-space:nowrap}td.b{font-weight:700}td.num{font-weight:700;color:#1b365d;white-space:nowrap}td.cli{color:#5b6b7a;font-size:9px}td.obj{color:#334155}'+
+    'tr.grp td{background:#eef2f7;font-weight:700;color:#1b365d;padding:5px 6px}tr.tot td{font-weight:700;border-top:2px solid #1b365d;border-bottom:none;padding-top:6px}td.vide{color:#8a96a3;font-style:italic}'+
+    '.late{color:#b4232f}.ok{color:#1b7a4e}.part{color:#b45309}.att{color:#1d4ed8}.mut{color:#8a96a3}'+
+    '.kp{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:6px;margin:4px 0 10px}.kp div{border:1px solid #d5dde5;border-left:3px solid #1b365d;border-radius:3px;padding:5px 8px}'+
+    '.kp em{font-style:normal;display:block;font-size:8.5px;color:#5b6b7a;text-transform:uppercase;letter-spacing:.03em}.kp strong{font-size:13.5px;color:#1b365d;display:block;white-space:nowrap}.kp strong.ok{color:#1b7a4e}.kp strong.late{color:#b4232f}.kp strong.mut{color:#5b6b7a}.kp small{font-size:8.5px;color:#8a96a3}'+
+    '.note{font-size:8.5px;color:#5b6b7a;margin:4px 0 8px}.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}'+
+    '.bars{display:flex;align-items:flex-end;gap:5px;height:120px;border-bottom:1px solid #b8c2cc;margin-bottom:4px}.bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;text-align:center}'+
+    '.bf{background:#1b365d;border-radius:2px 2px 0 0;min-height:1px}.bv{font-size:8px;color:#1b365d;font-weight:700;margin-bottom:2px}.bm{font-size:8px;color:#5b6b7a;margin-top:2px}'+
+    '.sec{break-before:page;page-break-before:always}.cover{text-align:center;padding:70px 0 40px;border-bottom:2.5px solid #e46c12;margin-bottom:24px}.toc li{margin:5px 0;font-size:12px}'+
+    'thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}'+
+    '.barre{position:sticky;top:0;background:#1b365d;color:#fff;padding:8px 12px;display:flex;gap:8px;align-items:center;margin:-0px -0px 12px;font-size:12px}.barre button{font:inherit;padding:5px 12px;border-radius:5px;border:1px solid #fff;background:#fff;color:#1b365d;font-weight:700;cursor:pointer}.barre button.s{background:transparent;color:#fff}'+
+    '@media print{.barre{display:none!important}}';
+}
+function _impEntete(titre,sous){
+  return '<div class="hd"><div><div style="display:inline-block;text-align:center"><img src="'+LG_PLACEHOLDER+'" style="height:38px;display:block;margin:0 auto" alt="CALINSTRUM">'+
+    '<div style="font-weight:800;font-size:10px;letter-spacing:.8px;color:#1b365d">CALINSTRUM</div></div><h1>'+esc(titre)+'</h1><div class="sub">'+esc(sous)+'</div></div>'+
+    '<div class="sub" style="text-align:right">Document interne<br>'+esc(CI&&CI.nom||'')+'<br>imprimé le '+fD(td())+'</div></div>';
+}
+function _impOuvrir(titre,corps,o,apercu){
+  var w=window.open('','_blank',''); if(!w){ alert('Veuillez autoriser les fenêtres (popups) pour ce fichier puis réessayer.'); return null; }
+  var barre=apercu?'<div class="barre">Aperçu — '+esc(titre)+'<span style="flex:1"></span><button onclick="window.print()">🖨 Imprimer / PDF</button><button class="s" onclick="window.close()">Fermer</button></div>':'';
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+esc(titre)+'</title><style>'+_impCss(o)+'</style></head><body>'+barre+corps+'</body></html>');
+  w.document.close(); w.focus();
+  setTimeout(function(){ try{ if(o.theme==='sombre' && typeof _pdfThemeAppliquer==='function') _pdfThemeAppliquer(w.document,'sombre'); }catch(e){} if(!apercu) w.print(); },400);
+  return w;
+}
+function _impDocument(page,o){
+  var r=IMP_BUILD[page](o), titre=(IMP_PAGES[page]||r.titre)+(o.annee?' '+o.annee:'');
+  return {titre:titre, corps:_impEntete(titre,_impPeriodeTxt(o)+(o.contenu?' · '+((IMP_CONTENU[page]||[]).filter(function(c){return c[0]===o.contenu;})[0]||['',o.contenu])[1]:''))+r.html, n:r.n};
+}
+// ----- Fenêtre d'options -----
+function _impSel(id,opts,val){ return '<select class="form-select" id="'+id+'">'+opts.map(function(c){return '<option value="'+esc(String(c[0]))+'"'+(String(c[0])===String(val)?' selected':'')+'>'+esc(c[1])+'</option>';}).join('')+'</select>'; }
+function _impLireOptions(){
+  var g=function(id){ var e=document.getElementById(id); return e?e.value:''; }, c=function(id){ var e=document.getElementById(id); return !!(e&&e.checked); };
+  return {annee:g('imp-annee'),mois:g('imp-mois'),client:g('imp-client'),contenu:g('imp-contenu'),totaux:c('imp-totaux'),masquer:c('imp-masquer'),paysage:g('imp-orient')==='paysage',theme:g('imp-theme'),
+    sections:[].map.call(document.querySelectorAll('#mIMP [data-imp-sec]:checked'),function(e){return e.getAttribute('data-imp-sec');})};
+}
+function ouvrirImpression(page){
+  var rapport=page==='rapport';
+  var ancien=document.getElementById('mIMP'); if(ancien) ancien.remove();
+  var an=String(new Date().getFullYear()), annees=_impAnnees(); if(annees.indexOf(an)<0) an=annees[0];
+  var priv=(typeof _getPrivacyStored==='function') && _getPrivacyStored();
+  var paysage=(page==='factures'||page==='devis'||page==='bc'||rapport);
+  var h='<div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
+    '<div class="form-group"><label>Année</label>'+_impSel('imp-annee',annees.map(function(y){return [y,y];}),an)+'</div>'+
+    (rapport?'<div></div>':'<div class="form-group"><label>Mois</label>'+_impSel('imp-mois',[['','Toute l\'année']].concat(IMP_MOIS.map(function(m,i){return [String(i+1).padStart(2,'0'),m];})),'')+'</div>')+
+    '<div class="form-group"><label>Client</label>'+_impSel('imp-client',[['','Tous']].concat(_impClients().map(function(c){return [c,c];})),'')+'</div>'+
+    (IMP_CONTENU[page]?'<div class="form-group"><label>Contenu</label>'+_impSel('imp-contenu',IMP_CONTENU[page],'')+'</div>':'<div></div>')+
+  '</div>';
+  if(rapport) h+='<div class="form-group"><label>Sections</label>'+IMP_SECTIONS.map(function(s){return '<label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:3px 0;cursor:pointer"><input type="checkbox" data-imp-sec="'+s[0]+'"'+(s[2]?' checked':'')+'> '+esc(s[1])+'</label>';}).join('')+'</div>';
+  h+='<div class="form-group"><label>Options</label>'+
+    (rapport||page==='dashboard'?'':'<label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:3px 0"><input type="checkbox" id="imp-totaux" checked> Sous-totaux par mois et total général</label>')+
+    '<label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:3px 0"><input type="checkbox" id="imp-masquer"'+(priv?' checked':'')+'> Masquer les montants (mode Privacy)</label></div>'+
+    '<div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div class="form-group"><label>Mise en page</label>'+_impSel('imp-orient',[['portrait','Portrait'],['paysage','Paysage']],paysage?'paysage':'portrait')+'</div>'+
+    '<div class="form-group"><label>Papier</label>'+_impSel('imp-theme',[['clair','Clair'],['sombre','Sombre (comme l\'écran)']],'clair')+'</div></div>';
+  var m=document.createElement('div'); m.id='mIMP'; m.className='modal-overlay open'; m.setAttribute('data-imp-page',page);
+  m.innerHTML='<div class="modal" style="max-width:560px"><div class="modal-header"><h3>'+(rapport?'📘 Rapport annuel du GRC':'🖨 Imprimer — '+esc(IMP_PAGES[page]||page))+'</h3><button class="modal-close" onclick="document.getElementById(\'mIMP\').remove()">✕</button></div>'+
+    '<div class="modal-body">'+h+'</div><div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:10px 16px"><button class="btn btn-ghost" onclick="document.getElementById(\'mIMP\').remove()">Annuler</button>'+
+    '<button class="btn btn-ghost" onclick="_impLancer(true)">👁 Aperçu</button><button class="btn btn-teal" onclick="_impLancer(false)">🖨 Imprimer / PDF</button></div></div>';
+  document.body.appendChild(m);
+}
+function ouvrirRapportAnnuel(){ ouvrirImpression('rapport'); }
+function _impRapport(o){
+  var secs=IMP_SECTIONS.filter(function(s){return o.sections.indexOf(s[0])>=0;});
+  var oo=Object.assign({},o,{mois:'',contenu:'',totaux:true});
+  var titre='Rapport annuel du GRC — '+(o.annee||'');
+  var corps='<div class="cover"><img src="'+LG_PLACEHOLDER+'" style="height:60px" alt="CALINSTRUM"><div style="font-size:26px;font-weight:800;color:#1b365d;margin-top:8px">CALINSTRUM</div>'+
+    '<div style="font-size:17px;margin-top:6px">'+esc(titre)+'</div><div class="sub" style="margin-top:6px">'+esc(o.client?'client '+o.client:'tous clients')+' · arrêté au '+fD(td())+'</div></div>'+
+    '<h3>Sommaire</h3><ol class="toc">'+secs.map(function(s){return '<li>'+esc(s[1].split(' (')[0])+'</li>';}).join('')+'</ol>';
+  secs.forEach(function(s,i){
+    var oc=Object.assign({},oo,{contenu:s[0]==='factures'?'emises':''});
+    var r=IMP_BUILD[s[0]](oc);
+    corps+='<div class="sec"><h2>'+(i+1)+' · '+esc(s[1].split(' (')[0])+' '+esc(o.annee||'')+'</h2>'+r.html+'</div>';
+  });
+  return {titre:titre,corps:corps};
+}
+function _impLancer(apercu){
+  var m=document.getElementById('mIMP'); if(!m) return;
+  var page=m.getAttribute('data-imp-page'), o=_impLireOptions();
+  if(page==='rapport'){
+    if(!o.sections.length){ alert('Cochez au moins une section.'); return; }
+    var r=_impRapport(o); _impOuvrir(r.titre,r.corps,o,apercu);
+  } else {
+    var d=_impDocument(page,o); _impOuvrir(d.titre,d.corps,o,apercu);
+  }
+}
 // Autre facture (que excluId) qui porte déjà ce n° — sinon null.
 function _faNumPrisPar(num,excluId){
   var k=String(num||'').toLowerCase().replace(/\s+/g,' ').trim(); if(!k) return null;
@@ -6744,6 +7048,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-01','Impression : le bouton 🖨 Imprimer propose des options et un aperçu papier (Tableau de bord, Factures, Devis, Bons de commande) ; nouveau 📘 Rapport annuel du GRC.'],
   ['2026-11-01','PO de remplacement : alerte si la case est cochée sur le mauvais PO (celui de la pièce erronée).'],
   ['2026-11-01','Bons de commande : PO de remplacement à nos frais (pièce erronée recommandée) — aucune facture, perte expliquée dans la rentabilité, badges sur les deux PO.'],
   ['2026-10-30','Journal : seules les vraies modifications sont listées (plus de « (vide) → (vide) »).'],
@@ -35433,24 +35738,30 @@ function _populateFAYearFilter(source){
 //  - Sparkline INTERACTIVE (crosshair + tooltip + pointillés prévisions)
 //  - Couleurs par card (vert/amber/red)
 // 4 cartes : Total filtré · Encaissé · En attente · En retard
-function _renderFAKpis(data){
-  var el=document.getElementById('fa-kpis');
-  if(!el) return;
-  var totalAll=0,paidSum=0,pendingSum=0,lateSum=0,prebilledSum=0;
-  var nPaid=0,nPending=0,nLate=0,nPrebilled=0;
+// KPI de la page Factures — source UNIQUE de l'écran et de l'impression (cf _impFactures).
+function _faKpisCalc(data){
+  var k={totalAll:0,paidSum:0,pendingSum:0,lateSum:0,prebilledSum:0,nPaid:0,nPending:0,nLate:0,nPrebilled:0,nTotal:data.length};
   data.forEach(function(i){
     var m=Number(i.montant)||0;
-    totalAll+=m;
+    k.totalAll+=m;
     if(typeof isPrebilled==='function' && isPrebilled(i)){
-      prebilledSum+=m; nPrebilled++;
+      k.prebilledSum+=m; k.nPrebilled++;
       return; // exclut les pré-facturées des stats paiement (elles ne sont pas encore émises)
     }
     var st=getStatus(i);
-    if(st==='paid'){paidSum+=m; nPaid++;}
-    else if(st==='late'){lateSum+=m; nLate++;}
-    else {pendingSum+=m; nPending++;}
+    if(st==='paid'){k.paidSum+=m; k.nPaid++;}
+    else if(st==='late'){k.lateSum+=m; k.nLate++;}
+    else {k.pendingSum+=m; k.nPending++;}
   });
-  var nTotal=data.length;
+  return k;
+}
+function _renderFAKpis(data){
+  var el=document.getElementById('fa-kpis');
+  if(!el) return;
+  var _k=_faKpisCalc(data);
+  var totalAll=_k.totalAll,paidSum=_k.paidSum,pendingSum=_k.pendingSum,lateSum=_k.lateSum,prebilledSum=_k.prebilledSum;
+  var nPaid=_k.nPaid,nPending=_k.nPending,nLate=_k.nLate,nPrebilled=_k.nPrebilled;
+  var nTotal=_k.nTotal;
 
   // === Sparklines : cumul mensuel ET valeurs mensuelles brutes (sur l'année courante) ===
   // - cumul : pour tracer la courbe (croissance acquise)
@@ -42379,6 +42690,14 @@ function showBCSaveToast(msg){
 // Totaux par statut (En attente · Confirmé · Livré · Annulé · Total) : nombre de PO
 // et total PAR DEVISE (jamais de devises additionnées entre elles). Suivent la
 // recherche et le client choisi, pas le filtre statut ; un clic = filtre statut.
+// Statuts des totaux PO et montant par devise (jamais additionnés entre devises) —
+// partagés par l'écran et l'impression (cf _impBC).
+var BC_STATUTS_TOTAUX=[['En attente','En attente'],['Confirmé','Confirmé'],['Livré','Livré'],['Annulé','Annulé'],['','Total']];
+function _bcMontantParDevise(liste){
+  var par={}; liste.forEach(function(b){ var dv=b.devise||'AUD'; par[dv]=(par[dv]||0)+(Number(b.total)||0); });
+  var k=Object.keys(par); if(!k.length) k=['AUD'];
+  return k.map(function(dv){ return fN(par[dv]||0)+' '+esc(dv); }).join(' · ');
+}
 function _bcRendreTotauxStatut(s, client, fs){
   var w=document.getElementById('bcStatutTotaux'); if(!w) return;
   var base=(DB.bcs||[]).filter(function(x){
@@ -42386,13 +42705,9 @@ function _bcRendreTotauxStatut(s, client, fs){
     if(client && (x.clientFinal||'Emerson')!==client) return false;
     return true;
   });
-  var montant=function(liste){
-    var par={}; liste.forEach(function(b){ var dv=b.devise||'AUD'; par[dv]=(par[dv]||0)+(Number(b.total)||0); });
-    var k=Object.keys(par); if(!k.length) k=['AUD'];
-    return k.map(function(dv){ return fN(par[dv]||0)+' '+esc(dv); }).join(' · ');
-  };
+  var montant=_bcMontantParDevise;
   var col={'En attente':'var(--text)','Confirmé':'#60a5fa','Livré':'var(--green,#34d399)','Annulé':'var(--muted)','':'var(--teal)'};
-  var cases=[['En attente','En attente'],['Confirmé','Confirmé'],['Livré','Livré'],['Annulé','Annulé'],['','Total']];
+  var cases=BC_STATUTS_TOTAUX;
   w.innerHTML=cases.map(function(c){
     var liste=c[0]?base.filter(function(b){return b.status===c[0];}):base;
     var actif=(fs||'')===c[0];
