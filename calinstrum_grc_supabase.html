@@ -3993,6 +3993,7 @@ function admPreviewPrint(){
             <input type="file" id="bc-emerson-pdf-input" accept=".pdf,application/pdf" style="display:none" onchange="handleEmersonPdfSelected(event)">
           </div>
         </div>
+        <div id="bc-rempl-bloc" style="margin-bottom:10px"></div>
         <div class="form-group"><label>Remarques / Notes BC</label><textarea class="form-textarea" id="bc-notes" rows="2" placeholder="Notes internes..."></textarea></div>
       </div>
       <div>
@@ -6637,7 +6638,7 @@ var _JR_LIB={num:'N°',rev:'Révision',date:'Date',client:'Client',objet:'Objet'
   bcClientRef:'Réf. BC client',bcClientDate:'Date BC client (réf.)',_importPONum:'N° PO client',dateReceptionBC:'Date réception BC',
   dateEncaissement:'Date encaissement',dateButoir:'Échéance',delai:'Délai',dvlie:'Devis lié',dvliePrint:'Devis imprimé',devisLieId:'Lien devis',
   linkFactureId:'Facture liée',notes:'Notes',contact:'Contact',email:'E-mail',adresse:'Adresse',versements:'Versements',
-  phaseHistory:'Traçabilité',lines:'Lignes',lignes:'Lignes',clientFinal:'Client final',_bcVu:'BC vérifié'};
+  phaseHistory:'Traçabilité',lines:'Lignes',lignes:'Lignes',clientFinal:'Client final',_bcVu:'BC vérifié',remplacement:'Remplacement à nos frais'};
 var _JR_ARGENT={ttc:1,ht:1,tgc:1,total:1,paye:1};
 var _jrSnap=null, _jrSessionDebut=Date.now(), _jrAuto=0, _jrAutoIds={}, _jrTimer=null, _jrEcrit=false;
 function _jrPoste(){ try{ var p=localStorage.getItem('ci_grc3_poste'); if(!p){ p='P'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); localStorage.setItem('ci_grc3_poste',p); } return p; }catch(e){ return 'P?'; } }
@@ -6670,6 +6671,7 @@ function _jrValeur(k,v,doc){
     var m=(typeof PHASES_META!=='undefined' && PHASES_META[d.phase])?PHASES_META[d.phase].label:d.phase; return m+(d.date?' · '+fD(d.date):''); }
   if(k==='lines'||k==='lignes'){ if(Array.isArray(v)) return v.length+' ligne(s)'; if(v&&typeof v==='object'){ var n=0; Object.keys(v).forEach(function(s){ if(Array.isArray(v[s])) n+=v[s].length; }); return n+' ligne(s)'; } return '(vide)'; }
   if(k==='_bcVu') return v?'oui':'non';
+  if(k==='remplacement'){ if(!v || v.remplace==null) return 'non'; var o=(DB.bcs||[]).find(function(x){return String(x.id)===String(v.remplace);}); return 'remplace '+(o?o.num:'?')+(v.piece&&typeof BC_REMPL_PIECE!=='undefined'?' · '+BC_REMPL_PIECE[v.piece]:'')+(v.avoir?' · avoir '+v.avoir:''); }
   if(/date|Date|Butoir/.test(k) && /^\d{4}-\d{2}-\d{2}/.test(String(v||''))) return fD(String(v).slice(0,10));
   return _jrCourt(v);
 }
@@ -6742,6 +6744,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-01','Bons de commande : PO de remplacement à nos frais (pièce erronée recommandée) — aucune facture, perte expliquée dans la rentabilité, badges sur les deux PO.'],
   ['2026-10-30','Journal : seules les vraies modifications sont listées (plus de « (vide) → (vide) »).'],
   ['2026-10-30','Journal d\'activité (ce menu). Factures : un n° ne peut plus être pris deux fois (le prochain n° libre est proposé), une facture n\'écrase plus jamais la ligne de Suivi d\'une autre, une facture en double est signalée au lieu d\'être supprimée en silence.'],
   ['2026-10-30','Le devis passe « Facturé » tout seul quand sa facture est émise.'],
@@ -8165,6 +8168,8 @@ function _bcsDeFacture(fa){
   var dv=f.devisLieId!=null?Number(f.devisLieId):null;
   return (DB.bcs||[]).filter(function(b){
     if(!b) return false;
+    // PO de remplacement à nos frais : livré à la main, jamais par la facture.
+    if(typeof _bcEstRemplacement==='function' && _bcEstRemplacement(b)) return false;
     if(f._fromBC===b.id || b.linkFactureId===f.id) return true;
     var n=(typeof buildFactureNumFromBC==='function')?String(buildFactureNumFromBC(b)||'').toLowerCase():'';
     if(n && n===num) return true;
@@ -9416,23 +9421,28 @@ function _rentaAffaires(){
          .sort(function(a,b){return String(a.num).localeCompare(String(b.num));});
     var ca=fa.reduce(function(s,f){return s+_rentaHT(f);},0);
     var caEmis=fa.reduce(function(s,f){var ph=getPhase(f); return s+((ph&&ph.billed)?_rentaHT(f):0);},0);
-    var cout=pos.reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
-    var frais=pos.reduce(function(s,bc){return s+getBCFraisXPF(bc);},0);
-    var benef=fa.length?ca-cout-frais:null;
+    // PO de remplacement à nos frais (cf _bcEstRemplacement) : coût à part, perte expliquée.
+    var posN=pos.filter(function(bc){return !_bcEstRemplacement(bc);}), posR=pos.filter(_bcEstRemplacement);
+    var cout=posN.reduce(function(s,bc){return s+getBCCoutXPF(bc);},0);
+    var frais=posN.reduce(function(s,bc){return s+getBCFraisXPF(bc);},0);
+    var rempl=posR.reduce(function(s,bc){return s+_bcRemplCoutXPF(bc);},0);
+    var benef=fa.length?ca-cout-frais-rempl:null;
     return {
       pos:pos, factures:fa, services:Object.keys(g.serv).map(function(k){return g.serv[k];}),
       date:pos[pos.length-1].date||'', client:_rentaClient(pos[0]), contact:pos[0].clientFinal||'',
       bcClient:pos.map(function(bc){return bc.linkBCclient;}).filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i;}).join(', '),
       aud:pos.reduce(function(s,bc){return s+(Number(bc.total)||0);},0),
-      cout:cout, frais:frais, ca:ca, caEmis:caEmis, benef:benef,
+      cout:cout, frais:frais, remplacement:rempl, posRempl:posR, ca:ca, caEmis:caEmis, benef:benef,
       marge:(fa.length&&ca)?benef/ca*100:null,
       fraisReels:pos.every(function(bc){return bcHasFraisReels(bc);}),
       tauxDefaut:pos.some(function(bc){return !bc.tauxAUD;}),
       mixte:fa.some(function(f){return /prestation/i.test(String(f.type||''));}),
-      ecartsQte:_rentaEcartsQte(pos,fa),
+      ecartsQte:_rentaEcartsQte(posN,fa),
       paidEmerson:pos.every(function(bc){return !!bc.paidEmerson;}),
       encaisse:fa.reduce(function(s,f){return s+(Number(f.paye)||0);},0),
-      sansFacture:!fa.length, verifier:fa.length>0 && benef<0
+      // « à vérifier » = bénéfice négatif AVANT remplacement : une perte due à un
+      // remplacement à nos frais est expliquée, pas une anomalie de rapprochement.
+      sansFacture:!fa.length, verifier:fa.length>0 && (ca-cout-frais)<0
     };
   });
   return aff.sort(function(a,b){return String(b.date).localeCompare(String(a.date));});
@@ -9443,12 +9453,12 @@ function _rentaAffaires(){
 function _rentaTotaux(aff,opts){
   var inclure=!!(opts&&opts.inclureAVerifier);
   var ok=aff.filter(function(a){return !a.sansFacture && (inclure || !a.verifier);});
-  var t={ca:0,cout:0,frais:0,fraisEstimes:0,benef:0,parClient:{},nAffaires:ok.length,nFactures:0,
+  var t={ca:0,cout:0,frais:0,fraisEstimes:0,remplacement:0,benef:0,parClient:{},nAffaires:ok.length,nFactures:0,
     nPO:aff.reduce(function(s,a){return s+a.pos.length;},0),
     nRapproches:aff.filter(function(a){return !a.sansFacture;}).reduce(function(s,a){return s+a.pos.length;},0),
     aVerifier:aff.filter(function(a){return a.verifier;})};
   ok.forEach(function(a){
-    t.ca+=a.ca; t.cout+=a.cout; t.frais+=a.frais; t.benef+=a.benef; t.nFactures+=a.factures.length;
+    t.ca+=a.ca; t.cout+=a.cout; t.frais+=a.frais; t.remplacement+=a.remplacement||0; t.benef+=a.benef; t.nFactures+=a.factures.length;
     if(!a.fraisReels) t.fraisEstimes+=a.frais;
     t.parClient[a.client]=(t.parClient[a.client]||0)+a.benef;
   });
@@ -9477,7 +9487,7 @@ function _rentaBarres(aff){
   var parMois={};
   aff.forEach(function(a){
     var m=String(a.date).slice(0,7); if(!m) return;
-    var x=parMois[m]||(parMois[m]={ca:0,cf:0,be:0}); x.ca+=a.ca; x.cf+=a.cout+a.frais; x.be+=a.benef;
+    var x=parMois[m]||(parMois[m]={ca:0,cf:0,be:0}); x.ca+=a.ca; x.cf+=a.cout+a.frais+(a.remplacement||0); x.be+=a.benef;
   });
   var ms=Object.keys(parMois).sort(), W=640, H=170, pad=24;
   if(!ms.length) return '<div class="renta-vide">Aucune donnée.</div>';
@@ -9504,7 +9514,8 @@ function _rentaSyntheseBlocs(sel,t,E,retenues){
     ['cout','Coût Emerson',_rentaM(t.cout),(t.ca?_rentaPct(t.cout/t.ca*100):'—')+' du CA'],
     ['frais','Frais de transit',_rentaM(t.frais),'dont '+_rentaM(t.fraisEstimes)+' <span style="color:var(--amber)">estimés</span>'],
     ['benef','Bénéfice net','<span style="color:'+(t.benef<0?'var(--red)':'var(--green)')+'">'+_rentaM(t.benef)+'</span>',
-      (verSel.length&&!E.verifier)?'hors '+verSel.length+' à vérifier ('+_rentaM(verSel.reduce(function(s,a){return s+a.benef;},0))+')':'toutes affaires'],
+      ((verSel.length&&!E.verifier)?'hors '+verSel.length+' à vérifier ('+_rentaM(verSel.reduce(function(s,a){return s+a.benef;},0))+')':'toutes affaires')+
+      (t.remplacement?' · dont <span style="color:#fb923c">−'+_rentaM(t.remplacement)+' de remplacements à nos frais</span>':'')],
     ['marge','Marge nette','<span style="color:'+(t.marge<0?'var(--red)':'var(--green)')+'">'+_rentaPct(t.marge)+'</span>','bénéfice / CA HT'],
     ['po','PO rapprochés',t.nRapproches+' / '+t.nPO,(t.nPO-t.nRapproches)?(t.nPO-t.nRapproches)+' PO sans facture':'tous rapprochés']
   ];
@@ -9512,7 +9523,7 @@ function _rentaSyntheseBlocs(sel,t,E,retenues){
     return '<div class="card renta-kpi"><div class="renta-kt">'+k[1]+'</div><div class="renta-kv" data-kpi="'+k[0]+'">'+k[2]+'</div><div class="renta-ks">'+k[3]+'</div></div>';
   }).join('')+'</div>';
 
-  var p1=[{n:'Emerson',v:t.cout,c:'var(--blue)'},{n:'Frais',v:t.frais,c:'var(--amber)'},{n:'Bénéfice',v:t.benef,c:'var(--teal)'}];
+  var p1=[{n:'Emerson',v:t.cout,c:'var(--blue)'},{n:'Frais',v:t.frais,c:'var(--amber)'}].concat(t.remplacement?[{n:'Remplacements à nos frais',v:t.remplacement,c:'#fb923c'}]:[]).concat([{n:'Bénéfice',v:t.benef,c:'var(--teal)'}]);
   var coul=['var(--teal)','var(--purple)','var(--orange)','var(--blue)','var(--amber)','var(--green)'];
   var p2=Object.keys(t.parClient).sort(function(a,b){return t.parClient[b]-t.parClient[a];}).map(function(k,i){return {n:k,v:t.parClient[k],c:coul[i%coul.length]};});
   var leg=function(parts,fmt){return parts.map(function(p){return '<div><i class="renta-dot" style="background:'+p.c+'"></i>'+esc(p.n)+'<b>'+fmt(p)+'</b></div>';}).join('');};
@@ -9589,7 +9600,8 @@ function renderRentabilite(){
     var poHtml=a.pos.map(function(bc){return '<a href="#" class="renta-po" onclick="event.preventDefault();ouvrirDocument(\'BC\','+bc.id+');">'+esc(bc.num)+'</a>';}).join('<br>');
     var faHtml=a.factures.map(function(f){return '<a href="#" onclick="event.preventDefault();ouvrirDocument(\'FA\','+f.id+');">'+esc(f.num)+'</a>';}).join(', ')||'—';
     return '<tr data-client="'+esc(a.client)+'"><td>'+poHtml+'</td><td>'+fD(a.date)+'</td><td>'+esc(a.contact)+'</td><td>'+(esc(a.bcClient)||'<span class="renta-tag">—</span>')+'</td><td>'+faHtml+'</td>'+
-      '<td class="n">'+fN(a.aud)+'</td><td class="n">'+fN(a.cout)+(a.tauxDefaut?'<span class="renta-badge est" title="taux AUD par défaut">~</span>':'')+'</td>'+
+      '<td class="n">'+fN(a.aud)+'</td><td class="n">'+fN(a.cout)+(a.tauxDefaut?'<span class="renta-badge est" title="taux AUD par défaut">~</span>':'')+
+        (a.remplacement?'<div style="font-size:10px;color:#fb923c" title="PO de remplacement à nos frais (coût + frais, avoir reçu déduit)">🔁 +'+fN(a.remplacement)+' remplacement</div>':'')+'</td>'+
       '<td class="n">'+fN(a.frais)+(a.fraisReels?'':'<span class="renta-badge est">estimé</span>')+'</td>'+
       '<td class="n">'+(a.sansFacture?'—':fN(a.ca))+'</td>'+
       '<td class="n" style="color:'+(a.benef<0?'var(--red)':'var(--green)')+'">'+(a.ecartsQte.length?'<span class="renta-badge est" title="quantités PO ≠ facture">qté</span> ':'')+(a.sansFacture?'—':fN(a.benef))+'</td>'+
@@ -10447,8 +10459,10 @@ function _suiviCommandes(){
     //       - 55,15 BARG », 1 × 456 789) ne dit pas combien d'articles ont ete commandes.
     //       [15/09/2026] Le PDF client annoncait « 1 × » pour un BC de 2 transmetteurs.
     //       Les quantites viennent alors des PO Emerson de l'affaire (cf _suiviArticlesPO).
-    if(forfait){ var dePO=_suiviArticlesPO(pos); if(dePO.length) articles=dePO; }
-    if(!articles.length) pos.forEach(function(bc){ (bc.lines||[]).forEach(function(l){
+    // Un PO de remplacement à nos frais ne change pas ce que le client a commandé.
+    var posCmd=pos.filter(function(bc){return !_bcEstRemplacement(bc);});
+    if(forfait){ var dePO=_suiviArticlesPO(posCmd); if(dePO.length) articles=dePO; }
+    if(!articles.length) posCmd.forEach(function(bc){ (bc.lines||[]).forEach(function(l){
       if(!l || l.qte==null || _suiviLigneFret((l.desc||'')+' '+(l.ref||''))) return;
       articles.push({code:'', ref:l.ref||'', des:String(l.desc||'').split('\n')[0], qte:Number(l.qte)});
     });});
@@ -10469,6 +10483,8 @@ function _suiviCommandes(){
       acheteur:contact.split(' - ').slice(1).join(' - ').trim()||contact,
       bcClient:a.bcClient, dateBC:dateBC, echeance:echeance?echeance.toISOString().slice(0,10):'',
       articles:articles, quotes:_suiviQuotes(pos), statut:statut,
+      // PO de remplacement à nos frais pas encore livrés (affiché à l'écran, jamais sur le PDF client)
+      remplacementEnCours:pos.filter(function(bc){return _bcEstRemplacement(bc) && String(bc.status||'')!=='Livré';}).map(function(bc){return bc.num;}),
       enRetard:statut.k==='attente' && !!echeance && echeance<new Date(new Date().toDateString())
     });
   });
@@ -10514,6 +10530,7 @@ function renderSuiviCommandes(){
     var st=c.statut.k==='livre'
       ? '<span class="sc-st ok">Livrée</span>'+(c.statut.livreeLe?'<div class="sc-tag">le '+fD(c.statut.livreeLe)+(c.statut.bl?' · '+esc(c.statut.bl):'')+'</div>':'')
       : '<span class="sc-st att">'+esc(c.statut.label)+'</span>';
+    if(c.remplacementEnCours && c.remplacementEnCours.length) st+='<div class="sc-tag" style="color:#fb923c">🔁 remplacement en cours · PO '+c.remplacementEnCours.map(esc).join(', ')+'</div>';
     var ech=c.echeance ? (c.enRetard?'<span style="color:var(--red);font-weight:600">'+fD(c.echeance)+' · dépassée</span>':fD(c.echeance)) : '<span class="sc-tag">non renseignée</span>';
     var bl=c.bls.length ? c.bls.map(function(x){return esc(x.num)+'<div class="sc-tag">'+esc(x.status||'')+(x.date?' · '+fD(x.date):'')+'</div>';}).join('') : '<span class="sc-tag">—</span>';
     var po=c.pos.map(function(bc){return '<a href="#" onclick="event.preventDefault();ouvrirDocument(\'BC\','+bc.id+');">'+esc(bc.num)+'</a>';}).join('<br>');
@@ -15556,6 +15573,8 @@ function copyBCLinesToFacture(bc){
 
 function syncBCToFacture(bc){
   if(!bc||bc.status!=='Confirmé')return {action:'noop'};
+  // Remplacement à nos frais : le client a déjà payé, aucune facture (cf _bcEstRemplacement).
+  if(typeof _bcEstRemplacement==='function' && _bcEstRemplacement(bc)) return {action:'noop',reason:'remplacement à nos frais'};
   var faNum=buildFactureNumFromBC(bc);
   if(!faNum)return {action:'noop',reason:'PO sans suffixe /NNN'};
   // === DÉTERMINATION DES LIGNES ET DU MONTANT ===
@@ -37067,9 +37086,85 @@ function _poDiffHtml(a,b){
 }
 var _PO_VERDICTS={ok:['Identique','ok'],tronque:['Identique (référence abrégée au devis)','ok'],reference:['Référence différente','red'],quantite:['Quantité différente','red'],
   incomplet:['Élément absent du PO','amber'],absent:['Absent du PO','amber'],extra:['Absent du devis','amber'],impossible:['Contrôle impossible','gris']};
+// =============================================================================
+// PO DE REMPLACEMENT À NOS FRAIS (01/11/2026)
+// =============================================================================
+// Cas réel : une pièce erronée commandée et livrée ; le client a payé la bonne (sa
+// facture est émise) ; CALINSTRUM recommande la bonne pièce à ses frais. Le PO de
+// remplacement porte bc.remplacement = {remplace:<id du PO>, motif, piece, avoir}.
+//   - aucune facture créée ni rattachée (syncBCToFacture), jamais passé « Livré » par
+//     la facture (_bcsDeFacture) : il est livré à la main à l'arrivée de la pièce ;
+//   - pas comparé au devis (_poControleDevis) : ce n'est pas une commande du client ;
+//   - rentabilité : son coût + ses frais = perte « remplacement à nos frais », comptée,
+//     l'affaire n'est pas « à vérifier » pour autant ; un avoir Emerson REÇU la réduit.
+var BC_REMPL_MOTIFS=['Mauvaise référence commandée','Erreur de quantité','Pièce endommagée au transport','Pièce défectueuse','Autre'];
+var BC_REMPL_PIECE={'':'À décider',stock:'Gardée en stock CALINSTRUM',avoir_attendu:'Retournée à Emerson — avoir attendu',avoir_recu:'Retournée à Emerson — avoir reçu',perdue:'Perdue / mise au rebut'};
+var _bcRempl=null;
+function _bcEstRemplacement(bc){ return !!(bc && bc.remplacement && bc.remplacement.remplace!=null && bc.remplacement.remplace!==''); }
+function _bcRemplacePar(bc){ return bc?(DB.bcs||[]).filter(function(x){ return x && x.id!==bc.id && _bcEstRemplacement(x) && String(x.remplacement.remplace)===String(bc.id); }):[]; }
+// Coût du remplacement (XPF) : PO + frais, moins l'avoir Emerson s'il est REÇU.
+function _bcRemplCoutXPF(bc){
+  if(!_bcEstRemplacement(bc)) return 0;
+  var r=bc.remplacement, c=getBCCoutXPF(bc)+getBCFraisXPF(bc);
+  if(r.piece==='avoir_recu' && Number(r.avoir)>0) c-=Number(r.avoir)*(bc.devise==='AUD'?getTauxAUD(bc):1);
+  return c;
+}
+function _bcRemplBadges(bc){
+  var h='';
+  if(_bcEstRemplacement(bc)){
+    var o=(DB.bcs||[]).find(function(x){return String(x.id)===String(bc.remplacement.remplace);});
+    h+='<div><span style="display:inline-block;font-size:10px;font-weight:400;border-radius:4px;padding:1px 6px;margin-top:3px;color:#fb923c;border:1px solid rgba(251,146,60,.55)" title="'+esc(bc.remplacement.motif||'')+'">🔁 Remplacement à nos frais'+(o?' · remplace '+esc(o.num):'')+'</span></div>';
+  }
+  var par=_bcRemplacePar(bc);
+  if(par.length) h+='<div><span style="display:inline-block;font-size:10px;font-weight:400;border-radius:4px;padding:1px 6px;margin-top:3px;color:#f87171;border:1px solid rgba(248,113,113,.5)">⚠ Pièce erronée · remplacée par '+par.map(function(x){return esc(x.num);}).join(', ')+'</span></div>';
+  return h;
+}
+function _bcRemplLire(){
+  if(!_bcRempl) return null;
+  var r={remplace:_bcRempl.remplace!=null&&_bcRempl.remplace!==''?_bcRempl.remplace:null, motif:_bcRempl.motif||'', piece:_bcRempl.piece||''};
+  if(/^avoir/.test(r.piece) && Number(_bcRempl.avoir)>0) r.avoir=Number(_bcRempl.avoir);
+  return r;
+}
+function _bcRemplBascule(on){ _bcRempl=on?(_bcRempl||{remplace:null,motif:BC_REMPL_MOTIFS[0],piece:''}):null; _bcRemplRendre(); }
+function _bcRemplMaj(k,v){
+  if(!_bcRempl) return;
+  if(k==='remplace'){ var o=(DB.bcs||[]).find(function(x){return String(x.id)===String(v);}); _bcRempl.remplace=o?o.id:null; }
+  else _bcRempl[k]=v;
+  if(k==='piece'||k==='remplace') _bcRemplRendre();
+}
+function _bcRemplRendre(){
+  var el=document.getElementById('bc-rempl-bloc'); if(!el) return;
+  var r=_bcRempl, on=!!r;
+  var h='<label style="display:flex;gap:8px;align-items:center;cursor:pointer;font-weight:700;font-size:12px;color:'+(on?'#fb923c':'var(--muted)')+'">'+
+    '<input type="checkbox" id="bc-rempl-on"'+(on?' checked':'')+' onchange="_bcRemplBascule(this.checked)"> 🔁 Remplacement à nos frais'+
+    '<span style="font-weight:400;font-size:10px;color:var(--muted)">pièce erronée à remplacer — pas de facture client</span></label>';
+  if(on){
+    var cf=gvg('bc-client-final')||'';
+    var cands=(DB.bcs||[]).filter(function(x){return x && x.id!==eBCid && !_bcEstRemplacement(x);})
+      .sort(function(a,b){ var sa=(a.clientFinal===cf)?0:1, sb=(b.clientFinal===cf)?0:1; return sa-sb || String(b.date||'').localeCompare(String(a.date||'')); });
+    var lib=function(x){ var l=(x.lines||[]).find(function(y){return y && y.type!=='header' && (y.desc||y.ref);}); return x.num+' — '+fD(x.date)+(x.clientFinal?' · '+x.clientFinal:'')+(l?' · '+String(l.desc||l.ref).slice(0,40):''); };
+    var sel=function(id,k,opts,val){ return '<select class="form-select" id="'+id+'" onchange="_bcRemplMaj(\''+k+'\',this.value)">'+opts.map(function(o){return '<option value="'+esc(String(o[0]))+'"'+(String(o[0])===String(val==null?'':val)?' selected':'')+'>'+esc(o[1])+'</option>';}).join('')+'</select>'; };
+    var orig=(DB.bcs||[]).find(function(x){return String(x.id)===String(r.remplace);});
+    var fas=orig?_rentaFacturesDuPO(orig).filter(_rentaEstFourniture):[];
+    var fInfo=!orig?'<span style="color:var(--muted)">choisissez le PO remplacé</span>':
+      (fas.length?fas.map(function(f){return esc(f.num)+' — '+(isPrebilled(f)?'pré-facture':'déjà émise');}).join(', ')+' : <b style="color:var(--green)">rien à refacturer ✓</b>':'<span style="color:var(--muted)">aucune facture trouvée pour le PO remplacé</span>');
+    h+='<div style="border:1px solid rgba(251,146,60,.55);background:rgba(251,146,60,.07);border-radius:8px;padding:10px 12px;margin-top:6px">'+
+      '<div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
+        '<div class="form-group"><label>Remplace le PO</label>'+sel('bc-rempl-po','remplace',[['','— choisir le PO de la pièce erronée —']].concat(cands.map(function(x){return [x.id,lib(x)];})),r.remplace)+'</div>'+
+        '<div class="form-group"><label>Motif</label>'+sel('bc-rempl-motif','motif',BC_REMPL_MOTIFS.map(function(m){return [m,m];}),r.motif)+'</div>'+
+        '<div class="form-group"><label>Pièce erronée</label>'+sel('bc-rempl-piece','piece',Object.keys(BC_REMPL_PIECE).map(function(k){return [k,BC_REMPL_PIECE[k]];}),r.piece)+'</div>'+
+        (/^avoir/.test(r.piece||'')?'<div class="form-group"><label>Montant de l\'avoir Emerson ('+esc(gvg('bc-devise')||'AUD')+')'+(r.piece==='avoir_recu'?' — réduit la perte':' — compté une fois reçu')+'</label><input class="form-input" type="number" step="0.01" id="bc-rempl-avoir" value="'+(Number(r.avoir)>0?Number(r.avoir):'')+'" oninput="_bcRemplMaj(\'avoir\',this.value)"></div>':'<div></div>')+
+      '</div>'+
+      '<div style="font-size:11px;color:var(--muted);margin-top:4px">Facture client : '+fInfo+'. Le coût de ce PO est compté comme une perte (remplacement à nos frais) dans la rentabilité. Il passe « Livré » à la main, à l\'arrivée de la pièce.</div>'+
+    '</div>';
+  }
+  el.innerHTML=h;
+}
 function _poControleDevis(bc){
   var res={verdict:'sans-devis',devis:[],lignes:[],nbEcarts:0,sig:''};
   if(!bc) return res;
+  // PO de remplacement à nos frais : pas une commande du client, pas comparé au devis.
+  if(_bcEstRemplacement(bc)){ res.verdict='remplacement'; return res; }
   var devis=_poDevisLies(bc); res.devis=devis;
   if(!devis.length) return res;
   var D=[]; devis.forEach(function(d){ D=D.concat(_poLignesDevis(d)); });
@@ -37122,7 +37217,8 @@ function _poControleDevis(bc){
   return res;
 }
 var _PO_GLOBAL={ok:['✅ PO conforme au devis accepté','ok'],ecart:['🛑 Le PO ne correspond pas au devis accepté','red'],verifier:['⚠ PO à vérifier','amber'],
-  impossible:['⚪ Contrôle impossible','gris'],'sans-devis':['⚪ Aucun devis relié à ce PO','gris']};
+  impossible:['⚪ Contrôle impossible','gris'],'sans-devis':['⚪ Aucun devis relié à ce PO','gris'],
+  remplacement:['🔁 PO de remplacement à nos frais — non comparé au devis','gris']};
 function _poDevisLabel(r){ return (r.devis||[]).map(function(d){return d.num+(d.rev?' '+d.rev:'');}).join(', '); }
 function _poControleHtml(r,bc,fiche){
   var g=_PO_GLOBAL[r.verdict], couleur={ok:'var(--green)',red:'var(--red)',amber:'var(--amber)',gris:'var(--muted)'};
@@ -37236,6 +37332,8 @@ function openBC(id){
   eBCid=id||null;bcL=[];rebuildAllParamSelects();
   _bcControleJustif=null;
   if(id){ var _bcj=(DB.bcs||[]).find(function(x){return x.id===id;}); if(_bcj && _bcj.controleDevis) _bcControleJustif=_bcj.controleDevis; }
+  _bcRempl=null;
+  if(id){ var _bcr=(DB.bcs||[]).find(function(x){return x.id===id;}); if(_bcr && _bcr.remplacement) _bcRempl=JSON.parse(JSON.stringify(_bcr.remplacement)); }
   // Refresh datalist suggestions BC Client (à chaque ouverture car DB.devis peut bouger)
   _refreshBCClientDatalist();
   if(id){
@@ -37310,6 +37408,7 @@ function openBC(id){
     bcNumInp.dataset.manualEditBound = '1';
   }
   _updateBCNumHint(); // affiche l'aide (nouveau BC) ou la masque (BC existant)
+  _bcRemplRendre();   // bloc « 🔁 Remplacement à nos frais »
   rBClines();om('mBC');
   // Reference de la copie de secours : le BC tel qu'il vient d'etre ouvert
   // (cf _bcDraftBase). Une restauration de brouillon ecrit par-dessus APRES ce
@@ -37746,6 +37845,9 @@ function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot
   // Justification d'un écart PO ↔ devis (posée seulement si définie : absente, la
   // valeur en base est restaurée par _preserveHiddenFields).
   if(_bcControleJustif) _bc.controleDevis=_bcControleJustif;
+  // Remplacement à nos frais : toujours écrit (null = décoché), sinon _preserveHiddenFields
+  // restaurerait l'ancienne valeur et on ne pourrait jamais décocher.
+  _bc.remplacement=_bcRemplLire();
   // ⚠ Restaure les champs posés par du code et absents du formulaire
   // (paidEmerson, paidEmersonDate → trésorerie). Cf _preserveHiddenFields.
   return _preserveHiddenFields(_bc, eBCid?(DB.bcs||[]).find(function(x){return x.id===eBCid;}):null);
@@ -42322,7 +42424,7 @@ function renderBC(){
       bcClientCell = '<td style="color:var(--muted);font-style:italic;font-size:10px">— non renseigné —</td>';
     }
     return'<tr class="hgr-data-row" style="cursor:pointer" onclick="openBC('+x.id+')">'+
-      '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td>'+
+      '<td style="font-weight:700;color:var(--teal)">'+esc(x.num)+_bcRemplBadges(x)+'</td><td>'+fD(x.date)+'</td>'+
       '<td style="color:var(--muted)">Emerson</td>'+
       '<td style="font-weight:600;color:var(--text)">'+esc(x.clientFinal||'—')+'</td>'+
       bcClientCell+
