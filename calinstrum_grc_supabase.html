@@ -3470,7 +3470,7 @@ function admPreviewPrint(){
              Stockée dans facture.dateEncaissement (format ISO yyyy-mm-dd).
              Sert à calculer le bilan d'encaissement par année (vs bilan facturation). -->
         <div class="form-group"><label>📅 Date d'encaissement effective <span style="font-size:9.5px;color:var(--muted);font-weight:400">(à renseigner à réception de l'avis de règlement)</span></label>
-          <input type="date" class="form-input" id="fa-date-encaissement" onchange="renderFADelaiHistory()">
+          <input type="date" class="form-input" id="fa-date-encaissement" onchange="renderFADelaiHistory();updateVersementsTotals()">
         </div>
       </div>
       <!-- HISTORIQUE DU DÉLAI : calcul automatique en lecture seule
@@ -6581,9 +6581,24 @@ function _migrationsApresCloud(){
   if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
   if(typeof migrateSuiviLiensAutreFacture==='function'){ try{ n+=migrateSuiviLiensAutreFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSuiviLiensAutreFacture (après cloud) :',e); } }
+  if(typeof migrateStatutDateEncaissement==='function'){ try{ n+=migrateStatutDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateStatutDateEncaissement (après cloud) :',e); } }
   try{ _jrCapturer(); }catch(e){}
   _jrAuto--;
   setTimeout(function(){ try{ _alerterDoublonsFactures(); }catch(e){} }, 1500);
+  return n;
+}
+// Facture émise avec une date d'encaissement mais aucun versement, restée non « Payée »
+// (cf updateVersementsTotals, 01/11/2026) → « Payée », comme la page Règlements. Idempotent.
+function migrateStatutDateEncaissement(){
+  var n=0;
+  (DB.factures||[]).forEach(function(f){
+    if(!f || !f.dateEncaissement || f.status==='Payée') return;
+    if(typeof isPrebilled==='function' && isPrebilled(f)) return;
+    if((f.versements||[]).some(function(v){return v && v.date && Number(v.montant)>0;})) return;
+    f.status='Payée'; syncFactureToSuivi(f); n++;
+    console.log('[CALINSTRUM] '+f.num+' : « Payée » (date d\'encaissement saisie, aucun versement)');
+  });
+  if(n) saveDB();
   return n;
 }
 // Facture rattachée à la ligne Suivi d'une AUTRE facture (cf syncFactureToSuivi) :
@@ -7078,6 +7093,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-01','Factures : une date d’encaissement saisie suffit pour qu’une facture soit « Payée » (sans versement), comme la page Règlements ; Auto-split date le versement du jour de l’encaissement.'],
   ['2026-11-01','Impression : l\'aperçu s\'affiche dans le GRC (plus de fenêtre séparée qui pouvait figer le GRC à la fermeture). Échap ou ✕ Fermer pour revenir.'],
   ['2026-11-01','Impression : le bouton 🖨 Imprimer propose des options et un aperçu papier (Tableau de bord, Factures, Devis, Bons de commande) ; nouveau 📘 Rapport annuel du GRC.'],
   ['2026-11-01','PO de remplacement : alerte si la case est cochée sur le mauvais PO (celui de la pièce erronée).'],
@@ -33596,12 +33612,17 @@ function updateVersementsTotals(){
   var reste=Math.max(0,ttc-totVerse);
   sv('faTotVerse',fN(totVerse)+' XPF');
   sv('faReste',fN(reste)+' XPF');
-  // Statut auto
+  // Statut auto — [01/11/2026] même règle que la page Règlements (_reglVerse) : s'il y a
+  // des versements, ils comptent (paiements en plusieurs fois, acomptes) ; sinon la date
+  // d'encaissement saisie = facture payée. Avant, seuls les versements comptaient : une
+  // facture encaissée (date saisie) redevenait « En retard » à chaque ouverture.
+  var dEnc=gvg('fa-date-encaissement')||'';
+  var totRegle=_reglVerse({versements:faVersements,dateEncaissement:dEnc,ttc:ttc});
   var newStatus='En attente';
-  if(totVerse>=ttc && ttc>0) newStatus='Payée';
-  else if(totVerse>0) newStatus='Partiel';
+  if(totRegle>=ttc && ttc>0) newStatus='Payée';
+  else if(totRegle>0) newStatus='Partiel';
   var dateStr=gvg('fa-date');
-  if(dateStr && totVerse<ttc){
+  if(dateStr && totRegle<ttc){
     var d=new Date(dateStr);
     var delai=gvg('fa-delai')||'';
     var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
@@ -33618,6 +33639,7 @@ function updateVersementsTotals(){
   var hint=document.getElementById('faStatusHint');
   if(hint){
     if(ttc===0) hint.textContent='';
+    else if(totVerse===0 && dEnc && totRegle>=ttc) hint.textContent='✓ Encaissée le '+fD(dEnc)+' (date d\'encaissement saisie)';
     else if(totVerse===0) hint.textContent='Aucun versement — statut: En attente';
     else if(totVerse>=ttc) hint.textContent='✓ Facture intégralement soldée';
     else hint.textContent='Versé: '+fN(totVerse)+' / '+fN(ttc)+' XPF ('+Math.round(totVerse/ttc*100)+'%)';
@@ -33635,7 +33657,10 @@ function autoSplitVersements(){
   var ttc=Math.round(+faL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);},0))||0;
   if(ttc===0){alert('Ajoute d\'abord des lignes à la facture pour calculer le TTC.');return;}
   if(faVersements.length && !confirm('Remplacer les '+faVersements.length+' versement(s) existant(s) par '+n+' versement(s) auto-répartis ?')) return;
-  var baseDate=new Date(gvg('fa-date')||td());
+  // Un seul versement et date d'encaissement saisie : le versement prend cette date
+  // (et non celle de la facture). [01/11/2026]
+  var dEnc=gvg('fa-date-encaissement')||'';
+  var baseDate=new Date((n===1 && dEnc)?dEnc:(gvg('fa-date')||td()));
   var part=Math.floor(ttc/n);
   var reste=ttc-part*n; // mis dans le dernier
   faVersements=[];
