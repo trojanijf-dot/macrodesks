@@ -6220,6 +6220,16 @@ function getSuiviSource(){
       _fromGRC:true,         // flag : provient de DB.factures
       _factureId:f.id        // pour ouvrir la facture GRC depuis Suivi/Factures
     });
+    // Facture mère d'acomptes (cadre, jamais émise) : ses acomptes sont des lignes à
+    // part entière ; elle ne compte plus que pour son RESTE à facturer dans tous les
+    // totaux (Backlog, « à facturer »…). Le total du dossier reste affiché sur sa ligne.
+    var _ech=_mereEcheancier(f);
+    if(_ech){
+      var _row=out[out.length-1];
+      _row.montant=_ech.reste;
+      _row._montantDossier=_ech.total;
+      _row._mere={n:_ech.n, reste:_ech.reste, restePct:_ech.restePct, pctFacture:_ech.pctFacture, pctEncaisse:_ech.pctEncaisse, pctNonEncaisse:_ech.pctNonEncaisse};
+    }
   });
   // 2) Ensuite : DB.invoices restantes (numéros qui n'ont PAS de facture GRC)
   (DB.invoices||[]).forEach(function(inv){
@@ -6586,6 +6596,9 @@ function _migrationsApresCloud(){
   if(typeof migrateStatutDateEncaissement==='function'){ try{ n+=migrateStatutDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateStatutDateEncaissement (après cloud) :',e); } }
   // Verrou des factures émises : d'abord vérifier les empreintes existantes, puis
   // verrouiller les factures émises qui n'en ont pas encore.
+  // Synchro Factures → Suivi : celle du démarrage tourne sur le cache local, avant le
+  // cloud, et son résultat était écrasé à chaque ouverture (entrées Suivi périmées).
+  if(typeof syncAllFacturesInvoices==='function'){ try{ n+=syncAllFacturesInvoices(); }catch(e){ console.warn('[CALINSTRUM] syncAllFacturesInvoices (après cloud) :',e); } }
   var _emprModif=[]; try{ _emprModif=_emprVerifier(); n+=_emprAssurer(); }catch(e){ console.warn('[CALINSTRUM] verrou factures émises :',e); }
   if(_emprModif.length) setTimeout(function(){ try{ ouvrirEmpreintesModifiees(); }catch(e){} },1800);
   try{ _jrCapturer(); }catch(e){}
@@ -7175,6 +7188,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-02','🧾 Factures d’acompte : la fiche de la facture mère affiche un échéancier (une ligne par acompte, date de paiement lue sur l’acompte, solde restant avec « + Facture de solde »). La facture mère (cadre, jamais émise) ne compte plus que pour son reste à facturer dans les totaux, et le Rapprochement Devis ↔ Factures ne l’additionne plus à ses acomptes : « solde à facturer » au lieu d’un faux écart. La synchro Factures → Suivi du démarrage est désormais conservée (elle était perdue au chargement cloud).'],
   ['2026-11-02','Devis : passer le statut de « Brouillon » à « Envoyé » date l’envoi à aujourd’hui (phase « Devis envoyé », modifiable ensuite). Une révision ne recopie plus l’historique de phases de l’original : elle n’avait pas encore été envoyée et gardait sa date d’envoi.'],
   ['2026-11-02','☁ Enregistrement cloud : seules les lignes réellement modifiées partent (plus la table entière). Une modification n’est plus écrasée par un écho tardif ni par un autre onglet/poste resté sur une version périmée, et fermer le GRC juste après une modification ne la perd plus : elle est envoyée à la réouverture (sauf si la même fiche a été modifiée ailleurs entre-temps : avertissement).'],
   ['2026-11-01','🛡 Contrôle PDF : la DATE de chaque facture émise est comparée à celle imprimée sur son PDF archivé (nouveau et ancien modèle). Écart = alerte rouge, avec « 📅 Date du PDF » pour corriger ; l’export Administratif prévient aussi quand une facture a quitté la période alors que son PDF y est daté.'],
@@ -8657,6 +8671,75 @@ function _faMereAlerteTexte(num, acomptes){
     acomptes.map(function(a){return a.num;}).join(', ')+' — '+pct+'% du total).\n\n'+
     'La passer « émise » facturerait le travail une seconde fois (CA et reste à recouvrer comptés en double).\n'+
     'Le reste se facture par une facture de SOLDE : onglet Paiement → « Créer facture d\'acompte » → Solde.';
+}
+// =============================================================================
+// ÉCHÉANCIER D'UNE FACTURE MÈRE D'ACOMPTES (02/11/2026)
+// =============================================================================
+// La mère est un CADRE (jamais émise) : ce sont ses factures d'acompte qui sont
+// émises et payées. Tout est LU sur les acomptes (montant, date, versements),
+// rien n'est saisi sur la mère. Sert à la fiche de la mère (renderAcomptesList),
+// à sa ligne Suivi/Factures (getSuiviSource : elle ne compte que pour son RESTE
+// à facturer) et au Rapprochement Devis ↔ Factures (_buildReconciliation).
+// Échéance affichée d'une facture : même règle que getSuiviSource.
+function _faEcheanceVue(f){
+  var b=f.dateButoir||'';
+  if(f.date&&(!b||_echeanceEstHeritee(f.date,b))) b=_echeanceFacture(f.date,f.delai)||b;
+  return b;
+}
+function _mereEcheancier(mere){
+  var acs=_faAcomptesDeMere(mere);
+  if(!acs.length) return null;
+  acs=acs.slice().sort(function(a,b){ return String(a.date||'').localeCompare(String(b.date||''))||String(a.num||'').localeCompare(String(b.num||'')); });
+  var total=Math.round(Number(mere.ttc)||0);
+  var e={total:total, n:acs.length, tranches:[], facture:0, encaisse:0, nonEncaisse:0};
+  acs.forEach(function(a){
+    var ttc=Math.round(Number(a.ttc)||0);
+    var vs=Array.isArray(a.versements)?a.versements:[];
+    var verse=vs.reduce(function(s,v){ return s+(Number(v&&v.montant)||0); },0);
+    if(!verse&&a.paye) verse=Number(a.paye)||0;
+    var payee=a.status==='Payée'||a.status==='Payee'||(ttc>0&&verse>=ttc);
+    verse=payee?ttc:Math.min(verse,ttc);
+    var dV=vs.map(function(v){ return (v&&v.date)||''; }).filter(Boolean).sort();
+    e.facture+=ttc; e.encaisse+=verse; e.nonEncaisse+=ttc-verse;
+    e.tranches.push({id:a.id, num:a.num, solde:a.acompteType==='solde',
+      pct:Number(a.acomptePct)||(total?Math.round(ttc/total*100):0), ttc:ttc, date:a.date||'',
+      payee:payee, verse:verse, datePaiement:payee?(a.dateEncaissement||dV[dV.length-1]||''):'',
+      echeance:_faEcheanceVue(a)});
+  });
+  e.reste=Math.max(0,total-e.facture);
+  e.restePct=total?Math.round(e.reste/total*100):0;
+  e.pctFacture=total?Math.min(100,Math.round(e.facture/total*100)):0;
+  e.pctEncaisse=total?Math.min(100,Math.round(e.encaisse/total*100)):0;
+  e.pctNonEncaisse=total?Math.min(100-e.pctEncaisse,Math.round(e.nonEncaisse/total*100)):0;
+  return e;
+}
+// Barre encaissé (vert) / facturé non encaissé (ambre) / reste à facturer (fond).
+function _mereBarreHtml(e,largeur){
+  return '<div style="height:'+(largeur?'6px':'10px')+';'+(largeur?'width:'+largeur+';':'')+'border-radius:5px;background:rgba(138,150,163,.2);overflow:hidden;display:flex;margin:4px 0 3px">'+
+    '<i style="display:block;height:100%;width:'+e.pctEncaisse+'%;background:#10b981"></i>'+
+    '<i style="display:block;height:100%;width:'+e.pctNonEncaisse+'%;background:#f0b429"></i></div>';
+}
+// Cellules de la ligne d'une mère dans les tableaux Suivi et Factures (i = ligne getSuiviSource).
+function _mereTagHtml(i){
+  if(!i||!i._mere) return '';
+  return ' <span title="Facture mère d\'acomptes : un cadre, jamais émise. Ce sont ses acomptes qui sont facturés." style="font-size:9px;border:1px solid rgba(59,130,246,.45);color:#93b4f5;border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:600;white-space:nowrap">cadre · '+i._mere.n+' tranche'+(i._mere.n>1?'s':'')+'</span>';
+}
+function _mereMontantHtml(i){
+  return '<td style="font-weight:700" title="Total du dossier. Seul le reste à facturer compte dans les totaux.">'+fN(i._montantDossier)+' XPF'+
+    '<div style="font-size:9.5px;font-weight:400;color:var(--muted)">reste à facturer '+fN(i.montant)+'</div></td>';
+}
+function _mereStatutHtml(i){
+  var m=i._mere;
+  return '<td><span style="padding:2px 7px;border-radius:10px;font-size:9.5px;font-weight:700;white-space:nowrap;background:rgba(138,150,163,.15);color:var(--muted)">'+m.pctFacture+' % facturé</span>'+
+    _mereBarreHtml(m,'110px')+
+    '<span style="font-size:9.5px;color:var(--muted);white-space:nowrap">encaissé '+m.pctEncaisse+' %'+(m.restePct>0?' · reste '+m.restePct+' % à facturer':'')+'</span></td>';
+}
+// « + Facture de solde » de l'échéancier : la modale d'acompte, type Solde.
+function _faOuvrirSolde(){
+  openAcompteModal();
+  if(!document.getElementById('mAcompte')) return;
+  gv('ac-type','solde');
+  onAcomptePctChange();
 }
 // opts (facultatif) : {dateEnvoi:'AAAA-MM-JJ', sansQuestion:true} — émission décidée
 // ailleurs (impression / archivage d'une pré-facture, cf _faPreFactureEnvoyee).
@@ -13058,11 +13141,13 @@ function renderTable(){
     var numCellAttrs = faGrcId
       ? ' ondblclick="event.stopPropagation();navigateToFA('+faGrcId+')" style="cursor:pointer" title="Double-clic : ouvrir la facture GRC complète"'
       : ' title="N° facture (pas de facture GRC liée)"';
+    // Facture mère d'acomptes : total du dossier + avancement (elle ne compte que pour son reste)
+    if(i._mere) statutCell=_mereStatutHtml(i);
     return'<tr style="'+rs+';cursor:pointer" onclick="openSUIVI('+i.id+')">'+
-      '<td'+numCellAttrs+'><span style="font-weight:700;color:var(--teal)">'+i.num+'</span>'+grcBadge+'</td>'+
+      '<td'+numCellAttrs+'><span style="font-weight:700;color:var(--teal)">'+i.num+'</span>'+grcBadge+_mereTagHtml(i)+'</td>'+
       '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(i.intitule)+'</td>'+
       typCell+
-      '<td style="font-weight:700">'+fN(i.montant)+' XPF</td>'+
+      (i._mere?_mereMontantHtml(i):'<td style="font-weight:700">'+fN(i.montant)+' XPF</td>')+
       '<td style="white-space:nowrap">'+phaseSelect(i)+'</td>'+
       '<td style="color:var(--muted)">'+(i.dateEnvoi?fD(i.dateEnvoi):'<span style="color:#a78bfa;font-size:10px">⏳ pas émise</span>')+'</td>'+
       '<td style="font-weight:700">'+(bd?bd.toLocaleDateString('fr-FR'):'—')+'</td>'+
@@ -18189,7 +18274,21 @@ function _buildReconciliation(opts){
   function _processFacture(f, factureKind){
     if(!inFiscalYearFA(f)) return;
     if(!matchesType(f.type)) return;
-    var dv=_matchFactureToDevis(f);
+    // Facture mère d'acomptes (cadre, jamais émise) : ce sont ses acomptes qui
+    // facturent. Additionnée à eux, elle créait un faux écart (= somme des acomptes).
+    // Elle est gardée sur la ligne du devis comme repère, hors total ; ses acomptes
+    // sont rattachés au devis de la mère.
+    var estMere=factureKind==='factures' && facAll.some(function(x){return x && x.parentId===f.id;});
+    var mere=(factureKind==='factures' && f.parentId)?facAll.find(function(x){return x && x.id===f.parentId;}):null;
+    var dv=(mere&&_matchFactureToDevis(mere))||_matchFactureToDevis(f);
+    if(estMere){
+      if(!dv) return;
+      var keyM=String(dv.id);
+      if(!groupes[keyM]) groupes[keyM]={devis:dv, factures:[], totalFac:0, bcLinks:[]};
+      (groupes[keyM].meres=groupes[keyM].meres||[]).push(f);
+      seenDvIds[keyM]=1;
+      return;
+    }
     if(!dv){
       orphanFacs.push({facture:f, factureKind:factureKind});
       return;
@@ -18629,7 +18728,17 @@ function _buildReconciliation(opts){
       rows.push({
         kind:'match', devis:g.devis, devisGroup:g.devisGroup,
         factures:g.factures, totalFac:g.totalFac, totalDv:dvTTC, ecart:ecart,
-        isGroup:!!g._isGroup
+        isGroup:!!g._isGroup, meres:g.meres||[]
+      });
+    } else if(ecart<0 && ((g.meres&&g.meres.length) || g.factures.some(function(f){return !!f.parentId;}))){
+      // Facturation par acomptes en cours : le reste n'est pas une erreur, c'est le
+      // solde à facturer (information).
+      nbMatch++;
+      rows.push({
+        kind:'match', devis:g.devis, devisGroup:g.devisGroup,
+        factures:g.factures, totalFac:g.totalFac, totalDv:dvTTC, ecart:ecart,
+        isGroup:!!g._isGroup, meres:g.meres||[], isAcomptes:true,
+        soldeAFacturer:-ecart, soldePct:Math.round(-ecart/dvTTC*100)
       });
     } else {
       nbEcart++;
@@ -18854,6 +18963,8 @@ function renderReconcilTable(){
         // pour N BC; on ne compare pas montant cadre vs montant facture).
         if(r.isCadre){
           ecartStr='<span style="color:var(--muted-soft);font-style:italic;font-size:10px">cadre</span>';
+        } else if(r.isAcomptes){
+          ecartStr='<span style="display:inline-block;padding:1px 7px;border-radius:8px;font-size:9.5px;font-weight:700;background:rgba(138,150,163,.15);color:var(--muted);white-space:nowrap" title="Facturation par acomptes en cours : ce reste n\'est pas une erreur">solde à facturer '+r.soldePct+' % : '+fNloc(r.soldeAFacturer)+'</span>';
         } else if(r.ecart>0) ecartStr='<span style="color:#f87171">+'+fNloc(r.ecart)+'</span>';
         else if(r.ecart<0) ecartStr='<span style="color:#fbbf24">'+fNloc(r.ecart)+'</span>';
         else ecartStr='<span style="color:#5dcaa5">0</span>';
@@ -18879,10 +18990,20 @@ function renderReconcilTable(){
               '</div>';
           }).join('');
         }
+        // Facture mère d'acomptes : repère, hors total (cf _processFacture)
+        if(r.meres&&r.meres.length){
+          facBadges=r.meres.map(function(m){
+            return '<div style="display:inline-block;margin-right:6px;margin-bottom:3px;vertical-align:top">'+
+              '<span onclick="event.stopPropagation();openFA('+m.id+')" style="cursor:pointer;display:inline-block;padding:1px 6px;border:0.5px dashed rgba(59,130,246,.45);border-radius:8px;font-size:9.5px;color:#93b4f5;font-family:var(--mono)" title="Facture mère d\'acomptes (cadre, jamais émise) : hors total — ouvrir l\'échéancier">'+esc(m.num||'?')+' · cadre</span></div>';
+          }).join('')+(r.factures.length?facBadges:'');
+        }
         // Pill Cadre supplémentaire à côté du pill match
         var cadrePill='';
         if(r.isCadre){
           cadrePill=' <span style="display:inline-block;padding:1px 5px;border-radius:8px;font-size:8.5px;font-weight:700;background:rgba(167,139,250,.12);color:#a78bfa;border:0.5px solid rgba(167,139,250,.3);margin-left:3px" title="Devis cadre — grille tarifaire référencée par N factures">Cadre</span>';
+        }
+        if(r.isAcomptes){
+          cadrePill+=' <span style="display:inline-block;padding:1px 5px;border-radius:8px;font-size:8.5px;font-weight:700;background:rgba(59,130,246,.12);color:#93b4f5;border:0.5px solid rgba(59,130,246,.3);margin-left:3px" title="Facturation par acomptes en cours">Acomptes</span>';
         }
         // Montant devis : afficher "—" pour les cadres (montant n'est pas comparable)
         var dvTTCcell=r.isCadre
@@ -34567,35 +34688,70 @@ function renderAcomptesList(){
     if(hintEl) hintEl.textContent='';
     return;
   }
-  var pctEmis=getAcomptesCumulePct(eFAid);
-  listEl.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:11px">'+
+  // Échéancier (02/11/2026) : une ligne par facture d'acompte, son encaissement lu
+  // sur l'acompte lui-même, puis le solde restant à facturer (cf _mereEcheancier).
+  var e=_mereEcheancier(parent||{id:eFAid});
+  var pill=function(bg,col,txt){ return '<span style="padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;white-space:nowrap;background:'+bg+';color:'+col+'">'+txt+'</span>'; };
+  var cel='padding:5px 6px;border-top:1px solid var(--border)';
+  var leg=function(col,txt,mnt,pct){ return '<span style="white-space:nowrap"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;background:'+col+'"></span>'+txt+' <strong style="font-family:var(--mono);color:var(--text)">'+fN(mnt)+'</strong>'+(pct?' ('+pct+' %)':'')+'</span>'; };
+  var html='<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:4px">'+
+      '<strong style="color:var(--teal)">'+esc((parent&&parent.num)||'')+' · échéancier</strong>'+
+      '<span style="color:var(--muted);font-size:10.5px">Total du dossier '+fN(e.total)+' XPF TTC · facture mère = cadre, jamais émise</span></div>'+
+    _mereBarreHtml(e)+
+    '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:10.5px;color:var(--muted);margin-bottom:8px">'+
+      leg('#10b981','Encaissé',e.encaisse,e.pctEncaisse)+
+      leg('#f0b429','Facturé non encaissé',e.nonEncaisse,e.pctNonEncaisse)+
+      leg('rgba(138,150,163,.35)','Reste à facturer',e.reste,e.restePct)+
+    '</div>'+
+    '<table style="width:100%;border-collapse:collapse;font-size:11px">'+
     '<thead><tr style="background:rgba(59,130,246,.1);color:#3b82f6">'+
-      '<th style="padding:5px 6px;text-align:left">N°</th>'+
-      '<th style="padding:5px 6px;text-align:left">Type</th>'+
+      '<th style="padding:5px 6px;text-align:left">Tranche</th>'+
+      '<th style="padding:5px 6px;text-align:left">Facture</th>'+
       '<th style="padding:5px 6px;text-align:right">%</th>'+
       '<th style="padding:5px 6px;text-align:right">Montant TTC</th>'+
-      '<th style="padding:5px 6px">Statut</th>'+
-      '<th style="padding:5px 6px;text-align:left">Date</th>'+
-      '<th style="width:80px"></th>'+
+      '<th style="padding:5px 6px;text-align:left">Facturée le</th>'+
+      '<th style="padding:5px 6px;text-align:left">Encaissement</th>'+
+      '<th style="width:70px"></th>'+
     '</tr></thead><tbody>'+
-    acomptes.map(function(a){
-      var typeLabel=a.acompteType==='solde'?'<span style="color:#10b981;font-weight:700">SOLDE</span>':'<span style="color:#3b82f6;font-weight:700">Acompte</span>';
+    e.tranches.map(function(t,k){
+      var enc;
+      if(t.payee) enc=pill('rgba(16,185,129,.15)','#10b981','✓ payée'+(t.datePaiement?' le '+fD(t.datePaiement):''));
+      else{
+        var retard=t.echeance && t.echeance<td();
+        var ech=t.echeance?' · échéance '+(retard?'dépassée ':'')+fD(t.echeance):'';
+        enc=t.verse>0
+          ? pill('rgba(240,180,41,.13)','#f0b429','◐ partiel '+fN(t.verse)+' · en attente du reste'+ech)
+          : pill(retard?'rgba(244,63,94,.13)':'rgba(240,180,41,.13)',retard?'#f87171':'#f0b429','⏳ en attente'+ech);
+      }
       return '<tr>'+
-        '<td style="padding:4px 6px"><strong style="color:var(--teal)">'+esc(a.num)+'</strong></td>'+
-        '<td style="padding:4px 6px">'+typeLabel+'</td>'+
-        '<td style="padding:4px 6px;text-align:right">'+a.acomptePct+'%</td>'+
-        '<td style="padding:4px 6px;text-align:right;font-weight:700">'+fN(a.ttc)+' XPF</td>'+
-        '<td style="padding:4px 6px">'+esc(a.status||'—')+'</td>'+
-        '<td style="padding:4px 6px;color:var(--muted)">'+fD(a.date)+'</td>'+
-        '<td style="padding:4px 6px;white-space:nowrap">'+
-          '<button class="btn btn-ghost btn-sm" onclick="openFA('+a.id+')" title="Ouvrir cette facture">📋</button>'+
-          '<button class="btn btn-red btn-sm" onclick="deleteAcompte('+a.id+')" title="Supprimer">🗑</button>'+
+        '<td style="'+cel+'">'+(k+1)+' · '+(t.solde?'<span style="color:#10b981;font-weight:700">Solde</span>':'Acompte')+'</td>'+
+        '<td style="'+cel+'"><strong style="color:var(--teal)">'+esc(t.num)+'</strong></td>'+
+        '<td style="'+cel+';text-align:right;font-family:var(--mono)">'+t.pct+' %</td>'+
+        '<td style="'+cel+';text-align:right;font-family:var(--mono);font-weight:700">'+fN(t.ttc)+'</td>'+
+        '<td style="'+cel+';color:var(--muted)">'+(t.date?fD(t.date):'—')+'</td>'+
+        '<td style="'+cel+'">'+enc+'</td>'+
+        '<td style="'+cel+';white-space:nowrap">'+
+          '<button class="btn btn-ghost btn-sm" onclick="openFA('+t.id+')" title="Ouvrir cette facture d\'acompte (saisir un paiement)">📋</button>'+
+          '<button class="btn btn-red btn-sm" onclick="deleteAcompte('+t.id+')" title="Supprimer">🗑</button>'+
         '</td>'+
       '</tr>';
-    }).join('')+'</tbody></table>';
+    }).join('')+
+    (e.reste>0
+      ? '<tr style="color:var(--muted);font-style:italic">'+
+          '<td style="'+cel.replace('solid','dashed')+'">'+(e.tranches.length+1)+' · Solde</td>'+
+          '<td style="'+cel.replace('solid','dashed')+'">à facturer</td>'+
+          '<td style="'+cel.replace('solid','dashed')+';text-align:right;font-family:var(--mono)">'+e.restePct+' %</td>'+
+          '<td style="'+cel.replace('solid','dashed')+';text-align:right;font-family:var(--mono)">'+fN(e.reste)+'</td>'+
+          '<td style="'+cel.replace('solid','dashed')+'">—</td>'+
+          '<td style="'+cel.replace('solid','dashed')+'">'+pill('rgba(138,150,163,.15)','var(--muted)','pas encore facturé')+'</td>'+
+          '<td style="'+cel.replace('solid','dashed')+';white-space:nowrap;font-style:normal"><button type="button" class="btn btn-ghost btn-sm" onclick="_faOuvrirSolde()" title="Créer la facture de solde">+ Facture de solde</button></td>'+
+        '</tr>'
+      : '')+
+    '</tbody></table>'+
+    '<div style="font-size:10px;color:var(--muted);margin-top:6px;font-style:italic">Les encaissements viennent de chaque facture d\'acompte (son versement ou sa date d\'encaissement) : pour saisir un paiement, ouvre l\'acompte avec 📋.</div>';
+  listEl.innerHTML=html;
   if(hintEl){
-    var restant=100-pctEmis;
-    hintEl.innerHTML='Cumul émis : <strong style="color:#3b82f6">'+pctEmis+'%</strong> — Reste disponible : <strong style="color:'+(restant>0?'#10b981':'#f87171')+'">'+restant+'%</strong>';
+    hintEl.innerHTML=e.reste>0?'':'<span style="color:#10b981;font-style:normal">✓ Dossier entièrement facturé.</span>';
     // Mère passée « émise » alors que ses acomptes le sont déjà : double facturation.
     var _phM=parent?getPhase(parent):null;
     if(_phM && _phM.billed===true){
@@ -35844,11 +36000,13 @@ function renderFA(){
       'margin-right:5px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;user-select:none;'+
       'background:'+(dosOuvert?'rgba(45,212,191,.12)':'transparent')+';'+
       'color:'+(dosOuvert?'var(--teal)':'rgba(45,212,191,.75)')+'">'+(dosOuvert?'▾':'▸')+'</span>';
+    // Facture mère d'acomptes : total du dossier + avancement (elle ne compte que pour son reste)
+    if(i._mere){ statutCell=_mereStatutHtml(i); dateEncCell='<td style="color:var(--muted);font-size:10px;font-style:italic" title="Encaissements portés par les factures d\'acompte">voir acomptes</td>'; }
     return '<tr class="hgr-data-row" style="'+rs+';cursor:pointer" onclick="'+rowOpenFn+'">'+
-      '<td>'+chevron+'<span style="font-weight:700;color:var(--teal)">'+esc(i.num||'')+'</span>'+grcBadge+'</td>'+
+      '<td>'+chevron+'<span style="font-weight:700;color:var(--teal)">'+esc(i.num||'')+'</span>'+grcBadge+_mereTagHtml(i)+'</td>'+
       '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(i.intitule||'')+'">'+esc(i.intitule||'')+(faPdfBadges?' '+faPdfBadges:'')+'</td>'+
       typCell+
-      '<td style="font-weight:700">'+fN(i.montant)+' XPF</td>'+
+      (i._mere?_mereMontantHtml(i):'<td style="font-weight:700">'+fN(i.montant)+' XPF</td>')+
       '<td style="white-space:nowrap">'+phaseCell+'</td>'+
       '<td style="color:var(--muted)">'+(i.dateEnvoi?fD(i.dateEnvoi):'<span style="color:#a78bfa;font-size:10px">⏳ pas émise</span>')+'</td>'+
       '<td style="font-weight:700">'+(bd?bd.toLocaleDateString('fr-FR'):'—')+'</td>'+
