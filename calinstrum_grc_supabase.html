@@ -6744,6 +6744,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-01','PO de remplacement : alerte si la case est cochée sur le mauvais PO (celui de la pièce erronée).'],
   ['2026-11-01','Bons de commande : PO de remplacement à nos frais (pièce erronée recommandée) — aucune facture, perte expliquée dans la rentabilité, badges sur les deux PO.'],
   ['2026-10-30','Journal : seules les vraies modifications sont listées (plus de « (vide) → (vide) »).'],
   ['2026-10-30','Journal d\'activité (ce menu). Factures : un n° ne peut plus être pris deux fois (le prochain n° libre est proposé), une facture n\'écrase plus jamais la ligne de Suivi d\'une autre, une facture en double est signalée au lieu d\'être supprimée en silence.'],
@@ -37119,6 +37120,17 @@ function _bcRemplBadges(bc){
   if(par.length) h+='<div><span style="display:inline-block;font-size:10px;font-weight:400;border-radius:4px;padding:1px 6px;margin-top:3px;color:#f87171;border:1px solid rgba(248,113,113,.5)">⚠ Pièce erronée · remplacée par '+par.map(function(x){return esc(x.num);}).join(', ')+'</span></div>';
   return h;
 }
+// Case cochée sur le mauvais PO ? [01/11/2026] Elle avait été cochée sur le PO de la
+// pièce erronée (le plus ancien), avec le nouveau PO comme « remplacé ». On prévient.
+function _bcRemplAlertes(bcId,dateIci,r){
+  var out=[]; if(!r) return out;
+  var orig=(DB.bcs||[]).find(function(x){return String(x.id)===String(r.remplace);});
+  if(orig && dateIci && orig.date && orig.date>dateIci)
+    out.push('Inversé ? Le PO choisi ('+orig.num+' du '+fD(orig.date)+') est plus récent que celui-ci ('+fD(dateIci)+'). La case se coche sur le PO le plus récent, celui qui remplace la pièce erronée.');
+  var par=bcId!=null?_bcRemplacePar({id:bcId}):[];
+  if(par.length) out.push('Ce PO est déjà indiqué comme remplacé par '+par.map(function(x){return x.num;}).join(', ')+' : c\'est lui le PO de la pièce erronée, la case ne se coche pas ici.');
+  return out;
+}
 function _bcRemplLire(){
   if(!_bcRempl) return null;
   var r={remplace:_bcRempl.remplace!=null&&_bcRempl.remplace!==''?_bcRempl.remplace:null, motif:_bcRempl.motif||'', piece:_bcRempl.piece||''};
@@ -37137,12 +37149,13 @@ function _bcRemplRendre(){
   var r=_bcRempl, on=!!r;
   var h='<label style="display:flex;gap:8px;align-items:center;cursor:pointer;font-weight:700;font-size:12px;color:'+(on?'#fb923c':'var(--muted)')+'">'+
     '<input type="checkbox" id="bc-rempl-on"'+(on?' checked':'')+' onchange="_bcRemplBascule(this.checked)"> 🔁 Remplacement à nos frais'+
-    '<span style="font-weight:400;font-size:10px;color:var(--muted)">pièce erronée à remplacer — pas de facture client</span></label>';
+    '<span style="font-weight:400;font-size:10px;color:var(--muted)">à cocher sur le NOUVEAU PO, celui qui remplace la pièce erronée — pas de facture client</span></label>';
   if(on){
     var cf=gvg('bc-client-final')||'';
     var cands=(DB.bcs||[]).filter(function(x){return x && x.id!==eBCid && !_bcEstRemplacement(x);})
       .sort(function(a,b){ var sa=(a.clientFinal===cf)?0:1, sb=(b.clientFinal===cf)?0:1; return sa-sb || String(b.date||'').localeCompare(String(a.date||'')); });
-    var lib=function(x){ var l=(x.lines||[]).find(function(y){return y && y.type!=='header' && (y.desc||y.ref);}); return x.num+' — '+fD(x.date)+(x.clientFinal?' · '+x.clientFinal:'')+(l?' · '+String(l.desc||l.ref).slice(0,40):''); };
+    var dateIci=gvg('bc-date')||'';
+    var lib=function(x){ var l=(x.lines||[]).find(function(y){return y && y.type!=='header' && (y.desc||y.ref);}); return x.num+' — '+fD(x.date)+(dateIci && x.date>dateIci?' ⚠ plus récent que ce PO':'')+(x.clientFinal?' · '+x.clientFinal:'')+(l?' · '+String(l.desc||l.ref).slice(0,40):''); };
     var sel=function(id,k,opts,val){ return '<select class="form-select" id="'+id+'" onchange="_bcRemplMaj(\''+k+'\',this.value)">'+opts.map(function(o){return '<option value="'+esc(String(o[0]))+'"'+(String(o[0])===String(val==null?'':val)?' selected':'')+'>'+esc(o[1])+'</option>';}).join('')+'</select>'; };
     var orig=(DB.bcs||[]).find(function(x){return String(x.id)===String(r.remplace);});
     var fas=orig?_rentaFacturesDuPO(orig).filter(_rentaEstFourniture):[];
@@ -37150,12 +37163,13 @@ function _bcRemplRendre(){
       (fas.length?fas.map(function(f){return esc(f.num)+' — '+(isPrebilled(f)?'pré-facture':'déjà émise');}).join(', ')+' : <b style="color:var(--green)">rien à refacturer ✓</b>':'<span style="color:var(--muted)">aucune facture trouvée pour le PO remplacé</span>');
     h+='<div style="border:1px solid rgba(251,146,60,.55);background:rgba(251,146,60,.07);border-radius:8px;padding:10px 12px;margin-top:6px">'+
       '<div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
-        '<div class="form-group"><label>Remplace le PO</label>'+sel('bc-rempl-po','remplace',[['','— choisir le PO de la pièce erronée —']].concat(cands.map(function(x){return [x.id,lib(x)];})),r.remplace)+'</div>'+
+        '<div class="form-group"><label>Remplace le PO (celui de la pièce erronée)</label>'+sel('bc-rempl-po','remplace',[['','— choisir le PO de la pièce erronée —']].concat(cands.map(function(x){return [x.id,lib(x)];})),r.remplace)+'</div>'+
         '<div class="form-group"><label>Motif</label>'+sel('bc-rempl-motif','motif',BC_REMPL_MOTIFS.map(function(m){return [m,m];}),r.motif)+'</div>'+
         '<div class="form-group"><label>Pièce erronée</label>'+sel('bc-rempl-piece','piece',Object.keys(BC_REMPL_PIECE).map(function(k){return [k,BC_REMPL_PIECE[k]];}),r.piece)+'</div>'+
         (/^avoir/.test(r.piece||'')?'<div class="form-group"><label>Montant de l\'avoir Emerson ('+esc(gvg('bc-devise')||'AUD')+')'+(r.piece==='avoir_recu'?' — réduit la perte':' — compté une fois reçu')+'</label><input class="form-input" type="number" step="0.01" id="bc-rempl-avoir" value="'+(Number(r.avoir)>0?Number(r.avoir):'')+'" oninput="_bcRemplMaj(\'avoir\',this.value)"></div>':'<div></div>')+
       '</div>'+
       '<div style="font-size:11px;color:var(--muted);margin-top:4px">Facture client : '+fInfo+'. Le coût de ce PO est compté comme une perte (remplacement à nos frais) dans la rentabilité. Il passe « Livré » à la main, à l\'arrivée de la pièce.</div>'+
+      _bcRemplAlertes(eBCid,dateIci,r).map(function(a){return '<div data-rempl-alerte style="margin-top:6px;padding:6px 9px;border:1px solid rgba(248,113,113,.55);background:rgba(248,113,113,.08);border-radius:6px;font-size:11px;color:#fca5a5">⚠ '+esc(a)+'</div>';}).join('')+
     '</div>';
   }
   el.innerHTML=h;
@@ -42274,6 +42288,11 @@ async function saveBC(){
     if(!__caok) return;
   }
   var b=getBC();if(!b.num){alert('N° PO manquant');return;}
+  // Remplacement à nos frais coché sur le mauvais PO ? On prévient (cf _bcRemplAlertes).
+  if(b.remplacement && b.remplacement.remplace!=null){
+    var _rAl=_bcRemplAlertes(b.id,b.date,b.remplacement);
+    if(_rAl.length && !confirm('⚠ Remplacement à nos frais — vérifiez :\n\n• '+_rAl.join('\n• ')+'\n\n[OK] = enregistrer quand même\n[Annuler] = revenir corriger')) return;
+  }
   var wasNew=!eBCid;
   // Détecter le précédent statut (pour savoir si on vient de passer en Confirmé)
   var prevStatus=null;
