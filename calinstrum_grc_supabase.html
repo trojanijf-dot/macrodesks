@@ -6832,21 +6832,51 @@ function _impCss(o){
     '.sec{break-before:page;page-break-before:always}.cover{text-align:center;padding:70px 0 40px;border-bottom:2.5px solid #e46c12;margin-bottom:24px}.toc li{margin:5px 0;font-size:12px}'+
     'thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}'+
     '.barre{position:sticky;top:0;background:#1b365d;color:#fff;padding:8px 12px;display:flex;gap:8px;align-items:center;margin:-0px -0px 12px;font-size:12px}.barre button{font:inherit;padding:5px 12px;border-radius:5px;border:1px solid #fff;background:#fff;color:#1b365d;font-weight:700;cursor:pointer}.barre button.s{background:transparent;color:#fff}'+
-    '@media print{.barre{display:none!important}}';
+    '@media print{.barre{display:none!important}}'+
+    // Aperçu à l'écran : une feuille blanche centrée ; les sauts de page en pointillés.
+    '@media screen{html{background:#e9edf2}body{max-width:1120px;margin:16px auto;padding:22px 28px;background:#fff;box-shadow:0 2px 14px rgba(0,0,0,.18)}.sec{border-top:2px dashed #c9d1da;margin-top:28px;padding-top:18px}}';
 }
 function _impEntete(titre,sous){
   return '<div class="hd"><div><div style="display:inline-block;text-align:center"><img src="'+LG_PLACEHOLDER+'" style="height:38px;display:block;margin:0 auto" alt="CALINSTRUM">'+
     '<div style="font-weight:800;font-size:10px;letter-spacing:.8px;color:#1b365d">CALINSTRUM</div></div><h1>'+esc(titre)+'</h1><div class="sub">'+esc(sous)+'</div></div>'+
     '<div class="sub" style="text-align:right">Document interne<br>'+esc(CI&&CI.nom||'')+'<br>imprimé le '+fD(td())+'</div></div>';
 }
+// [01/11/2026] L'aperçu s'ouvrait dans une FENÊTRE séparée (window.open) : la fermer
+// après l'impression laissait le GRC figé (impossible d'écrire ou de sélectionner).
+// Tout se passe maintenant DANS le GRC : un cadre (iframe) plein écran pour l'aperçu,
+// un cadre invisible pour l'impression directe — plus aucune fenêtre à fermer.
 function _impOuvrir(titre,corps,o,apercu){
-  var w=window.open('','_blank',''); if(!w){ alert('Veuillez autoriser les fenêtres (popups) pour ce fichier puis réessayer.'); return null; }
-  var barre=apercu?'<div class="barre">Aperçu — '+esc(titre)+'<span style="flex:1"></span><button onclick="window.print()">🖨 Imprimer / PDF</button><button class="s" onclick="window.close()">Fermer</button></div>':'';
-  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+esc(titre)+'</title><style>'+_impCss(o)+'</style></head><body>'+barre+corps+'</body></html>');
-  w.document.close(); w.focus();
-  setTimeout(function(){ try{ if(o.theme==='sombre' && typeof _pdfThemeAppliquer==='function') _pdfThemeAppliquer(w.document,'sombre'); }catch(e){} if(!apercu) w.print(); },400);
-  return w;
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+esc(titre)+'</title><style>'+_impCss(o)+'</style></head><body>'+corps+'</body></html>';
+  var mo=document.getElementById('mIMP'); if(mo) mo.remove();
+  _impFermerApercu();
+  var ov=document.createElement('div'); ov.id='impApercu'; ov.setAttribute('data-apercu',apercu?'1':'0');
+  ov.style.cssText=apercu?'position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.65);display:flex;flex-direction:column':'position:fixed;left:-12000px;top:0;width:1120px;height:800px;opacity:0;pointer-events:none';
+  if(apercu){
+    var bar=document.createElement('div');
+    bar.style.cssText='display:flex;gap:8px;align-items:center;padding:8px 14px;background:#1b365d;color:#fff;font:600 13px Calibri,Arial,sans-serif';
+    bar.innerHTML='<span>Aperçu — '+esc(titre)+'</span><span style="flex:1"></span>'+
+      '<button type="button" onclick="_impImprimerApercu()" style="font:inherit;padding:5px 14px;border-radius:5px;border:1px solid #fff;background:#fff;color:#1b365d;cursor:pointer">🖨 Imprimer / PDF</button>'+
+      '<button type="button" onclick="_impFermerApercu()" style="font:inherit;padding:5px 14px;border-radius:5px;border:1px solid #fff;background:transparent;color:#fff;cursor:pointer">✕ Fermer</button>';
+    ov.appendChild(bar);
+  }
+  var ifr=document.createElement('iframe'); ifr.id='impApercuFrame'; ifr.title=titre;
+  ifr.style.cssText=apercu?'flex:1;width:100%;border:0;background:#fff':'width:1120px;height:800px;border:0';
+  ifr.onload=function(){
+    try{ if(o.theme==='sombre' && typeof _pdfThemeAppliquer==='function') _pdfThemeAppliquer(ifr.contentDocument,'sombre'); }catch(e){}
+    if(!apercu) setTimeout(function(){ _impPrint(ifr.contentWindow); },250);
+  };
+  ifr.srcdoc=html; ov.appendChild(ifr); document.body.appendChild(ov);
+  if(apercu) document.addEventListener('keydown',_impEchap);
+  return ifr;
 }
+// Impression du cadre ; le cadre invisible est retiré une fois l'impression terminée.
+function _impPrint(w){
+  try{ w.addEventListener('afterprint',function(){ var x=document.getElementById('impApercu'); if(x && x.getAttribute('data-apercu')==='0') x.remove(); }); }catch(e){}
+  w.focus(); w.print();
+}
+function _impImprimerApercu(){ var f=document.getElementById('impApercuFrame'); if(f && f.contentWindow) _impPrint(f.contentWindow); }
+function _impFermerApercu(){ var x=document.getElementById('impApercu'); if(x) x.remove(); document.removeEventListener('keydown',_impEchap); }
+function _impEchap(e){ if(e.key==='Escape') _impFermerApercu(); }
 function _impDocument(page,o){
   var r=IMP_BUILD[page](o), titre=(IMP_PAGES[page]||r.titre)+(o.annee?' '+o.annee:'');
   return {titre:titre, corps:_impEntete(titre,_impPeriodeTxt(o)+(o.contenu?' · '+((IMP_CONTENU[page]||[]).filter(function(c){return c[0]===o.contenu;})[0]||['',o.contenu])[1]:''))+r.html, n:r.n};
@@ -7048,6 +7078,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-01','Impression : l\'aperçu s\'affiche dans le GRC (plus de fenêtre séparée qui pouvait figer le GRC à la fermeture). Échap ou ✕ Fermer pour revenir.'],
   ['2026-11-01','Impression : le bouton 🖨 Imprimer propose des options et un aperçu papier (Tableau de bord, Factures, Devis, Bons de commande) ; nouveau 📘 Rapport annuel du GRC.'],
   ['2026-11-01','PO de remplacement : alerte si la case est cochée sur le mauvais PO (celui de la pièce erronée).'],
   ['2026-11-01','Bons de commande : PO de remplacement à nos frais (pièce erronée recommandée) — aucune facture, perte expliquée dans la rentabilité, badges sur les deux PO.'],
