@@ -2979,7 +2979,7 @@ function admPreviewPrint(){
         </div>
       </div>
       <div class="form-group"><label>Statut</label>
-        <select class="form-select" id="dv-status" onchange="onDVStatusChange()"><option>Brouillon</option><option>Envoyé</option><option>Accepté</option><option>Refusé</option><option>Facturé</option><option>Cadre</option><option>Obsolète</option></select>
+        <select class="form-select" id="dv-status" onchange="onDVStatusChange();_dvStatutChoisi()"><option>Brouillon</option><option>Envoyé</option><option>Accepté</option><option>Refusé</option><option>Facturé</option><option>Cadre</option><option>Obsolète</option></select>
       </div>
       <!-- Bloc qui apparaît UNIQUEMENT quand le statut est 'Accepté' ou 'Facturé'.
            Permet de saisir le BC client SLN reçu, et de générer automatiquement la facture. -->
@@ -7175,6 +7175,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-02','Devis : passer le statut de « Brouillon » à « Envoyé » date l’envoi à aujourd’hui (phase « Devis envoyé », modifiable ensuite). Une révision ne recopie plus l’historique de phases de l’original : elle n’avait pas encore été envoyée et gardait sa date d’envoi.'],
   ['2026-11-02','☁ Enregistrement cloud : seules les lignes réellement modifiées partent (plus la table entière). Une modification n’est plus écrasée par un écho tardif ni par un autre onglet/poste resté sur une version périmée, et fermer le GRC juste après une modification ne la perd plus : elle est envoyée à la réouverture (sauf si la même fiche a été modifiée ailleurs entre-temps : avertissement).'],
   ['2026-11-01','🛡 Contrôle PDF : la DATE de chaque facture émise est comparée à celle imprimée sur son PDF archivé (nouveau et ancien modèle). Écart = alerte rouge, avec « 📅 Date du PDF » pour corriger ; l’export Administratif prévient aussi quand une facture a quitté la période alors que son PDF y est daté.'],
   ['2026-11-01','🔒 Verrou des factures émises : toute modification de la date, du client, de l’objet, des montants ou des lignes d’une facture déjà envoyée est annoncée (avant → après) ; une modification venue d’ailleurs est signalée à l’ouverture du GRC. L’objet d’une facture émise n’est plus jamais régénéré.'],
@@ -25689,6 +25690,26 @@ function _dvStatutSuitPhase(phaseKey){
   if(typeof onDVStatusChange==='function') onDVStatusChange();
   return true;
 }
+// [02/11/2026] LE STATUT CHOISI À LA MAIN « Brouillon → Envoyé » DATE L'ENVOI.
+// Demande utilisateur : révision envoyée au client, statut passé à « Envoyé » → la
+// date d'envoi restait celle du devis d'origine. Désormais la phase « Devis envoyé »
+// prend la date du jour à cet instant (modifiable ensuite dans la Traçabilité).
+// Seulement depuis le menu Statut (pas quand le statut suit une phase choisie à la
+// main avec sa date), et seulement si le devis enregistré était en Brouillon.
+function _dvStatutChoisi(){
+  if(gvg('dv-status')!=='Envoyé') return;
+  var existant=eDVid?DB.devis.find(function(x){return x.id===eDVid;}):null;
+  if(existant && existant.status!=='Brouillon') return;
+  var today=(typeof td==='function')?td():new Date().toISOString().substring(0,10);
+  var e=(_dvPhaseHistoryEdit||[]).find(function(x){return x && x.phase==='envoye';});
+  if(e){ e.date=today; e._reconstructed=false; delete e._autoSync; }
+  else _dvPhaseHistoryEdit.push({phase:'envoye',date:today,_reconstructed:false});
+  _dvPhaseHistoryEdit.sort(function(a,b){ return ((PHASES_META[a.phase]||{}).idx||99)-((PHASES_META[b.phase]||{}).idx||99); });
+  var cur=gvg('dv-phase');
+  if(!cur || cur==='envoye'){ gv('dv-phase','envoye'); gv('dv-phase-date',today); }
+  if(typeof renderPhaseHistoryTable==='function') renderPhaseHistoryTable();
+  _refreshPhaseNextBtn();
+}
 function onDVPhaseChange(){
   var phase=gvg('dv-phase');
   _dvStatutSuitPhase(phase);
@@ -31766,6 +31787,12 @@ function createDVRevision(sourceDevisId){
   newRev.rev=newRevLabel;
   newRev.date=td();
   newRev.status='Brouillon';
+  // [02/11/2026] Une révision repart d'un cycle vierge : elle n'est pas encore envoyée.
+  // La copie profonde emportait l'historique de phases de l'original → sa date d'envoi
+  // restait celle du devis d'origine (8 révisions sur 11 au 01/11). Cf _dvStatutChoisi.
+  newRev.phaseHistory=[];
+  delete newRev.phase;
+  delete newRev.phaseDate;
   // Reset des liens de facturation (la nouvelle REV n'est pas encore liée à une facture)
   delete newRev.linkFactureId;
   delete newRev._factureLiee;
