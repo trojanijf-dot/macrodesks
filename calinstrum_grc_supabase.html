@@ -4951,6 +4951,8 @@ function saveDB(){
   try{ if(typeof _supaSyncSchedule==='function') _supaSyncSchedule(); }catch(e){ console.warn('supabase schedule failed:',e); }
   // 3) Journal d'activité (comparaison regroupée, cf _jrCapturer).
   try{ if(typeof _jrPlanifier==='function') _jrPlanifier(); }catch(e){}
+  // 4) Verrou des factures émises : empreinte posée dès qu'une facture devient émise.
+  try{ if(typeof _emprPlanifier==='function') _emprPlanifier(); }catch(e){}
 }
 
 // =============================================================================
@@ -6582,10 +6584,90 @@ function _migrationsApresCloud(){
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
   if(typeof migrateSuiviLiensAutreFacture==='function'){ try{ n+=migrateSuiviLiensAutreFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSuiviLiensAutreFacture (après cloud) :',e); } }
   if(typeof migrateStatutDateEncaissement==='function'){ try{ n+=migrateStatutDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateStatutDateEncaissement (après cloud) :',e); } }
+  // Verrou des factures émises : d'abord vérifier les empreintes existantes, puis
+  // verrouiller les factures émises qui n'en ont pas encore.
+  var _emprModif=[]; try{ _emprModif=_emprVerifier(); n+=_emprAssurer(); }catch(e){ console.warn('[CALINSTRUM] verrou factures émises :',e); }
+  if(_emprModif.length) setTimeout(function(){ try{ ouvrirEmpreintesModifiees(); }catch(e){} },1800);
   try{ _jrCapturer(); }catch(e){}
   _jrAuto--;
   setTimeout(function(){ try{ _alerterDoublonsFactures(); }catch(e){} }, 1500);
   return n;
+}
+// =============================================================================
+// VERROU DES FACTURES ÉMISES — EMPREINTE (01/11/2026)
+// =============================================================================
+// Une facture envoyée au client restait entièrement modifiable, sans un mot :
+// une facture émise et payée (PDF archivé) a été redatée de deux mois par sa fiche
+// le 29/10 ; une autre avait vu son montant réécrit le 26/10. Désormais, dès qu'une
+// facture est émise, le GRC garde son EMPREINTE (n°, date, client, objet, montants,
+// lignes). Toute modification de ces éléments :
+//   - par la fiche → question explicite (avant → après) ; OK = l'empreinte suit ;
+//   - par tout autre chemin (automatisme, autre poste, import) → signalée au
+//     chargement (fenêtre « Factures émises modifiées »), à valider ou corriger.
+// Statut, paiement, phase, échéance, notes : jamais concernés (vie normale d'une facture).
+var EMPR_CHAMPS=[['num','N°'],['date','Date'],['client','Client'],['objet','Objet'],['ht','Montant HT'],['tgc','TGC'],['ttc','Montant TTC'],['lignes','Lignes']];
+function _emprListe(lines){
+  if(Array.isArray(lines)) return lines;
+  if(lines && typeof lines==='object'){ var o=[]; ['fourniture','service','fret'].forEach(function(s){ if(Array.isArray(lines[s])) o=o.concat(lines[s]); }); return o; }
+  return [];
+}
+function _emprLignes(lines){
+  var out=[];
+  (function walk(arr){ (arr||[]).forEach(function(l){ if(!l) return;
+    out.push([String(l.ref||'').trim(),String(l.designation||l.desc||'').replace(/\s+/g,' ').trim(),Number(l.qte)||0,Number(l.pu)||0,Number(l.tgc)||0,String(l.type||'')]);
+    if(Array.isArray(l.subLines)) walk(l.subLines); }); })(_emprListe(lines));
+  return JSON.stringify(out);
+}
+function _emprVals(f){
+  return {num:String(f.num||'').trim(), date:String(f.date||''), client:String(f.client||'').trim(), objet:String(typeof _faObjetClient==='function'?_faObjetClient(f.objet,f):(f.objet||'')).replace(/\s+/g,' ').trim(), // tel qu'imprimé (cf _faObjetClient)
+   
+    ht:Math.round(Number(f.ht)||0), tgc:Math.round(Number(f.tgc)||0), ttc:Math.round(Number(f.ttc)||0), lignes:_emprLignes(f.lines)};
+}
+function _emprDiff(a,b){
+  if(!a||!b) return [];
+  return EMPR_CHAMPS.filter(function(c){ return String(a[c[0]])!==String(b[c[0]]); }).map(function(c){
+    var k=c[0], fa=function(v){ return k==='date'?(v?fD(v):'(vide)'):(k==='ht'||k==='tgc'||k==='ttc')?fN(v):k==='lignes'?'':String(v||'(vide)'); };
+    return {k:k,c:c[1],a:fa(a[k]),n:k==='lignes'?'modifiées':fa(b[k])};
+  });
+}
+function _emprTexte(d){ return d.map(function(x){ return '• '+x.c+(x.k==='lignes'?' : modifiées':' : '+x.a+' → '+x.n); }).join('\n'); }
+function _emprEstEmise(f){ return !!(f && f.num && typeof isPrebilled==='function' && !isPrebilled(f)); }
+function _emprPoser(f,raison,modif){
+  var h=(f._empreinte&&f._empreinte.modifs)||[];
+  if(modif) h=h.concat([{le:new Date().toISOString(),champs:modif}]).slice(-20);
+  f._empreinte={vals:_emprVals(f),le:new Date().toISOString(),raison:raison||'',modifs:h};
+}
+// Pose l'empreinte des factures émises qui n'en ont pas encore (au chargement, et
+// après chaque enregistrement : une facture qui devient émise est verrouillée aussitôt).
+function _emprAssurer(){
+  var n=0; (DB.factures||[]).forEach(function(f){ if(_emprEstEmise(f) && !f._empreinte){ _emprPoser(f,'émise'); n++; } }); return n;
+}
+var _emprTimer=null, _emprEcrit=false;
+function _emprPlanifier(){ if(_emprEcrit||_emprTimer) return; _emprTimer=setTimeout(function(){ _emprTimer=null; if(_emprAssurer()){ _emprEcrit=true; try{ saveDB(); }finally{ _emprEcrit=false; } } },80); }
+// Factures émises dont le contenu ne correspond plus à leur empreinte.
+function _emprVerifier(){
+  return (DB.factures||[]).filter(function(f){ return _emprEstEmise(f) && f._empreinte && f._empreinte.vals; })
+    .map(function(f){ return {f:f,d:_emprDiff(f._empreinte.vals,_emprVals(f))}; }).filter(function(x){ return x.d.length; });
+}
+function _emprValider(id){
+  var f=(DB.factures||[]).find(function(x){return String(x.id)===String(id);}); if(!f) return;
+  var d=_emprDiff(f._empreinte&&f._empreinte.vals,_emprVals(f));
+  _emprPoser(f,'modification validée',d); saveDB();
+  if(typeof _jrAjouter==='function') _jrAjouter({qui:(typeof _jrQui==='function'?_jrQui():''),auto:false,col:'factures',docId:f.id,num:f.num,action:'mod',champs:[],note:'modification d\'une facture émise validée : '+d.map(function(x){return x.c;}).join(', ')});
+  ouvrirEmpreintesModifiees();
+}
+function ouvrirEmpreintesModifiees(){
+  var ancien=document.getElementById('mEMPR'); if(ancien) ancien.remove();
+  var l=_emprVerifier(); if(!l.length) return;
+  var m=document.createElement('div'); m.id='mEMPR'; m.className='modal-overlay open';
+  m.innerHTML='<div class="modal modal-lg"><div class="modal-header"><h3>🔒 Factures émises modifiées depuis leur envoi</h3><button class="modal-close" onclick="document.getElementById(\'mEMPR\').remove()">✕</button></div>'+
+    '<div class="modal-body"><div style="font-size:11.5px;color:var(--muted);margin-bottom:8px">Ces factures ont déjà été émises (envoyées au client) et leur contenu a changé depuis. Le PDF envoyé, lui, n\'a pas changé. Ouvrez-les pour vérifier ; si le changement est voulu, validez-le.</div>'+
+    l.map(function(x){ return '<div data-empr="'+esc(x.f.num)+'" style="border:1px solid rgba(248,113,113,.5);background:rgba(248,113,113,.06);border-radius:8px;padding:8px 10px;margin-bottom:6px;display:flex;gap:10px;align-items:flex-start">'+
+      '<div style="flex:1"><b style="color:var(--teal)">'+esc(x.f.num)+'</b> <span style="color:var(--muted);font-size:11px">'+esc(x.f.client||'')+'</span>'+
+      '<div style="font-size:11.5px;margin-top:3px">'+x.d.map(function(c){ return esc(c.c)+(c.k==='lignes'?' : modifiées':' : <s style="color:#8a96a3">'+esc(c.a)+'</s> → <b>'+esc(c.n)+'</b>'); }).join(' · ')+'</div></div>'+
+      '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'mEMPR\').remove();openFA('+JSON.stringify(x.f.id)+')">Ouvrir</button>'+
+      '<button class="btn btn-ghost btn-sm" onclick="_emprValider('+JSON.stringify(x.f.id)+')">C\'est voulu</button></div>'; }).join('')+'</div></div>';
+  document.body.appendChild(m);
 }
 // Facture émise avec une date d'encaissement mais aucun versement, restée non « Payée »
 // (cf updateVersementsTotals, 01/11/2026) → « Payée », comme la page Règlements. Idempotent.
@@ -6981,7 +7063,7 @@ function _alerterDoublonsFactures(){
 // Stockage : DB.journal, synchronisé par le canal params ; purgé au-delà de 5 jours.
 var JOURNAL_JOURS=5, JOURNAL_MAX=3000;
 var _JR_COLS={factures:'Facture',devis:'Devis',bcs:'Bon de commande',bls:'Bon de livraison',avoirs:'Avoir'};
-var _JR_IGNORE={_manuallyEditedAt:1,_modifiedAt:1,_updatedAt:1,_propagating:1,_lastSyncedAt:1,suiviId:1,_previousStatus:1};
+var _JR_IGNORE={_manuallyEditedAt:1,_modifiedAt:1,_updatedAt:1,_propagating:1,_lastSyncedAt:1,suiviId:1,_previousStatus:1,_empreinte:1};
 var _JR_LIB={num:'N°',rev:'Révision',date:'Date',client:'Client',objet:'Objet',phase:'Phase',status:'Statut',type:'Type',
   ttc:'Montant TTC',ht:'Montant HT',tgc:'TGC',total:'Total',paye:'Payé',bcClientSLN:'N° BC client',bcClientSLNDate:'Date BC client',
   bcClientRef:'Réf. BC client',bcClientDate:'Date BC client (réf.)',_importPONum:'N° PO client',dateReceptionBC:'Date réception BC',
@@ -7093,6 +7175,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-01','🔒 Verrou des factures émises : toute modification de la date, du client, de l’objet, des montants ou des lignes d’une facture déjà envoyée est annoncée (avant → après) ; une modification venue d’ailleurs est signalée à l’ouverture du GRC. L’objet d’une facture émise n’est plus jamais régénéré.'],
   ['2026-11-01','Factures : une date d’encaissement saisie suffit pour qu’une facture soit « Payée » (sans versement), comme la page Règlements ; Auto-split date le versement du jour de l’encaissement.'],
   ['2026-11-01','Impression : l\'aperçu s\'affiche dans le GRC (plus de fenêtre séparée qui pouvait figer le GRC à la fermeture). Échap ou ✕ Fermer pour revenir.'],
   ['2026-11-01','Impression : le bouton 🖨 Imprimer propose des options et un aperçu papier (Tableau de bord, Factures, Devis, Bons de commande) ; nouveau 📘 Rapport annuel du GRC.'],
@@ -34928,7 +35011,11 @@ async function saveFA(){
   // Déclenchée à chaque save (cf demande utilisateur : "À chaque création/sauvegarde").
   // Le champ objet visible dans la modale est régénéré ; le titre PDF (généré par
   // d'autres fonctions à partir d'autres sources) n'est pas affecté.
-  if(f.type==='Fourniture'){
+  // [01/11/2026] JAMAIS pour une facture déjà ÉMISE : son objet est imprimé sur le PDF
+  // envoyé au client. Le verrou (empreinte) a révélé 5 factures émises dont l'objet était
+  // réécrit en silence à chaque enregistrement (ex. « … / PO … » → « Fourniture REAPPRO BC … »).
+  var _faExistant=eFAid!=null?(DB.factures||[]).find(function(x){return x.id===eFAid;}):null;
+  if(f.type==='Fourniture' && !(_faExistant && _emprEstEmise(_faExistant))){
     f.objet=_buildFAFournitureObjet(f);
   }
   // Auto-remplit le devis à IMPRIMER (le cadre réel, distinct du devis-miroir de
@@ -34948,6 +35035,19 @@ async function saveFA(){
     if(!confirm('⛔ Le n° '+f.num+' est déjà pris par une autre facture : '+_numPris.num+' du '+fD(_numPris.date)+' — '+String(_numPris.objet||'').slice(0,60)+' ('+(_numPris.status||'')+').\n\nDeux factures ne peuvent pas porter le même n°.\n\n[OK] = enregistrer sous le prochain n° libre : '+_libre+'\n[Annuler] = revenir à la facture sans rien enregistrer')) return;
     f.num=_libre;
     var _faNumInput=document.getElementById('fa-num'); if(_faNumInput) _faNumInput.value=_libre;
+  }
+  // [01/11/2026] VERROU : facture déjà ÉMISE (envoyée au client) → toute modification de
+  // son contenu (n°, date, client, objet, montants, lignes) est annoncée, avant → après.
+  // Cf _empreinte. Statut / paiement / phase / notes ne sont pas concernés.
+  if(eFAid!=null){
+    var _faAvant=(DB.factures||[]).find(function(x){return x.id===eFAid;});
+    if(_faAvant && _emprEstEmise(_faAvant) && _faAvant._empreinte && _faAvant._empreinte.vals){
+      var _emprD=_emprDiff(_faAvant._empreinte.vals,_emprVals(f));
+      if(_emprD.length){
+        if(!confirm('🔒 '+_faAvant.num+' est une facture ÉMISE : elle a déjà été envoyée au client'+(_faAvant.date?' (émise le '+fD(_faAvant.date)+')':'')+'.\n\nVous modifiez :\n'+_emprTexte(_emprD)+'\n\nLe PDF déjà envoyé au client ne changera pas.\n\n[OK] = enregistrer quand même\n[Annuler] = ne rien enregistrer')) return;
+        _emprPoser(f,'modifiée depuis sa fiche',_emprD);
+      } else f._empreinte=_faAvant._empreinte;
+    }
   }
   // [30/10/2026] BC client cohérent : du bon client, celui du devis, daté plausiblement.
   if(typeof _bcCoherence==='function' && !_bcCoherenceConfirm(f,'facture',_bcCoherence(f,'facture'))) return;
