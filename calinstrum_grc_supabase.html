@@ -7188,6 +7188,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-02','≠ Rapprochement Devis ↔ Factures : un écart expliqué (ajouts facturés à la demande du client, etc.) peut être justifié avec un motif. La ligne passe en « Justifié » et sort du compteur des écarts ; elle redevient un écart si une facture ou un montant change.'],
   ['2026-11-02','🧾 Factures d’acompte : la fiche de la facture mère affiche un échéancier (une ligne par acompte, date de paiement lue sur l’acompte, solde restant avec « + Facture de solde »). La facture mère (cadre, jamais émise) ne compte plus que pour son reste à facturer dans les totaux, et le Rapprochement Devis ↔ Factures ne l’additionne plus à ses acomptes : « solde à facturer » au lieu d’un faux écart. La synchro Factures → Suivi du démarrage est désormais conservée (elle était perdue au chargement cloud).'],
   ['2026-11-02','Devis : passer le statut de « Brouillon » à « Envoyé » date l’envoi à aujourd’hui (phase « Devis envoyé », modifiable ensuite). Une révision ne recopie plus l’historique de phases de l’original : elle n’avait pas encore été envoyée et gardait sa date d’envoi.'],
   ['2026-11-02','☁ Enregistrement cloud : seules les lignes réellement modifiées partent (plus la table entière). Une modification n’est plus écrasée par un écho tardif ni par un autre onglet/poste resté sur une version périmée, et fermer le GRC juste après une modification ne la perd plus : elle est envoyée à la réouverture (sauf si la même fiche a été modifiée ailleurs entre-temps : avertissement).'],
@@ -18741,12 +18742,24 @@ function _buildReconciliation(opts){
         soldeAFacturer:-ecart, soldePct:Math.round(-ecart/dvTTC*100)
       });
     } else {
-      nbEcart++;
-      rows.push({
-        kind:'ecart', devis:g.devis, devisGroup:g.devisGroup,
-        factures:g.factures, totalFac:g.totalFac, totalDv:dvTTC, ecart:ecart,
-        isGroup:!!g._isGroup
-      });
+      var sigEcart=_reconcilSig(g,dvTTC);
+      var just=g.devis&&g.devis.ecartJustif;
+      if(just && just.sig===sigEcart){
+        // Écart expliqué par un motif saisi : sort du compteur des écarts
+        nbMatch++;
+        rows.push({
+          kind:'match', devis:g.devis, devisGroup:g.devisGroup,
+          factures:g.factures, totalFac:g.totalFac, totalDv:dvTTC, ecart:ecart,
+          isGroup:!!g._isGroup, justifie:just
+        });
+      } else {
+        nbEcart++;
+        rows.push({
+          kind:'ecart', devis:g.devis, devisGroup:g.devisGroup,
+          factures:g.factures, totalFac:g.totalFac, totalDv:dvTTC, ecart:ecart,
+          isGroup:!!g._isGroup, sig:sigEcart
+        });
+      }
     }
   });
 
@@ -18786,6 +18799,35 @@ function _buildReconciliation(opts){
   };
 }
 
+// Écart justifié : motif enregistré sur le(s) devis avec une signature (devis,
+// factures, montants). Si une facture ou un montant change, l'écart revient.
+function _reconcilSig(g, dvTTC){
+  var dv=(g.devisGroup||[g.devis]).map(function(d){return String(d.id);}).sort().join(',');
+  var fa=(g.factures||[]).map(function(f){return String(f.id);}).sort().join(',');
+  return dv+'|'+fa+'|'+Math.round(dvTTC)+'|'+Math.round(g.totalFac||0);
+}
+function _reconcilPoserJustif(r, just){
+  (r.devisGroup||[r.devis]).forEach(function(d){
+    var x=(DB.devis||[]).find(function(y){return String(y.id)===String(d.id);});
+    if(x) x.ecartJustif=just;
+  });
+  saveDB();
+  renderReconcilTable();
+}
+function reconcilJustifier(i){
+  var r=(window._reconcilLastRows||[])[i];
+  if(!r || r.kind!=='ecart' || !r.sig) return;
+  var motif=prompt('Motif de l\'écart entre le devis et les factures (obligatoire) :','');
+  if(!motif || !motif.trim()) return;
+  _reconcilPoserJustif(r, {sig:r.sig, motif:motif.trim(), date:td()});
+}
+function reconcilRetirerJustif(i){
+  var r=(window._reconcilLastRows||[])[i];
+  if(!r || !r.justifie) return;
+  if(!confirm('Retirer la justification ? La ligne repassera en Écart.')) return;
+  _reconcilPoserJustif(r, null);
+}
+
 // =============================================================================
 // RENDU UI : onglet "Réconciliation" dans Suivi Factures
 // =============================================================================
@@ -18804,6 +18846,8 @@ function renderReconcilTable(){
     fiscalYear:fy,
     typeFilter:window._reconcilTypeFilter
   });
+  rec.rows.forEach(function(r,i){ r._i=i; });
+  window._reconcilLastRows=rec.rows;
   var kind=window._reconcilKindFilter;
   var rows=rec.rows.filter(function(r){
     if(kind==='all') return true;
@@ -18824,6 +18868,19 @@ function renderReconcilTable(){
     };
     var s=map[k]||map.match;
     return '<span style="padding:1px 7px;border-radius:8px;font-size:9px;font-weight:700;background:'+s.bg+';color:'+s.col+';border:0.5px solid '+s.br+'">'+s.label+'</span>';
+  }
+  // Cellule Statut : pastille + « Justifier l'écart… » ou motif enregistré
+  function statutCell(r){
+    if(r.justifie){
+      return '<span style="padding:1px 7px;border-radius:8px;font-size:9px;font-weight:700;background:rgba(93,202,165,.1);color:#5dcaa5;border:0.5px solid rgba(93,202,165,.3)" title="Écart justifié">Justifié</span>'+
+        '<div style="font-size:9.5px;color:var(--muted);margin-top:3px;max-width:220px;white-space:normal;line-height:1.35">« '+esc(r.justifie.motif)+' » · '+fD(r.justifie.date)+
+        ' <a href="#" onclick="event.preventDefault();event.stopPropagation();reconcilRetirerJustif('+r._i+')" style="color:var(--muted-soft);text-decoration:underline">retirer</a></div>';
+    }
+    var h=pillKind(r.kind);
+    if(r.kind==='ecart' && r.sig){
+      h+='<div style="margin-top:4px"><button type="button" class="btn btn-ghost btn-sm" style="font-size:9.5px;padding:1px 7px;white-space:nowrap" onclick="event.stopPropagation();reconcilJustifier('+r._i+')">Justifier l\'écart…</button></div>';
+    }
+    return h;
   }
   function bgKind(k){
     if(k==='match') return 'rgba(16,185,129,.02)';
@@ -18921,7 +18978,8 @@ function renderReconcilTable(){
         var grpClient=r.devisGroup[0].client||'—';
         var grpTTC=Number(r.totalDv||0);
         var ecartStrG;
-        if(r.ecart>0) ecartStrG='<span style="color:#f87171">+'+fNloc(r.ecart)+'</span>';
+        if(r.justifie) ecartStrG='<span style="color:var(--muted)">'+(r.ecart>0?'+':'')+fNloc(r.ecart)+'</span>';
+        else if(r.ecart>0) ecartStrG='<span style="color:#f87171">+'+fNloc(r.ecart)+'</span>';
         else if(r.ecart<0) ecartStrG='<span style="color:#fbbf24">'+fNloc(r.ecart)+'</span>';
         else ecartStrG='<span style="color:#5dcaa5">0</span>';
         var facBadgesG='';
@@ -18950,7 +19008,7 @@ function renderReconcilTable(){
           '<td>'+facBadgesG+'</td>'+
           '<td style="text-align:right;font-family:var(--mono);font-weight:600">'+fNloc(r.totalFac)+' XPF</td>'+
           '<td style="text-align:right;font-family:var(--mono)">'+ecartStrG+'</td>'+
-          '<td>'+pillKind(r.kind)+' <span style="display:inline-block;padding:1px 5px;border-radius:8px;font-size:8.5px;font-weight:700;background:rgba(167,139,250,.12);color:#a78bfa;border:0.5px solid rgba(167,139,250,.3);margin-left:3px" title="Plusieurs devis regroupés sur une seule facture">Groupé</span></td>'+
+          '<td>'+statutCell(r)+' <span style="display:inline-block;padding:1px 5px;border-radius:8px;font-size:8.5px;font-weight:700;background:rgba(167,139,250,.12);color:#a78bfa;border:0.5px solid rgba(167,139,250,.3);margin-left:3px" title="Plusieurs devis regroupés sur une seule facture">Groupé</span></td>'+
           '</tr>';
       } else {
         var d=r.devis;
@@ -18965,6 +19023,8 @@ function renderReconcilTable(){
           ecartStr='<span style="color:var(--muted-soft);font-style:italic;font-size:10px">cadre</span>';
         } else if(r.isAcomptes){
           ecartStr='<span style="display:inline-block;padding:1px 7px;border-radius:8px;font-size:9.5px;font-weight:700;background:rgba(138,150,163,.15);color:var(--muted);white-space:nowrap" title="Facturation par acomptes en cours : ce reste n\'est pas une erreur">solde à facturer '+r.soldePct+' % : '+fNloc(r.soldeAFacturer)+'</span>';
+        } else if(r.justifie){
+          ecartStr='<span style="color:var(--muted)">'+(r.ecart>0?'+':'')+fNloc(r.ecart)+'</span>';
         } else if(r.ecart>0) ecartStr='<span style="color:#f87171">+'+fNloc(r.ecart)+'</span>';
         else if(r.ecart<0) ecartStr='<span style="color:#fbbf24">'+fNloc(r.ecart)+'</span>';
         else ecartStr='<span style="color:#5dcaa5">0</span>';
@@ -19017,7 +19077,7 @@ function renderReconcilTable(){
           '<td>'+facBadges+'</td>'+
           '<td style="text-align:right;font-family:var(--mono);'+(r.totalFac>0?'font-weight:600':'color:var(--muted)')+'">'+(r.totalFac>0?fNloc(r.totalFac)+' XPF':'—')+'</td>'+
           '<td style="text-align:right;font-family:var(--mono)">'+ecartStr+'</td>'+
-          '<td>'+pillKind(r.kind)+cadrePill+'</td>'+
+          '<td>'+statutCell(r)+cadrePill+'</td>'+
           '</tr>';
       }
     });
@@ -19026,7 +19086,7 @@ function renderReconcilTable(){
   // Note explicative en bas
   html+='<div style="margin-top:14px;font-size:10.5px;color:var(--muted-soft);line-height:1.6;padding:10px;background:rgba(255,255,255,.02);border-radius:6px">'+
     '<strong style="color:var(--muted)"><i class="ti ti-info-circle" style="font-size:11px;vertical-align:-1px"></i> Logique de matching</strong> — '+
-    'Périmètre : devis status « Accepté » ou « Facturé » de l\'année '+fy+'. Pour chaque devis, on cherche les factures liées via <code style="background:rgba(255,255,255,.06);padding:1px 4px;border-radius:3px">linkFactureId</code>, <code style="background:rgba(255,255,255,.06);padding:1px 4px;border-radius:3px">dvlie</code>, ou présence du N° devis dans l\'objet/intitulé. Une tolérance de 1% (min 1000 XPF) absorbe les arrondis TGC. '+
+    'Périmètre : devis status « Accepté » ou « Facturé » de l\'année '+fy+'. Pour chaque devis, on cherche les factures liées via <code style="background:rgba(255,255,255,.06);padding:1px 4px;border-radius:3px">linkFactureId</code>, <code style="background:rgba(255,255,255,.06);padding:1px 4px;border-radius:3px">dvlie</code>, ou présence du N° devis dans l\'objet/intitulé. Une tolérance de 1% (min 1000 XPF) absorbe les arrondis TGC. Un écart expliqué peut être justifié (motif) : il redevient un écart si une facture ou un montant change. '+
     'Clic sur une ligne ouvre le devis · clic sur un badge facture ouvre la facture.'+
     '</div>';
   container.innerHTML=html;
