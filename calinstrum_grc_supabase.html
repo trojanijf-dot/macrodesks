@@ -6615,6 +6615,7 @@ function _migrationsApresCloud(){
   if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
   if(typeof migrateSuiviLiensAutreFacture==='function'){ try{ n+=migrateSuiviLiensAutreFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSuiviLiensAutreFacture (après cloud) :',e); } }
+  if(typeof migrateSoldeBC==='function'){ try{ n+=migrateSoldeBC(); }catch(e){ console.warn('[CALINSTRUM] migrateSoldeBC (après cloud) :',e); } }
   if(typeof migrateSoldeDevisFacture==='function'){ try{ n+=migrateSoldeDevisFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSoldeDevisFacture (après cloud) :',e); } }
   if(typeof migrateStatutDateEncaissement==='function'){ try{ n+=migrateStatutDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateStatutDateEncaissement (après cloud) :',e); } }
   // Verrou des factures émises : d'abord vérifier les empreintes existantes, puis
@@ -7211,6 +7212,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-03','🧾 Factures d’acompte et de solde : elles reprennent le n° de BC client, sa date et leur % de la commande dès leur création.'],
   ['2026-11-03','🧾 Facture de solde : le devis passe « Facturé » à sa création. La facture mère entièrement facturée affiche la phase et les dates de sa dernière tranche, au lieu de « Chantier en cours / pas émise » (elle reste un cadre, le CA ne change pas). Liste Devis : la mère n’est plus additionnée à ses tranches. En-têtes de mois : une facture payée n’est plus comptée « en retard ».'],
   ['2026-11-02','📊 Export Administratif : la base HT du tableau « TGC par taux » compte les blocs tâches et correspond au CA ; le total TGC reprend les montants des documents (somme de la liste) ; plus de feuille quasi vide avant la 1re facture.'],
   ['2026-11-02','≠ Rapprochement Devis ↔ Factures : un écart expliqué (ajouts facturés à la demande du client, etc.) peut être justifié avec un motif. La ligne passe en « Justifié » et sort du compteur des écarts ; elle redevient un écart si une facture ou un montant change.'],
@@ -9059,6 +9061,30 @@ function migrateSoldeDevisFacture(){
     _soldeEmis(f); n++;
   });
   DB._soldeDevisV1=true;
+  if(n) saveDB();
+  return n;
+}
+
+// Rattrapage unique : soldes déjà créés sans leur BC. Seuls les champs de commande
+// VIDES sont remplis : montant, lignes, date et objet n'entrent pas ici.
+function migrateSoldeBC(){
+  if(!DB || DB._soldeBCV1) return 0;
+  var n=0;
+  (DB.factures||[]).forEach(function(f){
+    if(!f || f.acompteType!=='solde' || !f.parentId) return;
+    if(f._importPONum || f.bcClientSLN) return;
+    var mere=(DB.factures||[]).find(function(x){return x.id===f.parentId;});
+    if(!mere) return;
+    var bc=_trancheBC(mere);
+    if(!bc.num) return;
+    f._importPONum=bc.num;
+    if(!f.dateReceptionBC) f.dateReceptionBC=bc.date;
+    if(Number(f.acomptePct)>0 && (typeof f.pctOfBC!=='number' || f.pctOfBC===100)) f.pctOfBC=Number(f.acomptePct);
+    if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(f,'BC repris de sa facture mère');
+    if(typeof syncFactureToSuivi==='function') syncFactureToSuivi(f);
+    n++;
+  });
+  DB._soldeBCV1=true;
   if(n) saveDB();
   return n;
 }
@@ -34715,6 +34741,13 @@ function _recalcAcompteLines(){
 }
 
 // Génère la facture d'acompte à partir des champs de la modal
+// Commande client d'une tranche : celle de sa mère, sinon celle du devis.
+// [03/11/2026] Rien n'était repris : facture de solde imprimée sans son n° de BC.
+function _trancheBC(mere){
+  var d=_findLinkedDevisFromFacture(mere);
+  return {num:mere._importPONum||mere.bcClientSLN||_dvBCClientNum(d),
+    date:mere.dateReceptionBC||(d&&(d.bcClientDate||d.bcClientSLNDate))||''};
+}
 function generateAcompteInvoice(){
   if(!eFAid){alert('Pas de facture mère sélectionnée');return;}
   var parent=DB.factures.find(function(x){return x.id===eFAid;});
@@ -34789,6 +34822,11 @@ function generateAcompteInvoice(){
     email: parent.email||'',
     objet: (type==='solde'?'Solde — ':'Acompte — ')+(parent.objet||''),
     dvlie: parent.dvlie||'',
+    dvliePrint: parent.dvliePrint||'',
+    bcClientSLN: parent.bcClientSLN||'',
+    _importPONum: _trancheBC(parent).num,
+    dateReceptionBC: _trancheBC(parent).date,
+    pctOfBC: pct,
     type: parent.type||'Fourniture',
     status: 'En attente',
     tgcM: parent.tgcM||'506-2',
