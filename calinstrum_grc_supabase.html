@@ -1304,19 +1304,39 @@ function computeAdminReport(startDate,endDate){
   var byClientPrefix={}; // groupé par entité (SLN/PRNC/AEI SNC...) — export PDF
   var tgcByRate={}; // {taux:{taux,baseHT,tgc,n}}
 
-  function addLinesTGC(lines){
-    (lines||[]).forEach(function(l){
-      if(!l || l.type==='section_banner' || l.type==='header') return;
+  // [02/11/2026] Répartition par taux d'UN document. Un bloc TÂCHE porte ses montants
+  // sur ses sous-lignes (même règle que cFAtot) : les ignorer faisait une base HT
+  // inférieure au CA. Le montant de TGC qui fait foi est celui du document : l'écart
+  // d'arrondi va sur son taux principal, pour que tableau, total et liste coïncident.
+  function addLinesTGC(doc){
+    var lines=doc.lines||[], parts={};
+    function ajoute(l){
       var qte=Number(l.qte)||0, pu=Number(l.pu)||0;
       if(!qte) return;
-      var baseHT=Math.round(qte*pu);
+      var baseHT=qte*pu;
       var taux=Number(l.tgc)||0;
-      var tgcAmt=Math.round(baseHT*taux/100);
       var key=String(taux);
-      if(!tgcByRate[key]) tgcByRate[key]={taux:taux,baseHT:0,tgc:0,n:0};
-      tgcByRate[key].baseHT+=baseHT;
-      tgcByRate[key].tgc+=tgcAmt;
-      tgcByRate[key].n++;
+      if(!parts[key]) parts[key]={taux:taux,baseHT:0,tgc:0,n:0};
+      parts[key].baseHT+=baseHT;
+      parts[key].tgc+=baseHT*taux/100;
+      parts[key].n++;
+    }
+    lines.forEach(function(l,idx){
+      if(!l || l.type==='section_banner' || l.type==='header') return;
+      if(_isTaskCarrier(lines,idx)) l.subLines.forEach(ajoute);
+      else ajoute(l);
+    });
+    var cles=Object.keys(parts), somme=0, principal=null;
+    cles.forEach(function(k){
+      somme+=parts[k].tgc;
+      if(parts[k].taux>0 && (principal===null || Math.abs(parts[k].tgc)>Math.abs(parts[principal].tgc))) principal=k;
+    });
+    if(principal!==null) parts[principal].tgc+=(Number(doc.tgc)||0)-somme;
+    cles.forEach(function(k){
+      if(!tgcByRate[k]) tgcByRate[k]={taux:parts[k].taux,baseHT:0,tgc:0,n:0};
+      tgcByRate[k].baseHT+=parts[k].baseHT;
+      tgcByRate[k].tgc+=parts[k].tgc;
+      tgcByRate[k].n+=parts[k].n;
     });
   }
 
@@ -1338,7 +1358,7 @@ function computeAdminReport(startDate,endDate){
     // détaillé par contact.
     var clPfx=getClientPrefix(f.client||'')||'(sans client)';
     byClientPrefix[clPfx]=(byClientPrefix[clPfx]||0)+(Number(f.ht)||0);
-    addLinesTGC(f.lines);
+    addLinesTGC(f);
     var rates=[];
     (f.lines||[]).forEach(function(l){if(l&&Number(l.tgc)>0&&rates.indexOf(String(l.tgc))<0)rates.push(String(l.tgc));});
     detail.push({num:f.num,date:fDate,client:f.client,clientPrefix:clPfx,monthIdx:mIdx,
@@ -1352,14 +1372,14 @@ function computeAdminReport(startDate,endDate){
     byClient[clDet]=(byClient[clDet]||0)+(Number(a.ht)||0);
     var clPfx=getClientPrefix(a.client||'')||'(sans client)';
     byClientPrefix[clPfx]=(byClientPrefix[clPfx]||0)+(Number(a.ht)||0);
-    addLinesTGC(a.lines);
+    addLinesTGC(a);
     var ratesA=[];
     (a.lines||[]).forEach(function(l){if(l&&Number(l.tgc)>0&&ratesA.indexOf(String(l.tgc))<0)ratesA.push(String(l.tgc));});
     detail.push({num:a.num,date:a.date,client:a.client,clientPrefix:clPfx,monthIdx:mIdx,
       ht:a.ht,tgc:a.tgc,ttc:a.ttc,isAvoir:true,tgcRates:ratesA});
   });
 
-  var tgcTotal=Object.keys(tgcByRate).reduce(function(s,k){return s+tgcByRate[k].tgc;},0);
+  var tgcTotal=detail.reduce(function(s,x){return s+(Number(x.tgc)||0);},0);
 
   // Masse salariale brute, hors salariés marqués "Dirigeant" — agrégat pointage
   // sur la période demandée (opts.site omis = tous sites/clients confondus).
@@ -2246,11 +2266,12 @@ function admPreviewPrint(){
     '.fcap{font-size:9px;color:#64748b;margin:0 0 3px}'+
     '.fsep{border-top:2px solid #1e3a5f;padding-top:8px;font-size:12px;font-weight:800;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px}'+
     '.flist{font-size:9.5px;color:#64748b;margin-bottom:8px}'+
-    // fpage-first laisse ~25 mm a l'intercalaire sur la meme feuille.
-    '.fpage-first{max-height:225mm}'+
     // max-height garantit qu'une page de facture tient sur UNE page papier
     // (A4 utile ≈ 269 mm ; on laisse la place à la légende).
-    '.fpage{display:block;max-width:100%;max-height:252mm;margin:0 auto}';
+    '.fpage{display:block;max-width:100%;max-height:252mm;margin:0 auto}'+
+    // fpage-first laisse ~25 mm a l'intercalaire sur la meme feuille.
+    // APRÈS .fpage : à spécificité égale, la dernière règle gagne.
+    '.fpage-first{max-height:225mm}';
   var html=_admPrvState.synth+(withFa?_admPrvFacturesHtml(true):'');
   w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>CALINSTRUM Facturation '+
     esc(_admPeriodLabel(r))+'</title><style>'+css+'</style></head><body>'+html+'</body></html>');
@@ -7188,6 +7209,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-02','📊 Export Administratif : la base HT du tableau « TGC par taux » compte les blocs tâches et correspond au CA ; le total TGC reprend les montants des documents (somme de la liste) ; plus de feuille quasi vide avant la 1re facture.'],
   ['2026-11-02','≠ Rapprochement Devis ↔ Factures : un écart expliqué (ajouts facturés à la demande du client, etc.) peut être justifié avec un motif. La ligne passe en « Justifié » et sort du compteur des écarts ; elle redevient un écart si une facture ou un montant change.'],
   ['2026-11-02','🧾 Factures d’acompte : la fiche de la facture mère affiche un échéancier (une ligne par acompte, date de paiement lue sur l’acompte, solde restant avec « + Facture de solde »). La facture mère (cadre, jamais émise) ne compte plus que pour son reste à facturer dans les totaux, et le Rapprochement Devis ↔ Factures ne l’additionne plus à ses acomptes : « solde à facturer » au lieu d’un faux écart. La synchro Factures → Suivi du démarrage est désormais conservée (elle était perdue au chargement cloud).'],
   ['2026-11-02','Devis : passer le statut de « Brouillon » à « Envoyé » date l’envoi à aujourd’hui (phase « Devis envoyé », modifiable ensuite). Une révision ne recopie plus l’historique de phases de l’original : elle n’avait pas encore été envoyée et gardait sa date d’envoi.'],
