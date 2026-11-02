@@ -6393,6 +6393,31 @@ function fN(n){if(!n&&n!==0)return'—';return Math.round(Number(n)).toLocaleStr
 //   - DB.invoices (factures Suivi pré-facturées, parfois pas migrées en GRC)
 // On scanne les DEUX et on prend le max global pour éviter tout doublon.
 // =============================================================================
+// Série de numéros des devis d'un client, en lecture seule : préfixe et plus grand n°.
+// Un client peut porter deux préfixes (devis repris de PDF externes) : le devis au plus
+// grand numéro donne le préfixe, tous comptent pour le numéro. [03/11/2026] Le compteur
+// ne voyait qu'un préfixe, proposait l'autre série et retombait sur des n° déjà pris.
+// Un préfixe saisi sur la fiche client reste l'autorité (cf getClientNumPrefix).
+function _dvSerie(pfx){
+  var up=String(pfx||'').toUpperCase(), re=/^(.+?)-DV(\d+)/i, bases={};
+  (DB.devis||[]).forEach(function(d){
+    var m=String((d&&d.num)||'').match(re);
+    if(m && m[1].toUpperCase()===up && d.client) bases[getClientPrefix(d.client)]=1;
+  });
+  bases[getClientPrefix(pfx)]=1;
+  var fiche=(DB.clients||[]).some(function(c){
+    return c && String(c.prefixe||'').trim().toUpperCase()===up && bases[getClientPrefix(c.nom||'')];
+  });
+  var out={pfx:pfx,max:0};
+  (DB.devis||[]).forEach(function(d){
+    var m=String((d&&d.num)||'').match(re); if(!m) return;
+    var meme=m[1].toUpperCase()===up;
+    if(!meme && (fiche || !d.client || !bases[getClientPrefix(d.client)])) return;
+    var v=parseInt(m[2],10);
+    if(v>out.max || (v===out.max && meme)){ out.max=v; out.pfx=meme?pfx:m[1]; }
+  });
+  return out;
+}
 function nxt(t, prefix){
   if(!DB.nid) DB.nid={};
   // Préfixe par défaut = SLN (cohérent avec l'existant)
@@ -6416,15 +6441,13 @@ function nxt(t, prefix){
   var yy=now.getFullYear();
 
   if(t==='dv'){
-    // Échappe les caractères spéciaux du préfixe pour l'usage en regex
-    var escPfx=pfx.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-    var re=new RegExp('^'+escPfx+'-DV(\\d+)','i');
-    var n=scanMax(DB.devis||[], re)+1;
+    var serie=_dvSerie(pfx);
+    var n=serie.max+1;
     // Mise à jour DB.nid en miroir (pas utilisé en lecture, juste cohérence)
-    DB.nid['dv_'+pfx]=n;
+    DB.nid['dv_'+serie.pfx]=n;
     DB.nid.dv=Math.max(DB.nid.dv||0, n);
     saveDB();
-    return pfx+'-DV'+pad(n);
+    return serie.pfx+'-DV'+pad(n);
   }
 
   if(t==='fa'){
@@ -7212,6 +7235,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-03','🔢 Numéro des nouveaux devis : le GRC suit la série réelle du client, celle de son devis au plus grand numéro, et ne retombe plus sur un numéro déjà pris. Les devis existants et la numérotation des factures ne changent pas.'],
   ['2026-11-03','🧾 Factures d’acompte et de solde : elles reprennent le n° de BC client, sa date et leur % de la commande dès leur création.'],
   ['2026-11-03','🧾 Facture de solde : le devis passe « Facturé » à sa création. La facture mère entièrement facturée affiche la phase et les dates de sa dernière tranche, au lieu de « Chantier en cours / pas émise » (elle reste un cadre, le CA ne change pas). Liste Devis : la mère n’est plus additionnée à ses tranches. En-têtes de mois : une facture payée n’est plus comptée « en retard ».'],
   ['2026-11-02','📊 Export Administratif : la base HT du tableau « TGC par taux » compte les blocs tâches et correspond au CA ; le total TGC reprend les montants des documents (somme de la liste) ; plus de feuille quasi vide avant la 1re facture.'],
@@ -40806,12 +40830,8 @@ function _renderClientPickerList(){
       var escPfx=pfx.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
       var maxN=0;
       if(mode==='dv'){
-        var re=new RegExp('^'+escPfx+'-DV(\\d+)','i');
-        (DB.devis||[]).forEach(function(d){
-          var m=String(d.num||'').match(re);
-          if(m){var n=parseInt(m[1],10); if(n>maxN) maxN=n;}
-        });
-        nextNum=pfx+'-DV'+pad(maxN+1);
+        var serie=_dvSerie(getClientNumPrefix(nom));
+        nextNum=serie.pfx+'-DV'+pad(serie.max+1);
       } else {
         var reF=new RegExp('^'+escPfx+'-F(\\d+)','i');
         (DB.factures||[]).forEach(function(f){
@@ -50443,13 +50463,8 @@ function _clPrefixeHint(){
     // ⚠ NE PAS appeler nxt('dv',…) ici : il fait saveDB() (localStorage + push
     // Supabase debounce). Un aperçu qui se déclenche à chaque frappe ne doit
     // RIEN persister. On refait donc le scan à la main, en lecture seule.
-    var esc2=eff.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-    var re=new RegExp('^'+esc2+'-DV(\\d+)','i'), mx=0;
-    (DB.devis||[]).forEach(function(d){
-      var mm=String((d&&d.num)||'').match(re);
-      if(mm){ var n=parseInt(mm[1],10); if(n>mx) mx=n; }
-    });
-    suivant=eff+'-DV'+pad(mx+1);
+    var serie=_dvSerie(eff);
+    suivant=serie.pfx+'-DV'+pad(serie.max+1);
   }catch(e){ eff=saisi||nom; suivant=''; }
   if(i>=0) DB.clients[i].prefixe=avant;
 
