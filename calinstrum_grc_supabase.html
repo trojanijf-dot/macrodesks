@@ -6249,7 +6249,8 @@ function getSuiviSource(){
       var _row=out[out.length-1];
       _row.montant=_ech.reste;
       _row._montantDossier=_ech.total;
-      _row._mere={n:_ech.n, reste:_ech.reste, restePct:_ech.restePct, pctFacture:_ech.pctFacture, pctEncaisse:_ech.pctEncaisse, pctNonEncaisse:_ech.pctNonEncaisse};
+      var _fin=_ech.tranches[_ech.tranches.length-1];
+      _row._mere={termine:_ech.reste===0||(_ech.restePct===0&&_ech.tranches.some(function(t){return t.solde;})), finId:_fin.id, finDate:_fin.date, finEcheance:_fin.echeance, n:_ech.n, reste:_ech.reste, restePct:_ech.restePct, pctFacture:_ech.pctFacture, pctEncaisse:_ech.pctEncaisse, pctNonEncaisse:_ech.pctNonEncaisse};
     }
   });
   // 2) Ensuite : DB.invoices restantes (numéros qui n'ont PAS de facture GRC)
@@ -6614,6 +6615,7 @@ function _migrationsApresCloud(){
   if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
   if(typeof migrateSuiviLiensAutreFacture==='function'){ try{ n+=migrateSuiviLiensAutreFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSuiviLiensAutreFacture (après cloud) :',e); } }
+  if(typeof migrateSoldeDevisFacture==='function'){ try{ n+=migrateSoldeDevisFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSoldeDevisFacture (après cloud) :',e); } }
   if(typeof migrateStatutDateEncaissement==='function'){ try{ n+=migrateStatutDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateStatutDateEncaissement (après cloud) :',e); } }
   // Verrou des factures émises : d'abord vérifier les empreintes existantes, puis
   // verrouiller les factures émises qui n'en ont pas encore.
@@ -7209,6 +7211,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-03','🧾 Facture de solde : le devis passe « Facturé » à sa création. La facture mère entièrement facturée affiche la phase et les dates de sa dernière tranche, au lieu de « Chantier en cours / pas émise » (elle reste un cadre, le CA ne change pas). Liste Devis : la mère n’est plus additionnée à ses tranches. En-têtes de mois : une facture payée n’est plus comptée « en retard ».'],
   ['2026-11-02','📊 Export Administratif : la base HT du tableau « TGC par taux » compte les blocs tâches et correspond au CA ; le total TGC reprend les montants des documents (somme de la liste) ; plus de feuille quasi vide avant la 1re facture.'],
   ['2026-11-02','≠ Rapprochement Devis ↔ Factures : un écart expliqué (ajouts facturés à la demande du client, etc.) peut être justifié avec un motif. La ligne passe en « Justifié » et sort du compteur des écarts ; elle redevient un écart si une facture ou un montant change.'],
   ['2026-11-02','🧾 Factures d’acompte : la fiche de la facture mère affiche un échéancier (une ligne par acompte, date de paiement lue sur l’acompte, solde restant avec « + Facture de solde »). La facture mère (cadre, jamais émise) ne compte plus que pour son reste à facturer dans les totaux, et le Rapprochement Devis ↔ Factures ne l’additionne plus à ses acomptes : « solde à facturer » au lieu d’un faux écart. La synchro Factures → Suivi du démarrage est désormais conservée (elle était perdue au chargement cloud).'],
@@ -8747,6 +8750,13 @@ function _mereTagHtml(i){
   if(!i||!i._mere) return '';
   return ' <span title="Facture mère d\'acomptes : un cadre, jamais émise. Ce sont ses acomptes qui sont facturés." style="font-size:9px;border:1px solid rgba(59,130,246,.45);color:#93b4f5;border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:600;white-space:nowrap">cadre · '+i._mere.n+' tranche'+(i._mere.n>1?'s':'')+'</span>';
 }
+// Mère entièrement facturée : la ligne montre l'état réel du dossier (phase et dates de
+// la dernière tranche). Affichage seul : sa phase reste non émise, sinon CA en double.
+function _mereTerminee(i){ return !!(i&&i._mere&&i._mere.termine); }
+function _merePhaseHtml(i){
+  var fin=(DB.factures||[]).find(function(x){return x.id===i._mere.finId;});
+  return '<span title="Dossier entièrement facturé, en '+i._mere.n+' tranches. La mère reste un cadre : pas de phase à modifier.">'+phaseBadge(fin||i)+'</span>';
+}
 function _mereMontantHtml(i){
   return '<td style="font-weight:700" title="Total du dossier. Seul le reste à facturer compte dans les totaux.">'+fN(i._montantDossier)+' XPF'+
     '<div style="font-size:9.5px;font-weight:400;color:var(--muted)">reste à facturer '+fN(i.montant)+'</div></td>';
@@ -8910,6 +8920,19 @@ function _findLinkedDevisFromFacture(f){
     var d2=DB.devis.find(function(x){return x.linkFactureId===fac.id;});
     if(d2) return d2;
   }
+  // Pass 3 : référence « NUM REVn » ou liste de devis (cf _dvlieWithRev) : le premier
+  // numéro cité, sans son suffixe de révision, puis la révision ACTIVE de la famille.
+  if(fac.dvlie && Array.isArray(DB.devis)){
+    var cle=function(s){ return String(s||'').replace(/\s*REV\s*\d+\s*$/i,'').replace(/\s+/g,'').toUpperCase(); };
+    var k=cle(_faDevisNums(fac)[0]);
+    var d3=k?DB.devis.find(function(x){return cle(x.num)===k;}):null;
+    if(d3) return _dvRevisionActive(d3);
+  }
+  // Pass 4 : une tranche d'acompte suit le devis de sa facture mère.
+  if(fac.parentId){
+    var mere=(DB.factures||[]).find(function(x){return x.id===fac.parentId;});
+    if(mere && mere!==fac) return _findLinkedDevisFromFacture(mere);
+  }
   return null;
 }
 
@@ -9017,6 +9040,27 @@ function _dvPasserFacture(d){
   d._previousStatus=d.status; d.status='Facturé';
   if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(d,'passé « Facturé » : sa facture est émise');
   return true;
+}
+
+// La facture de SOLDE clôt le dossier : mêmes effets qu'une facture qui devient émise.
+// [03/11/2026] Sa création posait la phase sans prévenir le devis, resté « Accepté ».
+function _soldeEmis(f){
+  try{ _bcLivrerPourFacture(f,false); }catch(e){ console.warn('_bcLivrerPourFacture (solde):',e); }
+  try{ propagateFacturePhaseToDevis(f,f.phase); }catch(e){ console.warn('propagateFacturePhaseToDevis (solde):',e); }
+}
+// Rattrapage unique : soldes déjà créés dont le devis n'a pas suivi.
+function migrateSoldeDevisFacture(){
+  if(!DB || DB._soldeDevisV1) return 0;
+  var n=0;
+  (DB.factures||[]).forEach(function(f){
+    if(!f || f.acompteType!=='solde' || isPrebilled(f)) return;
+    var d=_findLinkedDevisFromFacture(f);
+    if(!d || d.status!=='Accepté') return;
+    _soldeEmis(f); n++;
+  });
+  DB._soldeDevisV1=true;
+  if(n) saveDB();
+  return n;
 }
 
 // Règle 3 — Facture passe en Payée/Partielle → propage 'facture' au devis
@@ -13171,9 +13215,9 @@ function renderTable(){
       '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(i.intitule)+'</td>'+
       typCell+
       (i._mere?_mereMontantHtml(i):'<td style="font-weight:700">'+fN(i.montant)+' XPF</td>')+
-      '<td style="white-space:nowrap">'+phaseSelect(i)+'</td>'+
-      '<td style="color:var(--muted)">'+(i.dateEnvoi?fD(i.dateEnvoi):'<span style="color:#a78bfa;font-size:10px">⏳ pas émise</span>')+'</td>'+
-      '<td style="font-weight:700">'+(bd?bd.toLocaleDateString('fr-FR'):'—')+'</td>'+
+      '<td style="white-space:nowrap">'+(_mereTerminee(i)?_merePhaseHtml(i):phaseSelect(i))+'</td>'+
+      '<td style="color:var(--muted)">'+(_mereTerminee(i)?fD(i._mere.finDate):i.dateEnvoi?fD(i.dateEnvoi):'<span style="color:#a78bfa;font-size:10px">⏳ pas émise</span>')+'</td>'+
+      '<td style="font-weight:700">'+(_mereTerminee(i)&&i._mere.finEcheance?fD(i._mere.finEcheance):bd?bd.toLocaleDateString('fr-FR'):'—')+'</td>'+
       statutCell+
       delaiCell+
       '<td class="no-print" style="white-space:nowrap">'+
@@ -18069,6 +18113,14 @@ function _findLinkedFactures(d){
     foundF=foundF.filter(function(f){return !excl[f.id];});
     foundI=foundI.filter(function(i){return !excl[i.id];});
   }
+  // Une tranche d'acompte suit sa mère : si la mère n'est pas liée à ce devis (devis
+  // remplacé par une révision), la tranche ne l'est pas non plus, sauf lien manuel.
+  foundF=foundF.filter(function(f){
+    if(!f.parentId) return true;
+    if(Array.isArray(d.manualFactureLinks) && d.manualFactureLinks.indexOf(f.id)>=0) return true;
+    if(!fac.some(function(x){return x.id===f.parentId;})) return true;
+    return foundF.some(function(x){return x.id===f.parentId;});
+  });
 
   return {
     factures: foundF,
@@ -19257,6 +19309,10 @@ function _renderFactureCell(d){
       paye:i.statut==='paid'?(i.montant||0):0,statut:i.statut||''});
   });
 
+  // Mère d'acomptes : un cadre, ses tranches portent déjà le montant.
+  var sansMere=allItems.filter(function(it){ return !(it.type==='F' && _faAcomptesDeMere(it.obj).length); });
+  if(sansMere.length) allItems=sansMere;
+
   var nbItems=allItems.length;
   var isCadre=d.cadreRef || String(d.num||'').toUpperCase().indexOf('CADRE')>=0;
 
@@ -19356,6 +19412,7 @@ function _toggleFacturePopover(event,devisId){
   // Calculs agrégés
   var totalTTC=0, totalPaid=0, nbPaid=0, nbLate=0;
   allItems.forEach(function(it){
+    if(it.type==='F' && _faAcomptesDeMere(it.obj).length) return; // cadre : ses tranches portent le montant
     totalTTC+=Number(it.ttc)||0;
     totalPaid+=Number(it.paye)||0;
     var status=_normalizeFactureStatus(it.obj);
@@ -30980,6 +31037,12 @@ function extractYearMonth(item){
 // Pour BC : item.status (En attente/Confirmé/Livré/Annulé)
 function extractStatusKey(item,type){
   if(type==='fa'){
+    // Ligne du Suivi (getSuiviSource) : même statut que celui affiché sur la ligne.
+    // [03/11/2026] statut « paid » non reconnu plus bas : payée comptée « en retard ».
+    if(item.statut && typeof getStatus==='function'){
+      var _vu={paid:'Payée',partial:'Partiel',late:'En retard',pending:'En attente'}[getStatus(item)];
+      if(_vu) return _vu;
+    }
     // Pour les factures GRC, calculer le statut effectif via versements
     var totVerse=0;
     if(item.versements&&item.versements.length){
@@ -31047,6 +31110,7 @@ function statusToCssClass(s){
 function renderStatusBadges(items,type){
   var counts={};
   items.forEach(function(it){
+    if(type==='fa' && it._mere && it._mere.termine) return; // cadre soldé : ses tranches sont comptées
     var s=extractStatusKey(it,type)||'(non défini)';
     counts[s]=(counts[s]||0)+1;
   });
@@ -34749,6 +34813,7 @@ function generateAcompteInvoice(){
   newFA.phase=getDefaultPhase(newFA);
   DB.factures.push(newFA);
   syncFactureToSuivi(newFA);
+  if(type==='solde') _soldeEmis(newFA);
   saveDB();
   cm('mAcompte');
   renderFA();rDash();
@@ -36089,9 +36154,9 @@ function renderFA(){
       '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(i.intitule||'')+'">'+esc(i.intitule||'')+(faPdfBadges?' '+faPdfBadges:'')+'</td>'+
       typCell+
       (i._mere?_mereMontantHtml(i):'<td style="font-weight:700">'+fN(i.montant)+' XPF</td>')+
-      '<td style="white-space:nowrap">'+phaseCell+'</td>'+
-      '<td style="color:var(--muted)">'+(i.dateEnvoi?fD(i.dateEnvoi):'<span style="color:#a78bfa;font-size:10px">⏳ pas émise</span>')+'</td>'+
-      '<td style="font-weight:700">'+(bd?bd.toLocaleDateString('fr-FR'):'—')+'</td>'+
+      '<td style="white-space:nowrap">'+(_mereTerminee(i)?_merePhaseHtml(i):phaseCell)+'</td>'+
+      '<td style="color:var(--muted)">'+(_mereTerminee(i)?fD(i._mere.finDate):i.dateEnvoi?fD(i.dateEnvoi):'<span style="color:#a78bfa;font-size:10px">⏳ pas émise</span>')+'</td>'+
+      '<td style="font-weight:700">'+(_mereTerminee(i)&&i._mere.finEcheance?fD(i._mere.finEcheance):bd?bd.toLocaleDateString('fr-FR'):'—')+'</td>'+
       dateEncCell+
       statutCell+
       delaiCell+
