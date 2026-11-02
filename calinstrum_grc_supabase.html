@@ -6615,6 +6615,7 @@ function _migrationsApresCloud(){
   if(typeof migrateUniteML==='function'){ try{ n+=migrateUniteML(); }catch(e){ console.warn('[CALINSTRUM] migrateUniteML (après cloud) :',e); } }
   if(typeof migratePOLivresFacturesEmises==='function'){ try{ n+=migratePOLivresFacturesEmises(); }catch(e){ console.warn('[CALINSTRUM] migratePOLivresFacturesEmises (après cloud) :',e); } }
   if(typeof migrateSuiviLiensAutreFacture==='function'){ try{ n+=migrateSuiviLiensAutreFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSuiviLiensAutreFacture (après cloud) :',e); } }
+  if(typeof migrateSoldeBC==='function'){ try{ n+=migrateSoldeBC(); }catch(e){ console.warn('[CALINSTRUM] migrateSoldeBC (après cloud) :',e); } }
   if(typeof migrateSoldeDevisFacture==='function'){ try{ n+=migrateSoldeDevisFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSoldeDevisFacture (après cloud) :',e); } }
   if(typeof migrateStatutDateEncaissement==='function'){ try{ n+=migrateStatutDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateStatutDateEncaissement (après cloud) :',e); } }
   // Verrou des factures émises : d'abord vérifier les empreintes existantes, puis
@@ -9060,6 +9061,30 @@ function migrateSoldeDevisFacture(){
     _soldeEmis(f); n++;
   });
   DB._soldeDevisV1=true;
+  if(n) saveDB();
+  return n;
+}
+
+// Rattrapage unique : soldes déjà créés sans leur BC. Seuls les champs de commande
+// VIDES sont remplis : montant, lignes, date et objet n'entrent pas ici.
+function migrateSoldeBC(){
+  if(!DB || DB._soldeBCV1) return 0;
+  var n=0;
+  (DB.factures||[]).forEach(function(f){
+    if(!f || f.acompteType!=='solde' || !f.parentId) return;
+    if(f._importPONum || f.bcClientSLN) return;
+    var mere=(DB.factures||[]).find(function(x){return x.id===f.parentId;});
+    if(!mere) return;
+    var bc=_trancheBC(mere);
+    if(!bc.num) return;
+    f._importPONum=bc.num;
+    if(!f.dateReceptionBC) f.dateReceptionBC=bc.date;
+    if(Number(f.acomptePct)>0 && (typeof f.pctOfBC!=='number' || f.pctOfBC===100)) f.pctOfBC=Number(f.acomptePct);
+    if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(f,'BC repris de sa facture mère');
+    if(typeof syncFactureToSuivi==='function') syncFactureToSuivi(f);
+    n++;
+  });
+  DB._soldeBCV1=true;
   if(n) saveDB();
   return n;
 }
