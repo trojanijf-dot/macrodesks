@@ -7273,7 +7273,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
-  ['2026-11-03','🛡 Factures, devis et BL : contrôle avant PDF. L’aperçu signale un BC ou un n° de commande vide, une adresse ou un contact différents de la tranche précédente, une quantité manquante, un montant ou un texte anormal, et l’impression te le rappelle. Rien n’est bloqué et rien n’est modifié.'],
+  ['2026-11-03','🛡 Prochains devis, factures et BL : contrôle avant PDF. L’aperçu signale un BC ou un n° de commande vide, une adresse ou un contact différents de la tranche précédente, une quantité manquante, un montant ou un texte anormal, et l’impression te le rappelle. Rien n’est bloqué et rien n’est modifié. Les documents déjà partis ne sont pas repris.'],
   ['2026-11-03','💰 Paiement client : pour un virement sans avis détaillé, saisis le client, le montant, la date et les factures citées. Le GRC contrôle le compte, avoirs déduits, signale un écart et enregistre d’un clic les factures couvertes. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','💰 Encaissement : la date saisie sur une facture crée son versement, avoir déduit, et la fiche affiche le bon reste à payer. Le reste dû déduit aussi les avoirs dans Règlements et le tableau de bord. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','🔢 Numéro des nouveaux devis : le GRC suit la série réelle du client, celle de son devis au plus grand numéro, et ne retombe plus sur un numéro déjà pris. Les devis existants et la numérotation des factures ne changent pas.'],
@@ -53253,12 +53253,19 @@ function _blControle(b,html){
   if(/\b(IBAN|BIC)\b/.test(t)) out.push('Coordonnées bancaires sur un BL.');
   return out;
 }
+// Le contrôle vaut pour les prochains documents : un document déjà parti avant sa mise en
+// service n'est pas repris. Ce qui n'est pas encore parti reste contrôlé, quelle que soit
+// sa date (pré-facture, brouillon de devis, BL en préparation).
+var _DOC_CTL_DEPUIS='2026-11-03';
+function _docDejaParti(o,pasParti){
+  return !pasParti && !!o.date && String(o.date)<_DOC_CTL_DEPUIS;
+}
 // Le contrôle du document affiché dans l'aperçu ; null si ce document n'en a pas.
 function _docControle(title,html){
-  var ti=String(title||'');
-  if(/^Facture\s/.test(ti)&&window._prvFaObj) return _faControle(window._prvFaObj,html);
-  if(/^Devis\s/.test(ti)&&window._prvDvObj) return _dvControle(window._prvDvObj,html);
-  if(/^BL\s/.test(ti)&&window._prvBlObj) return _blControle(window._prvBlObj,html);
+  var ti=String(title||''), o;
+  if(/^Facture\s/.test(ti)&&(o=window._prvFaObj)) return _docDejaParti(o,isPrebilled(o))?null:_faControle(o,html);
+  if(/^Devis\s/.test(ti)&&(o=window._prvDvObj)) return _docDejaParti(o,o.status==='Brouillon')?null:_dvControle(o,html);
+  if(/^BL\s/.test(ti)&&(o=window._prvBlObj)) return _docDejaParti(o,o.status==='En préparation')?null:_blControle(o,html);
   return null;
 }
 function _docControleConfirm(title,html){
