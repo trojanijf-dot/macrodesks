@@ -53255,7 +53255,8 @@ function _blControle(b,html){
 }
 // Le contrôle vaut pour les prochains documents : un document déjà parti avant sa mise en
 // service n'est pas repris. Ce qui n'est pas encore parti reste contrôlé, quelle que soit
-// sa date (pré-facture, brouillon de devis, BL en préparation).
+// sa date (pré-facture, brouillon de devis, BL en préparation). Une mère d'acomptes ne part
+// jamais chez le client : pas de contrôle.
 var _DOC_CTL_DEPUIS='2026-11-03';
 function _docDejaParti(o,pasParti){
   return !pasParti && !!o.date && String(o.date)<_DOC_CTL_DEPUIS;
@@ -53263,7 +53264,7 @@ function _docDejaParti(o,pasParti){
 // Le contrôle du document affiché dans l'aperçu ; null si ce document n'en a pas.
 function _docControle(title,html){
   var ti=String(title||''), o;
-  if(/^Facture\s/.test(ti)&&(o=window._prvFaObj)) return _docDejaParti(o,isPrebilled(o))?null:_faControle(o,html);
+  if(/^Facture\s/.test(ti)&&(o=window._prvFaObj)) return (_faAcomptesDeMere(o).length||_docDejaParti(o,isPrebilled(o)))?null:_faControle(o,html);
   if(/^Devis\s/.test(ti)&&(o=window._prvDvObj)) return _docDejaParti(o,o.status==='Brouillon')?null:_dvControle(o,html);
   if(/^BL\s/.test(ti)&&(o=window._prvBlObj)) return _docDejaParti(o,o.status==='En préparation')?null:_blControle(o,html);
   return null;
