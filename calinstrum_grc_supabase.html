@@ -3491,7 +3491,7 @@ function admPreviewPrint(){
              Stockée dans facture.dateEncaissement (format ISO yyyy-mm-dd).
              Sert à calculer le bilan d'encaissement par année (vs bilan facturation). -->
         <div class="form-group"><label>📅 Date d'encaissement effective <span style="font-size:9.5px;color:var(--muted);font-weight:400">(à renseigner à réception de l'avis de règlement)</span></label>
-          <input type="date" class="form-input" id="fa-date-encaissement" onchange="renderFADelaiHistory();updateVersementsTotals()">
+          <input type="date" class="form-input" id="fa-date-encaissement" onchange="renderFADelaiHistory();_faVersementDepuisDate();rVersements()">
         </div>
       </div>
       <!-- HISTORIQUE DU DÉLAI : calcul automatique en lecture seule
@@ -6641,6 +6641,7 @@ function _migrationsApresCloud(){
   if(typeof migrateSoldeBC==='function'){ try{ n+=migrateSoldeBC(); }catch(e){ console.warn('[CALINSTRUM] migrateSoldeBC (après cloud) :',e); } }
   if(typeof migrateSoldeDevisFacture==='function'){ try{ n+=migrateSoldeDevisFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSoldeDevisFacture (après cloud) :',e); } }
   if(typeof migrateStatutDateEncaissement==='function'){ try{ n+=migrateStatutDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateStatutDateEncaissement (après cloud) :',e); } }
+  if(typeof migrateVersementDateEncaissement==='function'){ try{ n+=migrateVersementDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateVersementDateEncaissement (après cloud) :',e); } }
   // Verrou des factures émises : d'abord vérifier les empreintes existantes, puis
   // verrouiller les factures émises qui n'en ont pas encore.
   // Synchro Factures → Suivi : celle du démarrage tourne sur le cache local, avant le
@@ -6739,6 +6740,22 @@ function migrateStatutDateEncaissement(){
     if((f.versements||[]).some(function(v){return v && v.date && Number(v.montant)>0;})) return;
     f.status='Payée'; syncFactureToSuivi(f); n++;
     console.log('[CALINSTRUM] '+f.num+' : « Payée » (date d\'encaissement saisie, aucun versement)');
+  });
+  if(n) saveDB();
+  return n;
+}
+// Date d'encaissement sans versement (saisie avant le 03/11/2026) : le versement manquant
+// est créé, facture moins avoirs déjà émis (cf _faVersementDepuisDate). Idempotent.
+function migrateVersementDateEncaissement(){
+  var n=0;
+  (DB.factures||[]).forEach(function(f){
+    if(!f || !f.dateEncaissement) return;
+    if(typeof isPrebilled==='function' && isPrebilled(f)) return;
+    if((f.versements||[]).some(function(v){return v && Number(v.montant)>0;})) return;
+    var net=_reglVerse(f); if(!(net>0)) return;
+    f.versements=[{date:f.dateEncaissement,montant:net}];
+    f.paye=net; f.status='Payée'; syncFactureToSuivi(f); n++;
+    console.log('[CALINSTRUM] '+f.num+' : versement créé depuis la date d\'encaissement');
   });
   if(n) saveDB();
   return n;
@@ -7235,6 +7252,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-03','💰 Encaissement : la date saisie sur une facture crée son versement, avoir déduit, et la fiche affiche le bon reste à payer. Le reste dû déduit aussi les avoirs dans Règlements et le tableau de bord. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','🔢 Numéro des nouveaux devis : le GRC suit la série réelle du client, celle de son devis au plus grand numéro, et ne retombe plus sur un numéro déjà pris. Les devis existants et la numérotation des factures ne changent pas.'],
   ['2026-11-03','🧾 Factures d’acompte et de solde : elles reprennent le n° de BC client, sa date et leur % de la commande dès leur création.'],
   ['2026-11-03','🧾 Facture de solde : le devis passe « Facturé » à sa création. La facture mère entièrement facturée affiche la phase et les dates de sa dernière tranche, au lieu de « Chantier en cours / pas émise » (elle reste un cadre, le CA ne change pas). Liste Devis : la mère n’est plus additionnée à ses tranches. En-têtes de mois : une facture payée n’est plus comptée « en retard ».'],
@@ -12457,11 +12475,20 @@ function _reglJoursEntre(a,b){
 // vu le règlement ; ne pas en faire une relance fantôme.
 // ⛔ Un statut « Payée » sans date ni versement ne compte PAS : il ne doit pas
 // masquer un impayé.
+// Avoirs d'une facture en valeur absolue ; avec une date, ceux émis au plus tard ce jour-là.
+function _faAvoirsTTC(f,dateMax){
+  if(!f||f.id==null||typeof getAvoirsForFA!=='function')return 0;
+  return getAvoirsForFA(f.id).reduce(function(s,a){
+    if(dateMax&&String(a.date||'')>dateMax)return s;
+    return s+Math.abs(Math.round(Number(a.ttc)||0));
+  },0);
+}
 function _reglVerse(f){
   if(!f)return 0;
   var v=(f.versements||[]).filter(function(x){return x&&x.date&&Number(x.montant)>0;});
   if(v.length)return Math.round(v.reduce(function(s,x){return s+Number(x.montant);},0));
-  if(f.dateEncaissement)return Math.round(Number(f.ttc)||0);
+  // Date seule : le client a payé la facture moins ses avoirs déjà émis.
+  if(f.dateEncaissement)return Math.max(0,Math.round(Number(f.ttc)||0)-_faAvoirsTTC(f,f.dateEncaissement));
   return 0;
 }
 // Date d'encaissement AFFICHÉE : la date saisie (dateEncaissement) fait foi. Les
@@ -12495,7 +12522,9 @@ function _enregistrerReglement(fa,dateIso,montant){
   if(!doublon)fa.versements.push({date:dateIso,montant:m});
   var ttc=Math.round(Number(fa.ttc)||0);
   var verse=Math.round(fa.versements.reduce(function(s,v){return s+(v&&v.date?(Number(v.montant)||0):0);},0));
-  var solde=verse>=ttc-1;
+  // Un avoir réduit ce que le client doit : payée au net, la facture est soldée.
+  var du=ttc-_faAvoirsTTC(fa);
+  var solde=verse>=du-1;
   fa.paye=verse;
   fa.status=solde?'Payée':'Partiel';
   // Un règlement enregistré ici est daté de SON versement (avis ou relevé) :
@@ -12506,7 +12535,7 @@ function _enregistrerReglement(fa,dateIso,montant){
     fa.phase=(fa.type==='Prestation de service')?'recu':'livre';
   }
   if(typeof syncFactureToSuivi==='function'){try{syncFactureToSuivi(fa);}catch(e){}}
-  return {statut:fa.status,verse:verse,reste:Math.max(0,ttc-verse),doublon:doublon};
+  return {statut:fa.status,verse:verse,reste:Math.max(0,du-verse),doublon:doublon};
 }
 // Position d'un paiement par rapport à l'échéance, en clair. « réglée · 32 j » avait
 // été lu comme 32 jours de RETARD pour une facture payée 3 jours AVANT l'échéance.
@@ -12526,7 +12555,7 @@ function _reglLignes(){
     var ech=_echeanceFacture(f.date,f.delai);
     var ttc=Math.round(Number(f.ttc)||0);
     var verse=Math.min(_reglVerse(f),ttc);
-    var reste=Math.max(0,ttc-verse);
+    var reste=Math.max(0,ttc-_faAvoirsTTC(f)-verse);
     var solde=reste<=1;
     var enc=solde?_reglDernierEncaissement(f):'';
     var rel=(f.relances||[]);
@@ -12564,8 +12593,8 @@ function renderReglements(){
   var L=toutes.filter(function(x){return _reglFiltreClient==='all'||x.client===_reglFiltreClient;});
   // Encaissé = montant réellement versé (un acompte compte pour son montant, pas
   // pour le TTC) ; une facture n'est « réglée » que soldée.
-  var emis=0,enc=0,nEnc=0;
-  L.forEach(function(x){emis+=x.ttc; enc+=x.verse; if(x.enc)nEnc++;});
+  var emis=0,enc=0,nEnc=0,du=0;
+  L.forEach(function(x){emis+=x.ttc; enc+=x.verse; du+=x.reste; if(x.enc)nEnc++;});
   var relances=L.filter(function(x){return x.retard>0;}).sort(function(a,z){return z.retard-a.retard;});
   var totRelance=relances.reduce(function(s,x){return s+x.reste;},0);
   var h='';
@@ -12590,7 +12619,7 @@ function renderReglements(){
   h+='<div class="g4" style="margin-bottom:12px">';
   h+=_reglKpi('Facturé',fN(emis),L.length+' facture'+(L.length>1?'s':'')+' émise'+(L.length>1?'s':'')+' · XPF','');
   h+=_reglKpi('Encaissé',fN(enc),nEnc+' réglée'+(nEnc>1?'s':'')+' · '+pct+' % du facturé','var(--green)');
-  h+=_reglKpi('Reste à encaisser',fN(emis-enc),(L.length-nEnc)+' facture'+((L.length-nEnc)>1?'s':'')+' en attente','var(--blue)');
+  h+=_reglKpi('Reste à encaisser',fN(du),(L.length-nEnc)+' facture'+((L.length-nEnc)>1?'s':'')+' en attente','var(--blue)');
   h+=_reglKpi('À relancer',fN(totRelance),relances.length+' facture'+(relances.length>1?'s':'')+' échue'+(relances.length>1?'s':''),relances.length?'var(--red)':'var(--muted-soft)');
   h+='</div>';
 
@@ -12714,7 +12743,7 @@ function relancerFacture(num){
   var jours=_reglJoursEntre(ech,_reglAujourdhui());
   // On réclame le RESTE dû : réclamer le TTC à un client qui a versé un acompte
   // serait faux, et le mail part chez lui.
-  var ttc=Math.round(Number(f.ttc)||0), verse=Math.min(_reglVerse(f),ttc), du=Math.max(0,ttc-verse);
+  var ttc=Math.round(Number(f.ttc)||0), verse=Math.min(_reglVerse(f),ttc), du=Math.max(0,ttc-_faAvoirsTTC(f)-verse);
   var objet='Relance — facture '+f.num+' échue le '+fD(ech);
   var corps=
     'Bonjour,\n\n'+
@@ -12723,7 +12752,7 @@ function relancerFacture(num){
     (f.objet?'  • Objet      : '+f.objet+'\n':'')+
     '  • Date       : '+fD(f.date)+'\n'+
     '  • Échéance   : '+fD(ech)+' (dépassée de '+jours+' jour'+(jours>1?'s':'')+')\n'+
-    (verse>0?'  • Montant    : '+fN(ttc)+' XPF, dont '+fN(verse)+' XPF déjà reçus\n':'')+
+    ((verse>0||_faAvoirsTTC(f)>0)?'  • Montant    : '+fN(ttc)+' XPF'+(_faAvoirsTTC(f)>0?', avoir déduit '+fN(_faAvoirsTTC(f))+' XPF':'')+(verse>0?(_faAvoirsTTC(f)>0?', ':', dont ')+fN(verse)+' XPF déjà reçus':'')+'\n':'')+
     '  • Montant dû : '+fN(du)+' XPF\n\n'+
     'Nous vous remercions de bien vouloir nous indiquer la date de règlement prévue.\n'+
     'Si le règlement a déjà été émis, merci de nous transmettre l\'avis correspondant.\n\n'+
@@ -12776,7 +12805,7 @@ function reglValiderPointage(num){
   var date=d?d.value:'', montant=_reglLireMontant(m?m.value:'');
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){alert('Indiquez la date d\'encaissement lue sur le relevé.');return;}
   if(!(montant>0)){alert('Indiquez le montant reçu.');return;}
-  var ttc=Math.round(Number(f.ttc)||0), reste=Math.max(0,ttc-Math.min(_reglVerse(f),ttc));
+  var ttc=Math.round(Number(f.ttc)||0), reste=Math.max(0,ttc-_faAvoirsTTC(f)-Math.min(_reglVerse(f),ttc));
   if(montant>reste+1&&!confirm('Le montant saisi ('+fN(montant)+' XPF) dépasse le reste dû ('+fN(reste)+' XPF).\n\nEnregistrer quand même ?'))return;
   var r=_enregistrerReglement(f,date,montant);
   if(!r){alert('Règlement non enregistré : vérifiez la date et le montant.');return;}
@@ -23829,7 +23858,7 @@ function rDash(){
     if(selectedYear==='all'||yearOf(f.date)===selectedYear){
       factAnnee+=ttc;
       nbFactAnnee++;
-      recAnnee+=Math.max(0,ttc-verses);
+      recAnnee+=Math.max(0,ttc-_faAvoirsTTC(f)-verses);
     }
     // Encaissement YYYY : on regarde la date des versements (et fallback dateEncaissement)
     if(selectedYear==='all'){
@@ -23892,7 +23921,7 @@ function rDash(){
     var verse=Math.min(totVerseFA(f),f.ttc||0);
     byType[k].total += (f.ttc||0);
     byType[k].encaisse += verse;
-    byType[k].recouvrer += Math.max(0,(f.ttc||0)-verse);
+    byType[k].recouvrer += Math.max(0,(f.ttc||0)-_faAvoirsTTC(f)-verse);
     byType[k].count++;
   });
   // Entrées Suivi manuelles (non _fromGRC) : on utilise statut + pct
@@ -33012,7 +33041,7 @@ function openFA(id,fromDV,preSelectedClient){
   // le ré-arme APRÈS son appel à openFA (cf _faDraftSourceDevisId / bandeau).
   _faDraftSourceDevisId=null;_faDraftBCSLN='';_faDraftBCDate='';_faPendingBcConsumption=null;_faPendingComplementDe=null;
   _setFADraftBanner(false);
-  eFAid=id||null;faL=[];faVersements=[];rebuildAllParamSelects();
+  eFAid=id||null;faL=[];faVersements=[];_faDateEncPrec='';rebuildAllParamSelects();
   buildClientOptions('fa-client',preSelectedClient||'');
   // Peupler le datalist Devis lié et brancher les listeners pour le re-peupler
   // si le client ou le type change pendant l'édition.
@@ -33050,7 +33079,7 @@ function openFA(id,fromDV,preSelectedClient){
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
       gv('fa-notes',f.notes||'');
       // Date d'encaissement effective (à renseigner à réception avis de règlement)
-      gv('fa-date-encaissement',f.dateEncaissement||'');
+      gv('fa-date-encaissement',f.dateEncaissement||'');_faDateEncPrec=f.dateEncaissement||'';
       // Date de réception du BC Client (classement mensuel des pré-facturées).
       // Si le champ est vide en DB, on essaie une auto-détection silencieuse depuis le PO ou BC lié.
       var dateRecBC = f.dateReceptionBC || autoDetectDateReceptionBC(f);
@@ -33988,6 +34017,29 @@ function cFAtot(){
 
 // ===== VERSEMENTS =====
 var faVersements=[]; // [{date:'2026-04-23', montant:50000}]
+var _faDateEncPrec=''; // date d'encaissement à laquelle faVersements correspond
+
+// La date d'encaissement crée le versement : facture moins avoirs déjà émis. [03/11/2026]
+// Date seule, la facture passait « Payée » sans versement : la fiche gardait tout le
+// reste à payer et l'encaissé comptait le TTC. Un versement posé par la date la suit si
+// elle change et part avec elle si elle est effacée ; un paiement partiel n'est pas touché.
+function _faVersementDepuisDate(){
+  var dt=gvg('fa-date-encaissement')||'', prec=_faDateEncPrec;
+  var ex=eFAid!=null?(DB.factures||[]).find(function(x){return x.id===eFAid;}):null;
+  if(ex && typeof isPrebilled==='function' && isPrebilled(ex))return;
+  var ttc=Math.round(+faL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);},0))||0;
+  var reels=faVersements.filter(function(v){return v&&Number(v.montant)>0;});
+  if(!reels.length){
+    var net=ttc-_faAvoirsTTC({id:eFAid},dt);
+    faVersements=(dt&&net>0)?[{date:dt,montant:net}]:[];
+  } else if(dt!==prec && prec && reels.length===1 && reels[0].date===prec){
+    var m=Number(reels[0].montant)||0, netPrec=ttc-_faAvoirsTTC({id:eFAid},prec);
+    if(Math.abs(m-netPrec)<=1 || Math.abs(m-ttc)<=1){
+      if(dt) reels[0].date=dt; else faVersements=[];
+    }
+  }
+  _faDateEncPrec=dt;
+}
 
 function rVersements(){
   var tb=document.getElementById('faVers');if(!tb)return;
@@ -34038,20 +34090,21 @@ function updateVersementsTotals(){
   });
   var totVerse=cumul;
   var ttc=Math.round(+faL.reduce(function(s,l){return s+(l.qte||0)*(l.pu||0)*(1+(Number(l.tgc)||0)/100);},0))||0;
-  var reste=Math.max(0,ttc-totVerse);
+  var dEnc=gvg('fa-date-encaissement')||'';
+  var du=ttc-_faAvoirsTTC({id:eFAid},dEnc);
+  var reste=Math.max(0,du-totVerse);
   sv('faTotVerse',fN(totVerse)+' XPF');
   sv('faReste',fN(reste)+' XPF');
   // Statut auto — [01/11/2026] même règle que la page Règlements (_reglVerse) : s'il y a
   // des versements, ils comptent (paiements en plusieurs fois, acomptes) ; sinon la date
   // d'encaissement saisie = facture payée. Avant, seuls les versements comptaient : une
   // facture encaissée (date saisie) redevenait « En retard » à chaque ouverture.
-  var dEnc=gvg('fa-date-encaissement')||'';
-  var totRegle=_reglVerse({versements:faVersements,dateEncaissement:dEnc,ttc:ttc});
+  var totRegle=_reglVerse({id:eFAid,versements:faVersements,dateEncaissement:dEnc,ttc:ttc});
   var newStatus='En attente';
-  if(totRegle>=ttc && ttc>0) newStatus='Payée';
+  if(totRegle>=du && ttc>0) newStatus='Payée';
   else if(totRegle>0) newStatus='Partiel';
   var dateStr=gvg('fa-date');
-  if(dateStr && totRegle<ttc){
+  if(dateStr && totRegle<du){
     var d=new Date(dateStr);
     var delai=gvg('fa-delai')||'';
     var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
@@ -34068,10 +34121,10 @@ function updateVersementsTotals(){
   var hint=document.getElementById('faStatusHint');
   if(hint){
     if(ttc===0) hint.textContent='';
-    else if(totVerse===0 && dEnc && totRegle>=ttc) hint.textContent='✓ Encaissée le '+fD(dEnc)+' (date d\'encaissement saisie)';
+    else if(totVerse===0 && dEnc && totRegle>=du) hint.textContent='✓ Encaissée le '+fD(dEnc)+' (date d\'encaissement saisie)';
     else if(totVerse===0) hint.textContent='Aucun versement — statut: En attente';
-    else if(totVerse>=ttc) hint.textContent='✓ Facture intégralement soldée';
-    else hint.textContent='Versé: '+fN(totVerse)+' / '+fN(ttc)+' XPF ('+Math.round(totVerse/ttc*100)+'%)';
+    else if(totVerse>=du) hint.textContent='✓ Facture intégralement soldée';
+    else hint.textContent='Versé: '+fN(totVerse)+' / '+fN(du)+' XPF ('+Math.round(totVerse/(du||1)*100)+'%)';
   }
 }
 
@@ -34090,8 +34143,9 @@ function autoSplitVersements(){
   // (et non celle de la facture). [01/11/2026]
   var dEnc=gvg('fa-date-encaissement')||'';
   var baseDate=new Date((n===1 && dEnc)?dEnc:(gvg('fa-date')||td()));
-  var part=Math.floor(ttc/n);
-  var reste=ttc-part*n; // mis dans le dernier
+  var aRepartir=Math.max(0,ttc-_faAvoirsTTC({id:eFAid},dEnc)); // un avoir réduit ce qui reste à payer
+  var part=Math.floor(aRepartir/n);
+  var reste=aRepartir-part*n; // mis dans le dernier
   faVersements=[];
   for(var i=0;i<n;i++){
     var d=new Date(baseDate);
@@ -35399,6 +35453,8 @@ async function saveFA(){
     var __caok=await window._supaCheckAndPromptConflict('factures',eFAid);
     if(!__caok) return;
   }
+  _faVersementDepuisDate();
+  updateVersementsTotals();
   var f=getFA();
   // === Génération auto de l'objet pour les factures Fourniture ============
   // Format : "Fourniture Matériel BC <bcClient> / PO <poCalinstrum> / REF DEVIS <dvNum>"
