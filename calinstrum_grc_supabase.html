@@ -2614,6 +2614,7 @@ function admPreviewPrint(){
       <!-- Importer un avis de règlement client (PDF ou texte collé) :
            parse la liste des factures réglées + date virement, propose un aperçu validable
            ligne par ligne, puis applique en bloc (statut Payée + dateEncaissement + versement) -->
+      <button class="btn btn-ghost btn-sm no-print" onclick="openPaiementClient()" title="Un virement règle plusieurs factures sans avis détaillé : retrouver lesquelles et les enregistrer">💰 Paiement client</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="openAvisReglement()" title="Importer un avis de règlement client (SLN, etc.). Met à jour automatiquement statut, date d'encaissement, versement, phase pour chaque facture réglée listée dans l'avis." style="border-color:rgba(16,185,129,.5);color:#10b981">💰 Importer avis de règlement</button>
       <!-- Bouton de migration Suivi → Factures (visible uniquement si DB.invoices.length > 0)
            Géré par updateMigrationButton() qui s'exécute à chaque rendu de la page Suivi -->
@@ -3848,6 +3849,25 @@ function admPreviewPrint(){
     <button class="btn btn-ghost" onclick="cm('mAvisReg')">Annuler</button>
     <button class="btn btn-ghost" id="avisreg-back" onclick="avisRegBack()" style="display:none">← Retour</button>
     <button class="btn btn-teal" id="avisreg-apply" onclick="avisRegApply()" style="display:none">✓ Appliquer les paiements cochés</button>
+  </div>
+</div></div>
+
+<!-- PAIEMENT GLOBAL D'UN CLIENT -->
+<div class="modal-overlay" id="mPaiementClient">
+<div class="modal modal-lg">
+  <div class="modal-header"><h3>💰 Paiement client sans détail</h3><button class="modal-close" onclick="cm('mPaiementClient')">✕</button></div>
+  <div class="modal-body">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:10px">
+      <div class="form-group"><label class="form-label">Client</label><select class="form-select" id="pc-client" onchange="pcActualiser()"></select></div>
+      <div class="form-group"><label class="form-label">Montant reçu (XPF)</label><input class="form-input" id="pc-montant" inputmode="numeric" oninput="pcActualiser()" style="text-align:right"></div>
+      <div class="form-group"><label class="form-label">Date du paiement</label><input class="form-input" id="pc-date" type="date" onchange="pcActualiser()" oninput="pcActualiser()"></div>
+    </div>
+    <div class="form-group" style="margin-bottom:12px"><label class="form-label">Factures citées sur le virement (recommandé)</label><input class="form-input" id="pc-libelle" placeholder="Ex. F012+13+14" oninput="pcActualiser()"></div>
+    <div id="pc-resultat"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="cm('mPaiementClient')">Annuler</button>
+    <button class="btn btn-teal" id="pc-enregistrer" onclick="pcEnregistrer()" style="display:none">✓ Enregistrer</button>
   </div>
 </div></div>
 
@@ -7252,6 +7272,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-03','💰 Paiement client : pour un virement sans avis détaillé, saisis le client, le montant, la date et les factures citées. Le GRC contrôle le compte, avoirs déduits, signale un écart et enregistre d’un clic les factures couvertes. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','💰 Encaissement : la date saisie sur une facture crée son versement, avoir déduit, et la fiche affiche le bon reste à payer. Le reste dû déduit aussi les avoirs dans Règlements et le tableau de bord. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','🔢 Numéro des nouveaux devis : le GRC suit la série réelle du client, celle de son devis au plus grand numéro, et ne retombe plus sur un numéro déjà pris. Les devis existants et la numérotation des factures ne changent pas.'],
   ['2026-11-03','🧾 Factures d’acompte et de solde : elles reprennent le n° de BC client, sa date et leur % de la commande dès leur création.'],
@@ -12609,6 +12630,7 @@ function renderReglements(){
   h+='</div>';
   // Export PDF : reprend le client affiché. Deux documents (archive / travail).
   h+='<div class="no-print" style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
+     '<button class="btn btn-teal btn-sm" onclick="openPaiementClient()" title="Un virement règle plusieurs factures : retrouver lesquelles et les enregistrer">💰 Paiement client</button>'+
      '<button class="btn btn-ghost btn-sm" onclick="reglImprimerPDF(\'complet\')" title="Tous les mois, toutes les factures — pour archiver">🖨 PDF complet</button>'+
      '<button class="btn btn-ghost btn-sm" onclick="reglImprimerPDF(\'impayes\')" title="Ce qui reste dû, les échues en tête — pour travailler">🖨 PDF impayés & relances</button>'+
      _pdfThemeBoxHtml('app')+
@@ -12817,6 +12839,177 @@ function reglValiderPointage(num){
   if(typeof showBCSaveToast==='function')showBCSaveToast(r.statut==='Payée'
     ?'✓ '+num+' soldée au '+fD(date)
     :'✓ '+fN(montant)+' XPF pointés sur '+num+' — reste '+fN(r.reste)+' XPF');
+}
+// ---- Paiement global d'un client, sans avis détaillé (03/11/2026) ----
+// Un virement règle plusieurs factures et seul son libellé les cite. Le GRC compare les
+// factures citées au montant reçu, avoirs déduits, et n'enregistre que celles que le
+// montant couvre. Une combinaison de montants n'est pas une preuve : sans libellé, c'est
+// une hypothèse à vérifier ; s'il y en a plusieurs, l'utilisateur choisit.
+var _pcEtat=null, _pcChoix=null;
+function _pcClients(){
+  var n={};
+  _reglLignes().forEach(function(x){ if(x.reste>0) n[x.client]=(n[x.client]||0)+1; });
+  return Object.keys(n).sort(function(a,z){ return n[z]-n[a]; });
+}
+// Numéros cités : « F012+13+14 », « F012 F013 », « 012, 013 ». Dans une ligne de relevé
+// complète, seuls les chiffres qui suivent un F comptent (ni les dates ni les références).
+function _pcLireNumeros(s){
+  var t=String(s||'').replace(/[A-Za-z]+F\s*-?\s*\d+/g,' | ');
+  var blocs=t.match(/F\s*-?\s*\d+(?:[\s+,;&]*\d+(?![\d\/]))*/gi);
+  var vus={}, out=[];
+  ((blocs?blocs.join(' '):t).match(/\d+/g)||[]).forEach(function(c){
+    var n=parseInt(c,10); if(!vus[n]){ vus[n]=1; out.push(n); }
+  });
+  return out;
+}
+// Déjà enregistré sur cette facture à la date du paiement (saisi à la main, par exemple).
+function _pcDejaAuJour(f,date){
+  var v=(f.versements||[]).filter(function(x){return x&&x.date===date&&Number(x.montant)>0;});
+  if(v.length)return Math.round(v.reduce(function(s,x){return s+Number(x.montant);},0));
+  if(!(f.versements||[]).length&&f.dateEncaissement===date)return _reglVerse(f);
+  return 0;
+}
+// Combinaisons de factures dont le dû fait le montant. Arrêt au-delà d'un plafond :
+// « coupe » dit que la liste n'est pas complète, donc qu'aucune n'est sûre.
+function _pcCombinaisons(pool,total){
+  var a=pool.slice().sort(function(x,y){return y.du-x.du;}), suite=[0];
+  for(var i=a.length-1;i>=0;i--) suite.unshift(suite[0]+a[i].du);
+  var sol=[], pas=0, coupe=false;
+  (function cherche(i,somme,cur){
+    if(coupe)return;
+    if(++pas>2000000||sol.length>6){ coupe=true; return; }
+    if(cur.length&&Math.abs(somme-total)<=1){ sol.push(cur.slice()); return; }
+    if(i>=a.length||somme+suite[i]<total-1)return;
+    for(var j=i;j<a.length;j++){
+      if(somme+a[j].du>total+1)continue;
+      cur.push(a[j]); cherche(j+1,somme+a[j].du,cur); cur.pop();
+      if(coupe)return;
+    }
+  })(0,0,[]);
+  sol.forEach(function(c){ c.sort(function(x,y){return pool.indexOf(x)-pool.indexOf(y);}); });
+  return {sol:sol,coupe:coupe};
+}
+function _pcAnalyser(client,montant,date,libelle){
+  var out={client:client,montant:montant,date:date,err:'',etat:'',libelle:false,pool:[],solutions:[],dejaJour:[],dejaAutre:[],introuvables:[],totalDu:0,manque:0,reste:0};
+  if(!client){ out.err='Choisis le client.'; return out; }
+  if(!(montant>0)){ out.err='Indique le montant reçu.'; return out; }
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(date||''))){ out.err='Indique la date du paiement.'; return out; }
+  var lignes=_reglLignes().filter(function(x){return x.client===client;});
+  var byId={}; (DB.factures||[]).forEach(function(f){ byId[f.id]=f; });
+  var numero=function(x){ var m=String(x.num).match(/-F(\d+)/i); return m?parseInt(m[1],10):-1; };
+  var numeros=_pcLireNumeros(libelle);
+  out.libelle=numeros.length>0;
+  var retenir=function(x){
+    var f=byId[x.id], jour=_pcDejaAuJour(f,date), du=Math.max(0,x.ttc-_faAvoirsTTC(f,date)-x.verse);
+    var c={id:x.id,num:x.num,objet:x.objet,date:x.date,ttc:x.ttc,avoir:_faAvoirsTTC(f,date),verse:x.verse,du:du,jour:jour,enc:x.enc,reste:x.reste};
+    if(jour>0) out.dejaJour.push(c);
+    if(x.reste>0&&du>0) out.pool.push(c);
+    else if(!jour&&out.libelle) out.dejaAutre.push(c);
+  };
+  if(out.libelle){
+    numeros.forEach(function(n){
+      var t=lignes.filter(function(x){return numero(x)===n;});
+      if(!t.length) out.introuvables.push(n);
+      t.forEach(retenir);
+    });
+  } else {
+    lignes.forEach(function(x){ if(x.date<=date||_pcDejaAuJour(byId[x.id],date)>0) retenir(x); });
+  }
+  out.pool.sort(function(x,y){ return String(x.date).localeCompare(String(y.date))||String(x.num).localeCompare(String(y.num)); });
+  var deja=out.dejaJour.reduce(function(s,c){return s+c.jour;},0);
+  out.reste=montant-deja;
+  out.totalDu=out.pool.reduce(function(s,c){return s+c.du;},0)+deja;
+  out.manque=out.totalDu-montant;
+  if(out.dejaJour.length&&Math.abs(out.reste)<=1){ out.etat='fait'; return out; }
+  if(out.reste<=1){ out.etat='aucune'; return out; }
+  var r=_pcCombinaisons(out.pool,out.reste);
+  if(r.coupe){ out.etat='trop'; return out; }
+  out.solutions=r.sol;
+  if(!r.sol.length) out.etat='aucune';
+  else if(r.sol.length>1) out.etat='plusieurs';
+  else if(!out.libelle) out.etat='montant';
+  else out.etat=(r.sol[0].length===out.pool.length&&!out.introuvables.length&&!out.dejaAutre.length)?'exact':'ecart';
+  return out;
+}
+function openPaiementClient(){
+  var sel=document.getElementById('pc-client'), liste=_pcClients();
+  sel.innerHTML=liste.map(function(c){ return '<option value="'+esc(c)+'">'+esc(c)+'</option>'; }).join('');
+  if(typeof _reglFiltreClient!=='undefined'&&liste.indexOf(_reglFiltreClient)>=0) sel.value=_reglFiltreClient;
+  ['pc-montant','pc-date','pc-libelle'].forEach(function(id){ document.getElementById(id).value=''; });
+  _pcChoix=null;
+  pcActualiser();
+  om('mPaiementClient');
+}
+function pcActualiser(){
+  _pcChoix=null;
+  _pcEtat=_pcAnalyser(gvg('pc-client'),_reglLireMontant(gvg('pc-montant')),gvg('pc-date'),gvg('pc-libelle'));
+  _pcRendre();
+}
+function pcChoisir(i){ _pcChoix=i; _pcRendre(); }
+function _pcSolution(){
+  var e=_pcEtat; if(!e)return null;
+  if(e.etat==='plusieurs') return _pcChoix==null?null:e.solutions[_pcChoix];
+  return e.solutions.length===1?e.solutions[0]:null;
+}
+function _pcTable(lignes,couverts){
+  var h='<div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>Facture</th><th>Objet</th><th style="text-align:right">TTC</th><th style="text-align:right">Avoir</th><th style="text-align:right">Dû</th></tr></thead><tbody>';
+  var somme=0;
+  lignes.forEach(function(c){
+    var ok=couverts.indexOf(c)>=0; if(ok) somme+=c.du;
+    h+='<tr'+(ok?'':' style="color:var(--amber)"')+'><td style="font-family:var(--mono);white-space:nowrap">'+esc(c.num)+(ok?'':' ⚠ non couverte')+'</td>'+
+      '<td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(c.objet||'')+'">'+esc(c.objet||'')+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fN(c.ttc)+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+(c.avoir?'−'+fN(c.avoir):'—')+'</td>'+
+      '<td style="text-align:right;font-family:var(--mono)">'+fN(c.du)+'</td></tr>';
+  });
+  return h+'<tr style="font-weight:700"><td colspan="4">À enregistrer</td><td style="text-align:right;font-family:var(--mono)">'+fN(somme)+'</td></tr></tbody></table></div>';
+}
+function _pcRendre(){
+  var e=_pcEtat, box=document.getElementById('pc-resultat'), btn=document.getElementById('pc-enregistrer');
+  var cadre=function(coul,titre,texte){ return '<div style="border:1px solid var(--'+coul+');border-radius:8px;padding:9px 12px;margin-bottom:8px"><b>'+titre+'</b>'+(texte?'<div style="color:var(--muted);font-size:11.5px;margin-top:2px">'+texte+'</div>':'')+'</div>'; };
+  var noms=function(l){ return l.map(function(c){ return esc(c.num); }).join(', '); };
+  var h='';
+  if(e.err){ box.innerHTML='<div style="color:var(--muted);font-size:12px">'+esc(e.err)+'</div>'; btn.style.display='none'; return; }
+  var sol=_pcSolution();
+  var non=sol?e.pool.filter(function(c){return sol.indexOf(c)<0;}):[];
+  if(e.etat==='exact') h+=cadre('green','✓ Les factures citées font exactement le montant reçu','');
+  else if(e.etat==='ecart') h+=cadre('amber','⚠ Le montant reçu ne couvre pas tout le libellé',non.length?'Il manque '+fN(e.manque)+' XPF : '+noms(non)+'. '+(non.length>1?'Elles restent dues.':'Elle reste due.'):'');
+  else if(e.etat==='montant') h+=cadre('amber','⚠ Une seule combinaison tombe juste, sans preuve','Sans libellé, ce n\'est qu\'une hypothèse : vérifie sur le relevé avant d\'enregistrer.');
+  else if(e.etat==='plusieurs') h+=cadre('amber','⚠ '+e.solutions.length+' combinaisons tombent juste','Le GRC ne choisit pas : coche la bonne.');
+  else if(e.etat==='aucune') h+=cadre('red','✗ Aucune combinaison ne tombe juste',(e.libelle?'Dû selon le libellé : '+fN(e.totalDu)+' XPF, reçu : '+fN(e.montant)+' XPF. ':'')+'Rien ne peut être enregistré ici : paiement partiel, retenue ou frais possibles.');
+  else if(e.etat==='trop') h+=cadre('amber','⚠ Trop de combinaisons possibles','Recopie le libellé du virement pour limiter la recherche.');
+  else if(e.etat==='fait') h+=cadre('green','✓ Ce paiement est déjà enregistré','');
+  if(e.etat==='plusieurs'){
+    e.solutions.forEach(function(c,i){
+      h+='<label style="display:block;border:1px solid var(--border);border-radius:8px;padding:8px 11px;margin-bottom:6px;cursor:pointer"><input type="radio" name="pc-choix" style="margin-right:8px"'+(_pcChoix===i?' checked':'')+' onchange="pcChoisir('+i+')">'+noms(c)+'</label>';
+    });
+  }
+  if(sol) h+=_pcTable(e.etat==='plusieurs'||e.etat==='montant'?sol:e.pool,sol);
+  var note=[];
+  if(e.dejaJour.length) note.push('Déjà enregistrées à cette date : '+e.dejaJour.map(function(c){return esc(c.num)+' ('+fN(c.jour)+')';}).join(', '));
+  if(e.dejaAutre.length) note.push('Citées mais déjà réglées : '+e.dejaAutre.map(function(c){return esc(c.num)+(c.enc?' le '+fD(c.enc):'');}).join(', '));
+  if(e.introuvables.length) note.push('Numéros introuvables ou non émis pour ce client : '+e.introuvables.map(function(n){return 'F'+n;}).join(', '));
+  if(note.length) h+='<div style="color:var(--amber);font-size:11.5px;margin-top:8px">'+note.join('<br>')+'</div>';
+  if(sol) h+='<div style="color:var(--muted);font-size:11px;margin-top:8px">Le CA et la TGC ne changent pas.</div>';
+  box.innerHTML=h;
+  var montrer=e.etat==='exact'||e.etat==='ecart'||e.etat==='montant'||e.etat==='plusieurs';
+  btn.style.display=montrer?'':'none';
+  btn.disabled=!sol;
+  btn.textContent=sol?'✓ Enregistrer '+(sol.length>1?'les '+sol.length+' factures couvertes':'la facture couverte'):'✓ Enregistrer';
+}
+function pcEnregistrer(){
+  var e=_pcEtat, sol=_pcSolution(); if(!sol||!sol.length)return;
+  var n=0;
+  sol.forEach(function(c){
+    var f=(DB.factures||[]).find(function(x){return x.id===c.id;});
+    if(f&&_enregistrerReglement(f,e.date,c.du)) n++;
+  });
+  saveDB();
+  cm('mPaiementClient');
+  renderReglements();
+  if(typeof renderFA==='function'){try{renderFA();}catch(x){}}
+  if(typeof renderSuivi==='function'){try{renderSuivi();}catch(x){}}
+  if(typeof showBCSaveToast==='function')showBCSaveToast('✓ '+n+' facture'+(n>1?'s':'')+' réglée'+(n>1?'s':'')+' au '+fD(e.date));
 }
 // ---- Export PDF du suivi des règlements (document INTERNE, pas client) ----
 // Deux documents :
