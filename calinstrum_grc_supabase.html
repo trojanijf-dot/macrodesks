@@ -7273,7 +7273,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
-  ['2026-11-03','🛡 Factures : contrôle avant PDF. L’aperçu signale un BC vide, une adresse ou un contact différents de la tranche précédente, un montant ou un texte anormal, et l’impression te le rappelle. Rien n’est bloqué et rien n’est modifié.'],
+  ['2026-11-03','🛡 Factures, devis et BL : contrôle avant PDF. L’aperçu signale un BC ou un n° de commande vide, une adresse ou un contact différents de la tranche précédente, une quantité manquante, un montant ou un texte anormal, et l’impression te le rappelle. Rien n’est bloqué et rien n’est modifié.'],
   ['2026-11-03','💰 Paiement client : pour un virement sans avis détaillé, saisis le client, le montant, la date et les factures citées. Le GRC contrôle le compte, avoirs déduits, signale un écart et enregistre d’un clic les factures couvertes. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','💰 Encaissement : la date saisie sur une facture crée son versement, avoir déduit, et la fiche affiche le bon reste à payer. Le reste dû déduit aussi les avoirs dans Règlements et le tableau de bord. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','🔢 Numéro des nouveaux devis : le GRC suit la série réelle du client, celle de son devis au plus grand numéro, et ne retombe plus sur un numéro déjà pris. Les devis existants et la numérotation des factures ne changent pas.'],
@@ -47142,7 +47142,7 @@ function buildColisageTitle(b){
 function prvBLColisage(){
   var b=getBL();
   if(!b.colisage){alert('Aucune liste de colisage attachée.');return;}
-  window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;
+  window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;window._prvBlObj=null;
   showPrv(buildColisageTitle(b),bColisage(b));
 }
 function printBLColisage(){
@@ -53179,7 +53179,15 @@ function bColisage(b){
 
 // ===== PREVIEW =====
 var prvTarget=null;
-// ---- Contrôle d'une facture avant PDF (03/11/2026) ----
+// ---- Contrôle des documents client avant PDF : factures, devis, BL (03/11/2026) ----
+function _docCtlTexte(html){
+  var e=document.createElement('div'); e.innerHTML=html||'';
+  return (e.textContent||'').replace(/[\s\u00a0\u202f]+/g,' ');
+}
+function _docCtlAnormal(t,out){
+  var m=t.match(/\b(undefined|NaN|Invalid Date)\b/);
+  if(m) out.push('Texte anormal sur le document : « '+m[1]+' ».');
+}
 // Une facture de solde a failli partir sans n° de BC : rien ne relisait le document final.
 // Ce contrôle lit ce qui sera imprimé et prévient, sans jamais bloquer ni rien modifier.
 // Adresse et e-mail ne sont pas comparés à la fiche client : ils en diffèrent trop souvent
@@ -53203,10 +53211,8 @@ function _faControle(f,html){
   if(typeof _bcCoherence==='function') _bcCoherence(f,'facture').forEach(function(i){
     if(i.niveau==='erreur') out.push(i.texte.charAt(0).toUpperCase()+i.texte.slice(1)+'.');
   });
-  var e=document.createElement('div'); e.innerHTML=html||bFA(f);
-  var t=(e.textContent||'').replace(/[\s\u00a0\u202f]+/g,' ');
-  var mauvais=t.match(/\b(undefined|NaN|Invalid Date)\b/);
-  if(mauvais) out.push('Texte anormal sur le document : « '+mauvais[1]+' ».');
+  var t=_docCtlTexte(html||bFA(f));
+  _docCtlAnormal(t,out);
   var ttc=Math.round(Number(f.ttc)||0);
   if(ttc>0&&t.indexOf(fN(ttc).replace(/[\s\u00a0\u202f]+/g,' '))<0) out.push('Montant affiché différent du TTC enregistré ('+fN(ttc)+' XPF).');
   if(ttc>0&&f.lines&&f.lines.length&&typeof _faCalcTotaux==='function'){
@@ -53215,17 +53221,62 @@ function _faControle(f,html){
   }
   return out;
 }
-function _faControleBandeau(title,html){
+// Un devis peut ne pas avoir de BC. Le fret compte dans ses lignes mais à part de son HT.
+function _dvControle(d,html){
+  var out=[]; if(!d) return out;
+  var L=d.lines||{}, lignes=Array.isArray(L)?L:[].concat(L.fourniture||[],L.service||[],L.fret||[]);
+  if(!String(d.adresse||'').trim()) out.push('Adresse vide sur le document.');
+  if(!lignes.some(function(l){ return l&&(l.designation||l.desc||l.ref); })) out.push('Aucune ligne sur le document.');
+  if(lignes.some(function(l){ return l&&_qteAlerte(l); })) out.push('Quantité manquante sur une ligne.');
+  if(typeof _bcCoherence==='function') _bcCoherence(d,'devis').forEach(function(i){
+    if(i.niveau==='erreur') out.push(i.texte.charAt(0).toUpperCase()+i.texte.slice(1)+'.');
+  });
+  var t=_docCtlTexte(html||bDV(d));
+  _docCtlAnormal(t,out);
+  var ttc=Math.round(Number(d.ttc)||0);
+  if(ttc>0&&t.indexOf(fN(ttc).replace(/[\s\u00a0\u202f]+/g,' '))<0) out.push('Montant affiché différent du TTC enregistré ('+fN(ttc)+' XPF).');
+  if(lignes.length&&typeof _gfTotalDevis==='function'){
+    var attendu=Math.round((Number(d.ht)||0)+(Number(d.fr)||0)), calc=Math.round(_gfTotalDevis(d));
+    if(Math.abs(calc-attendu)>2) out.push('Total des lignes ('+fN(calc)+' XPF) différent du total enregistré ('+fN(attendu)+' XPF).');
+  }
+  return out;
+}
+// Un BL ne porte jamais de coordonnées bancaires.
+function _blControle(b,html){
+  var out=[]; if(!b) return out;
+  var lignes=(b.lines||[]).filter(function(l){ return l&&(l.designation||l.desc||l.ref); });
+  if(!String(b.po||'').trim()) out.push('N° de commande vide sur le document.');
+  if(!lignes.length) out.push('Aucune ligne sur le document.');
+  else if(lignes.some(function(l){ return !(Number(l.qte)>0); })) out.push('Quantité manquante sur une ligne.');
+  var t=_docCtlTexte(html||bBL(b));
+  _docCtlAnormal(t,out);
+  if(/\b(IBAN|BIC)\b/.test(t)) out.push('Coordonnées bancaires sur un BL.');
+  return out;
+}
+// Le contrôle du document affiché dans l'aperçu ; null si ce document n'en a pas.
+function _docControle(title,html){
+  var ti=String(title||'');
+  if(/^Facture\s/.test(ti)&&window._prvFaObj) return _faControle(window._prvFaObj,html);
+  if(/^Devis\s/.test(ti)&&window._prvDvObj) return _dvControle(window._prvDvObj,html);
+  if(/^BL\s/.test(ti)&&window._prvBlObj) return _blControle(window._prvBlObj,html);
+  return null;
+}
+function _docControleConfirm(title,html){
+  var c=null; try{ c=_docControle(title,html); }catch(e){ console.warn('_docControle:',e); }
+  if(!c||!c.length) return true;
+  return confirm('⚠ '+String(title||'')+' : '+c.length+' point'+(c.length>1?'s':'')+' à vérifier\n\n• '+c.join('\n• ')+'\n\nOK = imprimer quand même · Annuler = corriger');
+}
+function _docControleBandeau(title,html){
   var z=document.getElementById('prvControle'); if(!z)return;
-  if(!/^Facture\s/.test(String(title||''))||!window._prvFaObj){ z.innerHTML=''; return; }
-  var c=_faControle(window._prvFaObj,html);
+  var c=_docControle(title,html);
+  if(!c){ z.innerHTML=''; return; }
   z.innerHTML=c.length
     ?'<div style="margin:10px 16px 0;padding:9px 12px;border:1px solid var(--red);border-radius:8px;font-size:12px"><b>⛔ '+c.length+' point'+(c.length>1?'s':'')+' à vérifier avant d\'envoyer</b>'+
       '<ul style="margin:5px 0;padding-left:18px">'+c.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('')+'</ul>'+
       '<span style="color:var(--muted);font-size:11px">Corrige la fiche, ou imprime quand même si c\'est voulu.</span></div>'
     :'<div style="margin:10px 16px 0;color:var(--green);font-size:11.5px;font-weight:600">✓ Contrôle OK</div>';
 }
-function showPrv(title,html){sv('prvTitle',title);var pb=document.getElementById('prvBody');if(pb)pb.innerHTML=html;prvTarget=html;try{_faControleBandeau(title,html);}catch(e){console.warn('_faControleBandeau:',e);}om('mPRV');}
+function showPrv(title,html){sv('prvTitle',title);var pb=document.getElementById('prvBody');if(pb)pb.innerHTML=html;prvTarget=html;try{_docControleBandeau(title,html);}catch(e){console.warn('_docControleBandeau:',e);}om('mPRV');}
 // Construit le titre normalisé pour les BC (utilisé pour l'aperçu ET le nom du PDF généré).
 // Format : "CALINSTRUM Purchase Order <num> Customer Ref <cref2>"
 function buildBCTitle(b){
@@ -53253,7 +53304,7 @@ window._prvFaObj=null;
 function prvDV(id){var d=DB.devis.find(function(x){return x.id===id;});if(d){window._prvDvSourceId=d.id;window._prvDvObj=d;window._prvFaSourceId=null;window._prvFaObj=null;showPrv('Devis — '+d.num,bDV(d));}}
 function prvFA(id){var f=DB.factures.find(function(x){return x.id===id;});if(f){window._prvFaSourceId=f.id;window._prvFaObj=f;window._prvDvSourceId=null;window._prvDvObj=null;showPrv('Facture — '+f.num,bFA(f));}}
 function prvBC(id){var b=DB.bcs.find(function(x){return x.id===id;});if(b){window._prvBcObj=b;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv(buildBCTitle(b),bBC(b));}}
-function prvBL(id){var b=DB.bls.find(function(x){return x.id===id;});if(b){window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv('BL — '+b.num,bBL(b));}}
+function prvBL(id){var b=DB.bls.find(function(x){return x.id===id;});if(b){window._prvBlObj=b;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv('BL — '+b.num,bBL(b));}}
 function previewDV(){var d=getDV();if(!d.num)return;window._prvDvSourceId=d.id||null;window._prvDvObj=d;window._prvFaSourceId=null;window._prvFaObj=null;showPrv('Devis — '+d.num,bDV(d));}
 function previewFA(){var f=getFA();if(!f.num)return;window._prvFaSourceId=f.id||null;window._prvFaObj=f;window._prvDvSourceId=null;window._prvDvObj=null;showPrv('Facture — '+f.num,bFA(f));}
 // Re-génère l'aperçu PDF facture (équivalent à previewFA mais avec confirmation visuelle
@@ -53270,7 +53321,7 @@ function regenerateFAPdf(){
   }
 }
 function previewBC(){var b=getBC();if(!b.num)return;window._prvBcObj=b;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv(buildBCTitle(b),bBC(b));}
-function previewBL(){var b=getBL();if(!b.num)return;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv('BL — '+b.num,bBL(b));}
+function previewBL(){var b=getBL();if(!b.num)return;window._prvBlObj=b;window._prvDvSourceId=null;window._prvFaSourceId=null;window._prvDvObj=null;window._prvFaObj=null;showPrv('BL — '+b.num,bBL(b));}
 
 
 // ===== JS PAGINATOR FOR DEVIS PRINT =====
@@ -54269,6 +54320,8 @@ function printPreviewBC(){
   // explicitement via window.doPrint pour éviter le shadowing.
   var titleElEarly=document.getElementById('prvTitle');
   var docTitleEarly=titleElEarly?titleElEarly.textContent:'';
+  // Devis et factures sont contrôlés par doPrint ; ici, le BL (cf _docControle).
+  if(/^BL\s/.test(docTitleEarly)&&!_docControleConfirm(docTitleEarly,src.innerHTML)) return;
   // (Administratif n'utilise plus l'aperçu mPRV — impression native directe,
   // cf printAdminReportPeriod() — pipeline html2pdf/canvas abandonné 11/08.)
   if(/^Devis\s/i.test(docTitleEarly) || /^Facture\s/i.test(docTitleEarly)){
@@ -55570,11 +55623,8 @@ function doPrint(){
   var isDevisDoc=docTitle && /^Devis\s/i.test(docTitle);
   // Détection facture (titre commence par "Facture")
   var isFactureDoc=docTitle && /^Facture\s/i.test(docTitle);
-  // Dernier contrôle avant le PDF : on prévient, l'utilisateur décide (cf _faControle).
-  if(isFactureDoc && window._prvFaObj){
-    var _ctl=[]; try{ _ctl=_faControle(window._prvFaObj,c.innerHTML); }catch(e){ console.warn('_faControle:',e); }
-    if(_ctl.length && !confirm('⚠ '+(window._prvFaObj.num||'Facture')+' : '+_ctl.length+' point'+(_ctl.length>1?'s':'')+' à vérifier\n\n• '+_ctl.join('\n• ')+'\n\nOK = imprimer quand même · Annuler = corriger')) return;
-  }
+  // Dernier contrôle avant le PDF : on prévient, l'utilisateur décide (cf _docControle).
+  if(!_docControleConfirm(docTitle,c.innerHTML)) return;
   // Imprimer une PRÉ-FACTURE, c'est souvent l'envoyer au client : proposer de l'émettre
   // (cf _faPreFactureEnvoyee). L'impression a lieu dans tous les cas.
   if(isFactureDoc && window._prvFaSourceId!=null && typeof _faPreFactureEnvoyee==='function'){
