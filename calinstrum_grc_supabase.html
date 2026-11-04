@@ -6943,8 +6943,8 @@ function _impReglements(o){
   var rel=data.filter(function(x){return x.retard>0 && x.reste>0;});
   var h=_impKpis([['Facturé (émis)',M(fac),data.length+' facture(s)'],['Encaissé',M(enc),'règlements pointés','ok'],['Reste dû',M(data.reduce(function(s,x){return s+x.reste;},0)),data.filter(function(x){return x.reste>0;}).length+' facture(s)'],['À relancer (échues)',M(rel.reduce(function(s,x){return s+x.reste;},0)),rel.length+' facture(s)','late']]);
   var lignes=_impParMois(data,function(x){return x.date;},function(x){
-    return '<tr><td class="num">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td><td class="cli">'+esc(x.client||'')+'</td><td class="obj">'+esc(_impCourt(x.objet,64))+'</td><td>'+fD(x.ech)+'</td><td class="n b">'+M(x.ttc)+'</td><td class="n">'+M(x.verse)+'</td><td class="n'+(x.reste>0&&x.retard>0?' late':'')+'">'+(x.reste>0?M(x.reste):'<span class="ok">soldée</span>')+'</td><td>'+(x.enc?fD(x.enc):'')+(x.reste>0&&x.retard>0?'<span class="late"> · '+x.retard+' j de retard</span>':'')+'</td></tr>'; },9,
-    o.totaux?function(l){return 'facturé '+M(l.reduce(function(s,x){return s+x.ttc;},0))+' · encaissé '+M(l.reduce(function(s,x){return s+x.verse;},0));}:null);
+    return '<tr><td class="num">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td><td class="cli">'+esc(x.client||'')+'</td><td class="obj">'+esc(_impCourt(x.objet,64))+'</td><td>'+fD(x.ech)+'</td><td class="n b">'+M(x.ttc)+_reglAvoirsHtml(x,REGL_AV_PDF,M)+'</td><td class="n">'+M(x.verse)+'</td><td class="n'+(x.reste>0&&x.retard>0?' late':'')+'">'+(x.reste>0?M(x.reste):'<span class="ok">soldée</span>')+'</td><td>'+(x.enc?fD(x.enc):'')+(x.reste>0&&x.retard>0?'<span class="late"> · '+x.retard+' j de retard</span>':'')+'</td></tr>'; },9,
+    o.totaux?function(l){var av=l.reduce(function(s,x){return s+x.avoirs;},0);return 'facturé '+M(l.reduce(function(s,x){return s+x.ttc;},0))+(av>0?' · avoirs '+M(av):'')+' · encaissé '+M(l.reduce(function(s,x){return s+x.verse;},0));}:null);
   h+='<table><thead><tr><th>N°</th><th>Émise le</th><th>Client</th><th>Objet</th><th>Échéance</th><th class="n">TTC</th><th class="n">Encaissé</th><th class="n">Reste</th><th>Encaissement</th></tr></thead><tbody>'+(lignes||'<tr><td colspan="9" class="vide">Aucune facture émise.</td></tr>')+'</tbody></table>'+
     '<div class="note">Échéance : 30 jours fin de mois à compter de l\'envoi · encaissé = règlements pointés (comme la page Règlements).</div>';
   return {titre:'Règlements',html:h,n:data.length};
@@ -7274,6 +7274,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-05','🧾 Règlements : le n° et le montant de l\'avoir sont indiqués sous la facture concernée, à l\'écran et sur les impressions. Aucun total ne change.'],
   ['2026-11-05','🧮 Règlements : coche des factures, même de mois différents, pour lire leur total et le comparer au montant viré. Rien n\'est enregistré.'],
   ['2026-11-04','📋 Facturation du tableau de bord : seules les factures émises sont comptées, comme le Suivi. Les pré-factures restent visibles à part. Le CA net et la TGC de la page Administratif ne changent pas.'],
   ['2026-11-04','💰 À recouvrer : le même chiffre sur le tableau de bord, le Suivi, les Factures, les Règlements et les impressions. Les avoirs sont déduits et les pré-factures ne comptent plus dans ce total. Le CA et la TGC ne changent pas.'],
@@ -12576,6 +12577,23 @@ function _reglPosEch(x){
   return x.ecartEch+' j après éch.';
 }
 // Les factures à suivre : uniquement celles réellement émises au client.
+// Les avoirs d'une facture : numéro court et montant, pour les nommer sur sa ligne.
+function _reglAvoirsListe(f){
+  if(!f||f.id==null||typeof getAvoirsForFA!=='function')return [];
+  return getAvoirsForFA(f.id).map(function(a){
+    return {num:String(a.num||'').replace(/^.*-(?=AV\d)/i,''),ttc:Math.abs(Math.round(Number(a.ttc)||0))};
+  });
+}
+// Une ligne par avoir, sous le montant. fmt : l'écran floute, l'impression masque.
+function _reglAvoirsHtml(x,style,fmt){
+  return (x.avoirsL||[]).map(function(a){
+    return '<span style="display:block;white-space:nowrap;'+style+'">avoir '+(a.num?esc(a.num)+' ':'')+'−'+fmt(a.ttc)+'</span>';
+  }).join('');
+}
+function _reglAvoirsEcran(x){
+  return _reglAvoirsHtml(x,'font-family:var(--mono);font-size:10px;font-weight:600;color:var(--amber);margin-top:1px',function(v){ return '<span data-money>'+fN(v)+'</span>'; });
+}
+var REGL_AV_PDF='color:#b45309;font-size:9px;font-weight:700';
 function _reglLignes(){
   var auj=_reglAujourdhui(), out=[];
   (DB.factures||[]).forEach(function(f){
@@ -12591,7 +12609,7 @@ function _reglLignes(){
     var rel=(f.relances||[]);
     out.push({
       id:f.id, num:f.num, client:_reglClient(f), objet:f.objet||'',
-      date:f.date, ech:ech, ttc:ttc, verse:verse, reste:solde?0:reste, avoirs:_faAvoirsTTC(f),
+      date:f.date, ech:ech, ttc:ttc, verse:verse, reste:solde?0:reste, avoirs:_faAvoirsTTC(f), avoirsL:_reglAvoirsListe(f),
       enc:enc, partiel:(!solde&&verse>0),
       retard:(!solde&&ech&&ech<auj)?_reglJoursEntre(ech,auj):0,
       delai:enc?_reglJoursEntre(f.date,enc):null,
@@ -12752,7 +12770,7 @@ function renderReglements(){
         '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
         '<td style="color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.objet)+'</td>'+
         '<td style="text-align:right;font-family:var(--mono)">'+fN(x.reste)+
-          (x.partiel?'<div style="font-size:9.5px;color:var(--muted-soft)">sur '+fN(x.ttc)+'</div>':'')+'</td>'+
+          ((x.partiel||x.avoirs>0)?'<div style="font-size:9.5px;color:var(--muted-soft)">sur '+fN(x.ttc)+'</div>':'')+_reglAvoirsEcran(x)+'</td>'+
         '<td style="font-family:var(--mono)">'+fD(x.date)+'</td>'+
         '<td style="font-family:var(--mono);color:var(--red)">'+fD(x.ech)+'</td>'+
         '<td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--red)">'+x.retard+' j</td>'+
@@ -12819,7 +12837,7 @@ function renderReglements(){
         '<td style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(x.num)+'</td>'+
         '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
         '<td style="color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.objet)+'">'+esc(x.objet)+'</td>'+
-        '<td style="text-align:right;font-family:var(--mono)">'+fN(x.ttc)+'</td>'+
+        '<td style="text-align:right;font-family:var(--mono)">'+fN(x.ttc)+_reglAvoirsEcran(x)+'</td>'+
         '<td style="font-family:var(--mono)">'+fD(x.date)+'</td>'+
         '<td style="font-family:var(--mono)'+(x.retard?';color:var(--red)':'')+'">'+fD(x.ech)+'</td>'+
         '<td>'+encTd+'</td><td style="text-align:right">'+delTd+'</td><td>'+st+'</td>'+
@@ -13122,7 +13140,7 @@ function _reglPdfHtml(mode){
     var aVenir=dus.filter(function(x){return !(x.retard>0);}).sort(function(a,z){return a.ech.localeCompare(z.ech);});
     var ligne=function(x){
       return '<tr><td class="num">'+esc(x.num)+'</td>'+tdCli(x)+'<td class="obj">'+esc(x.objet)+'</td>'+
-        '<td class="n">'+fN(x.ttc)+'</td><td class="n">'+(x.verse?fN(x.verse):'—')+'</td><td class="n b">'+fN(x.reste)+'</td>'+
+        '<td class="n">'+fN(x.ttc)+_reglAvoirsHtml(x,REGL_AV_PDF,fN)+'</td><td class="n">'+(x.verse?fN(x.verse):'—')+'</td><td class="n b">'+fN(x.reste)+'</td>'+
         '<td>'+fD(x.date)+'</td><td'+(x.retard?' class="late"':'')+'>'+fD(x.ech)+'</td>'+
         '<td class="n'+(x.retard?' late':'')+'">'+(x.retard?x.retard+' j':'—')+'</td>'+
         '<td>'+(x.derniereRelance?fD(x.derniereRelance):'—')+'</td></tr>';
@@ -13153,7 +13171,7 @@ function _reglPdfHtml(mode){
           :x.partiel?'<span class="part">partiel</span>'+(x.retard?' <span class="late">· '+x.retard+' j</span>':'')
           :x.retard?'<span class="late">'+x.retard+' j de retard</span>':'<span class="att">en attente</span>';
         rows+='<tr><td class="num">'+esc(x.num)+'</td>'+tdCli(x)+'<td class="obj">'+esc(x.objet)+'</td>'+
-          '<td class="n">'+fN(x.ttc)+'</td><td>'+fD(x.date)+'</td><td'+(x.retard?' class="late"':'')+'>'+fD(x.ech)+'</td>'+
+          '<td class="n">'+fN(x.ttc)+_reglAvoirsHtml(x,REGL_AV_PDF,fN)+'</td><td>'+fD(x.date)+'</td><td'+(x.retard?' class="late"':'')+'>'+fD(x.ech)+'</td>'+
           '<td>'+(x.enc?fD(x.enc):'—')+'</td><td class="n">'+(x.verse?fN(x.verse):'—')+'</td>'+
           '<td class="n">'+(x.reste?fN(x.reste):'—')+'</td><td>'+st+'</td></tr>';
       });
