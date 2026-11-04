@@ -7273,6 +7273,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-04','📋 Facturation du tableau de bord : seules les factures émises sont comptées, comme le Suivi. Les pré-factures restent visibles à part. Le CA net et la TGC de la page Administratif ne changent pas.'],
   ['2026-11-04','💰 À recouvrer : le même chiffre sur le tableau de bord, le Suivi, les Factures, les Règlements et les impressions. Les avoirs sont déduits et les pré-factures ne comptent plus dans ce total. Le CA et la TGC ne changent pas.'],
   ['2026-11-04','💰 Règlements : l’en-tête de chaque mois affiche les avoirs, et son reste ne les compte plus comme un impayé. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','🛡 Prochains devis, factures et BL : contrôle avant PDF. L’aperçu signale un BC ou un n° de commande vide, une adresse ou un contact différents de la tranche précédente, une quantité manquante, un montant ou un texte anormal, et l’impression te le rappelle. Rien n’est bloqué et rien n’est modifié. Les documents déjà partis ne sont pas repris.'],
@@ -16811,13 +16812,14 @@ function rDashPro(){
     return String(f.dateEnvoi||f.date||'').substring(0,4);
   }
   var dvFy=dv.filter(function(d){return (d.date||'').substring(0,4)==String(fy);});
-  var faFy=fa.filter(function(f){return _dashFactureYear(f)==String(fy);});
+  // Factures ÉMISES de l'année : une pré-facture n'est ni du CA ni une créance.
+  // Encaissé et reste suivent la règle de Règlements (avoirs déduits).
+  var regl=_reglParFacture();
+  var faFy=fa.filter(function(f){return _dashFactureYear(f)==String(fy)&&regl[f.id];});
 
   // Totaux annuels
   function devisTtc(d){return Number(d.ttc)||0;}
   function factureMt(f){return Number(f.montant||f.ttc||0);}
-  // Facture émise : encaissé et reste suivent la règle de Règlements (avoirs déduits).
-  var regl=_reglParFacture();
   function factureReste(f){var L=regl[f.id];return L?L.reste:0;}
   // Helper : montant réellement encaissé d'une facture
   //   Priorité : somme des versements > fallback status Payée → TTC entier > 0
@@ -16844,7 +16846,6 @@ function rDashPro(){
   // Encaissé : utilise factureEncaisse() qui regarde les versements en priorité
   var totalEnc=faFy.reduce(function(s,f){return s+factureEncaisse(f);},0);
   var totalRest=faFy.reduce(function(s,f){return s+factureReste(f);},0);
-  var totalEmisFy=faFy.reduce(function(s,f){return s+(regl[f.id]?regl[f.id].ttc:0);},0);
 
   // Sparklines (cumul mensuel)
   var dvMonthly=getMonthlyTotals(dvFy,devisTtc);
@@ -17117,8 +17118,8 @@ function rDashPro(){
     },'dash_fa'):
     makeSparkline(faCum,'#a3a39a',true);
   var facHelp = 'FACTURATION '+fy+' — CA comptable\n\n'+
-    '= Somme TTC de toutes les factures émises en '+fy+'.\n'+
-    '(date d\'émission OU date de réception BC pour pré-facturées)\n\n'+
+    '= Somme TTC des factures émises en '+fy+', avant avoirs.\n'+
+    '(les pré-factures n\'en font pas partie : elles ne sont pas émises)\n\n'+
     'Inclus :\n'+
     '• Tous statuts paiement (En attente, Partiel, Payée)\n'+
     '• Toutes phases (transit, livré, reçu PV, payé)\n'+
@@ -17126,7 +17127,7 @@ function rDashPro(){
     'Décomposition '+fy+' :\n'+
     '• Cycle court (sur devis '+fy+') : '+faFromDv2026Count+' factures · '+fNloc(faFromDv2026Sum)+' XPF\n'+
     '• Backlog rentrant (sur devis pré-'+fy+') : '+faFromPreCount+' factures · '+fNloc(faFromPreSum)+' XPF\n\n'+
-    'C\'est ton CA comptable réel pour le bilan annuel.';
+    'Le CA net HT et la TGC de l\'exercice sont sur la page Administratif.';
   html+='<div class="kpi-pro" style="position:relative">'+
     dashHelpDot(facHelp)+
     '<div class="kpi-label"><i class="ti ti-receipt-2"></i>Facturation</div>'+
@@ -17177,7 +17178,7 @@ function rDashPro(){
         '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul restant</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
     },'dash_rest'):
     makeSparkline(restCum,'#f09595',true);
-  var pctRest = totalEmisFy>0?Math.round(totalRest/totalEmisFy*100):0;
+  var pctRest = totalFa>0?Math.round(totalRest/totalFa*100):0;
   var restHelp = 'À RECOUVRER '+fy+' — Créances ouvertes\n\n'+
     '= Factures émises '+fy+' − avoirs − encaissé, comme la page Règlements\n'+
     '(les pré-factures n\'en font pas partie : elles ne sont pas émises)\n'+
@@ -24067,16 +24068,14 @@ function rDash(){
   // Facturation YYYY = factures dont date est en YYYY
   // Encaissement YYYY = somme versements en YYYY (ou TTC si dateEncaissement en YYYY et 1 seul versement implicite)
   var factAnnee=0,encAnnee=0,recAnnee=0,nbFactAnnee=0;
-  var regl=_reglParFacture();   // à recouvrer : règle de Règlements (avoirs déduits, factures émises)
+  var regl=_reglParFacture();   // facturation et à recouvrer : factures émises, règle de Règlements
   fa.forEach(function(f){
     var ttc=f.ttc||0;
     var verses=(f.versements||[]).reduce(function(s,v){return s+(Number(v.montant)||0);},0);
     if(verses===0&&f.paye)verses=Number(f.paye)||0;
     // Facturation YYYY
     if(selectedYear==='all'||yearOf(f.date)===selectedYear){
-      factAnnee+=ttc;
-      nbFactAnnee++;
-      recAnnee+=regl[f.id]?regl[f.id].reste:0;
+      if(regl[f.id]){ factAnnee+=ttc; nbFactAnnee++; recAnnee+=regl[f.id].reste; }
     }
     // Encaissement YYYY : on regarde la date des versements (et fallback dateEncaissement)
     if(selectedYear==='all'){
@@ -36230,7 +36229,7 @@ function renderFA(){
   var faStatsList=sourceWithClient.filter(function(f){
     // Ordre : dateEnvoi → _dateCreation (date comptable) → dateReceptionBC. Cf. règle métier.
     var ds=String(f.dateEnvoi||f.date||f._dateCreation||f.dateReceptionBC||'').substring(0,4);
-    return ds===String(statsYear);
+    return ds===String(statsYear) && !isPrebilled(f);
   });
   var faStatsCount=faStatsList.length;
   var faStatsTotal=faStatsList.reduce(function(s,f){return s+Number(f.montant||f.ttc||0);},0);
@@ -36241,7 +36240,7 @@ function renderFA(){
     var yrLabel=fYearForTabs?String(fYearForTabs):'toutes années';
     statsEl.innerHTML='<span style="color:var(--text);font-weight:500" data-money>'+faStatsCount+'</span> facture'+(faStatsCount>1?'s':'')+' · '+
       '<span class="num" style="color:var(--text)" data-money>'+fNlocFA(faStatsTotal)+' XPF</span> total émis'+
-      (fYearForTabs?'':' <span style="color:var(--muted-soft)">(toutes années)</span>');
+      ' <span style="color:var(--muted-soft)">('+esc(String(statsYear))+')</span>';
   }
 
   // ===== Récupération de tous les filtres actifs =====
@@ -41230,9 +41229,10 @@ function _decompDrillBuildItems(mode){
   });
 
   var dvFy=devis.filter(function(d){return String(d.date||'').substring(0,4)===fy;});
+  var regl=_reglParFacture();
   var faFy=factures.filter(function(f){
     var y=String(f.dateEnvoi||f.date||f.dateReceptionBC||'').substring(0,4);
-    return y===fy;
+    return y===fy&&regl[f.id];
   });
 
   // Pour chaque facture, trouver son premier devis lié + classer par année
