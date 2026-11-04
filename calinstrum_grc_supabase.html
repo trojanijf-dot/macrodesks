@@ -6877,8 +6877,8 @@ function _impFactures(o){
   var ht=function(l){ return l.reduce(function(s,i){var f=fa(i); return s+(f?Number(f.ht)||0:0);},0); };
   var tg=function(l){ return l.reduce(function(s,i){var f=fa(i); return s+(f?Number(f.tgc)||0:0);},0); };
   var tt=function(l){ return l.reduce(function(s,i){return s+(Number(i.montant)||0);},0); };
-  var h=_impKpis([['Total TTC',M(k.totalAll),k.nTotal+' facture(s)'],['Encaissé',M(k.paidSum),k.nPaid+' au statut « Payée »','ok'],['Reste à recouvrer',M(k.pendingSum+k.lateSum),(k.nPending+k.nLate)+' facture(s)'],['En retard',M(k.lateSum),k.nLate+' facture(s)','late'],['Pré-facturé (hors CA)',M(k.prebilledSum),k.nPrebilled+' pré-facture(s)','mut']].filter(function(x){ return o.contenu!=='emises' || x[0].indexOf('Pré-facturé')<0; }));
-  h+='<div class="note">Encaissé = factures au statut « Payée », comme les cartes de la page Factures (la page Règlements, elle, compte les encaissements saisis).</div>';
+  var h=_impKpis([['Total TTC',M(k.totalAll),k.nTotal+' facture(s)'],['Encaissé',M(k.paidSum),k.nPaid+' soldée(s)','ok'],['Reste à recouvrer',M(k.pendingSum+k.lateSum),(k.nPending+k.nLate)+' facture(s)'],['En retard',M(k.lateSum),k.nLate+' facture(s)','late'],['Pré-facturé (hors CA)',M(k.prebilledSum),k.nPrebilled+' pré-facture(s)','mut']].filter(function(x){ return o.contenu!=='emises' || x[0].indexOf('Pré-facturé')<0; }));
+  h+='<div class="note">Encaissé et reste : règle de la page Règlements, avoirs déduits.</div>';
   var lignes=_impParMois(data,_impDateFa,function(i){ var f=fa(i), ph=(typeof getPhase==='function'&&f)?getPhase(f):null, enc=(typeof _faGetEncaissement==='function')?_faGetEncaissement(i):'';
       return '<tr><td class="num">'+esc(i.num||'')+'</td><td>'+fD(_impDateFa(i))+'</td><td class="cli">'+esc(i.client||'')+'</td><td class="obj">'+esc(_impCourt(i.intitule||i.objet,72))+'</td><td>'+esc(ph?ph.label:'')+'</td>'+
         '<td class="n">'+(f?M(f.ht):'—')+'</td><td class="n">'+(f?M(f.tgc):'—')+'</td><td class="n b">'+M(i.montant)+'</td><td>'+(i.dateButoir?fD(i.dateButoir):'')+'</td><td>'+(enc?fD(enc):'')+'</td><td>'+stLib(i)+'</td></tr>'; },11,
@@ -6940,7 +6940,7 @@ function _impReglements(o){
   var M=function(v){return _impM(o,v);};
   var fac=data.reduce(function(s,x){return s+x.ttc;},0), enc=data.reduce(function(s,x){return s+x.verse;},0);
   var rel=data.filter(function(x){return x.retard>0 && x.reste>0;});
-  var h=_impKpis([['Facturé (émis)',M(fac),data.length+' facture(s)'],['Encaissé',M(enc),'règlements pointés','ok'],['Reste dû',M(fac-enc),data.filter(function(x){return x.reste>0;}).length+' facture(s)'],['À relancer (échues)',M(rel.reduce(function(s,x){return s+x.reste;},0)),rel.length+' facture(s)','late']]);
+  var h=_impKpis([['Facturé (émis)',M(fac),data.length+' facture(s)'],['Encaissé',M(enc),'règlements pointés','ok'],['Reste dû',M(data.reduce(function(s,x){return s+x.reste;},0)),data.filter(function(x){return x.reste>0;}).length+' facture(s)'],['À relancer (échues)',M(rel.reduce(function(s,x){return s+x.reste;},0)),rel.length+' facture(s)','late']]);
   var lignes=_impParMois(data,function(x){return x.date;},function(x){
     return '<tr><td class="num">'+esc(x.num)+'</td><td>'+fD(x.date)+'</td><td class="cli">'+esc(x.client||'')+'</td><td class="obj">'+esc(_impCourt(x.objet,64))+'</td><td>'+fD(x.ech)+'</td><td class="n b">'+M(x.ttc)+'</td><td class="n">'+M(x.verse)+'</td><td class="n'+(x.reste>0&&x.retard>0?' late':'')+'">'+(x.reste>0?M(x.reste):'<span class="ok">soldée</span>')+'</td><td>'+(x.enc?fD(x.enc):'')+(x.reste>0&&x.retard>0?'<span class="late"> · '+x.retard+' j de retard</span>':'')+'</td></tr>'; },9,
     o.totaux?function(l){return 'facturé '+M(l.reduce(function(s,x){return s+x.ttc;},0))+' · encaissé '+M(l.reduce(function(s,x){return s+x.verse;},0));}:null);
@@ -6992,7 +6992,7 @@ function _impSynthese(o){
   var base=(DB.devis||[]).filter(function(d){ return _impDansPeriode(d.date,oo) && (!o.client || _impClient(d.client)===o.client); });
   var fy0=fiscalYear, kpi; try{ if(o.annee) fiscalYear=Number(o.annee); kpi=_calcKpiDV(base); } finally{ fiscalYear=fy0; }
   var t=_rentaTotaux(_impRentaAffaires(oo));
-  var h=_impKpis([['Facturé (émis) TTC',M(fac),reg.length+' facture(s)'],['Encaissé',M(enc),'règlements pointés','ok'],['Reste dû',M(fac-enc),''],['À relancer',M(rel.reduce(function(s,x){return s+x.reste;},0)),rel.length+' échue(s)','late'],
+  var h=_impKpis([['Facturé (émis) TTC',M(fac),reg.length+' facture(s)'],['Encaissé',M(enc),'règlements pointés','ok'],['Reste dû',M(reg.reduce(function(s,x){return s+x.reste;},0)),''],['À relancer',M(rel.reduce(function(s,x){return s+x.reste;},0)),rel.length+' échue(s)','late'],
     ['Pré-facturé (hors CA)',M(pre.reduce(function(s,i){return s+(Number(i.montant)||0);},0)),pre.length+' pré-facture(s)','mut'],['Devis comptés',M(kpi.totalCounted),kpi.countCounted+' devis'],['Taux de transformation',(kpi.tauxAccept!=null?Math.round(kpi.tauxAccept)+' %':'—'),'acceptés + facturés / tranchés'],['Bénéfice Emerson',M(t.benef),t.ca?(Math.round(t.marge*10)/10).toLocaleString('fr-FR')+' % de marge':'',t.benef<0?'late':'ok']]);
   // CA émis par mois (date d'émission) — barres
   var mois=new Array(12).fill(0); reg.forEach(function(x){ var m=Number(String(x.date).slice(5,7)); if(m>=1&&m<=12) mois[m-1]+=x.ttc; });
@@ -7273,6 +7273,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-04','💰 À recouvrer : le même chiffre sur le tableau de bord, le Suivi, les Factures, les Règlements et les impressions. Les avoirs sont déduits et les pré-factures ne comptent plus dans ce total. Le CA et la TGC ne changent pas.'],
   ['2026-11-04','💰 Règlements : l’en-tête de chaque mois affiche les avoirs, et son reste ne les compte plus comme un impayé. Le CA et la TGC ne changent pas.'],
   ['2026-11-03','🛡 Prochains devis, factures et BL : contrôle avant PDF. L’aperçu signale un BC ou un n° de commande vide, une adresse ou un contact différents de la tranche précédente, une quantité manquante, un montant ou un texte anormal, et l’impression te le rappelle. Rien n’est bloqué et rien n’est modifié. Les documents déjà partis ne sont pas repris.'],
   ['2026-11-03','💰 Paiement client : pour un virement sans avis détaillé, saisis le client, le montant, la date et les factures citées. Le GRC contrôle le compte, avoirs déduits, signale un écart et enregistre d’un clic les factures couvertes. Le CA et la TGC ne changent pas.'],
@@ -11901,13 +11902,17 @@ function renderSuviKPIs(){
   var prebilledMnt=prebilled.reduce(function(s,i){return s+i.montant;},0);
   // Émises = factures considérées comme officiellement envoyées au client
   var emises=invoices.filter(function(i){return !isPrebilled(i);});
-  var paid=emises.filter(function(i){return getStatus(i)==='paid';}).reduce(function(s,i){return s+i.montant;},0);
-  var partial=emises.filter(function(i){return getStatus(i)==='partial';}).reduce(function(s,i){return s+i.montant*(i.pct/100);},0);
-  var partialReste=emises.filter(function(i){return getStatus(i)==='partial';}).reduce(function(s,i){return s+i.montant*(1-i.pct/100);},0);
-  var late=emises.filter(function(i){return getStatus(i)==='late';}).reduce(function(s,i){return s+i.montant;},0);
-  var pending=emises.filter(function(i){return getStatus(i)==='pending';}).reduce(function(s,i){return s+i.montant;},0);
-  var enc=paid+partial;
-  var aRecouvrer=pending+late+partialReste;
+  // Facture GRC : règle de Règlements. Ligne saisie à la main dans le Suivi : son statut.
+  var regl=_reglParFacture();
+  var encDe=function(i){
+    var L=regl[i._factureId||i.grcFactureId]; if(L)return L.verse;
+    var st=getStatus(i); return st==='paid'?i.montant:(st==='partial'?i.montant*(i.pct/100):0);
+  };
+  var resteDe=function(i){
+    var L=regl[i._factureId||i.grcFactureId]; return L?L.reste:i.montant-encDe(i);
+  };
+  var enc=emises.reduce(function(s,i){return s+encDe(i);},0);
+  var aRecouvrer=emises.reduce(function(s,i){return s+resteDe(i);},0);
   // Ratio sur factures réellement émises (pas sur le brut)
   var totalEmis=emises.reduce(function(s,i){return s+i.montant;},0);
 
@@ -11940,7 +11945,7 @@ function renderSuviKPIs(){
   el.innerHTML=
     // Ligne 1 : flux clients (label dynamique). Effet shimmer décalé pour éviter la "vague synchronisée".
     '<div class="metric m-green shimmer"><div class="mlbl">💰 Encaissé '+esc(clientLbl)+'</div><div class="mval green">'+fN(enc)+'</div><div class="msub">'+(totalEmis>0?Math.round(enc/totalEmis*100):0)+'% des factures émises</div></div>'+
-    '<div class="metric m-amber shimmer shimmer-d1"><div class="mlbl">⏳ À recouvrer '+esc(clientLbl)+'</div><div class="mval amber">'+fN(aRecouvrer)+'</div><div class="msub">'+emises.filter(function(i){return getStatus(i)!=='paid';}).length+' factures émises en attente</div></div>'+
+    '<div class="metric m-amber shimmer shimmer-d1"><div class="mlbl">⏳ À recouvrer '+esc(clientLbl)+'</div><div class="mval amber">'+fN(aRecouvrer)+'</div><div class="msub">'+emises.filter(function(i){return resteDe(i)>0;}).length+' factures émises en attente</div></div>'+
     '<div class="metric m-purple shimmer shimmer-d2"><div class="mlbl">📦 Backlog (pré-facturé)</div><div class="mval" style="color:#a78bfa">'+fN(prebilledMnt)+'</div><div class="msub">'+prebilled.length+' factures non émises</div></div>'+
     '<div class="metric m-teal shimmer shimmer-d3"><div class="mlbl">🎯 Total portefeuille</div><div class="mval">'+fN(totalBrut)+'</div><div class="msub">'+invoices.length+' lignes XPF (brut)</div></div>';
 
@@ -12078,10 +12083,12 @@ function getAlertData(){
     var isStatutPending=(s==='pending' || s==='en attente' || s==='partiel' || s==='partial');
     return isStatutPending && !dateEnvoi && preFacturationPhases.indexOf(phase)>=0;
   }
+  var regl=_reglParFacture();
   invoices.forEach(function(inv){
     var st=getStatus(inv);if(st==='paid')return;
     // ⭐ Skip pré-facturations : pas encore émises, pas d'alerte de retard légitime
     if(_isPrefactured(inv))return;
+    var Li=regl[inv._factureId||inv.grcFactureId];if(Li&&Li.reste<=0)return;
     var bd=parseDate(inv.dateButoir);if(!bd)return;
     var d=diffDays(td2,bd),dateStr=bd.toLocaleDateString('fr-FR');
     if(d<0)alerts.push(Object.assign({},inv,{type:'late',message:'En retard de '+Math.abs(d)+' jour'+(Math.abs(d)>1?'s':'')+' - echeance '+dateStr,_source:'invoice'}));
@@ -12092,14 +12099,10 @@ function getAlertData(){
   (DB.factures||[]).forEach(function(f){
     // ⭐ Skip pré-facturations côté GRC aussi
     if(_isPrefactured(f))return;
-    var totVerse=(f.versements&&f.versements.length)?f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0):(Number(f.paye)||0);
-    var reste=(f.ttc||0)-totVerse;
-    if(reste<=0)return;
-    // Calculer date butoir à partir de date facture + delai
-    var fd=parseDate(f.date);if(!fd)return;
-    var delai=(f.delai||'').toString();
-    var days=delai.indexOf('60')>=0?60:(delai.indexOf('immédiat')>=0?0:30);
-    var bd=new Date(fd);bd.setDate(bd.getDate()+days);
+    // Reste et échéance : règle de Règlements (avoirs déduits, 30 jours fin de mois).
+    var L=regl[f.id];if(!L||L.reste<=0)return;
+    var reste=L.reste;
+    var bd=parseDate(L.ech);if(!bd)return;
     var d=diffDays(td2,bd),dateStr=bd.toLocaleDateString('fr-FR');
     if(d<0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'late',message:'GRC — En retard de '+Math.abs(d)+'j, reste '+fN(reste)+' XPF (ech. '+dateStr+')',dateEnvoi:f.date,dateButoir:bd.toISOString().slice(0,10),_factureId:f.id,_source:'facture'});
     else if(d===0) alerts.push({num:f.num,intitule:f.objet||'Facture GRC',montant:reste,client:f.client,type:'today',message:'GRC — Echeance AUJOURD\'HUI, reste '+fN(reste)+' XPF',_factureId:f.id,dateButoir:bd.toISOString().slice(0,10),_source:'facture'});
@@ -12595,6 +12598,11 @@ function _reglLignes(){
     });
   });
   return out;
+}
+// Une entrée par facture émise, pour que chaque total lise la règle de cette page au lieu
+// de la refaire. Une pré-facture n'y est pas : ce n'est pas une créance.
+function _reglParFacture(){
+  var m={}; _reglLignes().forEach(function(x){ m[x.id]=x; }); return m;
 }
 // Préfixe client tel qu'il apparaît dans le numéro de facture (SLN-…, PRNC-…).
 function _reglClient(f){
@@ -16808,10 +16816,14 @@ function rDashPro(){
   // Totaux annuels
   function devisTtc(d){return Number(d.ttc)||0;}
   function factureMt(f){return Number(f.montant||f.ttc||0);}
+  // Facture émise : encaissé et reste suivent la règle de Règlements (avoirs déduits).
+  var regl=_reglParFacture();
+  function factureReste(f){var L=regl[f.id];return L?L.reste:0;}
   // Helper : montant réellement encaissé d'une facture
   //   Priorité : somme des versements > fallback status Payée → TTC entier > 0
   // Cohérent avec _findLinkedFactures et le widget Suivi factures.
   function factureEncaisse(f){
+    if(regl[f.id]) return regl[f.id].verse;
     if(Array.isArray(f.versements) && f.versements.length){
       return f.versements.reduce(function(s,v){return s+(Number(v.montant)||0);},0);
     }
@@ -16831,7 +16843,8 @@ function rDashPro(){
   var totalFa=faFy.reduce(function(s,f){return s+factureMt(f);},0);
   // Encaissé : utilise factureEncaisse() qui regarde les versements en priorité
   var totalEnc=faFy.reduce(function(s,f){return s+factureEncaisse(f);},0);
-  var totalRest=Math.max(0,totalFa-totalEnc);
+  var totalRest=faFy.reduce(function(s,f){return s+factureReste(f);},0);
+  var totalEmisFy=faFy.reduce(function(s,f){return s+(regl[f.id]?regl[f.id].ttc:0);},0);
 
   // Sparklines (cumul mensuel)
   var dvMonthly=getMonthlyTotals(dvFy,devisTtc);
@@ -16864,7 +16877,7 @@ function rDashPro(){
       // Fallback : dateEncaissement → dateEnvoi → date (cohérent avec _dashFactureYear)
       var ds=f.dateEncaissement||f.dateEnvoi||f.date||'';
       var m=parseInt(ds.substring(5,7),10);
-      if(m>=1&&m<=12) encMonthly[m-1]+=factureMt(f);
+      if(m>=1&&m<=12) encMonthly[m-1]+=factureEncaisse(f);
     }
   });
   var encCum=getMonthlyCumulative(encMonthly);
@@ -17040,8 +17053,8 @@ function rDashPro(){
     var m=parseInt(dsM,10)-1;
     if(m>=0&&m<=11) faMonthlyCount[m]++;
   });
-  // Restant à recouvrer mensuel = facturé - encaissé (cumulatif)
-  var restMonthly=faMonthly.map(function(v,i){return Math.max(0,v-encMonthly[i]);});
+  // Restant à recouvrer par mois d'émission : le cumul finit sur le total de la carte.
+  var restMonthly=getMonthlyTotals(faFy,factureReste,'dateEnvoi');
 
   var html='<div class="kpi-grid-pro">';
   // === HELPER : badge "?" tooltip pédagogique (réutilisé sur les 4 KPIs) ===
@@ -17149,28 +17162,29 @@ function rDashPro(){
     '<div class="kpi-sub">XPF · '+pctEnc+'% des émises</div>'+
     sparkEnc+
     dashProgressBar(pctEnc,'#5dcaa5')+
-    dashMetaLine('Cash réel', '<span style="color:var(--text)" data-money>'+fNloc(totalFa-totalEnc)+'</span> XPF restant à encaisser')+
+    dashMetaLine('Cash réel', '<span style="color:var(--text)" data-money>'+fNloc(totalRest)+'</span> XPF restant à encaisser')+
     '</div>';
   // KPI À recouvrer (sparkline interactive)
-  var restCum=faCum.map(function(v,i){return Math.max(0,v-encCum[i]);});
+  var restCum=getMonthlyCumulative(restMonthly);
   // nbLate : on s'aligne sur getAlertData (= source de vérité partagée avec
-  // le pill du topbar et la card "Alertes facturation").
+  // le pill du topbar et la card "Alertes facturation"), sans les devis à facturer.
   var allAlertsForKpi=(typeof getAlertData==='function')?getAlertData():[];
-  var nbLate=allAlertsForKpi.filter(function(a){return a.type==='late';}).length;
+  var nbLate=allAlertsForKpi.filter(function(a){return a.type==='late'&&a._source!=='prefact';}).length;
   var sparkRest=(typeof _interactiveSparkline==='function')?
     _interactiveSparkline(restCum,'#f09595',restMonthly,function(idx,monthlyV,cumV,months){
       return '<div style="font-weight:500;color:var(--text);margin-bottom:3px">'+months[idx]+' '+fy+'</div>'+
         '<div style="display:flex;justify-content:space-between;gap:10px"><span style="color:var(--muted)">Restant ce mois</span><span class="num" data-money>'+fNloc(monthlyV)+' XPF</span></div>'+
         '<div style="display:flex;justify-content:space-between;gap:10px;border-top:0.5px solid rgba(255,255,250,0.1);padding-top:3px;margin-top:3px"><span style="color:var(--muted-soft);font-size:10px">Cumul restant</span><span class="num" style="color:var(--muted-soft);font-size:10px" data-money>'+fNloc(cumV)+' XPF</span></div>';
     },'dash_rest'):
-    makeSparkline(faCum.map(function(v,i){return v-encCum[i];}),'#f09595',true);
-  var pctRest = totalFa>0?Math.round(totalRest/totalFa*100):0;
+    makeSparkline(restCum,'#f09595',true);
+  var pctRest = totalEmisFy>0?Math.round(totalRest/totalEmisFy*100):0;
   var restHelp = 'À RECOUVRER '+fy+' — Créances ouvertes\n\n'+
-    '= Facturation '+fy+' − Encaissé '+fy+'\n'+
-    '= '+fNloc(totalFa)+' − '+fNloc(totalEnc)+' = '+fNloc(totalRest)+' XPF\n\n'+
+    '= Factures émises '+fy+' − avoirs − encaissé, comme la page Règlements\n'+
+    '(les pré-factures n\'en font pas partie : elles ne sont pas émises)\n'+
+    '= '+fNloc(totalRest)+' XPF\n\n'+
     'Ce que tes clients te doivent encore sur les factures '+fy+'.\n\n'+
     '• '+nbLate+' facture(s) en RETARD (échéance dépassée)\n'+
-    '• Représente '+pctRest+'% du facturé annuel\n\n'+
+    '• Représente '+pctRest+'% des factures émises\n\n'+
     'Vue trésorerie :\n'+
     'Ce montant n\'est PAS encore dans ta banque — c\'est ton DSO\n'+
     '(Days Sales Outstanding) à surveiller. Plus c\'est bas, mieux c\'est.';
@@ -17181,7 +17195,7 @@ function rDashPro(){
     '<div class="kpi-sub">XPF restants · '+nbLate+' en retard</div>'+
     sparkRest+
     dashProgressBar(pctRest,'#f09595')+
-    dashMetaLine('Créances ouvertes', '<span style="color:var(--text)">'+pctRest+'%</span> du facturé · '+(nbLate>0?'<span style="color:#ef4444">'+nbLate+' en retard</span>':'<span style="color:var(--muted-soft)">aucun retard</span>'))+
+    dashMetaLine('Créances ouvertes', '<span style="color:var(--text)">'+pctRest+'%</span> de l\'émis · '+(nbLate>0?'<span style="color:#ef4444">'+nbLate+' en retard</span>':'<span style="color:var(--muted-soft)">aucun retard</span>'))+
     '</div>';
   html+='</div>';
 
@@ -22670,13 +22684,16 @@ function renderSuiviPro(){
     return f.phase==='prebilled' || (f.statut||'').toLowerCase().indexOf('pré')>=0;
   }
 
-  // Totaux
+  // Totaux. Facture GRC : encaissé et reste suivent la règle de Règlements (avoirs déduits).
+  var regl=_reglParFacture();
   var totalEmis=0,totalEnc=0,nbEmis=0;
   srcFy.forEach(function(f){
     if(isPrebilled(f)) return; // ignorer les pré-facturées
     var mt=getMt(f);
     totalEmis+=mt; nbEmis++;
-    if(isPaid(f)) totalEnc+=mt;
+    var L=regl[f._factureId||f.grcFactureId];
+    if(L) totalEnc+=L.verse;
+    else if(isPaid(f)) totalEnc+=mt;
     else if(isPartial(f)) totalEnc+=mt*((f.pct||0)/100);
   });
   var totalReste=totalEmis-totalEnc;
@@ -22943,8 +22960,12 @@ function renderSuiviPro(){
   var _cntEnc=0,_cntAtt=0,_cntRet=0; // compteurs
   srcFy.forEach(function(f){
     if(isPrebilled(f))return;
-    var amt=getMt(f);
-    if(isPaid(f)){
+    var amt=getMt(f), L=regl[f._factureId||f.grcFactureId];
+    if(L){
+      if(L.reste<=0){ _stEnc+=L.verse; _cntEnc++; }
+      else if(f.dateButoir && f.dateButoir<_todayIso){ _stRet+=L.reste; _cntRet++; }
+      else { _stAtt+=L.reste; _cntAtt++; }
+    } else if(isPaid(f)){
       _stEnc+=amt; _cntEnc++;
     } else if(f.dateButoir && f.dateButoir<_todayIso){
       _stRet+=amt; _cntRet++;
@@ -24046,6 +24067,7 @@ function rDash(){
   // Facturation YYYY = factures dont date est en YYYY
   // Encaissement YYYY = somme versements en YYYY (ou TTC si dateEncaissement en YYYY et 1 seul versement implicite)
   var factAnnee=0,encAnnee=0,recAnnee=0,nbFactAnnee=0;
+  var regl=_reglParFacture();   // à recouvrer : règle de Règlements (avoirs déduits, factures émises)
   fa.forEach(function(f){
     var ttc=f.ttc||0;
     var verses=(f.versements||[]).reduce(function(s,v){return s+(Number(v.montant)||0);},0);
@@ -24054,7 +24076,7 @@ function rDash(){
     if(selectedYear==='all'||yearOf(f.date)===selectedYear){
       factAnnee+=ttc;
       nbFactAnnee++;
-      recAnnee+=Math.max(0,ttc-_faAvoirsTTC(f)-verses);
+      recAnnee+=regl[f.id]?regl[f.id].reste:0;
     }
     // Encaissement YYYY : on regarde la date des versements (et fallback dateEncaissement)
     if(selectedYear==='all'){
@@ -24117,7 +24139,7 @@ function rDash(){
     var verse=Math.min(totVerseFA(f),f.ttc||0);
     byType[k].total += (f.ttc||0);
     byType[k].encaisse += verse;
-    byType[k].recouvrer += Math.max(0,(f.ttc||0)-_faAvoirsTTC(f)-verse);
+    byType[k].recouvrer += regl[f.id]?regl[f.id].reste:0;
     byType[k].count++;
   });
   // Entrées Suivi manuelles (non _fromGRC) : on utilise statut + pct
@@ -36545,6 +36567,7 @@ function _populateFAYearFilter(source){
 // KPI de la page Factures — source UNIQUE de l'écran et de l'impression (cf _impFactures).
 function _faKpisCalc(data){
   var k={totalAll:0,paidSum:0,pendingSum:0,lateSum:0,prebilledSum:0,nPaid:0,nPending:0,nLate:0,nPrebilled:0,nTotal:data.length};
+  var regl=_reglParFacture();
   data.forEach(function(i){
     var m=Number(i.montant)||0;
     k.totalAll+=m;
@@ -36552,7 +36575,15 @@ function _faKpisCalc(data){
       k.prebilledSum+=m; k.nPrebilled++;
       return; // exclut les pré-facturées des stats paiement (elles ne sont pas encore émises)
     }
-    var st=getStatus(i);
+    var st=getStatus(i), L=regl[i._factureId||i.grcFactureId];
+    // Facture GRC : encaissé et reste suivent la règle de Règlements (avoirs déduits).
+    if(L){
+      k.paidSum+=L.verse;
+      if(L.reste<=0) k.nPaid++;
+      else if(st==='late'){k.lateSum+=L.reste; k.nLate++;}
+      else {k.pendingSum+=L.reste; k.nPending++;}
+      return;
+    }
     if(st==='paid'){k.paidSum+=m; k.nPaid++;}
     else if(st==='late'){k.lateSum+=m; k.nLate++;}
     else {k.pendingSum+=m; k.nPending++;}
@@ -36570,7 +36601,7 @@ function _renderFAKpis(data){
   // === Sparklines : cumul mensuel ET valeurs mensuelles brutes (sur l'année courante) ===
   // - cumul : pour tracer la courbe (croissance acquise)
   // - monthly : pour afficher dans le tooltip ("Mai 2026 : encaissé 1.2M ce mois")
-  function _monthlySeriesFilter(filterFn){
+  function _monthlySeriesFilter(filterFn,val){
     var months=new Array(12).fill(0);
     var fy=parseInt(gvg('fFAyear'),10) || ((typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear());
     data.forEach(function(i){
@@ -36582,7 +36613,7 @@ function _renderFAKpis(data){
       if(year!==fy) return;
       var month=parseInt(m[2],10);
       if(isNaN(month)||month<1||month>12) return;
-      months[month-1]+=Number(i.montant)||0;
+      months[month-1]+=val?val(i):(Number(i.montant)||0);
     });
     // Cumul
     var cumul=new Array(12).fill(0);
@@ -36590,19 +36621,23 @@ function _renderFAKpis(data){
     for(var k=0;k<12;k++){acc+=months[k];cumul[k]=acc;}
     return {cumul:cumul, monthly:months};
   }
+  // Mêmes règles que les cartes (_faKpisCalc) : les courbes finissent sur leur chiffre.
+  var regl=_reglParFacture();
+  var _ligneL=function(i){ return regl[i._factureId||i.grcFactureId]; };
+  var _reste=function(i){ var L=_ligneL(i); return L?L.reste:(Number(i.montant)||0); };
   var serTotal=_monthlySeriesFilter(function(){return true;});
   var serPaid=_monthlySeriesFilter(function(i){
     if(typeof isPrebilled==='function' && isPrebilled(i)) return false;
-    return getStatus(i)==='paid';
-  });
+    return !!_ligneL(i)||getStatus(i)==='paid';
+  },function(i){ var L=_ligneL(i); return L?L.verse:(Number(i.montant)||0); });
   var serPending=_monthlySeriesFilter(function(i){
     if(typeof isPrebilled==='function' && isPrebilled(i)) return false;
-    return getStatus(i)==='pending';
-  });
+    var st=getStatus(i); return st!=='late'&&(st!=='paid'||!!_ligneL(i));
+  },_reste);
   var serLate=_monthlySeriesFilter(function(i){
     if(typeof isPrebilled==='function' && isPrebilled(i)) return false;
     return getStatus(i)==='late';
-  });
+  },_reste);
 
   function fNloc(n){return (Math.round(n)||0).toLocaleString('fr-FR').replace(/\u202f/g,' ');}
   var fy_=parseInt(gvg('fFAyear'),10) || ((typeof fiscalYear!=='undefined')?fiscalYear:new Date().getFullYear());
@@ -36880,17 +36915,12 @@ function _renderFAPipeline(data){
   if(fStatutActive && typeof _faRecomputeWithoutStatusFilter==='function'){
     pipelineData=_faRecomputeWithoutStatusFilter();
   }
-  pipelineData.forEach(function(i){
-    var m=Number(i.montant)||0;
-    if(typeof isPrebilled==='function' && isPrebilled(i)){
-      stats.prebilled.count++; stats.prebilled.total+=m;
-      return;
-    }
-    var st=getStatus(i);
-    if(st==='paid'){stats.paid.count++; stats.paid.total+=m;}
-    else if(st==='late'){stats.late.count++; stats.late.total+=m;}
-    else {stats.pending.count++; stats.pending.total+=m;}
-  });
+  // Mêmes chiffres que les cartes au-dessus.
+  var _k=_faKpisCalc(pipelineData);
+  stats.paid.count=_k.nPaid;           stats.paid.total=_k.paidSum;
+  stats.prebilled.count=_k.nPrebilled; stats.prebilled.total=_k.prebilledSum;
+  stats.pending.count=_k.nPending;     stats.pending.total=_k.pendingSum;
+  stats.late.count=_k.nLate;           stats.late.total=_k.lateSum;
   var totalCount=stats.paid.count+stats.prebilled.count+stats.pending.count+stats.late.count;
   // Mettre à jour le label année (utile si filtre année actif)
   var yearLabel=document.getElementById('fa-pipeline-year');
@@ -37085,6 +37115,7 @@ function _renderFADonut(data){
   //   d'encaissement (saisie en attente). Affiché pour ne pas perdre l'info.
   var monthlyConfirmed=new Array(12).fill(0);
   var monthlyNoDate=new Array(12).fill(0);
+  var regl=_reglParFacture();
 
   data.forEach(function(i){
     if(typeof isPrebilled==='function' && isPrebilled(i)) return; // pas pré-facturée
@@ -37098,7 +37129,8 @@ function _renderFADonut(data){
     if(year!==fy) return;
     var month=parseInt(match[2],10);
     if(isNaN(month)||month<1||month>12) return;
-    var mt=Number(i.montant)||0;
+    var L=regl[i._factureId||i.grcFactureId];
+    var mt=(L&&L.verse>0)?L.verse:(Number(i.montant)||0);   // reçu, avoirs déduits
     if(isConfirmed) monthlyConfirmed[month-1]+=mt;
     else            monthlyNoDate[month-1]+=mt;
   });
