@@ -669,6 +669,7 @@ th:hover{color:var(--teal)}
 td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(255,255,255,.02)}
+tr.regl-calc-on td{background:rgba(45,212,191,.09)}
 /* === Surbrillance "ligne en édition" — appliquée quand une modale d'édition est ouverte === */
 /* Style variante D : hover figé (outline bleu pâle + fond bleu très léger). */
 /* Persistante tant que la modale reste ouverte (vs tr:hover qui est éphémère). */
@@ -7273,6 +7274,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-05','🧮 Règlements : coche des factures, même de mois différents, pour lire leur total et le comparer au montant viré. Rien n\'est enregistré.'],
   ['2026-11-04','📋 Facturation du tableau de bord : seules les factures émises sont comptées, comme le Suivi. Les pré-factures restent visibles à part. Le CA net et la TGC de la page Administratif ne changent pas.'],
   ['2026-11-04','💰 À recouvrer : le même chiffre sur le tableau de bord, le Suivi, les Factures, les Règlements et les impressions. Les avoirs sont déduits et les pré-factures ne comptent plus dans ce total. Le CA et la TGC ne changent pas.'],
   ['2026-11-04','💰 Règlements : l’en-tête de chaque mois affiche les avoirs, et son reste ne les compte plus comme un impayé. Le CA et la TGC ne changent pas.'],
@@ -12613,9 +12615,79 @@ function _reglClient(f){
 var _reglFiltreClient='all';
 function setReglFiltre(c){ _reglFiltreClient=c; renderReglements(); }
 
+// Calculette de Règlements : additionner des factures cochées pour les comparer au
+// virement reçu. Rien n'est enregistré : l'état vit en mémoire le temps de la page.
+var _reglCalcCoches={}, _reglCalcVire='';
+// Ce que le client doit payer : le reste, ou ce qu'elle devait si elle est déjà réglée.
+function _reglCalcMontant(x){ return x.reste>0?x.reste:Math.max(0,x.ttc-x.avoirs); }
+function _reglCalcCase(x){
+  return '<td class="no-print" style="width:30px;padding-right:0"><label style="display:block;cursor:pointer;text-align:center">'+
+    '<input type="checkbox" data-calc="'+esc(String(x.id))+'" aria-label="Cocher '+esc(x.num)+'" style="width:15px;height:15px;cursor:pointer;margin:0;vertical-align:middle;accent-color:var(--teal)"'+
+    (_reglCalcCoches[x.id]?' checked':'')+' onchange="reglCalcCocher(this)"></label></td>';
+}
+function _reglCalcLigne(x){ return _reglCalcCoches[x.id]?'<tr class="regl-calc-on">':'<tr>'; }
+function _reglCalcBarre(){
+  var lbl=function(t){ return '<span style="display:block;font-size:10px;color:var(--muted);margin-bottom:1px">'+t+'</span>'; };
+  var pt='font-family:var(--mono);font-size:12px;font-weight:600;white-space:nowrap';
+  return '<div id="regl-calc-barre" class="no-print" style="display:none;position:sticky;bottom:10px;z-index:20;flex-wrap:wrap;align-items:center;gap:8px 22px;'+
+    'margin-top:12px;padding:10px 16px;background:var(--bg2);border:1px solid var(--teal);border-radius:10px">'+
+    '<div>'+lbl('Cochées')+'<span id="regl-calc-n" style="'+pt+'"></span></div>'+
+    '<div>'+lbl('Total à payer')+'<span id="regl-calc-total" data-money style="font-family:var(--mono);font-size:18px;font-weight:700;color:var(--teal);white-space:nowrap"></span></div>'+
+    '<div id="regl-calc-bav">'+lbl('dont avoirs déduits')+'<span id="regl-calc-av" data-money style="'+pt+'"></span></div>'+
+    '<div id="regl-calc-bver">'+lbl('dont déjà versé')+'<span id="regl-calc-ver" data-money style="'+pt+'"></span></div>'+
+    '<div>'+lbl('Montant viré')+'<input id="regl-calc-vire" class="form-input" inputmode="numeric" autocomplete="off" value="'+esc(_reglCalcVire)+'" oninput="reglCalcVire(this.value)" '+
+      'style="width:130px;height:30px;text-align:right;font-family:var(--mono);font-size:13px"></div>'+
+    '<div>'+lbl('Écart')+'<span id="regl-calc-ecart" data-money style="'+pt+'"></span></div>'+
+    '<button id="regl-calc-vider" class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="reglCalcVider()">Tout décocher</button>'+
+    '</div>';
+}
+function reglCalcCocher(c){
+  if(c.checked) _reglCalcCoches[c.dataset.calc]=true; else delete _reglCalcCoches[c.dataset.calc];
+  reglCalcMaj();
+}
+function reglCalcVire(v){ _reglCalcVire=v; reglCalcMaj(); }
+function reglCalcVider(){ _reglCalcCoches={}; _reglCalcVire=''; var v=document.getElementById('regl-calc-vire'); if(v)v.value=''; reglCalcMaj(); }
+// Met à jour cases, lignes et barre sans redessiner la page : le défilement ne bouge pas.
+function reglCalcMaj(){
+  var barre=document.getElementById('regl-calc-barre');
+  if(!barre)return;
+  var m=_reglParFacture(), n=0, tot=0, av=0, ver=0, clients=[];
+  Object.keys(_reglCalcCoches).forEach(function(id){
+    var x=m[id];
+    if(!x){ delete _reglCalcCoches[id]; return; }
+    n++; tot+=_reglCalcMontant(x); av+=x.avoirs;
+    if(x.reste>0) ver+=x.verse;
+    if(clients.indexOf(x.client)<0) clients.push(x.client);
+  });
+  document.querySelectorAll('#reglementsContent [data-calc]').forEach(function(c){
+    var on=!!_reglCalcCoches[c.dataset.calc];
+    c.checked=on;
+    var tr=c.closest('tr'); if(tr) tr.classList.toggle('regl-calc-on',on);
+  });
+  if(!n){ barre.style.display='none'; return; }
+  barre.style.display='flex';
+  var ecrire=function(id,t){ var e=document.getElementById(id); if(e) e.textContent=t; };
+  var nEl=document.getElementById('regl-calc-n');
+  nEl.textContent=n+' facture'+(n>1?'s':'')+' · '+(clients.length>1?clients.length+' clients':clients[0]);
+  nEl.style.color=clients.length>1?'var(--amber)':'';
+  ecrire('regl-calc-total',fN(tot)+' XPF');
+  ecrire('regl-calc-av',fN(av));
+  ecrire('regl-calc-ver',fN(ver));
+  document.getElementById('regl-calc-bav').style.display=av>0?'':'none';
+  document.getElementById('regl-calc-bver').style.display=ver>0?'':'none';
+  var ec=document.getElementById('regl-calc-ecart'), v=_reglLireMontant(_reglCalcVire);
+  if(!v){ ec.textContent='—'; ec.style.color='var(--muted)'; }
+  else{
+    var d=v-tot;
+    ec.textContent=d===0?'0 ✓':(d>0?'+':'−')+fN(Math.abs(d));
+    ec.style.color=d===0?'var(--green)':'var(--red)';
+  }
+}
+
 function renderReglements(){
   var box=document.getElementById('reglementsContent');
   if(!box)return;
+  var saisieVire=document.activeElement&&document.activeElement.id==='regl-calc-vire';
   var toutes=_reglLignes();
   var clients=[];
   toutes.forEach(function(L){if(clients.indexOf(L.client)<0)clients.push(L.client);});
@@ -12671,11 +12743,11 @@ function renderReglements(){
     h+='<div class="card mt8" style="border-color:rgba(244,63,94,.38)">'+
        '<div class="ctitle" style="color:var(--red)"><span class="ico-classic">⚠</span><i class="ti ti-alert-triangle ico-pro"></i> À relancer '+
        '<span style="color:var(--muted);font-weight:400;font-size:10.5px">(échéance dépassée, facture non soldée)</span></div>';
-    h+='<div class="tbl-wrap"><table><thead><tr><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Reste dû</th>'+
+    h+='<div class="tbl-wrap"><table><thead><tr><th class="no-print"></th><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Reste dû</th>'+
        '<th>Envoyée le</th><th>Échéance</th><th style="text-align:right">Retard</th><th class="no-print"></th></tr></thead><tbody>';
     relances.forEach(function(x){
       var nJs=JSON.stringify(x.num).replace(/"/g,'&quot;');
-      h+='<tr>'+
+      h+=_reglCalcLigne(x)+_reglCalcCase(x)+
         '<td style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(x.num)+'</td>'+
         '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
         '<td style="color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.objet)+'</td>'+
@@ -12688,7 +12760,7 @@ function renderReglements(){
           (x.derniereRelance?'<span style="font-size:9.5px;color:var(--amber);margin-right:6px">relancée le '+fD(x.derniereRelance)+'</span>':'')+
           '<button class="btn btn-ghost btn-sm" data-pointer="'+esc(x.num)+'" style="border-color:rgba(34,197,94,.45);color:var(--green);margin-right:4px" onclick="reglOuvrirPointage('+nJs+')">✓ Pointer</button>'+
           '<button class="btn btn-ghost btn-sm" style="border-color:rgba(244,63,94,.45);color:var(--red)" onclick="relancerFacture('+nJs+')">✉ Relancer</button>'+
-        '</td></tr>'+panneau(x,8);
+        '</td></tr>'+panneau(x,9);
     });
     h+='</tbody></table></div>';
     h+='<div style="font-size:10.5px;color:var(--muted);margin-top:8px">Total échu : <strong style="font-family:var(--mono)">'+fN(totRelance)+' XPF</strong>. '+
@@ -12718,7 +12790,7 @@ function renderReglements(){
        '<span style="font-family:var(--mono);font-size:11px;color:var(--green)">&nbsp;·&nbsp;encaissé '+fN(sr)+'</span>'+
        (solde>0?'<span style="font-family:var(--mono);font-size:11px;color:var(--blue)">&nbsp;·&nbsp;reste '+fN(solde)+'</span>':'')+
        '</div>';
-    h+='<div class="tbl-wrap"><table><thead><tr><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Montant</th>'+
+    h+='<div class="tbl-wrap"><table><thead><tr><th class="no-print"></th><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Montant</th>'+
        '<th>Envoi</th><th>Échéance</th><th>Encaissé le</th><th style="text-align:right">Délai</th><th>Statut</th><th class="no-print"></th></tr></thead><tbody>';
     LL.forEach(function(x){
       var st,encTd,delTd;
@@ -12743,7 +12815,7 @@ function renderReglements(){
            'font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:20px;font-family:var(--mono)">en attente</span>';
         encTd='<span style="color:var(--muted-soft)">—</span>'; delTd='<span style="color:var(--muted-soft)">—</span>';
       }
-      h+='<tr>'+
+      h+=_reglCalcLigne(x)+_reglCalcCase(x)+
         '<td style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(x.num)+'</td>'+
         '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
         '<td style="color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.objet)+'">'+esc(x.objet)+'</td>'+
@@ -12753,12 +12825,15 @@ function renderReglements(){
         '<td>'+encTd+'</td><td style="text-align:right">'+delTd+'</td><td>'+st+'</td>'+
         '<td class="no-print" style="text-align:right">'+
           (x.enc?'':'<button class="btn btn-ghost btn-sm" data-pointer="'+esc(x.num)+'" style="border-color:rgba(34,197,94,.45);color:var(--green)" onclick="reglOuvrirPointage('+JSON.stringify(x.num).replace(/"/g,'&quot;')+')">✓ Pointer</button>')+
-        '</td></tr>'+panneau(x,10);
+        '</td></tr>'+panneau(x,11);
     });
     h+='</tbody></table></div>';
   });
   h+='</div>';
+  h+=_reglCalcBarre();
   box.innerHTML=h;
+  reglCalcMaj();
+  if(saisieVire){ var vr=document.getElementById('regl-calc-vire'); if(vr){ vr.focus(); vr.setSelectionRange(vr.value.length,vr.value.length); } }
 }
 function _reglKpi(lbl,val,foot,couleur){
   return '<div class="kpi"><div class="kpi-label">'+esc(lbl)+'</div>'+
