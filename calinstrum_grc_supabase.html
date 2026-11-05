@@ -670,6 +670,7 @@ td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(255,255,255,.02)}
 tr.regl-calc-on td{background:rgba(45,212,191,.09)}
+.regl-cols{table-layout:fixed;min-width:1200px}
 #mIMP .modal{display:flex;flex-direction:column}
 #mIMP .modal-body{flex:1 1 auto;min-height:0;overflow-y:auto}
 .imp-bloc{margin-bottom:12px}
@@ -1094,6 +1095,7 @@ body.has-dashboard-bg #page-dashboard .metric{
     <span id="topTitle" style="font-family:var(--display);font-size:14px;font-weight:800;color:#fff">Dashboard</span>
     <span id="topSubtitle" class="no-pm-blur" style="font-size:11px;color:var(--muted-soft);font-weight:400;display:none"></span>
   </div>
+  <button class="btn btn-ghost btn-sm no-print" id="grcBtnActualiser" onclick="grcActualiser()" style="margin-left:14px;margin-right:auto" title="Réaffiche cette page avec les données à jour, sans recharger l'application ni redemander le code"><span class="ico-classic">🔄</span><i class="ti ti-refresh ico-pro"></i> <span id="grcActualiserLib">Actualiser</span></button>
   <div class="no-print" style="display:flex;gap:8px;align-items:center">
     <div id="alert-pill" class="pill pill-red" style="display:none;cursor:pointer;user-select:none" onclick="goToAlerts()" title="Cliquer pour voir les factures en retard ou à échéance proche"><div class="dot"></div><span id="alert-count">0 alertes</span></div>
     <button class="btn btn-ghost btn-sm" id="jrBtnTop" onclick="ouvrirJournal()" style="color:var(--teal);border-color:rgba(45,212,191,0.45)" title="Journal d'activité : session en cours et 5 derniers jours">🕘 Journal <span id="jrBadgeTop" style="display:none;font-size:9px;background:var(--teal);color:#06261f;border-radius:999px;padding:0 5px;font-weight:700"></span></button>
@@ -7510,6 +7512,8 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-05','📏 Règlements : les colonnes sont alignées de mois en mois, et avec À relancer.'],
+  ['2026-11-05','🔄 Bouton Actualiser à côté du titre. Une facture supprimée disparaît aussi de Règlements dès le retour dans Suivi Factures, sans recharger.'],
   ['2026-11-05','🖨 Impressions : années, mois, statuts et clients se cochent et se combinent dans chaque section, et le nombre de documents retenus s\'affiche avant d\'imprimer.'],
   ['2026-11-05','🎨 Impressions PO et BL : Livré en vert, En attente en orange, Confirmé en bleu.'],
   ['2026-11-05','🧾 Règlements : le n° et le montant de l\'avoir sont indiqués sous la facture concernée, à l\'écran et sur les impressions. Aucun total ne change.'],
@@ -12098,6 +12102,25 @@ function renderSuivi(){
   // dès qu'on revient sur l'onglet, sans F5. La fonction fait un early-return
   // si #reconcilContent n'existe pas — donc safe à appeler partout.
   if(typeof renderReconcilTable==='function'){try{renderReconcilTable();}catch(e){}}
+  // Règlements aussi, si son onglet est ouvert : sinon une facture supprimée y restait
+  // jusqu'au rechargement. Pas pendant une saisie : le rendu viderait ce qui est tapé.
+  var regl=document.querySelector('#suiviTab-reglements.active #reglementsContent');
+  if(regl && typeof renderReglements==='function' && _reglPointageOuvert==null && !regl.contains(document.activeElement)){
+    try{ renderReglements(); }catch(e){ console.error('renderReglements',e); }
+  }
+}
+
+// Bouton Actualiser : réaffiche la page en cours à partir des données déjà chargées.
+// N'écrit rien et ne recharge rien du cloud. Page, onglet, filtres et défilement restent.
+function grcActualiser(){
+  var pg=_impPageCourante(); if(!pg) return;
+  var zones=[document.getElementById('main'),document.scrollingElement].filter(Boolean), pos=zones.map(function(z){ return z.scrollTop; });
+  invoices=getSuiviSource();
+  nav(pg);
+  if(pg==='suivi' && document.querySelector('#suiviTab-reglements.active')) renderReglements();
+  zones.forEach(function(z,i){ z.scrollTop=pos[i]; });
+  var lib=document.getElementById('grcActualiserLib');
+  if(lib){ lib.textContent='✓ À jour'; clearTimeout(grcActualiser._t); grcActualiser._t=setTimeout(function(){ lib.textContent='Actualiser'; },1000); }
 }
 
 // Filtre invoices selon l'onglet client actif du Dashboard, puis re-render KPIs/charts/progression/urgents.
@@ -12871,6 +12894,12 @@ function _reglClient(f){
 var _reglFiltreClient='all';
 function setReglFiltre(c){ _reglFiltreClient=c; renderReglements(); }
 
+// Chaque mois est un tableau à part : sans largeurs imposées, chacun calcule les siennes
+// selon son contenu et les colonnes ne tombent pas au même endroit. L'objet prend le reste.
+function _reglCol(w,cl){ return '<col'+(cl?' class="'+cl+'"':'')+(w?' style="width:'+w+'px"':'')+'>'; }
+function _reglColsDebut(){ return _reglCol(34,'no-print')+_reglCol(130)+_reglCol(80)+_reglCol(0)+_reglCol(135)+_reglCol(90)+_reglCol(90); }
+function _reglColsMois(){ return '<colgroup>'+_reglColsDebut()+_reglCol(90)+_reglCol(55)+_reglCol(190)+_reglCol(90,'no-print')+'</colgroup>'; }
+function _reglColsRelance(){ return '<colgroup>'+_reglColsDebut()+_reglCol(70)+_reglCol(355,'no-print')+'</colgroup>'; }
 // Calculette de Règlements : additionner des factures cochées pour les comparer au
 // virement reçu. Rien n'est enregistré : l'état vit en mémoire le temps de la page.
 var _reglCalcCoches={}, _reglCalcVire='';
@@ -13000,14 +13029,14 @@ function renderReglements(){
     h+='<div class="card mt8" style="border-color:rgba(244,63,94,.38)">'+
        '<div class="ctitle" style="color:var(--red)"><span class="ico-classic">⚠</span><i class="ti ti-alert-triangle ico-pro"></i> À relancer '+
        '<span style="color:var(--muted);font-weight:400;font-size:10.5px">(échéance dépassée, facture non soldée)</span></div>';
-    h+='<div class="tbl-wrap"><table><thead><tr><th class="no-print"></th><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Reste dû</th>'+
+    h+='<div class="tbl-wrap"><table class="regl-cols">'+_reglColsRelance()+'<thead><tr><th class="no-print"></th><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Reste dû</th>'+
        '<th>Envoyée le</th><th>Échéance</th><th style="text-align:right">Retard</th><th class="no-print"></th></tr></thead><tbody>';
     relances.forEach(function(x){
       var nJs=JSON.stringify(x.num).replace(/"/g,'&quot;');
       h+=_reglCalcLigne(x)+_reglCalcCase(x)+
         '<td style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(x.num)+'</td>'+
         '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
-        '<td style="color:var(--muted);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(x.objet)+'</td>'+
+        '<td style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.objet)+'">'+esc(x.objet)+'</td>'+
         '<td style="text-align:right;font-family:var(--mono)">'+fN(x.reste)+
           ((x.partiel||x.avoirs>0)?'<div style="font-size:9.5px;color:var(--muted-soft)">sur '+fN(x.ttc)+'</div>':'')+_reglAvoirsEcran(x)+'</td>'+
         '<td style="font-family:var(--mono)">'+fD(x.date)+'</td>'+
@@ -13047,7 +13076,7 @@ function renderReglements(){
        '<span style="font-family:var(--mono);font-size:11px;color:var(--green)">&nbsp;·&nbsp;encaissé '+fN(sr)+'</span>'+
        (solde>0?'<span style="font-family:var(--mono);font-size:11px;color:var(--blue)">&nbsp;·&nbsp;reste '+fN(solde)+'</span>':'')+
        '</div>';
-    h+='<div class="tbl-wrap"><table><thead><tr><th class="no-print"></th><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Montant</th>'+
+    h+='<div class="tbl-wrap"><table class="regl-cols">'+_reglColsMois()+'<thead><tr><th class="no-print"></th><th>N° Facture</th><th>Client</th><th>Objet</th><th style="text-align:right">Montant</th>'+
        '<th>Envoi</th><th>Échéance</th><th>Encaissé le</th><th style="text-align:right">Délai</th><th>Statut</th><th class="no-print"></th></tr></thead><tbody>';
     LL.forEach(function(x){
       var st,encTd,delTd;
@@ -13075,7 +13104,7 @@ function renderReglements(){
       h+=_reglCalcLigne(x)+_reglCalcCase(x)+
         '<td style="font-family:var(--mono);font-weight:700;color:var(--teal)">'+esc(x.num)+'</td>'+
         '<td><span style="font-size:9.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(x.client)+'</span></td>'+
-        '<td style="color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.objet)+'">'+esc(x.objet)+'</td>'+
+        '<td style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(x.objet)+'">'+esc(x.objet)+'</td>'+
         '<td style="text-align:right;font-family:var(--mono)">'+fN(x.ttc)+_reglAvoirsEcran(x)+'</td>'+
         '<td style="font-family:var(--mono)">'+fD(x.date)+'</td>'+
         '<td style="font-family:var(--mono)'+(x.retard?';color:var(--red)':'')+'">'+fD(x.ech)+'</td>'+
