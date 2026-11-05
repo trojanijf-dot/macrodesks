@@ -670,6 +670,23 @@ td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.03);vertical-align
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(255,255,255,.02)}
 tr.regl-calc-on td{background:rgba(45,212,191,.09)}
+#mIMP .modal{display:flex;flex-direction:column}
+#mIMP .modal-body{flex:1 1 auto;min-height:0;overflow-y:auto}
+.imp-bloc{margin-bottom:12px}
+.imp-tete{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.imp-lien{background:none;border:0;padding:0;font:600 10px var(--mono);color:var(--blue,#60a5fa);cursor:pointer;text-transform:none}
+.imp-tete .imp-lien:first-of-type{margin-left:auto}
+.imp-pts{display:flex;flex-wrap:wrap;gap:5px}
+.imp-p{position:relative;cursor:pointer;margin:0}
+.imp-p input{position:absolute;opacity:0;width:0;height:0}
+.imp-p span{display:block;font:600 11px var(--mono);padding:5px 9px;border:1px solid var(--border);border-radius:6px;color:var(--muted);white-space:nowrap;text-transform:none;letter-spacing:0}
+.imp-p input:checked+span{border-color:var(--teal);background:rgba(45,212,191,.14);color:var(--teal)}
+.imp-p input:focus-visible+span{outline:2px solid var(--teal);outline-offset:1px}
+.imp-clients{border:1px solid var(--border);border-radius:8px;padding:6px 10px;max-height:170px;overflow:auto}
+.imp-case{display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)}
+.imp-case.sous{margin-left:24px;font-size:11px;color:var(--muted)}
+.imp-compte{padding:8px 16px;border-top:1px solid var(--border);background:rgba(45,212,191,.07);font:700 12px var(--mono);color:var(--teal)}
+.imp-compte.vide{color:var(--amber,#f59e0b);background:rgba(245,158,11,.08)}
 /* === Surbrillance "ligne en édition" — appliquée quand une modale d'édition est ouverte === */
 /* Style variante D : hover figé (outline bleu pâle + fond bleu très léger). */
 /* Persistante tant que la modale reste ouverte (vs tr:hover qui est éphémère). */
@@ -1153,7 +1170,7 @@ body.has-dashboard-bg #page-dashboard .metric{
       <button type="button" class="renta-chip" data-renta-onglet="virements" onclick="rentaOnglet('virements')">🏦 Rapprochement virements</button>
     </span>
     <span style="margin-left:auto;display:inline-flex;gap:8px">
-      <span id="rentaActionsAffaires" style="display:inline-flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="rentaExportExcel()">⬇ Export Excel</button></span>
+      <span id="rentaActionsAffaires" style="display:inline-flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="ouvrirImpression('renta')" title="Choisir les années, mois, statuts et clients à imprimer">🖨 Imprimer une sélection</button><button class="btn btn-ghost btn-sm" onclick="rentaExportExcel()">⬇ Export Excel</button></span>
       <span class="pdf-theme-box" style="display:inline-flex;gap:2px;border:1px solid var(--border);border-radius:7px;padding:2px" title="Thème du PDF"><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="clair" data-pdf-scope="app" onclick="pdfSetTheme('clair','app')">☀ Clair</button><button type="button" class="btn btn-ghost btn-sm" data-pdf-theme="sombre" data-pdf-scope="app" onclick="pdfSetTheme('sombre','app')">🌙 Sombre</button></span><button class="btn btn-teal btn-sm" id="rentaBtnArticlesPO" onclick="rentaImprimerArticlesPO()">📄 PDF articles par PO / BC client</button>
     </span>
   </div>
@@ -2336,6 +2353,7 @@ function admPreviewPrint(){
       <button class="btn btn-ghost no-print" onclick="uploadExcelSync()" title="Synchronise les devis ET factures du fichier Excel SLN 2026 (upload depuis votre PC). Anti-doublon strict : ignore les entrées déjà importées." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📥 Excel SLN</button>
       <button class="btn btn-ghost no-print" onclick="uploadExcelSyncPRNC()" title="Synchronise les devis ET factures du fichier Excel PRNC (format spécifique PRNC). Anti-doublon strict." style="border-color:rgba(244,114,182,.4);color:#f472b6">📥 Excel PRNC</button>
       <button class="btn btn-ghost no-print" onclick="generateCadreFromInvoices()" title="Scanne toutes les factures Fourniture déjà importées, extrait les références Emerson uniques, et génère automatiquement un devis cadre avec ces articles. Évite de retaper la grille tarifaire manuellement." style="border-color:rgba(56,189,248,.4);color:#38bdf8">🪄 Auto-générer devis cadre</button>
+      <button class="btn btn-ghost btn-sm no-print" onclick="ouvrirImpression('devis')" title="Choisir les années, mois, statuts et clients à imprimer">🖨 Imprimer des devis</button>
       <button class="btn btn-teal no-print" onclick="openDV()">+ Nouveau devis</button>
     </div>
   </div>
@@ -2416,6 +2434,7 @@ function admPreviewPrint(){
       <!-- Import format simple : Excel avec colonnes Intitulé/N°/Montant/PO/Date/État/Commentaire -->
       <input type="file" id="fa-import-simple-file" accept=".xlsx,.xls" style="display:none" onchange="importSimpleFAExcel(this.files[0])">
       <button class="btn btn-ghost no-print" onclick="document.getElementById('fa-import-simple-file').click()" title="Import factures depuis un fichier Excel simple. Colonnes attendues : Intitulé, N° facture, Montant, N° PO, Date envoi, État paiement, Commentaire" style="border-color:rgba(167,139,250,.4);color:#a78bfa">📅 Importer factures Excel (simple)</button>
+      <button class="btn btn-ghost btn-sm no-print" onclick="ouvrirImpression('factures')" title="Choisir les années, mois, statuts et clients à imprimer">🖨 Imprimer des factures</button>
       <button class="btn btn-teal no-print" onclick="openFA()">+ Nouvelle facture</button>
     </div>
   </div>
@@ -2691,6 +2710,7 @@ function admPreviewPrint(){
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadPOCalinstrumPdf()" title="Importer un ou plusieurs PDFs de PO Calinstrum (Purchase Order) déjà créés avant le GRC. Détecte automatiquement N° PO, date, vendor, Customer Ref, Emerson Proposal, lignes et total. Anti-doublon strict sur le N° PO." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Importer PO PDF</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="uploadBCReapproPdf()" title="Importe un PDF de BC SLN REAPPRO (signature : « GÉNÉRÉ PAR LE RÉAPPROVISIONNEMENT »). Crée AUTOMATIQUEMENT 4 documents liés en cascade : 1) Devis SLN-DV-BCGMAO-{numBC}, 2) Facture SLN-F{NNN}, 3) BL BL{JJMMAAAA}/{NNN}, 4) BC Calinstrum (Emerson, AUD) {JJMMAAAA}/{NNN}. Le NNN est partagé entre les 4 documents. Bloque l'import si une ref est hors grille tarifaire." style="border-color:rgba(167,139,250,.5);color:#a78bfa;font-weight:700">🔄 Import REAPPRO (cascade)</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="ouvrirControlePO()" title="Compare chaque PO Emerson au devis accepté : références et quantités" style="border-color:rgba(244,63,94,.45);color:#fb7185;font-weight:700">🛡 Contrôle des PO</button>
+      <button class="btn btn-ghost btn-sm no-print" onclick="ouvrirImpression('bc')" title="Choisir les années, mois, statuts et clients à imprimer">🖨 Imprimer des PO</button>
       <button class="btn btn-teal no-print" onclick="openBC()">+ Nouveau bon de commande</button>
     </div>
   </div>
@@ -2716,6 +2736,7 @@ function admPreviewPrint(){
       <button class="btn btn-ghost no-print" onclick="openBLFromDVPicker()" title="Créer un BL à partir d'un ou plusieurs devis acceptés ou facturés. Gère les livraisons partielles : si une ligne a déjà été partiellement livrée par un autre BL, le restant à livrer s'affiche. Supporte le groupage de plusieurs devis dans un même BL." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📦 Créer BL depuis devis</button>
       <button class="btn btn-ghost no-print" onclick="uploadBCClientPdf()" title="Importer un PDF de BC Client (SLN ou PRNC) pour créer un BL pré-rempli. Détecte automatiquement le format SLN (00XXXXXX-XX-XX) ou PRNC (LXXXXX / XXXX), extrait N° BC, client, date, lignes (ref + désignation + quantité + PU), total et lien devis. Idéal pour livrer une commande client en duplicant exactement ses références." style="border-color:rgba(251,191,36,.4);color:#fbbf24">📋 BL depuis BC Client</button>
       <button class="btn btn-ghost no-print" onclick="uploadBLPdf()" title="Importer un ou plusieurs PDFs de Bon de Livraison Calinstrum existants (anciens BL faits hors GRC). Détecte automatiquement N° BL, date, lieu, PO, contact, client et lignes. Anti-doublon strict sur le N° BL." style="border-color:rgba(56,189,248,.4);color:#38bdf8">📥 Importer BL PDF</button>
+      <button class="btn btn-ghost btn-sm no-print" onclick="ouvrirImpression('bl')" title="Choisir les années, mois, statuts et clients à imprimer">🖨 Imprimer des BL</button>
       <button class="btn btn-teal no-print" onclick="openBL()">+ Nouveau bon de livraison</button>
     </div>
   </div>
@@ -6810,7 +6831,7 @@ function migrateSuiviLiensAutreFacture(){
 // aucun calcul refait à part. Toutes les lignes sont imprimées (rien de replié).
 // Lot 1 : dashboard, factures, devis, bons de commande, rapport annuel. Les pages qui
 // avaient déjà leur PDF le gardent ; les autres impriment l'écran comme avant.
-var IMP_PAGES={dashboard:'Tableau de bord',factures:'Factures',devis:'Devis',bc:'Bons de commande'};
+var IMP_PAGES={dashboard:'Tableau de bord',factures:'Factures',devis:'Devis',bc:'Bons de commande',bl:'Bons de livraison',reglements:'Règlements',renta:'Rentabilité Emerson'};
 var IMP_MOIS=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 var IMP_CONTENU={
   factures:[['','Toutes'],['emises','Émises'],['pre','Pré-factures'],['impayees','Impayées'],['retard','En retard'],['payees','Payées']],
@@ -6824,6 +6845,8 @@ var _impEtat=null;
 function _impPageCourante(){ var p=document.querySelector('.page.active'); return p?p.id.replace(/^page-/,''):''; }
 function grcImprimer(){
   var pg=_impPageCourante();
+  if(pg==='rentabilite') return ouvrirImpression('renta');
+  if(pg==='suivi' && document.querySelector('#suiviTab-reglements.active')) return ouvrirImpression('reglements');
   if(IMP_PAGES[pg]) return ouvrirImpression(pg);
   if(pg==='suivicmd' && typeof suiviCmdImprimerPDF==='function') return suiviCmdImprimerPDF();
   if(pg==='pointage' && typeof ptPaiePrint==='function') return ptPaiePrint();
@@ -6831,10 +6854,25 @@ function grcImprimer(){
 }
 function _impClient(x){ return extractClientGroup({client:x||''}); }
 function _impDateFa(i){ return i.dateEnvoi||i._dateCreation||i.dateReceptionBC||''; }
-function _impDansPeriode(d,o){ d=String(d||''); if(o.annee && d.slice(0,4)!==String(o.annee)) return false; if(o.mois && d.slice(5,7)!==o.mois) return false; return true; }
+function _impDansPeriode(d,o){
+  d=String(d||'');
+  if(o.annees){ if(o.annees.indexOf(d.slice(0,4))<0) return false; }
+  else if(o.annee && d.slice(0,4)!==String(o.annee)) return false;
+  if(o.moisL){ if(o.moisL.indexOf(d.slice(5,7))<0) return false; }
+  else if(o.mois && d.slice(5,7)!==o.mois) return false;
+  return true;
+}
+// clients : valeurs exactes cochées ; groupes : sociétés cochées ; client : une seule société.
+// alt : le nom de société déjà connu du document, quand il ne se déduit pas de raw.
+function _impClientOk(raw,o,alt){
+  raw=String(raw||'').trim();
+  if(o.clients) return o.clients.indexOf(raw)>=0;
+  if(o.groupes) return o.groupes.indexOf(_impClient(raw))>=0 || (alt!=null && o.groupes.indexOf(alt)>=0);
+  return !o.client || _impClient(raw)===o.client || alt===o.client;
+}
 function _impAnnees(){
   var s={}; var add=function(d){ var y=String(d||'').slice(0,4); if(/^\d{4}$/.test(y)) s[y]=1; };
-  (DB.devis||[]).forEach(function(d){add(d.date);}); (DB.factures||[]).forEach(function(f){add(f.date);}); (DB.bcs||[]).forEach(function(b){add(b.date);});
+  (DB.devis||[]).forEach(function(d){add(d.date);}); (DB.factures||[]).forEach(function(f){add(f.date);}); (DB.bcs||[]).forEach(function(b){add(b.date);}); (DB.bls||[]).forEach(function(b){add(b.date);});
   var l=Object.keys(s).sort().reverse(); if(!l.length) l=[String(new Date().getFullYear())]; return l;
 }
 function _impClients(){
@@ -6846,7 +6884,18 @@ function _impClients(){
 function _impM(o,v,dev){ return o.masquer?'•••':(fN(v)+(dev?' '+esc(dev):'')); }
 function _impCourt(s,n){ s=String(s||'').replace(/\s+/g,' ').trim(); return s.length>n?s.slice(0,n-1).replace(/[\s,;:\-—–/(+]+$/,'')+'…':s; }
 var IMP_MOIS_COURT=['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'];
-function _impPeriodeTxt(o){ return (o.mois?IMP_MOIS[Number(o.mois)-1]+' ':'')+(o.annee||'toutes années')+(o.client?' · client '+o.client:' · tous clients'); }
+function _impAnneesTxt(o){ return o.annees?o.annees.slice().sort().join(' + '):String(o.annee||''); }
+function _impMoisTxt(o){
+  if(o.moisL) return o.moisL.length===1?IMP_MOIS[Number(o.moisL[0])-1]:o.moisL.map(function(m){return IMP_MOIS_COURT[Number(m)-1];}).join(', ');
+  return o.mois?IMP_MOIS[Number(o.mois)-1]:'';
+}
+function _impClientsTxt(o){
+  var l=o.clients||o.groupes;
+  if(!l) return o.client||'';
+  l=l.map(function(c){return c||'Sans client';});
+  return l.length>3?l.slice(0,3).join(' + ')+' + '+(l.length-3)+' autres':l.join(' + ');
+}
+function _impPeriodeTxt(o){ var m=_impMoisTxt(o), c=_impClientsTxt(o); return (m?m+' ':'')+(_impAnneesTxt(o)||'toutes années')+(c?' · client '+c:' · tous clients'); }
 function _impKpis(l){ var nc=l.length<=6?l.length:Math.ceil(l.length/2); return '<div class="kp" style="grid-template-columns:repeat('+nc+',1fr)">'+l.map(function(k){ return '<div><em>'+k[0]+'</em><strong'+(k[3]?' class="'+k[3]+'"':'')+'>'+k[1]+'</strong>'+(k[2]?'<small>'+k[2]+'</small>':'')+'</div>'; }).join('')+'</div>'; }
 // Groupes par mois (tri chronologique), lignes dépliées, sous-total par mois et total.
 function _impParMois(items,dateDe,ligneDe,colspan,totalDe){
@@ -6857,11 +6906,59 @@ function _impParMois(items,dateDe,ligneDe,colspan,totalDe){
     return '<tr class="grp"><td colspan="'+colspan+'">'+lib+' — '+l.length+' élément'+(l.length>1?'s':'')+(totalDe?' · '+totalDe(l):'')+'</td></tr>'+l.map(ligneDe).join('');
   }).join('');
 }
+// Statut imprimé d'une facture : les mêmes mots que sa colonne Statut.
+function _impStatutFa(i){
+  if(isPrebilled(i)) return 'Pré-facturée';
+  var s=getStatus(i);
+  return s==='paid'?'Payée':s==='late'?'En retard':s==='partial'?'Partiel':'En attente';
+}
+// Une section : sa liste, et comment lire la date, le client et le statut de chaque élément.
+// Un statut trouvé dans les données mais absent de l'ordre prévu est ajouté aux cases :
+// rien ne peut disparaître d'une impression faute de case à cocher.
+var IMP_FILTRES={
+  bc:{unite:['PO','PO'],items:function(){return DB.bcs||[];},date:function(b){return b.date;},client:function(b){return b.clientFinal;},
+    statut:function(b){return b.status||'Sans statut';},ordre:['En attente','Confirmé','Livré','Annulé']},
+  factures:{unite:['facture','factures'],items:function(){return getSuiviSource();},date:function(i){return _impDateFa(i);},client:function(i){return i.client;},
+    statut:function(i){return _impStatutFa(i);},ordre:['Pré-facturée','En attente','Partiel','En retard','Payée'],offRapport:['Pré-facturée']},
+  devis:{unite:['devis','devis'],items:function(){return DB.devis||[];},date:function(d){return d.date;},client:function(d){return d.client;},
+    statut:function(d){return _dvIsSuperseded(d)?'Versions remplacées':(d.status||'Brouillon');},ordre:['Brouillon','Envoyé','Accepté','Facturé','Refusé','Versions remplacées'],off:['Versions remplacées']},
+  bl:{unite:['BL','BL'],items:function(){return DB.bls||[];},date:function(b){return b.date;},client:function(b){return b.client;},
+    statut:function(b){return b.status||'Sans statut';},ordre:['En préparation','Livré','Annulé']},
+  reglements:{unite:['facture','factures'],items:function(){return _reglLignes();},date:function(x){return x.date;},client:function(x){return x.client;},
+    statut:function(x){return x.reste<=0?'Réglée':x.retard>0?'En retard':x.partiel?'Partiel':'À échoir';},ordre:['Réglée','Partiel','À échoir','En retard']},
+  renta:{unite:['affaire','affaires'],items:function(){return _rentaAffaires();},date:function(a){return a.date;},client:function(a){return a.contact||a.client;},alt:function(a){return a.client;},
+    statut:function(a){return a.sansFacture?'Sans facture':a.verifier?'À vérifier':'Avec facture';},ordre:['Avec facture','Sans facture','À vérifier']},
+  dashboard:{unite:['facture','factures'],suffixe:'dans la synthèse',groupes:true,items:function(){return _reglLignes();},date:function(x){return x.date;},client:function(x){return x.client;},alt:function(x){return _impReglGroupe(x);}}
+};
+// Le client d'une ligne de Règlements vient du préfixe du n° de facture, qui n'est pas
+// toujours le nom de la société : on relit la société sur la facture elle-même.
+function _impReglGroupe(x){
+  var f=(DB.factures||[]).find(function(y){ return y.id===x.id; });
+  return f?_impClient(f.client):x.client;
+}
+// Retenu par les statuts cochés ; sans choix : tous, sauf ceux écartés par défaut.
+function _impStatutOk(page,x,o){
+  var F=IMP_FILTRES[page]; if(!F||!F.statut) return true;
+  var s=F.statut(x);
+  return o.statuts?o.statuts.indexOf(s)>=0:!(F.off&&F.off.indexOf(s)>=0);
+}
+function _impRetenu(page,x,o){
+  var F=IMP_FILTRES[page];
+  return _impDansPeriode(F.date(x),o) && _impClientOk(F.client(x),o,F.alt?F.alt(x):undefined) && _impStatutOk(page,x,o);
+}
+// Les cases de statut d'une section : l'ordre prévu, puis ce que les données contiennent d'autre.
+function _impStatutsListe(page,items){
+  var F=IMP_FILTRES[page]; if(!F||!F.statut) return null;
+  var l=F.ordre.slice();
+  items.forEach(function(x){ var s=F.statut(x); if(l.indexOf(s)<0) l.push(s); });
+  return l;
+}
 // ----- Factures (mêmes données et KPI que la page : getSuiviSource + _faKpisCalc) -----
 function _impFacturesData(o){
   return getSuiviSource().filter(function(i){
     if(!_impDansPeriode(_impDateFa(i),o)) return false;
-    if(o.client && _impClient(i.client)!==o.client) return false;
+    if(!_impClientOk(i.client,o)) return false;
+    if(o.statuts && o.statuts.indexOf(_impStatutFa(i))<0) return false;
     var pre=isPrebilled(i), st=pre?'prebilled':getStatus(i);
     if(o.contenu==='emises') return !pre;
     if(o.contenu==='pre') return pre;
@@ -6891,14 +6988,27 @@ function _impFactures(o){
 }
 // ----- Devis (KPI : _calcKpiDV, comme la page ; TTC : _getDevisTTC comme la page) -----
 function _impDevisTTC(d){ return (typeof _getDevisTTC==='function'?_getDevisTTC(d):d.ttc)||0; }
+// Indicateurs de la page Devis. Ils se calculent sur UNE année : avec plusieurs années
+// cochées, la liste est ramenée à la première, pour que la même règle compte tout.
+function _impKpiDV(l,o){
+  var fy0=fiscalYear;
+  try{
+    if(o.annees && o.annees.length>1){
+      var y=o.annees[0]; fiscalYear=Number(y);
+      l=l.map(function(d){ return Object.assign({},d,{date:y+'-01-01'}); });
+    } else if(o.annee) fiscalYear=Number(o.annee);
+    return _calcKpiDV(l);
+  } finally{ fiscalYear=fy0; }
+}
 function _impDevis(o){
-  var base=(DB.devis||[]).filter(function(d){ return _impDansPeriode(d.date,o) && (!o.client || _impClient(d.client)===o.client); });
-  var fy0=fiscalYear, kpi; try{ if(o.annee) fiscalYear=Number(o.annee); kpi=_calcKpiDV(base); } finally{ fiscalYear=fy0; }
+  var base=(DB.devis||[]).filter(function(d){ return _impDansPeriode(d.date,o) && _impClientOk(d.client,o); });
   var data=base.filter(function(d){
+    if(o.statuts) return o.statuts.indexOf(IMP_FILTRES.devis.statut(d))>=0;
     if(o.contenu==='tout') return true;
     if(_dvIsSuperseded(d)) return false;
     return !o.contenu || d.status===o.contenu;
   });
+  var kpi=_impKpiDV(o.statuts?data:base,o);
   var M=function(v){return _impM(o,v);};
   var sc=kpi.statusCount||{}, sm=kpi.statusMontant||{};
   var h=_impKpis([['Devis comptés (envoyés, acceptés, facturés)',M(kpi.totalCounted),kpi.countCounted+' devis'],['Acceptés',M(sm['Accepté']||0),(sc['Accepté']||0)+' devis','ok'],['Facturés',M(sm['Facturé']||0),(sc['Facturé']||0)+' devis'],['En attente client',M(sm['Envoyé']||0),(sc['Envoyé']||0)+' devis','att'],['Taux de transformation',(kpi.tauxAccept!=null?Math.round(kpi.tauxAccept)+' %':'—'),'acceptés + facturés / tranchés']]);
@@ -6911,7 +7021,7 @@ function _impDevis(o){
   h+='<table><thead><tr><th>N°</th><th>Date</th><th>Client</th><th>Objet</th><th>Type</th><th>Statut</th><th class="n">TTC</th><th>BC client</th><th>Facture</th></tr></thead><tbody>'+
     (lignes||'<tr><td colspan="9" class="vide">Aucun devis.</td></tr>')+
     (o.totaux&&data.length?'<tr class="tot"><td colspan="6">Total — '+data.length+' devis listés (tous statuts)</td><td class="n">'+M(tt(data))+'</td><td colspan="2"></td></tr>':'')+'</tbody></table>'+
-    '<div class="note">Indicateurs calculés comme sur la page Devis (année '+esc(o.annee||'')+(o.client?', client '+esc(o.client):'')+(o.mois?', '+IMP_MOIS[Number(o.mois)-1]:'')+').</div>';
+    '<div class="note">Indicateurs calculés comme sur la page Devis (année '+esc(_impAnneesTxt(o))+(_impClientsTxt(o)?', client '+esc(_impClientsTxt(o)):'')+(_impMoisTxt(o)?', '+esc(_impMoisTxt(o)):'')+(o.statuts?', '+esc(o.statuts.join(' + ')):'')+').</div>';
   return {titre:'Devis',html:h,n:data.length};
 }
 // ----- Bons de commande (totaux par statut : _bcMontantParDevise, comme la page) -----
@@ -6921,11 +7031,14 @@ function _impStatut(s){
   return c?'<span class="'+c+'" style="font-weight:700">'+esc(s)+'</span>':esc(s||'');
 }
 function _impBC(o){
-  var base=(DB.bcs||[]).filter(function(b){ return _impDansPeriode(b.date,o) && (!o.client || _impClient(b.clientFinal)===o.client); });
-  var data=base.filter(function(b){ return !o.contenu || b.status===o.contenu; });
+  var base=(DB.bcs||[]).filter(function(b){ return _impDansPeriode(b.date,o) && _impClientOk(b.clientFinal,o); });
+  var data=base.filter(function(b){ return (!o.contenu || b.status===o.contenu) && _impStatutOk('bc',b,o); });
+  // Statuts choisis : cartes et total ne parlent que d'eux.
+  var cartes=BC_STATUTS_TOTAUX;
+  if(o.statuts){ base=data; cartes=cartes.filter(function(c){ return !c[0]||o.statuts.indexOf(c[0])>=0; }); }
   var M=function(v,dv){return _impM(o,v,dv);};
   var montant=function(l){ return o.masquer?'•••':_bcMontantParDevise(l); };
-  var h=_impKpis(BC_STATUTS_TOTAUX.map(function(c){ var l=c[0]?base.filter(function(b){return b.status===c[0];}):base; return [c[1],montant(l),l.length+' PO',IMP_ST_COULEUR[c[0]]||'']; })
+  var h=_impKpis(cartes.map(function(c){ var l=c[0]?base.filter(function(b){return b.status===c[0];}):base; return [c[1],montant(l),l.length+' PO',IMP_ST_COULEUR[c[0]]||'']; })
     .concat([['Coût Emerson (XPF)',M(base.reduce(function(s,b){return s+getBCCoutXPF(b);},0)),'au taux de chaque PO']]));
   var nR=base.filter(_bcEstRemplacement);
   if(nR.length) h+='<div class="note">🔁 '+nR.length+' PO de remplacement à nos frais : '+nR.map(function(b){return esc(b.num);}).join(', ')+'.</div>';
@@ -6942,7 +7055,7 @@ function _impBC(o){
 }
 // ----- Règlements (_reglLignes : règle d'échéance et encaissements de la page) -----
 function _impReglements(o){
-  var data=_reglLignes().filter(function(x){ return _impDansPeriode(x.date,o) && (!o.client || x.client===o.client || _impClient(x.client)===o.client); });
+  var data=_reglLignes().filter(function(x){ return _impDansPeriode(x.date,o) && _impClientOk(x.client,o,_impReglGroupe(x)) && _impStatutOk('reglements',x,o); });
   var M=function(v){return _impM(o,v);};
   var fac=data.reduce(function(s,x){return s+x.ttc;},0), enc=data.reduce(function(s,x){return s+x.verse;},0);
   var rel=data.filter(function(x){return x.retard>0 && x.reste>0;});
@@ -6955,7 +7068,7 @@ function _impReglements(o){
   return {titre:'Règlements',html:h,n:data.length};
 }
 // ----- Rentabilité Emerson (_rentaAffaires / _rentaTotaux, comme la page) -----
-function _impRentaAffaires(o){ return _rentaAffaires().filter(function(a){ return _impDansPeriode(a.date,o) && (!o.client || a.client===o.client); }); }
+function _impRentaAffaires(o){ return _rentaAffaires().filter(function(a){ return _impDansPeriode(a.date,o) && _impClientOk(a.contact||a.client,o,a.client) && _impStatutOk('renta',a,o); }); }
 function _impRenta(o){
   var aff=_impRentaAffaires(o), t=_rentaTotaux(aff), M=function(v){return _impM(o,v);};
   var h=_impKpis([['CA fourniture HT',M(t.ca),t.nAffaires+' affaire(s)'],['Coût Emerson',M(t.cout),''],['Frais de transit',M(t.frais),t.fraisEstimes?'dont '+M(t.fraisEstimes)+' estimés':''],['Bénéfice net',M(t.benef),t.remplacement?'dont −'+M(t.remplacement)+' de remplacements':'',t.benef<0?'late':'ok'],['Marge nette',(t.ca?(Math.round(t.marge*10)/10).toLocaleString('fr-FR')+' %':'—'),'bénéfice / CA HT']]);
@@ -6969,7 +7082,7 @@ function _impRenta(o){
 }
 // ----- Bons de livraison -----
 function _impBL(o){
-  var data=(DB.bls||[]).filter(function(b){ return _impDansPeriode(b.date,o) && (!o.client || _impClient(b.client)===o.client); });
+  var data=(DB.bls||[]).filter(function(b){ return _impDansPeriode(b.date,o) && _impClientOk(b.client,o) && _impStatutOk('bl',b,o); });
   var lignes=_impParMois(data,function(b){return b.date;},function(b){
     var f=b._linkedFactureId!=null?(DB.factures||[]).find(function(x){return x.id===b._linkedFactureId;}):null;
     return '<tr><td class="num">'+esc(b.num||'')+'</td><td>'+fD(b.date)+'</td><td class="cli">'+esc(b.client||'')+'</td><td>'+_impStatut(b.status)+'</td><td>'+esc(f?f.num:(b.linkFacture||''))+'</td><td>'+(b.lines||[]).filter(function(l){return l&&l.type!=='header';}).length+' ligne(s)</td></tr>'; },6,null);
@@ -6977,10 +7090,10 @@ function _impBL(o){
 }
 // ----- Clients : CA émis de l'année (factures émises de la page Factures) + coordonnées -----
 function _impClientsSec(o){
-  var emis=_impFacturesData({annee:o.annee,mois:o.mois,client:o.client,contenu:'emises'}), M=function(v){return _impM(o,v);};
+  var emis=_impFacturesData(Object.assign({},o,{contenu:'emises',statuts:null})), M=function(v){return _impM(o,v);};
   var ca={}; emis.forEach(function(i){ var c=_impClient(i.client); ca[c]=(ca[c]||0)+(Number(i.montant)||0); });
   var tot=Object.keys(ca).reduce(function(s,k){return s+ca[k];},0);
-  var cl=(DB.clients||[]).filter(function(c){ return !o.client || _impClient(c.nom||c.name||'')===o.client; });
+  var cl=(DB.clients||[]).filter(function(c){ return _impClientOk(c.nom||c.name||'',o); });
   var h='<table><thead><tr><th>Client</th><th class="n">CA émis TTC</th><th class="n">%</th></tr></thead><tbody>'+Object.keys(ca).sort(function(a,b){return ca[b]-ca[a];}).map(function(k){
     return '<tr><td class="b">'+esc(k)+'</td><td class="n">'+M(ca[k])+'</td><td class="n">'+(tot?Math.round(ca[k]/tot*1000)/10:0).toLocaleString('fr-FR')+' %</td></tr>'; }).join('')+
     '<tr class="tot"><td>Total</td><td class="n">'+M(tot)+'</td><td class="n">100 %</td></tr></tbody></table>';
@@ -6991,19 +7104,23 @@ function _impClientsSec(o){
 // ----- Synthèse de l'année (tableau de bord imprimé) -----
 function _impSynthese(o){
   var oo=Object.assign({},o,{mois:''}), M=function(v){return _impM(o,v);};
-  var reg=_reglLignes().filter(function(x){ return _impDansPeriode(x.date,oo) && (!o.client || x.client===o.client || _impClient(x.client)===o.client); });
+  var reg=_reglLignes().filter(function(x){ return _impDansPeriode(x.date,oo) && _impClientOk(x.client,o,_impReglGroupe(x)); });
   var fac=reg.reduce(function(s,x){return s+x.ttc;},0), enc=reg.reduce(function(s,x){return s+x.verse;},0);
   var rel=reg.filter(function(x){return x.retard>0 && x.reste>0;});
   var pre=_impFacturesData(Object.assign({},oo,{contenu:'pre'}));
-  var base=(DB.devis||[]).filter(function(d){ return _impDansPeriode(d.date,oo) && (!o.client || _impClient(d.client)===o.client); });
-  var fy0=fiscalYear, kpi; try{ if(o.annee) fiscalYear=Number(o.annee); kpi=_calcKpiDV(base); } finally{ fiscalYear=fy0; }
+  var base=(DB.devis||[]).filter(function(d){ return _impDansPeriode(d.date,oo) && _impClientOk(d.client,o); });
+  var kpi=_impKpiDV(base,o);
   var t=_rentaTotaux(_impRentaAffaires(oo));
   var h=_impKpis([['Facturé (émis) TTC',M(fac),reg.length+' facture(s)'],['Encaissé',M(enc),'règlements pointés','ok'],['Reste dû',M(reg.reduce(function(s,x){return s+x.reste;},0)),''],['À relancer',M(rel.reduce(function(s,x){return s+x.reste;},0)),rel.length+' échue(s)','late'],
     ['Pré-facturé (hors CA)',M(pre.reduce(function(s,i){return s+(Number(i.montant)||0);},0)),pre.length+' pré-facture(s)','mut'],['Devis comptés',M(kpi.totalCounted),kpi.countCounted+' devis'],['Taux de transformation',(kpi.tauxAccept!=null?Math.round(kpi.tauxAccept)+' %':'—'),'acceptés + facturés / tranchés'],['Bénéfice Emerson',M(t.benef),t.ca?(Math.round(t.marge*10)/10).toLocaleString('fr-FR')+' % de marge':'',t.benef<0?'late':'ok']]);
   // CA émis par mois (date d'émission) — barres
-  var mois=new Array(12).fill(0); reg.forEach(function(x){ var m=Number(String(x.date).slice(5,7)); if(m>=1&&m<=12) mois[m-1]+=x.ttc; });
-  var mx=Math.max.apply(null,mois)||1;
-  h+='<h3>CA émis par mois (TTC)</h3><div class="bars">'+mois.map(function(v,i){ return '<div class="bar"><div class="bv">'+(v&&!o.masquer?(Math.round(v/1e5)/10).toLocaleString('fr-FR')+' M':'')+'</div><div class="bf" style="height:'+Math.round(v/mx*100)+'%"></div><div class="bm">'+IMP_MOIS_COURT[i]+'</div></div>'; }).join('')+'</div>';
+  var plusieurs=o.annees&&o.annees.length>1, cols=[];
+  (plusieurs?o.annees.slice().sort():['']).forEach(function(a){
+    (o.moisL||IMP_MOIS_COURT.map(function(_,i){return String(i+1).padStart(2,'0');})).forEach(function(m){ cols.push({a:a,m:m,v:0}); });
+  });
+  reg.forEach(function(x){ var d=String(x.date), c=cols.find(function(k){ return k.m===d.slice(5,7)&&(!k.a||k.a===d.slice(0,4)); }); if(c) c.v+=x.ttc; });
+  var mx=Math.max.apply(null,cols.map(function(c){return c.v;}))||1;
+  h+='<h3>CA émis par mois (TTC)</h3><div class="bars">'+cols.map(function(c){ var v=c.v; return '<div class="bar"><div class="bv">'+(v&&!o.masquer?(Math.round(v/1e5)/10).toLocaleString('fr-FR')+' M':'')+'</div><div class="bf" style="height:'+Math.round(v/mx*100)+'%"></div><div class="bm">'+IMP_MOIS_COURT[Number(c.m)-1]+(c.a?' '+c.a.slice(2):'')+'</div></div>'; }).join('')+'</div>';
   // Top clients (CA émis)
   var ca={}; reg.forEach(function(x){ var c=_impClient(x.client); ca[c]=(ca[c]||0)+x.ttc; });
   var top=Object.keys(ca).sort(function(a,b){return ca[b]-ca[a];}).slice(0,8);
@@ -7079,39 +7196,150 @@ function _impImprimerApercu(){ var f=document.getElementById('impApercuFrame'); 
 function _impFermerApercu(){ var x=document.getElementById('impApercu'); if(x) x.remove(); document.removeEventListener('keydown',_impEchap); }
 function _impEchap(e){ if(e.key==='Escape') _impFermerApercu(); }
 function _impDocument(page,o){
-  var r=IMP_BUILD[page](o), titre=(IMP_PAGES[page]||r.titre)+(o.annee?' '+o.annee:'');
-  return {titre:titre, corps:_impEntete(titre,_impPeriodeTxt(o)+(o.contenu?' · '+((IMP_CONTENU[page]||[]).filter(function(c){return c[0]===o.contenu;})[0]||['',o.contenu])[1]:''))+r.html, n:r.n};
+  var r=IMP_BUILD[page](o), titre=(IMP_PAGES[page]||r.titre)+(_impAnneesTxt(o)?' '+_impAnneesTxt(o):'');
+  return {titre:titre, corps:_impEntete(titre,_impPeriodeTxt(o)+(o.statuts?' · '+o.statuts.join(' + '):'')+(o.contenu?' · '+((IMP_CONTENU[page]||[]).filter(function(c){return c[0]===o.contenu;})[0]||['',o.contenu])[1]:''))+r.html, n:r.n};
 }
 // ----- Fenêtre d'options -----
 function _impSel(id,opts,val){ return '<select class="form-select" id="'+id+'">'+opts.map(function(c){return '<option value="'+esc(String(c[0]))+'"'+(String(c[0])===String(val)?' selected':'')+'>'+esc(c[1])+'</option>';}).join('')+'</select>'; }
+// Cases cochées d'une famille, et si elle en a au moins une.
+function _impCoches(attr){
+  var t=[].slice.call(document.querySelectorAll('#mIMP ['+attr+']'));
+  return {existe:t.length>0,tout:t.every(function(e){return e.checked;}),l:t.filter(function(e){return e.checked;}).map(function(e){return e.value;})};
+}
+// Rien de choisi au-delà du réglage par défaut : null, le document est celui de toujours.
+function _impStatutsChoisis(attr,off){
+  var c=_impCoches(attr); if(!c.existe) return null;
+  var def=[].slice.call(document.querySelectorAll('#mIMP ['+attr+']')).map(function(e){return e.value;}).filter(function(s){return !off||off.indexOf(s)<0;});
+  return (c.l.length===def.length && def.every(function(s){return c.l.indexOf(s)>=0;}))?null:c.l;
+}
 function _impLireOptions(){
   var g=function(id){ var e=document.getElementById(id); return e?e.value:''; }, c=function(id){ var e=document.getElementById(id); return !!(e&&e.checked); };
-  return {annee:g('imp-annee'),mois:g('imp-mois'),client:g('imp-client'),contenu:g('imp-contenu'),totaux:c('imp-totaux'),masquer:c('imp-masquer'),paysage:g('imp-orient')==='paysage',theme:g('imp-theme'),
+  var page=(document.getElementById('mIMP')||{getAttribute:function(){return '';}}).getAttribute('data-imp-page'), F=IMP_FILTRES[page]||{};
+  var o={annee:g('imp-annee'),mois:'',client:'',contenu:'',totaux:c('imp-totaux'),masquer:c('imp-masquer'),paysage:g('imp-orient')==='paysage',theme:g('imp-theme'),
     sections:[].map.call(document.querySelectorAll('#mIMP [data-imp-sec]:checked'),function(e){return e.getAttribute('data-imp-sec');})};
+  var an=_impCoches('data-imp-an');
+  if(an.existe){ o.annee=an.l.length===1?an.l[0]:''; o.annees=an.l.length>1?an.l:null; if(!an.l.length) o.manque='une année'; }
+  var mo=_impCoches('data-imp-mo');
+  if(mo.existe){ o.moisL=mo.tout?null:mo.l; if(!mo.l.length) o.manque='un mois'; }
+  var cl=_impCoches('data-imp-cli'), gr=_impCoches('data-imp-grp');
+  if(cl.existe){ o.clients=cl.tout?null:cl.l; if(!cl.l.length) o.manque='un client'; }
+  if(gr.existe){ o.groupes=gr.tout?null:gr.l; if(!gr.l.length) o.manque='un client'; }
+  if(F.statut){ o.statuts=_impStatutsChoisis('data-imp-st',F.off); if(!_impCoches('data-imp-st').l.length) o.manque='un statut'; }
+  // Rapport : les statuts de chaque section cochée
+  if(page==='rapport'){
+    o.statutsPar={};
+    o.sections.forEach(function(k){
+      var Fk=IMP_FILTRES[k], a='data-imp-st-'+k; if(!Fk||!document.querySelector('#mIMP ['+a+']')) return;
+      if(!_impCoches(a).l.length) o.manque='un statut pour chaque section cochée';
+      o.statutsPar[k]=_impStatutsChoisis(a,(Fk.off||[]).concat(Fk.offRapport||[]));
+    });
+  }
+  return o;
+}
+// Une pastille à cocher ; un groupe de pastilles avec ses liens tout / rien.
+function _impPastille(attr,val,lib,on){
+  return '<label class="imp-p"><input type="checkbox" '+attr+' value="'+esc(String(val))+'"'+(on?' checked':'')+'><span>'+esc(lib)+'</span></label>';
+}
+function _impLiens(attr){
+  return '<button type="button" class="imp-lien" onclick="_impTout(\''+attr+'\',true)">tout</button><button type="button" class="imp-lien" onclick="_impTout(\''+attr+'\',false)">rien</button>';
+}
+function _impBloc(titre,attr,corps){
+  return '<div class="imp-bloc"><div class="imp-tete"><span>'+titre+'</span>'+_impLiens(attr)+'</div>'+corps+'</div>';
+}
+function _impTout(attr,v){
+  document.querySelectorAll('#mIMP ['+attr+']').forEach(function(e){ e.checked=v; });
+  if(attr==='data-imp-cli') document.querySelectorAll('#mIMP [data-imp-soc]').forEach(function(p){ p.checked=v; p.indeterminate=false; });
+  _impMajCompte();
+}
+// Les clients d'une section, par société : une société se coche d'un coup, ou contact par contact.
+function _impClientsHtml(page,items,choix){
+  var F=IMP_FILTRES[page], g={};
+  items.forEach(function(x){ var r=String(F.client(x)||'').trim(), k=r?_impClient(r):'Sans client'; (g[k]=g[k]||{}); g[k][r]=1; });
+  var cb=function(attr,val,on){ return '<input type="checkbox" '+attr+' value="'+esc(String(val))+'"'+(on?' checked':'')+' onchange="_impClientCoche(this)">'; };
+  return '<div class="imp-clients">'+Object.keys(g).sort().map(function(k){
+    var raws=Object.keys(g[k]).sort(), lignes=raws.map(function(r){ return {r:r,on:!choix||choix(r,k)}; });
+    if(raws.length===1 && (raws[0]===k||raws[0]==='')) return '<label class="imp-case">'+cb('data-imp-cli',raws[0],lignes[0].on)+esc(k)+'</label>';
+    var tous=lignes.every(function(l){return l.on;});
+    return '<label class="imp-case">'+cb('data-imp-soc="'+esc(k)+'"',k,tous)+esc(k)+'</label>'+
+      lignes.map(function(l){ return '<label class="imp-case sous">'+cb('data-imp-cli data-imp-de="'+esc(k)+'"',l.r,l.on)+esc(l.r===k?k+' (sans contact)':l.r)+'</label>'; }).join('');
+  }).join('')+'</div>';
+}
+function _impClientCoche(e){
+  var soc=e.getAttribute('data-imp-soc'), de=e.getAttribute('data-imp-de');
+  var filles=function(k){ return [].filter.call(document.querySelectorAll('#mIMP [data-imp-de]'),function(x){return x.getAttribute('data-imp-de')===k;}); };
+  if(soc!=null){ filles(soc).forEach(function(x){ x.checked=e.checked; }); e.indeterminate=false; }
+  if(de!=null){
+    var f=filles(de), n=f.filter(function(x){return x.checked;}).length;
+    [].forEach.call(document.querySelectorAll('#mIMP [data-imp-soc]'),function(p){ if(p.getAttribute('data-imp-soc')===de){ p.checked=n===f.length; p.indeterminate=n>0&&n<f.length; } });
+  }
+  _impMajCompte();
+}
+// Ce qui était filtré à l'écran au moment d'ouvrir la fenêtre.
+function _impFiltreEcran(page){
+  var v=function(id){ var e=document.getElementById(id); return e?e.value:''; }, hgr=function(t){ return (typeof getHgrState==='function'?getHgrState(t).activeClient:'')||''; };
+  if(page==='bc') return {statut:v('fBCst'),client:hgr('bc')};
+  if(page==='bl') return {statut:v('fBLst'),client:v('fBLcli')||hgr('bl')};
+  if(page==='devis') return {statut:v('fDVst'),client:hgr('dv')};
+  if(page==='factures') return {statut:{paid:'Payée',pending:'En attente',late:'En retard',partial:'Partiel',prebilled:'Pré-facturée'}[v('fFAst')]||'',client:hgr('fa'),annee:v('fFAyear')};
+  if(page==='reglements') return {statut:'',client:(typeof _reglFiltreClient!=='undefined'&&_reglFiltreClient!=='all')?_reglFiltreClient:''};
+  if(page==='renta'&&typeof _rentaEtat!=='undefined') return {statut:_rentaEtat.verifier?'À vérifier':'',client:_rentaEtat.client==='Tous'?'':_rentaEtat.client,annee:_rentaEtat.an==='Tout'?'':_rentaEtat.an};
+  return {};
+}
+function _impMajCompte(){
+  var m=document.getElementById('mIMP'), z=document.getElementById('imp-compte'); if(!m||!z) return;
+  var page=m.getAttribute('data-imp-page'), F=IMP_FILTRES[page]; if(!F||!_impEtat) return;
+  var o=_impLireOptions(), n=_impEtat.items.filter(function(x){ return _impRetenu(page,x,o); }).length;
+  z.textContent=n?'→ '+n+' '+F.unite[n>1?1:0]+' '+(F.suffixe||'à imprimer'):'→ rien à imprimer avec ces choix';
+  z.classList.toggle('vide',!n);
 }
 function ouvrirImpression(page){
   var rapport=page==='rapport';
   var ancien=document.getElementById('mIMP'); if(ancien) ancien.remove();
   var an=String(new Date().getFullYear()), annees=_impAnnees(); if(annees.indexOf(an)<0) an=annees[0];
   var priv=(typeof _getPrivacyStored==='function') && _getPrivacyStored();
-  var paysage=(page==='factures'||page==='devis'||page==='bc'||rapport);
-  var h='<div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'+
-    '<div class="form-group"><label>Année</label>'+_impSel('imp-annee',annees.map(function(y){return [y,y];}),an)+'</div>'+
-    (rapport?'<div></div>':'<div class="form-group"><label>Mois</label>'+_impSel('imp-mois',[['','Toute l\'année']].concat(IMP_MOIS.map(function(m,i){return [String(i+1).padStart(2,'0'),m];})),'')+'</div>')+
-    '<div class="form-group"><label>Client</label>'+_impSel('imp-client',[['','Tous']].concat(_impClients().map(function(c){return [c,c];})),'')+'</div>'+
-    (IMP_CONTENU[page]?'<div class="form-group"><label>Contenu</label>'+_impSel('imp-contenu',IMP_CONTENU[page],'')+'</div>':'<div></div>')+
-  '</div>';
-  if(rapport) h+='<div class="form-group"><label>Sections</label>'+IMP_SECTIONS.map(function(s){return '<label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:3px 0;cursor:pointer"><input type="checkbox" data-imp-sec="'+s[0]+'"'+(s[2]?' checked':'')+'> '+esc(s[1])+'</label>';}).join('')+'</div>';
+  var paysage=(page==='factures'||page==='devis'||page==='bc'||page==='reglements'||page==='renta'||rapport);
+  var pastillesGroupes=function(){ return '<div class="imp-pts">'+_impClients().map(function(c){ return _impPastille('data-imp-grp',c,c,true); }).join('')+'</div>'; };
+  var h='';
+  if(rapport){
+    h+='<div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div class="form-group"><label>Année</label>'+_impSel('imp-annee',annees.map(function(y){return [y,y];}),an)+'</div><div></div></div>'+
+      _impBloc('Clients','data-imp-grp',pastillesGroupes());
+    h+='<div class="form-group"><label>Sections</label>'+IMP_SECTIONS.map(function(s){
+      var F=IMP_FILTRES[s[0]], l=F&&F.statut?_impStatutsListe(s[0],F.items()):null, off=F?(F.off||[]).concat(F.offRapport||[]):[];
+      return '<label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:3px 0;cursor:pointer"><input type="checkbox" data-imp-sec="'+s[0]+'"'+(s[2]?' checked':'')+'> '+esc(s[1])+'</label>'+
+        (l?'<div class="imp-pts" style="margin:3px 0 8px 24px">'+l.map(function(st){ return _impPastille('data-imp-st-'+s[0],st,st,off.indexOf(st)<0); }).join('')+'</div>':'');
+    }).join('')+'</div>';
+    _impEtat=null;
+  } else {
+    var F=IMP_FILTRES[page], items=F?F.items():[], ecran=_impFiltreEcran(page);
+    _impEtat={page:page,items:items};
+    var anOn=(ecran.annee&&annees.indexOf(String(ecran.annee))>=0)?String(ecran.annee):an;
+    h+=_impBloc('Années','data-imp-an','<div class="imp-pts">'+annees.slice().sort().map(function(y){ return _impPastille('data-imp-an',y,y,y===anOn); }).join('')+'</div>');
+    h+=_impBloc('Mois','data-imp-mo','<div class="imp-pts">'+IMP_MOIS_COURT.map(function(m,i){ return _impPastille('data-imp-mo',String(i+1).padStart(2,'0'),m,true); }).join('')+'</div>');
+    var stL=F?_impStatutsListe(page,items):null;
+    if(stL){
+      if(ecran.statut && stL.indexOf(ecran.statut)<0) stL.push(ecran.statut);
+      h+='<div id="imp-statuts">'+_impBloc('Statuts','data-imp-st','<div class="imp-pts">'+stL.map(function(st){ return _impPastille('data-imp-st',st,st,ecran.statut?st===ecran.statut:!(F.off&&F.off.indexOf(st)>=0)); }).join('')+'</div>')+'</div>';
+    }
+    if(F&&F.groupes) h+=_impBloc('Clients','data-imp-grp',pastillesGroupes());
+    else if(F){
+      var ac=String(ecran.client||''), connu=ac&&items.some(function(x){ var r=String(F.client(x)||'').trim(); return r===ac||_impClient(r)===ac||(F.alt&&F.alt(x)===ac); });
+      h+=_impBloc('Clients','data-imp-cli',_impClientsHtml(page,items,connu?function(r,k){ return r===ac||k===ac; }:null));
+    }
+  }
   h+='<div class="form-group"><label>Options</label>'+
-    (rapport||page==='dashboard'?'':'<label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:3px 0"><input type="checkbox" id="imp-totaux" checked> Sous-totaux par mois et total général</label>')+
+    (rapport||page==='dashboard'||page==='bl'||page==='renta'?'':'<label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:3px 0"><input type="checkbox" id="imp-totaux" checked> Sous-totaux par mois et total général</label>')+
     '<label style="display:flex;gap:7px;align-items:center;font-size:12px;margin:3px 0"><input type="checkbox" id="imp-masquer"'+(priv?' checked':'')+'> Masquer les montants (mode Privacy)</label></div>'+
     '<div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div class="form-group"><label>Mise en page</label>'+_impSel('imp-orient',[['portrait','Portrait'],['paysage','Paysage']],paysage?'paysage':'portrait')+'</div>'+
     '<div class="form-group"><label>Papier</label>'+_impSel('imp-theme',[['clair','Clair'],['sombre','Sombre (comme l\'écran)']],'clair')+'</div></div>';
   var m=document.createElement('div'); m.id='mIMP'; m.className='modal-overlay open'; m.setAttribute('data-imp-page',page);
   m.innerHTML='<div class="modal" style="max-width:560px"><div class="modal-header"><h3>'+(rapport?'📘 Rapport annuel du GRC':'🖨 Imprimer — '+esc(IMP_PAGES[page]||page))+'</h3><button class="modal-close" onclick="document.getElementById(\'mIMP\').remove()">✕</button></div>'+
-    '<div class="modal-body">'+h+'</div><div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:10px 16px"><button class="btn btn-ghost" onclick="document.getElementById(\'mIMP\').remove()">Annuler</button>'+
+    '<div class="modal-body">'+h+'</div>'+(rapport?'':'<div class="imp-compte" id="imp-compte"></div>')+'<div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:10px 16px"><button class="btn btn-ghost" onclick="document.getElementById(\'mIMP\').remove()">Annuler</button>'+
     '<button class="btn btn-ghost" onclick="_impLancer(true)">👁 Aperçu</button><button class="btn btn-teal" onclick="_impLancer(false)">🖨 Imprimer / PDF</button></div></div>';
   document.body.appendChild(m);
+  m.addEventListener('change',_impMajCompte);
+  // Sociétés cochées à moitié si le filtre de l'écran ne retient qu'un contact
+  m.querySelectorAll('[data-imp-de]').forEach(function(x){ if(x.checked) _impClientCoche(x); });
+  _impMajCompte();
 }
 function ouvrirRapportAnnuel(){ ouvrirImpression('rapport'); }
 function _impRapport(o){
@@ -7119,12 +7347,13 @@ function _impRapport(o){
   var oo=Object.assign({},o,{mois:'',contenu:'',totaux:true});
   var titre='Rapport annuel du GRC — '+(o.annee||'');
   var corps='<div class="cover"><img src="'+LG_PLACEHOLDER+'" style="height:60px" alt="CALINSTRUM"><div style="font-size:26px;font-weight:800;color:#1b365d;margin-top:8px">CALINSTRUM</div>'+
-    '<div style="font-size:17px;margin-top:6px">'+esc(titre)+'</div><div class="sub" style="margin-top:6px">'+esc(o.client?'client '+o.client:'tous clients')+' · arrêté au '+fD(td())+'</div></div>'+
+    '<div style="font-size:17px;margin-top:6px">'+esc(titre)+'</div><div class="sub" style="margin-top:6px">'+esc(_impClientsTxt(o)?'client '+_impClientsTxt(o):'tous clients')+' · arrêté au '+fD(td())+'</div></div>'+
     '<h3>Sommaire</h3><ol class="toc">'+secs.map(function(s){return '<li>'+esc(s[1].split(' (')[0])+'</li>';}).join('')+'</ol>';
   secs.forEach(function(s,i){
-    var oc=Object.assign({},oo,{contenu:s[0]==='factures'?'emises':''});
+    var st=(o.statutsPar||{})[s[0]]||null;
+    var oc=Object.assign({},oo,{contenu:(s[0]==='factures'&&!st)?'emises':'',statuts:st});
     var r=IMP_BUILD[s[0]](oc);
-    corps+='<div class="sec"><h2>'+(i+1)+' · '+esc(s[1].split(' (')[0])+' '+esc(o.annee||'')+'</h2>'+r.html+'</div>';
+    corps+='<div class="sec"><h2>'+(i+1)+' · '+esc(s[1].split(' (')[0])+' '+esc(o.annee||'')+'</h2>'+(st?'<div class="note">'+esc(st.join(' + '))+'</div>':'')+r.html+'</div>';
   });
   return {titre:titre,corps:corps};
 }
@@ -7133,8 +7362,10 @@ function _impLancer(apercu){
   var page=m.getAttribute('data-imp-page'), o=_impLireOptions();
   if(page==='rapport'){
     if(!o.sections.length){ alert('Cochez au moins une section.'); return; }
+    if(o.manque){ alert('Cochez au moins '+o.manque+'.'); return; }
     var r=_impRapport(o); _impOuvrir(r.titre,r.corps,o,apercu);
   } else {
+    if(o.manque){ alert('Cochez au moins '+o.manque+'.'); return; }
     var d=_impDocument(page,o); _impOuvrir(d.titre,d.corps,o,apercu);
   }
 }
@@ -7279,6 +7510,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-05','🖨 Impressions : années, mois, statuts et clients se cochent et se combinent dans chaque section, et le nombre de documents retenus s\'affiche avant d\'imprimer.'],
   ['2026-11-05','🎨 Impressions PO et BL : Livré en vert, En attente en orange, Confirmé en bleu.'],
   ['2026-11-05','🧾 Règlements : le n° et le montant de l\'avoir sont indiqués sous la facture concernée, à l\'écran et sur les impressions. Aucun total ne change.'],
   ['2026-11-05','🧮 Règlements : coche des factures, même de mois différents, pour lire leur total et le comparer au montant viré. Rien n\'est enregistré.'],
@@ -12739,6 +12971,7 @@ function renderReglements(){
   // Export PDF : reprend le client affiché. Deux documents (archive / travail).
   h+='<div class="no-print" style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:10px">'+
      '<button class="btn btn-teal btn-sm" onclick="openPaiementClient()" title="Un virement règle plusieurs factures : retrouver lesquelles et les enregistrer">💰 Paiement client</button>'+
+     '<button class="btn btn-ghost btn-sm" onclick="ouvrirImpression(\'reglements\')" title="Choisir les années, mois, statuts et clients à imprimer">🖨 Imprimer une sélection</button>'+
      '<button class="btn btn-ghost btn-sm" onclick="reglImprimerPDF(\'complet\')" title="Tous les mois, toutes les factures — pour archiver">🖨 PDF complet</button>'+
      '<button class="btn btn-ghost btn-sm" onclick="reglImprimerPDF(\'impayes\')" title="Ce qui reste dû, les échues en tête — pour travailler">🖨 PDF impayés & relances</button>'+
      _pdfThemeBoxHtml('app')+
