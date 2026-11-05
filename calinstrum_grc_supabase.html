@@ -6915,12 +6915,17 @@ function _impDevis(o){
   return {titre:'Devis',html:h,n:data.length};
 }
 // ----- Bons de commande (totaux par statut : _bcMontantParDevise, comme la page) -----
+var IMP_ST_COULEUR={'Livré':'ok','En attente':'orange','Confirmé':'att','Annulé':'mut'};
+function _impStatut(s){
+  var c=IMP_ST_COULEUR[s];
+  return c?'<span class="'+c+'" style="font-weight:700">'+esc(s)+'</span>':esc(s||'');
+}
 function _impBC(o){
   var base=(DB.bcs||[]).filter(function(b){ return _impDansPeriode(b.date,o) && (!o.client || _impClient(b.clientFinal)===o.client); });
   var data=base.filter(function(b){ return !o.contenu || b.status===o.contenu; });
   var M=function(v,dv){return _impM(o,v,dv);};
   var montant=function(l){ return o.masquer?'•••':_bcMontantParDevise(l); };
-  var h=_impKpis(BC_STATUTS_TOTAUX.map(function(c){ var l=c[0]?base.filter(function(b){return b.status===c[0];}):base; return [c[1],montant(l),l.length+' PO',c[0]==='Livré'?'ok':(c[0]==='Annulé'?'mut':'')]; })
+  var h=_impKpis(BC_STATUTS_TOTAUX.map(function(c){ var l=c[0]?base.filter(function(b){return b.status===c[0];}):base; return [c[1],montant(l),l.length+' PO',IMP_ST_COULEUR[c[0]]||'']; })
     .concat([['Coût Emerson (XPF)',M(base.reduce(function(s,b){return s+getBCCoutXPF(b);},0)),'au taux de chaque PO']]));
   var nR=base.filter(_bcEstRemplacement);
   if(nR.length) h+='<div class="note">🔁 '+nR.length+' PO de remplacement à nos frais : '+nR.map(function(b){return esc(b.num);}).join(', ')+'.</div>';
@@ -6928,7 +6933,7 @@ function _impBC(o){
     var l=(b.lines||[]).find(function(x){return x && x.type!=='header' && (x.desc||x.ref);});
     var orig=_bcEstRemplacement(b)?(DB.bcs||[]).find(function(x){return String(x.id)===String(b.remplacement.remplace);}):null, par=_bcRemplacePar(b);
     return '<tr><td class="num">'+esc(b.num||'')+(orig?'<div class="mut">🔁 remplace '+esc(orig.num)+'</div>':'')+(par.length?'<div class="late">pièce erronée</div>':'')+'</td><td>'+fD(b.date)+'</td><td class="cli">'+esc(b.clientFinal||'')+'</td><td>'+esc(b.linkBCclient||'')+'</td>'+
-      '<td class="obj">'+esc(l?_impCourt(l.desc||l.ref,62):'')+'</td><td class="n b">'+M(b.total,b.devise||'AUD')+'</td><td class="n">'+M(getBCCoutXPF(b))+'</td><td>'+esc(b.status||'')+'</td></tr>'; },8,
+      '<td class="obj">'+esc(l?_impCourt(l.desc||l.ref,62):'')+'</td><td class="n b">'+M(b.total,b.devise||'AUD')+'</td><td class="n">'+M(getBCCoutXPF(b))+'</td><td>'+_impStatut(b.status)+'</td></tr>'; },8,
     o.totaux?function(l){return montant(l);}:null);
   h+='<table><thead><tr><th>N° PO</th><th>Date</th><th>Client final</th><th>BC client</th><th>Description</th><th class="n">Montant</th><th class="n">Coût XPF</th><th>Statut</th></tr></thead><tbody>'+
     (lignes||'<tr><td colspan="8" class="vide">Aucun bon de commande.</td></tr>')+
@@ -6967,7 +6972,7 @@ function _impBL(o){
   var data=(DB.bls||[]).filter(function(b){ return _impDansPeriode(b.date,o) && (!o.client || _impClient(b.client)===o.client); });
   var lignes=_impParMois(data,function(b){return b.date;},function(b){
     var f=b._linkedFactureId!=null?(DB.factures||[]).find(function(x){return x.id===b._linkedFactureId;}):null;
-    return '<tr><td class="num">'+esc(b.num||'')+'</td><td>'+fD(b.date)+'</td><td class="cli">'+esc(b.client||'')+'</td><td>'+esc(b.status||'')+'</td><td>'+esc(f?f.num:(b.linkFacture||''))+'</td><td>'+(b.lines||[]).filter(function(l){return l&&l.type!=='header';}).length+' ligne(s)</td></tr>'; },6,null);
+    return '<tr><td class="num">'+esc(b.num||'')+'</td><td>'+fD(b.date)+'</td><td class="cli">'+esc(b.client||'')+'</td><td>'+_impStatut(b.status)+'</td><td>'+esc(f?f.num:(b.linkFacture||''))+'</td><td>'+(b.lines||[]).filter(function(l){return l&&l.type!=='header';}).length+' ligne(s)</td></tr>'; },6,null);
   return {titre:'Bons de livraison',html:'<table><thead><tr><th>N° BL</th><th>Date</th><th>Client</th><th>Statut</th><th>Facture</th><th>Contenu</th></tr></thead><tbody>'+(lignes||'<tr><td colspan="6" class="vide">Aucun bon de livraison.</td></tr>')+'</tbody></table>',n:data.length};
 }
 // ----- Clients : CA émis de l'année (factures émises de la page Factures) + coordonnées -----
@@ -7019,9 +7024,9 @@ function _impCss(o){
     'th{background:#1b365d;color:#fff;text-align:left;font-size:9px;padding:5px 6px}td{padding:3.5px 6px;border-bottom:1px solid #e5e9ef;vertical-align:top}'+
     'th.n,td.n{text-align:right;white-space:nowrap}td.b{font-weight:700}td.num{font-weight:700;color:#1b365d;white-space:nowrap}td.cli{color:#5b6b7a;font-size:9px}td.obj{color:#334155}'+
     'tr.grp td{background:#eef2f7;font-weight:700;color:#1b365d;padding:5px 6px}tr.tot td{font-weight:700;border-top:2px solid #1b365d;border-bottom:none;padding-top:6px}td.vide{color:#8a96a3;font-style:italic}'+
-    '.late{color:#b4232f}.ok{color:#1b7a4e}.part{color:#b45309}.att{color:#1d4ed8}.mut{color:#8a96a3}'+
+    '.late{color:#b4232f}.ok{color:#1b7a4e}.part{color:#b45309}.orange{color:#d9600a}.att{color:#1d4ed8}.mut{color:#8a96a3}'+
     '.kp{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:6px;margin:4px 0 10px}.kp div{border:1px solid #d5dde5;border-left:3px solid #1b365d;border-radius:3px;padding:5px 8px}'+
-    '.kp em{font-style:normal;display:block;font-size:8.5px;color:#5b6b7a;text-transform:uppercase;letter-spacing:.03em}.kp strong{font-size:13.5px;color:#1b365d;display:block;white-space:nowrap}.kp strong.ok{color:#1b7a4e}.kp strong.late{color:#b4232f}.kp strong.mut{color:#5b6b7a}.kp small{font-size:8.5px;color:#8a96a3}'+
+    '.kp em{font-style:normal;display:block;font-size:8.5px;color:#5b6b7a;text-transform:uppercase;letter-spacing:.03em}.kp strong{font-size:13.5px;color:#1b365d;display:block;white-space:nowrap}.kp strong.ok{color:#1b7a4e}.kp strong.late{color:#b4232f}.kp strong.mut{color:#5b6b7a}.kp strong.orange{color:#d9600a}.kp strong.att{color:#1d4ed8}.kp small{font-size:8.5px;color:#8a96a3}'+
     '.note{font-size:8.5px;color:#5b6b7a;margin:4px 0 8px}.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}'+
     '.bars{display:flex;align-items:flex-end;gap:5px;height:120px;border-bottom:1px solid #b8c2cc;margin-bottom:4px}.bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;text-align:center}'+
     '.bf{background:#1b365d;border-radius:2px 2px 0 0;min-height:1px}.bv{font-size:8px;color:#1b365d;font-weight:700;margin-bottom:2px}.bm{font-size:8px;color:#5b6b7a;margin-top:2px}'+
@@ -7274,6 +7279,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-05','🎨 Impressions PO et BL : Livré en vert, En attente en orange, Confirmé en bleu.'],
   ['2026-11-05','🧾 Règlements : le n° et le montant de l\'avoir sont indiqués sous la facture concernée, à l\'écran et sur les impressions. Aucun total ne change.'],
   ['2026-11-05','🧮 Règlements : coche des factures, même de mois différents, pour lire leur total et le comparer au montant viré. Rien n\'est enregistré.'],
   ['2026-11-04','📋 Facturation du tableau de bord : seules les factures émises sont comptées, comme le Suivi. Les pré-factures restent visibles à part. Le CA net et la TGC de la page Administratif ne changent pas.'],
