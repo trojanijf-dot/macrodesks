@@ -7512,6 +7512,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-10','🔁 Suivi commandes : un PO de remplacement pas encore livré remet la commande en attente (filtre, compteur, PDF client).'],
   ['2026-11-05','📏 Règlements : les colonnes sont alignées de mois en mois, et avec À relancer.'],
   ['2026-11-05','🔄 Bouton Actualiser à côté du titre. Une facture supprimée disparaît aussi de Règlements dès le retour dans Suivi Factures, sans recharger.'],
   ['2026-11-05','🖨 Impressions : années, mois, statuts et clients se cochent et se combinent dans chaque section, et le nombre de documents retenus s\'affiche avant d\'imprimer.'],
@@ -11405,6 +11406,17 @@ function _suiviCommandes(){
       var lance=pos.map(function(bc){return bc.date;}).filter(Boolean).sort()[0]||'';
       statut={k:'attente', label:'Commande lancée'+(lance?' le '+fD(lance):'')+' — en attente', lanceeLe:lance};
     }
+    // (=X=) PO DE REMPLACEMENT A NOS FRAIS PAS ENCORE LIVRE : le client attend encore sa
+    //       piece, la commande est donc EN ATTENTE (filtre, compteur, PDF client), meme si
+    //       la facture est emise. [10/11/2026] La ligne restait « Livrée ».
+    //       Le libelle reste factuel (date du nouveau PO), sans n° ni mot « remplacement ».
+    //       Pas d'echeance depassee : le delai du devis portait sur la 1re livraison.
+    var remplAttente=pos.filter(function(bc){return _bcEstRemplacement(bc) && String(bc.status||'')!=='Livré';});
+    if(statut.k==='livre' && remplAttente.length){
+      var lanceR=remplAttente.map(function(bc){return bc.date;}).filter(Boolean).sort()[0]||'';
+      statut={k:'attente', label:'Commande lancée'+(lanceR?' le '+fD(lanceR):'')+' — en attente', lanceeLe:lanceR,
+              remplacement:true, premiereLivraison:statut.livreeLe||''};
+    }
     var contact=String(pos[0].clientFinal||'');
     out.push({
       pos:pos, factures:a.factures, bls:bls, client:_rentaClient(pos[0]), contact:contact,
@@ -11412,8 +11424,8 @@ function _suiviCommandes(){
       bcClient:a.bcClient, dateBC:dateBC, echeance:echeance?echeance.toISOString().slice(0,10):'',
       articles:articles, quotes:_suiviQuotes(pos), statut:statut,
       // PO de remplacement à nos frais pas encore livrés (affiché à l'écran, jamais sur le PDF client)
-      remplacementEnCours:pos.filter(function(bc){return _bcEstRemplacement(bc) && String(bc.status||'')!=='Livré';}).map(function(bc){return bc.num;}),
-      enRetard:statut.k==='attente' && !!echeance && echeance<new Date(new Date().toDateString())
+      remplacementEnCours:remplAttente.map(function(bc){return bc.num;}),
+      enRetard:statut.k==='attente' && !statut.remplacement && !!echeance && echeance<new Date(new Date().toDateString())
     });
   });
   return out.sort(function(x,y){return String(y.dateBC||y.pos[0].date||'').localeCompare(String(x.dateBC||x.pos[0].date||''));});
@@ -11458,7 +11470,7 @@ function renderSuiviCommandes(){
     var st=c.statut.k==='livre'
       ? '<span class="sc-st ok">Livrée</span>'+(c.statut.livreeLe?'<div class="sc-tag">le '+fD(c.statut.livreeLe)+(c.statut.bl?' · '+esc(c.statut.bl):'')+'</div>':'')
       : '<span class="sc-st att">'+esc(c.statut.label)+'</span>';
-    if(c.remplacementEnCours && c.remplacementEnCours.length) st+='<div class="sc-tag" style="color:#fb923c">🔁 remplacement en cours · PO '+c.remplacementEnCours.map(esc).join(', ')+'</div>';
+    if(c.remplacementEnCours && c.remplacementEnCours.length) st+='<div class="sc-tag" style="color:#fb923c">🔁 remplacement en cours · PO '+c.remplacementEnCours.map(esc).join(', ')+(c.statut.premiereLivraison?' · 1re livraison le '+fD(c.statut.premiereLivraison):'')+'</div>';
     var ech=c.echeance ? (c.enRetard?'<span style="color:var(--red);font-weight:600">'+fD(c.echeance)+' · dépassée</span>':fD(c.echeance)) : '<span class="sc-tag">non renseignée</span>';
     var bl=c.bls.length ? c.bls.map(function(x){return esc(x.num)+'<div class="sc-tag">'+esc(x.status||'')+(x.date?' · '+fD(x.date):'')+'</div>';}).join('') : '<span class="sc-tag">—</span>';
     var po=c.pos.map(function(bc){return '<a href="#" onclick="event.preventDefault();ouvrirDocument(\'BC\','+bc.id+');">'+esc(bc.num)+'</a>';}).join('<br>');
