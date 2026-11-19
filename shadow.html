@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="fr"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0e0e0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MacroDesk">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>MacroDesk — Shadow · Rotation sectorielle (palier 3)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+:root{--bg:#0e0e0c;--bg1:#0a0a08;--bg2:#1a1a17;--bg3:#14140f;--bg4:#222220;--border:rgba(255,255,250,0.08);--border-2:rgba(255,255,250,0.13);--text:#f5f5f0;--text-2:#c7c7c0;--muted:#a3a39a;--muted-soft:#6e6e66;--faint:#46463f;--red:#f09595;--green:#5dcaa5;--amber:#ef9f27;--blue:#88aae0;--purple:#a78bfa;--cyan:#4fc4d6;--mono:'JetBrains Mono',monospace;--font:'Inter',system-ui,sans-serif;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.55;letter-spacing:-0.005em;-webkit-font-smoothing:antialiased;padding:22px 26px 70px;max-width:1420px;margin:0 auto}
+.g{color:var(--green)}.r{color:var(--red)}.a{color:var(--amber)}.p{color:var(--purple)}.b{color:var(--blue)}.t2{color:var(--text-2)}
+.mono{font-family:var(--mono)}
+
+/* nav — identique aux autres pages */
+.topnav{display:flex;gap:4px;margin-bottom:16px;border-bottom:.5px solid var(--border);flex-wrap:wrap}
+.topnav a{font-family:var(--mono);font-size:11px;color:var(--muted);text-decoration:none;padding:9px 15px;border-bottom:2px solid transparent;display:inline-flex;align-items:center;gap:6px;transition:.12s;margin-bottom:-.5px}
+.topnav a:hover{color:var(--text)}
+.topnav a.active{color:var(--blue);border-bottom-color:var(--blue)}
+
+/* en-tête */
+.top{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px}
+h1{font-size:24px;font-weight:700;letter-spacing:-.02em;line-height:1.2;display:flex;align-items:center;gap:10px}
+h1 i{color:var(--cyan)}
+.sub{font-size:14px;color:var(--muted);margin-top:4px}
+.stamp{font:500 12px/1.7 var(--mono);color:var(--muted);text-align:right;margin-left:auto}
+.stamp b{color:var(--green);font-weight:600}
+
+/* bandeaux */
+#err{display:none;background:rgba(240,149,149,.08);border:1px solid rgba(240,149,149,.3);border-radius:10px;padding:14px 17px;margin-top:16px;color:var(--red);font-size:13px}
+.avis{margin-top:16px;padding:12px 16px;border:1px dashed rgba(239,159,39,.45);border-radius:10px;background:rgba(239,159,39,.06);font-size:13px;color:var(--text-2)}
+.avis b{color:var(--amber);font-weight:600}
+.avis.info{border-color:rgba(136,170,224,.45);background:rgba(136,170,224,.06)}
+.avis.info b{color:var(--blue)}
+.avis.rouge{border-color:rgba(240,149,149,.45);background:rgba(240,149,149,.06)}
+.avis.rouge b{color:var(--red)}
+
+/* titres de section */
+.secdiv{display:flex;flex-wrap:wrap;align-items:center;gap:11px;margin:26px 0 14px}
+.secdiv h2{font-size:16px;font-weight:650;letter-spacing:-.01em}
+.secdiv .line{flex:1;min-width:20px;height:1px;background:var(--border)}
+.tag{font:600 11px/1.2 var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:6px 8px;border-radius:4px;background:var(--bg4);color:var(--muted);border:1px solid var(--border-2)}
+.tag.ok{background:rgba(93,202,165,.14);color:var(--green);border-color:rgba(93,202,165,.3)}
+.tag.warn{background:rgba(239,159,39,.12);color:var(--amber);border-color:rgba(239,159,39,.3)}
+.tag.bad{background:rgba(240,149,149,.12);color:var(--red);border-color:rgba(240,149,149,.3)}
+
+/* cartes */
+.card{display:flex;flex-direction:column;gap:16px;padding:20px 22px;border-radius:12px;background:var(--bg2);border:1px solid var(--border)}
+.card.hero{gap:18px;padding:22px 24px;border-radius:14px;border-color:rgba(79,196,214,.3)}
+.card h3{font-size:15px;font-weight:600}
+.rowsb{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.lbl{font:600 11px/1.3 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.big{font-size:30px;line-height:1.2;font-weight:700;letter-spacing:-.02em}
+.txt{font-size:13.5px;color:var(--text-2);max-width:92ch}
+.note{font-size:12.5px;color:var(--muted)}
+.note.sep{padding-top:13px;border-top:1px solid var(--border)}
+.vide{font:500 12.5px/1.7 var(--mono);color:var(--muted);background:var(--bg3);border:1px dashed var(--border-2);border-radius:9px;padding:16px 18px}
+.retire{opacity:.55}
+
+/* grilles : une colonne sur téléphone */
+.g230{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px}
+.g280{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}
+.g150{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:8px}
+.g130{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr));gap:8px}
+.g440{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px;align-items:start}
+.col{display:flex;flex-direction:column;gap:10px}
+
+/* indicateurs */
+.kpi{display:flex;flex-direction:column;gap:6px;padding:14px 16px;border-radius:10px;background:var(--bg3);border:1px solid var(--border)}
+.kpi.neuf{border-color:rgba(93,202,165,.35)}
+.kpi .n{font-size:16px;font-weight:600}
+.kpi .v{font:700 24px/1 var(--mono);letter-spacing:-.03em}
+.kpi .s{font-size:12px;color:var(--muted)}
+.kpi.crit{gap:8px;padding:16px 18px;border-radius:11px}
+.kpi.crit .v{font-size:28px}
+.kpi.crit .v small{font-size:14px;font-weight:500;color:var(--muted)}
+.kpi.crit .s{font-size:12.5px}
+.kpi.mini{gap:4px;padding:10px 12px;border-radius:9px}
+.kpi.mini .lbl{font-size:11px;line-height:1.4;letter-spacing:.08em}
+.kpi.mini .v{font:700 18px/1.3 var(--mono);letter-spacing:0}
+.kpi.mini .s{font:500 11px/1.4 var(--mono)}
+
+/* jauge du taux de réussite */
+.jauge{position:relative;height:40px}
+.jauge .fond{height:12px;border-radius:8px;background:var(--bg4);overflow:hidden}
+.jauge .fond i{display:block;height:100%}
+.jauge .rep{position:absolute;top:-3px;width:2px;height:18px}
+.jauge .et{position:absolute;top:20px;font:500 11px/1.3 var(--mono);white-space:nowrap}
+
+/* tableaux : défilent dans leur cadre */
+.scroll{overflow-x:auto;border-radius:9px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+th{text-align:left;padding:9px 10px;font:600 11px/1.4 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border-2)}
+td{padding:10px;border-bottom:1px solid var(--border)}
+tbody tr:last-child td,tbody tr:last-child th{border-bottom:0}
+td.n,th.n{text-align:right}
+td.n,td.k{font-family:var(--mono)}
+tbody th{font:500 13px/1.5 var(--font);letter-spacing:0;text-transform:none;color:var(--text-2);padding:10px 12px;border-bottom:1px solid var(--border)}
+tbody tr.conf{background:rgba(93,202,165,.05)}
+tbody tr.conf th{color:var(--text);font-weight:600}
+.echelle td,.echelle thead th{padding:10px 12px}
+
+/* classement */
+.rang{display:grid;grid-template-columns:minmax(118px,190px) 1fr 68px;align-items:center;gap:10px}
+.rang .nm{font-size:13px;color:var(--text-2)}
+.rang .nm small{font:500 11px/1 var(--mono);color:var(--muted)}
+.rang .br{height:16px}
+.rang .br i{display:block;height:100%;border-radius:3px;min-width:3px}
+.rang .vl{font:500 13px/1 var(--mono);text-align:right;color:var(--text-2)}
+.rang.tenu .nm{font-weight:600;color:var(--text)}
+.rang.tenu .vl{font-weight:600;color:var(--text)}
+.rang.spy{padding:5px 0;border-top:1px dashed rgba(136,170,224,.5);border-bottom:1px dashed rgba(136,170,224,.5)}
+.rang.spy .nm,.rang.spy .vl,.rang.spy .nm small{color:var(--blue);font-weight:600}
+
+/* observation H7 */
+.obs{display:flex;flex-direction:column;gap:10px;padding:18px 20px;border-radius:12px;background:rgba(167,139,250,.04);border:1px dashed rgba(167,139,250,.4)}
+.obs h3{font-size:14px;font-weight:600;color:var(--purple)}
+
+/* renvoi + pied */
+.chart{padding:10px 6px 4px;border-radius:9px;background:var(--bg3);border:1px solid var(--border)}
+.chart svg{display:block;width:100%;height:auto}
+.foot{margin-top:26px;padding-top:16px;border-top:1px solid var(--border);font-size:12.5px;color:var(--muted);max-width:110ch}
+@media(max-width:640px){
+  body{padding:14px 12px 50px}
+  .big{font-size:23px}
+  .stamp{text-align:left}
+  .card,.card.hero{padding:16px 14px}
+}
+</style>
+</head>
+<body>
+
+<nav class="topnav" aria-label="Pages de MacroDesk"><a href="smallcap.html"><i class="ti ti-radar-2"></i>Radar</a><a href="decouvertes.html"><i class="ti ti-search"></i>Découvertes</a><a href="moniteur.html"><i class="ti ti-shield-half"></i>Moniteur</a><a href="validateur.html"><i class="ti ti-checkup-list"></i>Validateur</a><a href="portfolio.html"><i class="ti ti-briefcase"></i>Portfolio</a><a href="fxdesk.html"><i class="ti ti-currency-dollar"></i>Desk FX</a><a href="patrimoine.html"><i class="ti ti-droplet"></i>Patrimoine</a><a href="shadow.html" class="active" aria-current="page"><i class="ti ti-flask"></i>Shadow</a><a href="smallcap_guide.html"><i class="ti ti-book"></i>Guide</a></nav>
+
+<div class="top">
+  <div>
+    <h1><i class="ti ti-flask"></i>Shadow</h1>
+    <p class="sub">Rotation sectorielle suivie en temps réel, sans argent. Palier 3 de l'échelle de preuve.</p>
+  </div>
+  <div class="stamp" id="stamp">chargement…</div>
+</div>
+
+<div id="err"></div>
+<div id="avis"></div>
+
+<!-- 1 -->
+<div class="secdiv"><h2>Ce mois-ci</h2><span class="line" aria-hidden="true"></span></div>
+<section class="card hero" id="mois"><p class="vide">chargement…</p></section>
+
+<!-- 2 -->
+<div class="secdiv"><h2>Tient-il ses critères ?</h2><span class="line" aria-hidden="true"></span><span class="tag" id="tag-crit">ETF réels · depuis avril 2017</span></div>
+<section class="card" id="criteres"><p class="vide">chargement…</p></section>
+
+<!-- 3 -->
+<div class="secdiv"><h2>Mois vécus</h2><span class="line" aria-hidden="true"></span><span class="tag" id="tag-vecus">premier mois mesuré : décembre 2026</span></div>
+<section class="card" id="vecus"><p class="vide">chargement…</p></section>
+
+<!-- 4 -->
+<div class="secdiv"><h2>Classement des 11 secteurs</h2><span class="line" aria-hidden="true"></span><span class="tag" id="tag-class">Performance sur 12 mois</span></div>
+<section class="card" id="classement" style="gap:14px"><p class="vide">chargement…</p></section>
+
+<!-- 5 : contenu statique -->
+<div class="secdiv"><h2>L'échelle de preuve</h2><span class="line" aria-hidden="true"></span><span class="tag">8 modèles essayés · 2 confirmés</span></div>
+<section class="card" style="gap:14px">
+  <p class="txt">Chaque modèle monte les paliers avec des règles écrites avant le calcul. Les échecs restent affichés : plus on essaie de modèles, plus un gagnant peut être dû au hasard.</p>
+  <div class="scroll">
+  <table class="echelle" style="min-width:760px">
+    <thead><tr><th scope="col">Modèle</th><th scope="col">Palier 1 · histoire longue</th><th scope="col">Palier 2 · ETF réels</th><th scope="col">Palier 3 · shadow</th></tr></thead>
+    <tbody>
+      <tr class="conf"><th scope="row">P4 · rotation sectorielle, 3 secteurs</th><td class="g">retenu · 92 %</td><td class="g">confirmé · 55 % · +1,3 pt</td><td style="color:var(--cyan)">en cours</td></tr>
+      <tr class="conf"><th scope="row">P5 · P4 avec frein</th><td class="g">retenu · 84 %</td><td class="a">confirmé de justesse · 51 % · +0,3 pt</td><td style="color:var(--cyan)">en cours</td></tr>
+      <tr><th scope="row">P6 · mixte P1 + P4</th><td class="g">retenu · 93 %</td><td class="r">non confirmé · 32 %</td><td style="color:var(--muted)">non suivi</td></tr>
+      <tr><th scope="row">P1 · momentum de titres (MTUM)</th><td class="g">retenu · 81 %</td><td class="r">non confirmé · 38 %</td><td style="color:var(--muted)">non suivi</td></tr>
+      <tr><th scope="row">P3 · momentum, capitalisations moyennes</th><td class="g">retenu · 83 %</td><td style="color:var(--muted)">en attente · ETF à collecter</td><td style="color:var(--muted)">non suivi</td></tr>
+      <tr><th scope="row">P2 · P1 avec frein</th><td class="r">non établi · 74 %</td><td style="color:var(--muted)">arrêté au palier 1</td><td style="color:var(--muted)">non suivi</td></tr>
+      <tr><th scope="row">Rotation entre classes d'actions, avec et sans frein (2 modèles)</th><td class="r">non établi</td><td style="color:var(--muted)">arrêté au premier test</td><td style="color:var(--muted)">non suivi</td></tr>
+      <tr><th scope="row">H7 · MSCI World Momentum (IWMO), hors échelle</th><td style="color:var(--muted)">pas de test</td><td class="p">observé · 59 % · +1,7 pt</td><td class="p">en observation</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">Taux de réussite : part des périodes terminées devant le marché. Périodes de 5 ans au palier 1 (1950 à 2017), de 3 ans au palier 2 (2017 à 2026).</p>
+</section>
+
+<!-- 6 -->
+<div class="secdiv"><h2>Journal et fidélité</h2><span class="line" aria-hidden="true"></span><span class="tag">Une ligne par mois, jamais réécrite</span></div>
+<div class="g440">
+  <section class="card" id="journal" style="gap:12px"><p class="vide">chargement…</p></section>
+  <section class="obs" id="h7"><p class="vide">chargement…</p></section>
+</div>
+
+<!-- 7 -->
+<footer class="foot" id="foot">
+  Source unique : <span class="mono">data/shadow_palier3.json</span>, écrit par le workflow n8n « 🧪 Shadow — Rotation sectorielle (palier 3) »
+  (quotidien 07:15 Nouméa, n'agit qu'au premier relevé qui suit chaque mois complet ; verrou CAS à l'écriture).
+  Règles figées avant le premier signal : <span class="mono">PREENREGISTREMENT_palier3_shadow_2026-11-18.md</span>,
+  empreinte <span class="mono" id="empreinte" title="f898d21ff5928d37ae94c325696f3d81953aa5c579ad87b29863c3b2de418c05">f898d21f…418c05</span>.
+  Frais modélisés : 10 pb par unité échangée. Exécution supposée à la clôture de fin de mois ; fiscalité non modélisée.
+  Cette page mesure et affiche : elle ne passe aucun ordre et ne contient aucune recommandation.
+</footer>
+
+<script>
+'use strict';
+/* ============================================================================
+   SHADOW — page de lecture du shadow de rotation sectorielle (palier 3).
+   Donnees : data/shadow_palier3.json ecrit par le workflow n8n, une fois par mois.
+   GitHub Pages sert les data/*.json avec du retard -> on lit raw.githubusercontent,
+   comme les autres pages. En local (localhost), on lit la copie du dossier.
+   Cette page n ecrit rien et ne calcule aucune regle : elle affiche le fichier.
+   ========================================================================== */
+var MD_RAW = 'https://raw.githubusercontent.com/trojanijf-dot/macrodesks/main/';
+var LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+var SRC = (LOCAL ? '' : MD_RAW) + 'data/shadow_palier3.json';
+var PREMIER_SIGNAL = '2026-11';
+
+var NOMS = { XLB:'matériaux', XLE:'énergie', XLF:'finance', XLI:'industrie', XLK:'technologie',
+  XLP:'conso. de base', XLU:'services publics', XLV:'santé', XLY:'conso. cyclique',
+  XLRE:'immobilier', XLC:'communication' };
+var AVEC_ARTICLE = { XLB:'les matériaux', XLE:'l\'énergie', XLF:'la finance', XLI:'l\'industrie', XLK:'la technologie',
+  XLP:'la conso. de base', XLU:'les services publics', XLV:'la santé', XLY:'la conso. cyclique',
+  XLRE:'l\'immobilier', XLC:'la communication' };
+var MOIS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+var MOIS_ABR = ['janv.','févr.','mars','avr.','mai','juin','juil.','août','sept.','oct.','nov.','déc.'];
+
+function el(id){ return document.getElementById(id); }
+function esc(s){ return String(s === undefined || s === null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function nul(x){ return x === null || x === undefined || isNaN(x); }
+function fr(x, d){ return Math.abs(x).toFixed(d).replace('.', ','); }
+/* Toujours un signe explicite : jamais le sens porte par la couleur seule. */
+function pct(x, d){ if (nul(x)) return '—';
+  return (x >= 0 ? '+' : '−') + fr(x * 100, d === undefined ? 1 : d) + ' %'; }
+function pts(x, d){ if (nul(x)) return '—';
+  return (x >= 0 ? '+' : '−') + fr(x * 100, d === undefined ? 2 : d) + ' pt'; }
+function part(x, d){ if (nul(x)) return '—'; return fr(x * 100, d === undefined ? 0 : d) + ' %'; }
+function coul(x){ return nul(x) ? '' : (x > 0 ? 'g' : (x < 0 ? 'r' : '')); }
+function cap(s){ s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
+function nomS(sym){ return NOMS[sym] || sym; }
+function moisPlus(m, n){ var k = (+m.slice(0,4)) * 12 + (+m.slice(5,7)) - 1 + n;
+  return ('000' + Math.floor(k / 12)).slice(-4) + '-' + ('0' + (k % 12 + 1)).slice(-2); }
+function nomMois(ym){ return MOIS[(+String(ym).slice(5,7)) - 1] || esc(ym); }
+function moisAn(ym){ return nomMois(ym) + ' ' + String(ym).slice(0,4); }
+function dateFr(iso){ var p = String(iso || '').split('-'); return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : esc(iso); }
+function dateLongue(iso){ var p = String(iso || '').split('-');
+  return p.length === 3 ? (+p[2]) + (p[2] === '01' ? 'er' : '') + ' ' + MOIS[(+p[1]) - 1] : esc(iso); }
+function liste(a){ return a.map(function(s){ return nomS(s); }).join(', '); }
+function premierMesure(j){ return moisAn(moisPlus((j && j.premierSignal) || PREMIER_SIGNAL, 1)); }
+function retire(j, k){ return !!(j.pointEtape && j.pointEtape.manques && j.pointEtape.manques[k] >= 2); }
+
+/* ---- bandeau haut */
+function renderEntete(j){
+  var maj = j.maj ? new Date(j.maj) : null;
+  el('stamp').innerHTML = 'source <b>data/shadow_palier3.json</b>' + (LOCAL ? ' · copie locale' : '') + '<br>' +
+    (j.moisSignal ? 'signal ' + esc(j.moisSignal) + ' · ' + nomMois(j.moisTenu) + ' en cours · ' : '') +
+    'maj ' + (maj ? esc(maj.toLocaleString('fr-FR', {dateStyle:'short', timeStyle:'short'})) : '?');
+  if (j.protocole && j.protocole.sha256){
+    var h = String(j.protocole.sha256);
+    el('empreinte').textContent = h.slice(0, 8) + '…' + h.slice(-6);
+    el('empreinte').title = h;
+  }
+}
+
+/* ---- avis : echec du dernier releve, alertes de retard */
+function renderAvis(j){
+  var h = '';
+  if (j.erreur){
+    var e = j.erreur;
+    h += '<p class="avis"><b>Dernier relevé en échec.</b> Décision de ' + esc(e.mois || '?') +
+      ' non enregistrée : ' + esc(e.cause || 'cause inconnue') + '.' +
+      (e.depuis ? ' Constaté le ' + esc(new Date(e.depuis).toLocaleDateString('fr-FR')) + '.' : '') +
+      ' Aucune ligne n\'est écrite tant que le mois n\'est pas complet ; le workflow réessaie chaque matin.</p>';
+  }
+  if (j.alerte){
+    if (j.alerte.P4) h += '<p class="avis rouge"><b>Alerte P4.</b> Retard cumulé face à SPY de ' + pct(j.alerte.retardP4) +
+      ' depuis le début du shadow, au-delà du seuil de −20 %. C\'est une information, pas un verdict.</p>';
+    if (j.alerte.P5) h += '<p class="avis rouge"><b>Alerte P5.</b> Retard cumulé face à SPY de ' + pct(j.alerte.retardP5) +
+      ' depuis le début du shadow, au-delà du seuil de −25 %. C\'est une information, pas un verdict.</p>';
+  }
+  el('avis').innerHTML = h;
+}
+
+/* ---- 1. ce mois-ci */
+function tenuDepuis(j, sym){
+  var lignes = (j.journal || []).slice().sort(function(a, b){ return a.moisSignal < b.moisSignal ? 1 : -1; });
+  var n = 0, premier = null;
+  for (var i = 0; i < lignes.length; i++){
+    if ((lignes[i].p4 || []).indexOf(sym) < 0) break;
+    if (i > 0 && lignes[i].moisSignal !== moisPlus(lignes[i - 1].moisSignal, -1)) break;
+    n++; premier = lignes[i];
+  }
+  if (n === lignes.length) return 'tenu depuis le début du suivi';
+  return 'tenu depuis ' + nomMois(premier.moisTenu);
+}
+function renderMois(j){
+  var box = el('mois');
+  if (!j.positions || !j.moisSignal){
+    box.innerHTML = '<p class="vide">Aucun signal enregistré pour l\'instant. Premier signal : clôture du 30 novembre 2026. ' +
+      'Premier mois mesuré : ' + premierMesure(j) + '.</p>';
+    return;
+  }
+  var p4 = j.positions.P4 || [], p5 = j.positions.P5 || [];
+  var ch = j.changements || { entrees: [], sorties: [] };
+  var ligne = (j.journal || []).filter(function(r){ return r.moisSignal === j.moisSignal; }).pop() || {};
+  var par = {};
+  (j.classement || []).forEach(function(c){ par[c.sym] = c; });
+  var chg = '';
+  if (ch.entrees.length) chg += ' <strong class="g" style="font-weight:600">Entrée : ' + esc(liste(ch.entrees)) + '.</strong>';
+  if (ch.sorties.length) chg += ' <strong class="r" style="font-weight:600">Sortie : ' + esc(liste(ch.sorties)) + '.</strong>';
+  if (!ch.entrees.length && !ch.sorties.length) chg = ' Aucun changement par rapport au signal précédent.';
+  var h = '<div class="col" style="gap:6px">' +
+    '<p class="lbl">' + esc(moisAn(j.moisTenu)) + ' · signal du ' + esc(dateLongue(ligne.dateSignal)) +
+    (ligne.tardif ? ' · enregistré en retard' : '') + '</p>' +
+    '<p class="big">' + p4.map(function(s){ return esc(cap(nomS(s))); }).join(' · ') + '</p>' +
+    '<p class="txt" style="font-size:14px;max-width:80ch">Un tiers chacun, tenus jusqu\'au signal de fin ' + nomMois(j.moisTenu) + '.' + chg + '</p></div>';
+  h += '<div class="g230">' + p4.map(function(s){
+    var c = par[s] || {};
+    var neuf = ch.entrees.indexOf(s) >= 0;
+    var suite = neuf
+      ? (ch.sorties.length ? 'remplace ' + esc(ch.sorties.map(function(x){ return AVEC_ARTICLE[x] || x; }).join(', ')) : 'entre ce mois-ci')
+      : esc(tenuDepuis(j, s));
+    return '<div class="kpi' + (neuf ? ' neuf' : '') + '">' +
+      '<span class="lbl">Rang ' + esc(c.rang || '?') + ' · ' + esc(s) + (neuf ? ' · nouveau' : '') + '</span>' +
+      '<span class="n">' + esc(cap(nomS(s))) + '</span>' +
+      '<span class="v ' + coul(c.perf12) + '">' + pct(c.perf12) + '</span>' +
+      '<span class="s">sur 12 mois · ' + suite + '</span></div>';
+  }).join('') + '</div>';
+  var hors = p4.filter(function(s){ return p5.indexOf(s) < 0; });
+  var frein = !hors.length
+    ? 'mêmes secteurs, 0 % en cash. Les trois sont positifs sur 12 mois, le frein ne joue pas.'
+    : (p5.length ? esc(liste(p5)) + ' seulement' : 'aucun secteur') + ', ' + part(j.positions.cashP5) + ' en cash. ' +
+      cap(esc(liste(hors))) + (hors.length > 1 ? ' ne sont pas positifs' : ' n\'est pas positif') +
+      ' sur 12 mois : ' + (hors.length > 1 ? 'leur tiers reste' : 'son tiers reste') + ' en cash.';
+  h += '<p class="note sep" style="font-size:13px">Variante avec frein (P5) : ' + frein + '</p>';
+  box.innerHTML = h;
+}
+
+/* ---- 2. criteres */
+function etiquette(j, k){
+  var c = j.etat[k].criteres || [];
+  var n = c.filter(Boolean).length;
+  if (retire(j, k)) return '<span class="tag">Retiré · 2 points d\'étape manqués de suite</span>';
+  if (n === 3) return '<span class="tag ok">Tient · 3 critères sur 3</span>';
+  return '<span class="tag bad">Manque ' + (3 - n) + ' critère' + (3 - n > 1 ? 's' : '') + ' · ' + n + ' sur 3</span>';
+}
+function verdict(ok){ return ok ? '<span class="g">Critère tenu.</span>' : '<span class="r">Critère manqué.</span>'; }
+function jauge(x){
+  var w = Math.max(0, Math.min(100, x * 100));
+  return '<div class="jauge" role="img" aria-label="Jauge du taux de réussite : ' + part(x) + ', seuil à 50 %, ambition à 67 %">' +
+    '<div class="fond"><i style="width:' + w.toFixed(1) + '%;background:' + (x >= 0.5 ? 'var(--green)' : 'var(--red)') + '"></i></div>' +
+    '<span class="rep" style="left:50%;background:var(--text)"></span>' +
+    '<span class="et" style="left:50%;transform:translateX(-100%);padding-right:4px;color:var(--text-2)">seuil 50 %</span>' +
+    '<span class="rep" style="left:67%;background:var(--amber)"></span>' +
+    '<span class="et a" style="left:67%;padding-left:4px">ambition 67 %</span></div>';
+}
+function renderCriteres(j){
+  var box = el('criteres');
+  var e = j.etat;
+  if (!e || !e.P4 || !e.P5){
+    box.innerHTML = '<p class="vide">Critères calculés au premier relevé qui suit le premier signal (clôture du 30 novembre 2026).</p>';
+    return;
+  }
+  el('tag-crit').textContent = 'ETF réels · ' + moisAn(e.depuis) + ' → ' + moisAn(e.jusqua) + ' · ' + e.nMois + ' mois';
+  var a = e.P4, b = e.P5, c4 = a.criteres || [], c5 = b.criteres || [];
+  var h = '<div class="' + (retire(j, 'P4') ? 'retire' : '') + '" style="display:flex;flex-direction:column;gap:16px">' +
+    '<div class="rowsb"><h3>P4 · rotation sectorielle, 3 secteurs</h3>' + etiquette(j, 'P4') + '</div>' +
+    '<div class="g280">' +
+    '<div class="kpi crit"><span class="lbl">1 · Écart de rendement</span>' +
+      '<span class="v ' + (c4[0] ? 'g' : 'r') + '">' + pts(a.ecartCagr) + '<small> par an</small></span>' +
+      '<span class="s">Modèle ' + part(a.cagr, 1) + ' par an, SPY ' + part(e.SPY.cagr, 1) + '. Seuil : au-dessus de 0. ' + verdict(c4[0]) + '</span></div>' +
+    '<div class="kpi crit"><span class="lbl">2 · Taux de réussite</span>' +
+      '<span class="v ' + (c4[1] ? 'g' : 'r') + '">' + part(a.fenetres3ans) + '</span>' + jauge(a.fenetres3ans) +
+      '<span class="s">' + esc(a.fenetresDevant) + ' périodes de 3 ans sur ' + esc(a.fenetresTotal) + ' terminées devant SPY. Seuil : 50 %. ' + verdict(c4[1]) + '</span></div>' +
+    '<div class="kpi crit"><span class="lbl">3 · Pire baisse</span>' +
+      '<span class="v ' + (c4[2] ? 'g' : 'r') + '">' + pct(a.pireBaisse) + '</span>' +
+      '<span class="s">SPY : ' + pct(e.SPY.pireBaisse) + '. Seuil : pas plus de 5 points de plus que SPY. ' + verdict(c4[2]) + '</span></div>' +
+    '</div></div>';
+  h += '<p class="txt">Constat du palier 2, d\'avril 2017 à octobre 2026 : l\'avance vient de deux années, 2022 et 2026. Fin 2025, le modèle était en retard de 1,2 point par an, et il n\'a battu SPY que 3 années sur 10. Son point fort reste la baisse plus faible.</p>';
+  h += '<div class="kpi rowsb' + (retire(j, 'P5') ? ' retire' : '') + '" style="flex-direction:row">' +
+    '<div class="col" style="gap:3px"><span style="font-size:14px;font-weight:600">P5 · la même, avec frein</span>' +
+    '<span class="mono t2" style="font-size:12.5px;font-weight:500">' + pts(b.ecartCagr) + ' par an · ' + part(b.fenetres3ans) +
+    ' (' + esc(b.fenetresDevant) + ' sur ' + esc(b.fenetresTotal) + ') · pire baisse ' + pct(b.pireBaisse) + '</span>' +
+    '<span class="s">Écart : ' + (c5[0] ? 'tenu' : 'manqué') + ' · taux de réussite : ' + (c5[1] ? 'tenu' : 'manqué') +
+    ' · pire baisse : ' + (c5[2] ? 'tenu' : 'manqué') + '</span></div>' + etiquette(j, 'P5') + '</div>';
+  var pe = j.pointEtape || {};
+  var der = '';
+  if (pe.dernier){
+    var n4 = (pe.dernier.P4 || []).filter(Boolean).length, n5 = (pe.dernier.P5 || []).filter(Boolean).length;
+    der = ' Dernier point d\'étape, fin ' + moisAn(pe.dernier.mois) + ' : P4 ' + n4 + ' critères sur 3, P5 ' + n5 + ' sur 3.';
+  }
+  h += '<p class="note sep">Prochain point d\'étape : fin ' + (pe.prochain ? moisAn(pe.prochain) : 'mai 2027') +
+    '. Un modèle qui manque un critère à deux points d\'étape de suite est retiré.' + der + '</p>';
+  box.innerHTML = h;
+}
+
+/* ---- 3. mois vecus */
+function courbe(v){
+  var W = 720, H = 260, x0 = 60, x1 = 660, yT = 30, yB = 205;
+  var m = [0].concat(v.map(function(r){ return (r.cumulP4 - 1) * 100; }));
+  var s = [0].concat(v.map(function(r){ return (r.cumulSpy - 1) * 100; }));
+  var lo = Math.min.apply(null, m.concat(s)), hi = Math.max.apply(null, m.concat(s));
+  if (hi - lo < 2){ hi += 1; lo -= 1; }
+  var marge = (hi - lo) * 0.12; lo -= marge; hi += marge;
+  var n = m.length - 1;
+  function X(i){ return x0 + (x1 - x0) * (n ? i / n : 0); }
+  function Y(p){ return yB - (p - lo) / (hi - lo) * (yB - yT); }
+  var pas = [1, 2, 5, 10, 20, 25, 50, 100], step = 100;
+  for (var k = 0; k < pas.length; k++){ if ((hi - lo) / pas[k] <= 5){ step = pas[k]; break; } }
+  var o = '';
+  for (var t = Math.ceil(lo / step) * step; t <= hi; t += step){
+    o += '<line x1="' + x0 + '" y1="' + Y(t).toFixed(1) + '" x2="690" y2="' + Y(t).toFixed(1) + '" stroke="rgba(255,255,250,' + (t === 0 ? '0.22' : '0.08') + ')" stroke-width="1"></line>' +
+      '<text x="52" y="' + (Y(t) + 3.5).toFixed(1) + '" fill="#a3a39a" font-size="11" font-family="JetBrains Mono, monospace" text-anchor="end">' +
+      (t === 0 ? '0' : (t > 0 ? '+' : '−') + Math.abs(t) + ' %') + '</text>';
+  }
+  function chemin(a){ return a.map(function(p, i){ return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p).toFixed(1); }).join(' '); }
+  o += '<path d="' + chemin(s) + '" fill="none" stroke="#9b9b91" stroke-width="1.8" stroke-dasharray="6 5"></path>';
+  o += '<path d="' + chemin(m) + '" fill="none" stroke="#efb04f" stroke-width="2.6" stroke-linejoin="round"></path>';
+  if (n <= 24) m.forEach(function(p, i){
+    o += '<circle cx="' + X(i).toFixed(1) + '" cy="' + Y(p).toFixed(1) + '" r="' + (i ? 5 : 4) + '" fill="#efb04f"' + (i ? ' stroke="#14140f" stroke-width="2"' : '') + '></circle>';
+  });
+  var fm = m[n], fs = s[n], haut = fm >= fs;
+  o += '<text x="652" y="' + (Y(fm) + (haut ? -14 : 22)).toFixed(1) + '" fill="#efb04f" font-size="12" font-weight="700" font-family="JetBrains Mono, monospace" text-anchor="end">modèle ' + pct(fm / 100) + '</text>';
+  o += '<text x="652" y="' + (Y(fs) + (haut ? 22 : -14)).toFixed(1) + '" fill="#c7c7c0" font-size="12" font-weight="600" font-family="JetBrains Mono, monospace" text-anchor="end">SPY ' + pct(fs / 100) + '</text>';
+  var saut = Math.max(1, Math.ceil(n / 12));
+  for (var i = 0; i <= n; i++){
+    if (i && i !== n && i % saut) continue;
+    var lab = 'départ';
+    if (i){ var ym = v[i - 1].mois; lab = MOIS_ABR[(+ym.slice(5,7)) - 1] + (ym.slice(5,7) === '01' || saut > 1 ? ' ' + ym.slice(2,4) : ''); }
+    o += '<text x="' + X(i).toFixed(1) + '" y="240" fill="#a3a39a" font-size="11" font-family="JetBrains Mono, monospace" text-anchor="middle">' + esc(lab) + '</text>';
+  }
+  var d = v[n - 1];
+  return '<svg role="img" aria-label="Courbe cumulée de ' + esc(moisAn(v[0].mois)) + ' à ' + esc(moisAn(d.mois)) + ' : le modèle finit à ' +
+    pct(d.cumulP4 - 1) + ', SPY à ' + pct(d.cumulSpy - 1) + '" viewBox="0 0 ' + W + ' ' + H + '">' + o + '</svg>';
+}
+function renderVecus(j){
+  var box = el('vecus');
+  var v = j.moisVecus || [];
+  if (!v.length){
+    el('tag-vecus').textContent = 'premier mois mesuré : ' + premierMesure(j);
+    box.innerHTML = '<p class="vide">Aucun mois vécu pour l\'instant. Premier mois mesuré : ' + premierMesure(j) +
+      '. Rappel : quelques mois ne prouveront rien, l\'écart entre le modèle et SPY varie d\'environ 8 points par an.</p>';
+    return;
+  }
+  var d = v[v.length - 1];
+  el('tag-vecus').textContent = v.length + ' mois mesuré' + (v.length > 1 ? 's' : '') + ' · depuis ' + moisAn(v[0].mois);
+  var av = d.cumulP4 / d.cumulSpy - 1, av5 = d.cumulP5 / d.cumulSpy - 1;
+  var devant = v.filter(function(r){ return r.p4 > r.spy; }).length;
+  var parMois = {};
+  (j.journal || []).forEach(function(r){ parMois[r.moisTenu] = r; });
+  function mini(l, val, cls, s){ return '<div class="kpi mini"><span class="lbl">' + l + '</span><span class="v ' + cls + '">' + val + '</span><span class="s">' + s + '</span></div>'; }
+  var h = '<div class="g150">' +
+    mini('Cumul modèle', pct(d.cumulP4 - 1), coul(d.cumulP4 - 1), 'la courbe ambre') +
+    mini('Cumul SPY', pct(d.cumulSpy - 1), coul(d.cumulSpy - 1), 'la courbe grise') +
+    mini(av >= 0 ? 'Avance sur SPY' : 'Retard sur SPY', pct(av), coul(av), 'alerte sous −20 %') +
+    mini('Mois devant SPY', devant + ' sur ' + v.length, '', 'trop peu pour conclure') + '</div>';
+  var lignes = v.map(function(r){
+    var l = parMois[r.mois];
+    var e = r.p4 - r.spy;
+    return '<tr><td class="k">' + esc(r.mois) + '</td><td class="t2">' + esc(l ? liste(l.p4 || []) : '—') + '</td>' +
+      '<td class="n">' + pct(r.p4) + '</td><td class="n t2">' + pct(r.spy) + '</td>' +
+      '<td class="n ' + coul(e) + '">' + pts(e, 1) + '</td></tr>';
+  }).join('');
+  h += '<div class="g440"><div class="col"><div class="chart">' + courbe(v) + '</div>' +
+    '<p class="note">' + (v.length === 1 ? 'Un mois ne prouve rien' : 'Quelques mois ne prouvent rien') +
+    ' : l\'écart entre le modèle et SPY varie d\'environ 8 points par an (écart-type).</p></div>' +
+    '<div class="scroll"><table style="min-width:430px"><thead><tr><th scope="col">Mois</th><th scope="col">Secteurs tenus</th>' +
+    '<th scope="col" class="n">Modèle</th><th scope="col" class="n">SPY</th><th scope="col" class="n">Écart</th></tr></thead>' +
+    '<tbody>' + lignes + '</tbody></table></div></div>';
+  h += '<p class="note sep">Variante avec frein (P5) : cumul ' + pct(d.cumulP5 - 1) + ', ' + (av5 >= 0 ? 'avance' : 'retard') +
+    ' sur SPY de ' + pct(av5) + ' (alerte sous −25 %). ' +
+    (j.alerte && (j.alerte.retardP4 < 0 || j.alerte.retardP5 < 0)
+      ? 'Pire retard cumulé atteint depuis le début : P4 ' + pct(j.alerte.retardP4) + ', P5 ' + pct(j.alerte.retardP5) + '.'
+      : 'Aucun retard cumulé face à SPY depuis le début.') + '</p>';
+  box.innerHTML = h;
+}
+
+/* ---- 4. classement */
+function renderClassement(j){
+  var box = el('classement');
+  var cl = (j.classement || []).filter(function(c){ return !nul(c.perf12); });
+  if (!cl.length){
+    box.innerHTML = '<p class="vide">Classement publié au premier relevé qui suit le premier signal.</p>';
+    return;
+  }
+  el('tag-class').textContent = 'Performance sur 12 mois · fin ' + moisAn(j.moisSignal);
+  var spy = j.spyPerf12;
+  var vals = cl.map(function(c){ return c.perf12; }).concat(nul(spy) ? [] : [spy]);
+  var lo = Math.min.apply(null, vals.concat([0])), hi = Math.max.apply(null, vals.concat([0]));
+  var plage = (hi - lo) || 1, zero = (0 - lo) / plage * 100;
+  function barre(x, fond){
+    var w = Math.abs(x) / plage * 100;
+    return '<div class="br"><i style="margin-left:' + (x >= 0 ? zero : zero - w).toFixed(1) + '%;width:' + w.toFixed(1) + '%;background:' + fond + '"></i></div>';
+  }
+  var devant = nul(spy) ? null : cl.filter(function(c){ return c.perf12 > spy; }).length;
+  var h = '<p class="txt">' + (devant === null ? '' : cap(String(devant)) + ' secteur' + (devant > 1 ? 's' : '') + ' devant le marché, ' +
+    (cl.length - devant) + ' derrière. ') + 'Les trois premiers sont tenus : ' + esc(liste((j.positions && j.positions.P4) || [])) + '.</p>';
+  h += '<div class="col" style="gap:7px">';
+  var pose = false;
+  function ligneSpy(){
+    pose = true;
+    return '<div class="rang spy"><span class="nm">Le marché <small>SPY</small></span>' + barre(spy, 'var(--blue)') +
+      '<span class="vl">' + pct(spy) + '</span></div>';
+  }
+  cl.forEach(function(c){
+    if (!pose && !nul(spy) && c.perf12 <= spy) h += ligneSpy();
+    var fond = c.p4 ? 'var(--green)' : (c.perf12 < 0 ? 'var(--red)' : 'var(--faint)');
+    var horsP5 = c.p4 && !c.p5;
+    h += '<div class="rang' + (c.p4 ? ' tenu' : '') + '"><span class="nm">' + esc(c.rang) + ' · ' + esc(cap(nomS(c.sym))) +
+      ' <small>' + esc(c.sym) + (horsP5 ? ' · en cash dans P5' : '') + '</small></span>' + barre(c.perf12, fond) +
+      '<span class="vl"' + (c.perf12 < 0 ? ' style="color:var(--red)"' : '') + '>' + pct(c.perf12) + '</span></div>';
+  });
+  if (!pose && !nul(spy)) h += ligneSpy();
+  box.innerHTML = h + '</div>';
+}
+
+/* ---- 6. journal, fidelite, H7 */
+function renderJournal(j){
+  var box = el('journal');
+  var jr = (j.journal || []).slice().sort(function(a, b){ return a.moisSignal < b.moisSignal ? 1 : -1; });
+  if (!jr.length){
+    box.innerHTML = '<p class="vide">Journal vide. Premier signal : clôture du 30 novembre 2026.</p>';
+    return;
+  }
+  var h = '<div class="scroll"><table style="min-width:420px"><thead><tr><th scope="col">Signal</th><th scope="col">Mois tenu</th><th scope="col">Secteurs retenus</th></tr></thead><tbody>';
+  jr.forEach(function(r, i){
+    var p4 = r.p4 || [], p5 = r.p5 || [];
+    var diff = p4.join('+') !== p5.join('+');
+    h += '<tr' + (i ? ' class="t2"' : '') + '><td class="k">' + esc(dateFr(r.dateSignal)) + '</td><td class="k">' + esc(r.moisTenu) + '</td>' +
+      '<td class="k">' + esc(p4.join(' · ')) + (diff ? ' <span class="a">· P5 : ' + esc(p5.length ? p5.join(' · ') : 'tout en cash') + '</span>' : '') +
+      (r.tardif ? ' <span class="a">· tardif</span>' : '') + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  var f = j.fidelite || { identiques: 0, total: 0, ecarts: [] };
+  var tout = f.total > 0 && f.identiques === f.total;
+  h += '<p class="t2" style="font-size:13px"><strong class="' + (tout ? 'g' : 'a') + '" style="font-weight:600">' + esc(f.identiques) +
+    ' décision' + (f.identiques > 1 ? 's' : '') + ' sur ' + esc(f.total) + ' identique' + (f.identiques > 1 ? 's' : '') +
+    '</strong> au recalcul avec les cours du jour' + (f.total ? ' (' + part(f.identiques / f.total) + ')' : '') + '. Seuil du verdict final : 95 %.</p>';
+  if (f.ecarts && f.ecarts.length){
+    h += '<p class="note a">Différences listées, jamais corrigées — le journal fait foi :<br>' +
+      f.ecarts.map(function(x){ return esc(x); }).join('<br>') + '</p>';
+  }
+  box.innerHTML = h;
+}
+function renderH7(j){
+  var box = el('h7');
+  var v = j.moisVecus || [], x = j.h7;
+  var h = '<h3>En observation · MSCI World Momentum</h3>' +
+    '<p class="txt">IWMO contre IWDA, le marché mondial. Hypothèse née d\'une observation : affichée, pas jugée avant 36 mois.</p>';
+  if (!v.length || !x){
+    box.innerHTML = h + '<p class="vide">Aucun mois mesuré pour l\'instant. Premier mois mesuré : ' + premierMesure(j) + '.</p>';
+    return;
+  }
+  function m(l, val){ return '<div class="kpi mini" style="gap:5px;border-radius:8px"><span class="lbl">' + l + '</span>' +
+    '<span class="v ' + coul(val) + '" style="font:600 16px/1.2 var(--mono)">' + pct(val) + '</span></div>'; }
+  h += '<div class="g130">' + m('IWMO', x.cumulIwmo - 1) + m('IWDA', x.cumulIwda - 1) + m(x.ecart >= 0 ? 'Avance' : 'Retard', x.ecart) + '</div>' +
+    '<p class="note">Sur ' + (v.length === 1 ? 'le seul mois vécu' : 'les ' + v.length + ' mois vécus') + '. Le retard est affiché comme l\'avance.</p>';
+  box.innerHTML = h;
+}
+
+function render(j){
+  renderEntete(j); renderAvis(j); renderMois(j); renderCriteres(j);
+  renderVecus(j); renderClassement(j); renderJournal(j); renderH7(j);
+}
+/* Avant le premier releve : le fichier n existe pas encore. Ce n est pas une erreur. */
+function renderVide(){
+  el('stamp').innerHTML = 'source <b>data/shadow_palier3.json</b>' + (LOCAL ? ' · copie locale' : '') + '<br>pas encore publié';
+  el('avis').innerHTML = '<p class="avis info"><b>Rien n\'est encore enregistré.</b> Le premier signal est la clôture américaine du lundi 30 novembre 2026 ; ' +
+    'le workflow l\'enregistre au relevé qui suit, vers 07:15 à Nouméa. Premier mois mesuré : ' + premierMesure(null) + '.</p>';
+  var j = { journal: [], moisVecus: [], classement: [] };
+  renderMois(j); renderCriteres(j); renderVecus(j); renderClassement(j); renderJournal(j); renderH7(j);
+}
+
+fetch(SRC + '?t=' + Date.now())
+  .then(function(r){
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(function(j){ if (j) render(j); else renderVide(); })
+  .catch(function(e){
+    var b = el('err');
+    b.style.display = 'block';
+    b.innerHTML = '<b>Données injoignables</b> — ' + esc(e.message) +
+      '. La page lit <span class="mono">raw.githubusercontent.com/…/data/shadow_palier3.json</span> ; ' +
+      'vérifier la connexion, puis que le workflow n8n « Shadow » a bien publié au moins un relevé.';
+    el('stamp').textContent = 'hors ligne';
+    ['mois','criteres','vecus','classement','journal','h7'].forEach(function(id){
+      el(id).innerHTML = '<p class="vide">Données injoignables.</p>'; });
+  });
+</script>
+</body>
+</html>
