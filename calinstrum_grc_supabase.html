@@ -686,6 +686,20 @@ tr.regl-calc-on td{background:rgba(45,212,191,.09)}
 .imp-clients{border:1px solid var(--border);border-radius:8px;padding:6px 10px;max-height:170px;overflow:auto}
 .imp-case{display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)}
 .imp-case.sous{margin-left:24px;font-size:11px;color:var(--muted)}
+.fa-regr-tag{font:600 9px var(--mono);border:1px solid rgba(251,146,60,.55);color:#fb923c;background:rgba(251,146,60,.08);border-radius:4px;padding:1px 6px;margin-left:4px;cursor:pointer;white-space:nowrap}
+.fa-regr-tag:hover{background:rgba(251,146,60,.2)}
+#mREGR .modal{display:flex;flex-direction:column}
+#mREGR .modal-body{overflow-y:auto}
+.regr-note{font-size:11.5px;color:var(--muted);line-height:1.5}
+.regr-table{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:10px}
+.regr-table th{color:var(--muted);font-weight:600;text-align:left;padding:5px 6px;border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase}
+.regr-table td{padding:6px;border-bottom:1px solid var(--border);vertical-align:top}
+.regr-num{color:var(--teal);font-weight:700;white-space:nowrap}
+.regr-bilan{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.regr-bilan>div{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:var(--bg3)}
+.regr-bilan span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.regr-bilan b{font-size:13px;color:var(--text-strong)}
+.regr-alerte{margin-top:12px;padding:8px 10px;border-radius:8px;border:1px solid rgba(244,63,94,.45);color:#fb7185;font-size:12px}
 .imp-compte{padding:8px 16px;border-top:1px solid var(--border);background:rgba(45,212,191,.07);font:700 12px var(--mono);color:var(--teal)}
 .imp-compte.vide{color:var(--amber,#f59e0b);background:rgba(245,158,11,.08)}
 /* === Surbrillance "ligne en édition" — appliquée quand une modale d'édition est ouverte === */
@@ -7512,6 +7526,8 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-20','🔗 Factures : deux pré-factures pour un même bon de commande client se regroupent en une seule (pastille « même BC »). Aucune émission, annulable.'],
+  ['2026-11-20','🧾 Acompte en % : les tâches et les kits sont comptés. Avant, un acompte sur une facture de tâches sortait à 0.'],
   ['2026-11-10','🔁 Suivi commandes : un PO de remplacement pas encore livré remet la commande en attente (filtre, compteur, PDF client).'],
   ['2026-11-05','📏 Règlements : les colonnes sont alignées de mois en mois, et avec À relancer.'],
   ['2026-11-05','🔄 Bouton Actualiser à côté du titre. Une facture supprimée disparaît aussi de Règlements dès le retour dans Suivi Factures, sans recharger.'],
@@ -9336,18 +9352,242 @@ function propagateFacturePhaseToDevis(inv, newPhase){
   if(_faSrc.acompteType==='acompte') return;
   var devisPhaseKey=_facturePhaseToDevisPhase(newPhase, inv.type);
   if(!devisPhaseKey) return;
-  var d=_findLinkedDevisFromFacture(inv);
-  if(!d) return;
-  if(d._propagating) return;
+  // Une facture regroupée clôt TOUS ses devis (cf _faDevisLies) ; sinon son devis lié.
+  var _dvs=_faDevisLies(inv).filter(function(d){ return d && !d._propagating; });
+  if(!_dvs.length) return;
   inv._propagating=true;
   try{
-    _addPhaseToDevisHistory(d, devisPhaseKey, {date:inv.dateEnvoi||td()});
-    if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(d,'phase reprise de sa facture');
-    _dvPasserFacture(d);
+    _dvs.forEach(function(d){
+      _addPhaseToDevisHistory(d, devisPhaseKey, {date:inv.dateEnvoi||td()});
+      if(typeof _jrMarquerAuto==='function') _jrMarquerAuto(d,'phase reprise de sa facture');
+      _dvPasserFacture(d);
+    });
   } finally {
     delete inv._propagating;
   }
 }
+// =============================================================================
+// REGROUPER LES PRÉ-FACTURES D'UN MÊME BON DE COMMANDE CLIENT — [20/11/2026]
+// =============================================================================
+// Deux devis, UN seul bon de commande du client : chaque devis accepté réserve sa
+// pré-facture (cf _prefactureAuto), soit deux factures pour une seule commande.
+// Le client attend une facture par bon de commande. Le regroupement réunit ces
+// pré-factures en UNE : elle garde l'un des numéros, porte les lignes de chaque
+// devis sous un titre, et reste liée à tous ses devis (devisLiesIds).
+// ⛔ Jamais une facture émise, une tranche, une mère d'acomptes ni une facture
+//    d'heures : seules des pré-factures entières.
+// ⛔ Rien d'automatique : un même n° de BC peut venir d'une erreur de saisie.
+//    L'app propose (pastille dans la liste), l'utilisateur coche et confirme.
+function _faBCClientNum(f){
+  if(!f) return '';
+  var n=String(f.bcClientSLN||f.bcClientPRNC||f.bcClientRef||f._importPONum||'').trim();
+  if(!n){ var d=_findLinkedDevisFromFacture(f); n=d?String(_dvBCClientNum(d)||'').trim():''; }
+  return n;
+}
+// Clé de rapprochement : sans espaces ni zéros de tête (le PDF du client en ajoute).
+function _faBCClientCle(f){
+  return _faBCClientNum(f).replace(/\s+/g,'').replace(/^0+(?=\d)/,'').toUpperCase();
+}
+function _faRegroupable(f){
+  if(!f || !isPrebilled(f)) return false;
+  if(f.parentId || f.acompteType || f.avoirOf) return false;
+  if(_faAcomptesDeMere(f).length) return false;
+  if(Array.isArray(f._bcConsumption) && f._bcConsumption.length) return false;
+  if((Number(f.paye)||0)>0) return false;
+  return true;
+}
+// { idFacture : [pré-factures du même client et du même BC] }, groupes de 2 et plus.
+function _faRegroupIndex(){
+  var parCle={}, idx={};
+  (DB.factures||[]).forEach(function(f){
+    if(!_faRegroupable(f)) return;
+    var bc=_faBCClientCle(f); if(!bc) return;
+    var k=getClientNumPrefix(f.client)+'|'+bc;
+    (parCle[k]=parCle[k]||[]).push(f);
+  });
+  Object.keys(parCle).forEach(function(k){
+    if(parCle[k].length>1) parCle[k].forEach(function(f){ idx[String(f.id)]=parCle[k]; });
+  });
+  return idx;
+}
+// Ordre des blocs sur la facture : celui des devis, puis des numéros de facture.
+function _faRegroupOrdre(l){
+  var cle=function(f){ var m=/DV\D*(\d+)/i.exec(String(f.dvlie||'')); return m?parseInt(m[1],10):1e9; };
+  return l.slice().sort(function(a,b){ return (cle(a)-cle(b)) || String(a.num||'').localeCompare(String(b.num||'')); });
+}
+// Devis d'une pré-facture : le lien technique d'abord (révision en cours), sinon le texte.
+function _faRegroupDevis(f){
+  var d=(f.devisLieId!=null)?(DB.devis||[]).find(function(x){ return x && String(x.id)===String(f.devisLieId); }):null;
+  if(d) return _dvRevisionActive(d)||d;
+  return _findLinkedDevisFromFacture(f);
+}
+// Phase d'une facture regroupée : la plus avancée de ses pré-factures (aucune n'est émise).
+var _FA_REGROUP_PHASES=['chantier_attente','emerson','transit','douane','chantier_cours'];
+// Ce que donnerait le regroupement, SANS rien écrire : la fenêtre et l'action lisent ceci.
+function _faRegroupProjet(ids, gardeId){
+  var cles=(ids||[]).map(String);
+  var l=_faRegroupOrdre((DB.factures||[]).filter(function(f){ return f && cles.indexOf(String(f.id))>=0; }));
+  var r={ok:false, raison:'', factures:l, garde:null, absorbees:[], lines:[], devis:[], dvlie:'', objet:'', type:'', phase:'', tot:null, somme:0};
+  if(l.length<2){ r.raison='Coche au moins deux pré-factures.'; return r; }
+  var refus=l.filter(function(f){ return !_faRegroupable(f); });
+  if(refus.length){ r.raison='Déjà émise, tranche ou cadre d\'acomptes : '+refus.map(function(f){ return f.num; }).join(', ')+'.'; return r; }
+  var pf=getClientNumPrefix(l[0].client);
+  if(l.some(function(f){ return getClientNumPrefix(f.client)!==pf; })){ r.raison='Ces pré-factures ne sont pas au même client.'; return r; }
+  r.garde=l.find(function(f){ return String(f.id)===String(gardeId); }) ||
+    l.slice().sort(function(a,b){ return String(a.num||'').localeCompare(String(b.num||'')); })[0];
+  r.absorbees=l.filter(function(f){ return f!==r.garde; });
+  var nums=[];
+  l.forEach(function(f){
+    var lignes=(f.lines||[]).filter(Boolean), prem=lignes.find(function(x){ return x._sec; });
+    var dv=_faDevisNumAffiche(f), titre={type:'header', mode:'items', desc:String(f.objet||'').trim()+(dv?' — Devis N° '+dv:'')};
+    if(prem) titre._sec=prem._sec;
+    r.lines.push(titre);
+    lignes.forEach(function(x){ r.lines.push(JSON.parse(JSON.stringify(x))); });
+    var d=_faRegroupDevis(f); if(d && r.devis.indexOf(d)<0) r.devis.push(d);
+    _faDevisNums(f).forEach(function(n){ if(nums.indexOf(n)<0) nums.push(n); });
+    r.somme+=Number(f.ttc)||0;
+  });
+  r.tot=_faCalcTotaux(r.lines);
+  r.dvlie=nums.join(', ');
+  r.objet=l.map(function(f){ return String(f.objet||'').trim(); }).filter(function(o,i,a){ return o && a.indexOf(o)===i; }).join(' + ');
+  var types=l.map(function(f){ return f.type||'Fourniture'; });
+  r.type=types.every(function(t){ return t===types[0]; })?types[0]:'Fourniture + Prestation';
+  var rang=-1;
+  l.forEach(function(f){ var k=_FA_REGROUP_PHASES.indexOf(_phaseEffective(f)); if(k>rang) rang=k; });
+  r.phase=rang>=0?_FA_REGROUP_PHASES[rang]:_premierePhase(r.type);
+  // Une fourniture pure ne se suit pas comme un chantier, et inversement (cf _typeEstPrestation).
+  if(_typeEstPrestation(r.type)!==(PHASES[r.phase].type==='prestation')) r.phase=_premierePhase(r.type);
+  if(Math.round(r.tot.ttc)!==Math.round(r.somme)){ r.raison='Le total regroupé ('+fN(Math.round(r.tot.ttc))+') ne retrouve pas la somme des pré-factures ('+fN(Math.round(r.somme))+').'; return r; }
+  r.ok=true;
+  return r;
+}
+// Le regroupement lui-même. Annulable (↶). Retourne la facture gardée, ou null.
+function _faRegrouper(ids, gardeId, objet){
+  var p=_faRegroupProjet(ids, gardeId);
+  if(!p.ok) return null;
+  var g=p.garde, partis=p.absorbees.map(function(f){ return f.id; });
+  var photo={factures:JSON.parse(JSON.stringify(DB.factures)), invoices:JSON.parse(JSON.stringify(DB.invoices||[])), liens:[]};
+  var noter=function(o,ch){ photo.liens.push([o,ch,o[ch]]); };
+  g.lines=p.lines;
+  g.ht=p.tot.ht; g.t6=p.tot.t6; g.t11=p.tot.t11; g.t22=p.tot.t22; g.tgc=p.tot.tgc; g.ttc=p.tot.ttc;
+  g.objet=String(objet||'').trim()||p.objet;
+  g.dvlie=p.dvlie; g.type=p.type; g.phase=p.phase;
+  g.devisLiesIds=p.devis.map(function(d){ return d.id; });
+  if(p.devis[0]) g.devisLieId=p.devis[0].id;
+  g._regroupeDe=p.factures.map(function(f){ return f.num; });
+  g._manuallyEditedAt=new Date().toISOString();
+  // Tout ce qui pointait une pré-facture absorbée pointe la facture gardée.
+  p.devis.forEach(function(d){ if(d.linkFactureId!==g.id){ noter(d,'linkFactureId'); d.linkFactureId=g.id; } });
+  (DB.devis||[]).forEach(function(d){ if(d && partis.indexOf(d.linkFactureId)>=0){ noter(d,'linkFactureId'); d.linkFactureId=g.id; } });
+  (DB.bcs||[]).forEach(function(b){ if(b && partis.indexOf(b.linkFactureId)>=0){ noter(b,'linkFactureId'); b.linkFactureId=g.id; } });
+  (DB.bls||[]).forEach(function(b){ if(b && partis.indexOf(b._linkedFactureId)>=0){ noter(b,'_linkedFactureId'); b._linkedFactureId=g.id; } });
+  var suivis=p.absorbees.map(function(f){ return f.suiviId; }).filter(function(x){ return x!=null; });
+  DB.factures=DB.factures.filter(function(f){ return partis.indexOf(f.id)<0; });
+  if(suivis.length){ DB.invoices=(DB.invoices||[]).filter(function(x){ return suivis.indexOf(x.id)<0; }); invoices=DB.invoices; }
+  try{ if(typeof syncFactureToSuivi==='function' && g.suiviId) syncFactureToSuivi(g); }catch(e){ console.warn('syncFactureToSuivi (regroupement):',e); }
+  var redessiner=function(){
+    try{ renderFA(); }catch(e){} try{ rDash(); }catch(e){}
+    if(typeof renderSuivi==='function'){ try{ renderSuivi(); }catch(e){} }
+    if(typeof renderDV==='function'){ try{ renderDV(); }catch(e){} }
+  };
+  pushUndo('Regroupement « '+g.num+' »',function(){
+    DB.factures=photo.factures; DB.invoices=photo.invoices; invoices=DB.invoices;
+    photo.liens.forEach(function(x){ x[0][x[1]]=x[2]; });
+    saveDB(); redessiner();
+  });
+  saveDB(); redessiner();
+  return (DB.factures||[]).find(function(f){ return f.id===g.id; })||g;
+}
+// Tous les devis d'une facture : ceux d'une facture regroupée, sinon son devis lié.
+// Une tranche (acompte, solde) suit sa facture mère.
+function _faDevisLies(f){
+  if(!f) return [];
+  var fac=(DB.factures||[]).find(function(x){ return x && x.id===(f._factureId||f.grcFactureId||f.id); })||f;
+  var src=fac;
+  if(fac.parentId){ var m=(DB.factures||[]).find(function(x){ return x && x.id===fac.parentId; }); if(m && m!==fac) src=m; }
+  var l=[];
+  (Array.isArray(src.devisLiesIds)?src.devisLiesIds:[]).forEach(function(id){
+    var d=(DB.devis||[]).find(function(x){ return x && String(x.id)===String(id); });
+    if(d) d=_dvRevisionActive(d)||d;
+    if(d && l.indexOf(d)<0) l.push(d);
+  });
+  if(l.length>1) return l;
+  var seul=_findLinkedDevisFromFacture(f);
+  return seul?[seul]:[];
+}
+// Pastille de la liste Factures (i = ligne getSuiviSource, idx = _faRegroupIndex()).
+function _regroupTagHtml(i, idx){
+  if(!i || !idx) return '';
+  var id=i._factureId||i.grcFactureId||i.id, g=idx[String(id)];
+  if(!g) return '';
+  return ' <button type="button" class="fa-regr-tag" data-regr="'+esc(String(id))+'" onclick="event.stopPropagation();ouvrirRegroupement('+JSON.stringify(id)+')" '+
+    'title="'+g.length+' pré-factures portent le même bon de commande client ('+esc(_faBCClientNum(g[0]))+'). Clique pour n\'en faire qu\'une.">🔗 même BC · '+g.length+'</button>';
+}
+// Fenêtre de regroupement.
+var _regrEtat=null;
+function ouvrirRegroupement(id){
+  var g=_faRegroupIndex()[String(id)];
+  if(!g){ alert('Aucune autre pré-facture ne porte ce bon de commande client.'); return; }
+  var l=_faRegroupOrdre(g);
+  _regrEtat={ids:l.map(function(f){ return f.id; }), bc:_faBCClientNum(l[0]), objetSaisi:false};
+  var ancien=document.getElementById('mREGR'); if(ancien) ancien.remove();
+  var m=document.createElement('div'); m.id='mREGR'; m.className='modal-overlay open';
+  m.innerHTML='<div class="modal" style="max-width:720px"><div class="modal-header"><h3>🔗 Regrouper sur une seule facture</h3><button class="modal-close" onclick="document.getElementById(\'mREGR\').remove()">✕</button></div>'+
+    '<div class="modal-body" id="regr-corps"></div>'+
+    '<div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:10px 16px"><button class="btn btn-ghost" onclick="document.getElementById(\'mREGR\').remove()">Annuler</button>'+
+    '<button class="btn btn-teal" id="regr-ok" onclick="_regrValider()">🔗 Regrouper</button></div></div>';
+  document.body.appendChild(m);
+  var corps=document.getElementById('regr-corps');
+  var premier=l.slice().sort(function(a,b){ return String(a.num||'').localeCompare(String(b.num||'')); })[0];
+  corps.innerHTML='<div class="regr-note">Bon de commande client <b>'+esc(_regrEtat.bc)+'</b> · '+esc(getClientNumPrefix(l[0].client))+'. Vérifie que ton bon de commande cite bien chaque devis coché.</div>'+
+    '<table class="regr-table"><thead><tr><th></th><th>Pré-facture</th><th>Devis</th><th>Objet</th><th style="text-align:right">Montant TTC</th><th style="text-align:center">N° gardé</th></tr></thead><tbody>'+
+    l.map(function(f){
+      return '<tr><td><input type="checkbox" data-regr-inc="'+esc(String(f.id))+'" checked></td><td class="regr-num">'+esc(f.num||'')+'</td><td>'+esc(_faDevisNumAffiche(f)||'—')+'</td>'+
+        '<td>'+esc(String(f.objet||''))+'</td><td style="text-align:right;white-space:nowrap" data-money>'+fN(Math.round(Number(f.ttc)||0))+'</td>'+
+        '<td style="text-align:center"><input type="radio" name="regr-garde" value="'+esc(String(f.id))+'"'+(f===premier?' checked':'')+'></td></tr>';
+    }).join('')+'</tbody></table>'+
+    '<div class="form-group" style="margin-top:12px"><label>Objet de la facture regroupée</label><input type="text" class="form-input" id="regr-objet" style="width:100%" oninput="_regrEtat.objetSaisi=true"></div>'+
+    '<div id="regr-bilan"></div>';
+  m.addEventListener('change',_regrMaj);
+  _regrMaj();
+}
+function _regrLire(){
+  var m=document.getElementById('mREGR'); if(!m || !_regrEtat) return null;
+  var ids=[].filter.call(m.querySelectorAll('[data-regr-inc]'),function(x){ return x.checked; }).map(function(x){ return x.getAttribute('data-regr-inc'); });
+  var rad=m.querySelector('input[name="regr-garde"]:checked'), garde=rad?rad.value:null;
+  if(garde!=null && ids.indexOf(String(garde))<0) garde=null;
+  return {ids:ids, garde:garde};
+}
+function _regrMaj(){
+  var c=_regrLire(); if(!c) return;
+  var m=document.getElementById('mREGR'), p=_faRegroupProjet(c.ids, c.garde);
+  // Le n° gardé est forcément une pré-facture cochée.
+  [].forEach.call(m.querySelectorAll('input[name="regr-garde"]'),function(x){
+    x.disabled=c.ids.indexOf(x.value)<0;
+    x.checked=!!(p.garde && String(p.garde.id)===x.value);
+  });
+  var ob=document.getElementById('regr-objet');
+  if(ob && !_regrEtat.objetSaisi) ob.value=p.objet||'';
+  var b=document.getElementById('regr-bilan'), ok=document.getElementById('regr-ok');
+  if(ok) ok.disabled=!p.ok;
+  if(!b) return;
+  if(!p.ok){ b.innerHTML='<div class="regr-alerte">'+esc(p.raison)+'</div>'; return; }
+  b.innerHTML='<div class="regr-bilan"><div><span>Facture gardée</span><b>'+esc(p.garde.num)+'</b></div>'+
+    '<div><span>Total regroupé</span><b data-money>'+fN(Math.round(p.tot.ttc))+' XPF</b></div>'+
+    '<div><span>Devis liés</span><b>'+esc(p.dvlie||'—')+'</b></div>'+
+    '<div><span>N° libéré'+(p.absorbees.length>1?'s':'')+'</span><b>'+esc(p.absorbees.map(function(f){ return f.num; }).join(', '))+'</b></div></div>'+
+    '<div class="regr-note" style="margin-top:8px">Les lignes de chaque devis sont reprises sous un titre. Rien n\'est émis : la facture reste une pré-facture, et tu peux ensuite créer son acompte. Annulable par ↶.</div>';
+}
+function _regrValider(){
+  var c=_regrLire(); if(!c) return;
+  var p=_faRegroupProjet(c.ids, c.garde);
+  if(!p.ok){ alert(p.raison); return; }
+  var ob=document.getElementById('regr-objet');
+  var f=_faRegrouper(c.ids, p.garde.id, ob?ob.value:'');
+  var m=document.getElementById('mREGR'); if(m) m.remove();
+  if(f && typeof showBCSaveToast==='function') showBCSaveToast('✓ '+p.factures.length+' pré-factures regroupées sur '+f.num);
+}
+
 // Facture émise → son devis « Accepté » passe « Facturé ». [30/10/2026] Une
 // pré-facture archivée puis émise laissait le devis « Accepté ». Un devis Cadre
 // ou déjà Facturé / Obsolète / Refusé n'est pas touché ; statut précédent gardé.
@@ -9439,6 +9679,13 @@ function propagateDevisPhaseToFacture(d){
       if(fa._propagating) return;
       // Mère d'acomptes : jamais émise par une bascule AUTOMATIQUE (cf _faAcomptesDeMere).
       if(_faAcomptesDeMere(fa).length) return;
+      // Facture regroupée : émise seulement quand TOUS ses devis sont terminés.
+      // Un seul chantier fini ne facture pas les travaux des autres devis.
+      var _autres=_faDevisLies(fa);
+      if(_autres.length>1 && _autres.some(function(x){
+        var c=(String(x.id)===String(d.id))?current:_getCurrentPhase(x);
+        return !(c && _devisPhaseToFacturePhase(c.phase, x.type));
+      })) return;
       var oldFP=fa.phase||'';
       var oldBilled=PHASES[oldFP] && PHASES[oldFP].billed===true;
       // Ne pas écraser si déjà billed (l'utilisateur a peut-être choisi livre vs recu manuellement)
@@ -9456,7 +9703,11 @@ function propagateDevisPhaseToFacture(d){
         // Facture devenue émise par le devis → son PO « Confirmé » passe « Livré ».
         if(PHASES[facturePhaseKey] && PHASES[facturePhaseKey].billed===true && typeof _bcLivrerPourFacture==='function') _bcLivrerPourFacture(fa,false);
         // … et le devis « Accepté » passe « Facturé » (hors acompte).
-        if(PHASES[facturePhaseKey] && PHASES[facturePhaseKey].billed===true && fa.acompteType!=='acompte') _dvPasserFacture(d);
+        if(PHASES[facturePhaseKey] && PHASES[facturePhaseKey].billed===true && fa.acompteType!=='acompte'){
+          _dvPasserFacture(d);
+          // Facture regroupée : ses autres devis sont facturés par elle aussi.
+          _autres.forEach(function(x){ if(String(x.id)!==String(d.id)) _dvPasserFacture(x); });
+        }
       } finally {
         delete fa._propagating;
       }
@@ -35470,13 +35721,28 @@ function generateAcompteInvoice(){
       if(!confirm('Attention : ce acompte + les précédents font '+(pctEmis0+pct)+'% du total. Continuer quand même ?')) return;
     }
     var factor=pct/100;
+    // (=X=) LES SOUS-LIGNES AUSSI. Une tâche (ou un kit) porte son prix dans ses
+    //       sous-lignes : la porteuse est à 0. [20/11/2026] Seul le prix de la ligne
+    //       était réduit : un acompte sur une facture de tâches sortait à 0, avec
+    //       des lignes restées à 100 % sous un total qui les contredisait.
+    //       Copie PROFONDE : les sous-lignes ne sont plus partagées avec la mère.
     acompteLines=(parent.lines||[]).map(function(l){
-      return Object.assign({},l,{
-        pu:Math.round((l.pu||0)*factor),
-        designation:(l.designation||'')+' ('+libelle+')'
-      });
+      if(!l || l.type==='header' || l.type==='section_banner') return l?JSON.parse(JSON.stringify(l)):l;
+      var c=JSON.parse(JSON.stringify(l));
+      c.pu=Math.round((Number(l.pu)||0)*factor);
+      if(Array.isArray(c.subLines)) c.subLines.forEach(function(s){ if(s) s.pu=Math.round((Number(s.pu)||0)*factor); });
+      c.designation=(l.designation||'')+' ('+libelle+')';
+      return c;
     });
-    acompteLines.forEach(function(l){ var h=(l.qte||0)*(l.pu||0); ht+=h; tgcSum+=h*(Number(l.tgc)||0)/100; });
+    // Même partage ligne / tâche que le total de la facture : cf _isTaskCarrier.
+    acompteLines.forEach(function(l,idx){
+      if(!l || l.type==='header' || l.type==='section_banner') return;
+      if(_isTaskCarrier(acompteLines,idx)){
+        l.subLines.forEach(function(s){ var hs=(Number(s.qte)||0)*(Number(s.pu)||0); ht+=hs; tgcSum+=hs*(Number(s.tgc)||0)/100; });
+        return;
+      }
+      var h=(l.qte||0)*(l.pu||0); ht+=h; tgcSum+=h*(Number(l.tgc)||0)/100;
+    });
   }
   var ttc=Math.round(ht+tgcSum);
   // Construire la nouvelle facture
@@ -36780,6 +37046,8 @@ function renderFA(){
 
   // Fonction de rendu d'UNE ligne (utilisée par renderHierarchicalRows pour chaque facture
   // au plus profond de la hiérarchie Année > Mois > Client > Factures)
+  // Pré-factures d'un même BC client : pastille « même BC » (cf _faRegroupIndex).
+  var _regrIdx=_faRegroupIndex();
   function renderFARow(i){
     var st=getStatus(i),bd=parseDate(i.dateButoir);
     var prebilled=(typeof isPrebilled==='function')?isPrebilled(i):false;
@@ -36858,7 +37126,7 @@ function renderFA(){
     // Facture mère d'acomptes : total du dossier + avancement (elle ne compte que pour son reste)
     if(i._mere){ statutCell=_mereStatutHtml(i); dateEncCell='<td style="color:var(--muted);font-size:10px;font-style:italic" title="Encaissements portés par les factures d\'acompte">voir acomptes</td>'; }
     return '<tr class="hgr-data-row" style="'+rs+';cursor:pointer" onclick="'+rowOpenFn+'">'+
-      '<td>'+chevron+'<span style="font-weight:700;color:var(--teal)">'+esc(i.num||'')+'</span>'+grcBadge+_mereTagHtml(i)+'</td>'+
+      '<td>'+chevron+'<span style="font-weight:700;color:var(--teal)">'+esc(i.num||'')+'</span>'+grcBadge+_mereTagHtml(i)+_regroupTagHtml(i,_regrIdx)+'</td>'+
       '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(i.intitule||'')+'">'+esc(i.intitule||'')+(faPdfBadges?' '+faPdfBadges:'')+'</td>'+
       typCell+
       (i._mere?_mereMontantHtml(i):'<td style="font-weight:700">'+fN(i.montant)+' XPF</td>')+
