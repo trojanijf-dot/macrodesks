@@ -6510,6 +6510,9 @@ function nxt(t, prefix){
   }
 
   if(t==='fa'){
+    // Un n° libéré (regroupement, pré-facture supprimée) est repris avant d'en créer un neuf.
+    var _libres=_faNumsLibres(pfx);
+    if(_libres.length){ _faNumRepriseDire(_libres[0]); return _libres[0]; }
     var escPfxF=pfx.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
     var reF=new RegExp('^'+escPfxF+'-F(\\d+)','i');
     var maxFactures=scanMax(DB.factures||[], reF);
@@ -7386,6 +7389,47 @@ function _impLancer(apercu){
   }
 }
 // Autre facture (que excluId) qui porte déjà ce n° — sinon null.
+// =============================================================================
+// NUMÉROS DE FACTURE LIBÉRÉS — [20/11/2026]
+// =============================================================================
+// Une pré-facture regroupée ou supprimée laisse son numéro, jamais émis : un trou
+// dans la suite. La prochaine facture du même client le reprend (suivi comptable).
+// ⛔ Seuls les numéros libérés par l'app entrent ici. Un trou ancien peut être
+//    celui d'une facture émise puis retirée : on ne le rebouche jamais d'office.
+// ⛔ Jamais une tranche (-A1, -SO) : seul un numéro de la série principale.
+function _faNumCle(n){ return String(n||'').toLowerCase().replace(/\s+/g,' ').trim(); }
+function _faNumEstPris(num){
+  var k=_faNumCle(num); if(!k) return true;
+  var meme=function(x){ return x && _faNumCle(x.num)===k; };
+  return (DB.factures||[]).some(meme) || (DB.invoices||[]).some(meme);
+}
+function _faNumLiberer(num, motif){
+  num=String(num||'').trim();
+  if(!/-F\d+$/i.test(num)) return;
+  if(!Array.isArray(DB.numsLiberes)) DB.numsLiberes=[];
+  if(DB.numsLiberes.some(function(x){ return x && _faNumCle(x.num)===_faNumCle(num); })) return;
+  DB.numsLiberes.push({num:num, le:td(), motif:motif||''});
+}
+// Numéros libérés encore libres pour ce préfixe, du plus petit au plus grand.
+// Deux sources : la liste, et les factures regroupées (elles gardent les n° d'origine).
+function _faNumsLibres(pfx){
+  var debut=_faNumCle(pfx)+'-f', vus={}, l=[];
+  var voir=function(n){
+    n=String(n||'').trim(); var k=_faNumCle(n);
+    if(k.indexOf(debut)!==0 || !/^\d+$/.test(k.slice(debut.length)) || vus[k]) return;
+    vus[k]=1;
+    if(!_faNumEstPris(n)) l.push({num:n, rang:parseInt(k.slice(debut.length),10)});
+  };
+  (DB.numsLiberes||[]).forEach(function(x){ if(x) voir(x.num); });
+  (DB.factures||[]).forEach(function(f){ if(f && Array.isArray(f._regroupeDe)) f._regroupeDe.forEach(voir); });
+  return l.sort(function(a,b){ return a.rang-b.rang; }).map(function(x){ return x.num; });
+}
+// On le dit une fois par numéro : l'utilisateur sait pourquoi ce n'est pas le suivant.
+var _faNumRepriseVue={};
+function _faNumRepriseDire(num){
+  if(_faNumRepriseVue[num]) return; _faNumRepriseVue[num]=1;
+  try{ if(typeof showBCSaveToast==='function') showBCSaveToast('N° '+num+' repris : il avait été libéré'); }catch(e){}
+}
 function _faNumPrisPar(num,excluId){
   var k=String(num||'').toLowerCase().replace(/\s+/g,' ').trim(); if(!k) return null;
   return (DB.factures||[]).find(function(x){ return x && x.id!==excluId && String(x.num||'').toLowerCase().replace(/\s+/g,' ').trim()===k; })||null;
@@ -7526,6 +7570,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-20','🔢 Factures : un numéro libéré (regroupement, pré-facture supprimée) est repris par la prochaine facture du même client. Plus de trou dans la suite.'],
   ['2026-11-20','🔗 Factures : deux pré-factures pour un même bon de commande client se regroupent en une seule (pastille « même BC »). Aucune émission, annulable.'],
   ['2026-11-20','🧾 Acompte en % : les tâches et les kits sont comptés. Avant, un acompte sur une facture de tâches sortait à 0.'],
   ['2026-11-10','🔁 Suivi commandes : un PO de remplacement pas encore livré remet la commande en attente (filtre, compteur, PDF client).'],
@@ -9468,6 +9513,8 @@ function _faRegrouper(ids, gardeId, objet){
   var g=p.garde, partis=p.absorbees.map(function(f){ return f.id; });
   var photo={factures:JSON.parse(JSON.stringify(DB.factures)), invoices:JSON.parse(JSON.stringify(DB.invoices||[])), liens:[]};
   var noter=function(o,ch){ photo.liens.push([o,ch,o[ch]]); };
+  var libAvant=Array.isArray(DB.numsLiberes)?JSON.parse(JSON.stringify(DB.numsLiberes)):null;
+  p.absorbees.forEach(function(f){ _faNumLiberer(f.num,'regroupée sur '+g.num); });
   g.lines=p.lines;
   g.ht=p.tot.ht; g.t6=p.tot.t6; g.t11=p.tot.t11; g.t22=p.tot.t22; g.tgc=p.tot.tgc; g.ttc=p.tot.ttc;
   g.objet=String(objet||'').trim()||p.objet;
@@ -9493,6 +9540,7 @@ function _faRegrouper(ids, gardeId, objet){
   pushUndo('Regroupement « '+g.num+' »',function(){
     DB.factures=photo.factures; DB.invoices=photo.invoices; invoices=DB.invoices;
     photo.liens.forEach(function(x){ x[0][x[1]]=x[2]; });
+    if(libAvant) DB.numsLiberes=libAvant; else delete DB.numsLiberes;
     saveDB(); redessiner();
   });
   saveDB(); redessiner();
@@ -9576,7 +9624,7 @@ function _regrMaj(){
     '<div><span>Total regroupé</span><b data-money>'+fN(Math.round(p.tot.ttc))+' XPF</b></div>'+
     '<div><span>Devis liés</span><b>'+esc(p.dvlie||'—')+'</b></div>'+
     '<div><span>N° libéré'+(p.absorbees.length>1?'s':'')+'</span><b>'+esc(p.absorbees.map(function(f){ return f.num; }).join(', '))+'</b></div></div>'+
-    '<div class="regr-note" style="margin-top:8px">Les lignes de chaque devis sont reprises sous un titre. Rien n\'est émis : la facture reste une pré-facture, et tu peux ensuite créer son acompte. Annulable par ↶.</div>';
+    '<div class="regr-note" style="margin-top:8px">Les lignes de chaque devis sont reprises sous un titre. Rien n\'est émis : la facture reste une pré-facture, et tu peux ensuite créer son acompte. Le n° libéré sera repris par la prochaine facture de ce client. Annulable par ↶.</div>';
 }
 function _regrValider(){
   var c=_regrLire(); if(!c) return;
@@ -52162,6 +52210,8 @@ function _doDelDoc(col,id){
     if(typeof renderSuivi==='function'){try{renderSuivi();}catch(e){}}
     if(typeof renderHist==='function'){try{renderHist();}catch(e){}}
   });
+  // Pré-facture entière supprimée : son n°, jamais émis, sera repris (cf _faNumsLibres).
+  if(col==='factures' && isPrebilled(removedDoc) && !removedDoc.parentId && !removedDoc.acompteType && !_faAcomptesDeMere(removedDoc).length) _faNumLiberer(removedDoc.num,'pré-facture supprimée');
   DB[col]=DB[col].filter(function(x){return x.id!==id;});
   saveDB();
   if(col==='devis')renderDV();if(col==='factures')renderFA();if(col==='bcs')renderBC();if(col==='bls')renderBL();if(col==='articles')renderART();
