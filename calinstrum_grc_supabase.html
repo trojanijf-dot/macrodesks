@@ -7570,6 +7570,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-20','🔗 Facture regroupée : la fiche la compare à la somme de ses devis. Elle annonçait à tort un écart avec le premier devis.'],
   ['2026-11-20','🔢 Factures : un numéro libéré (regroupement, pré-facture supprimée) est repris par la prochaine facture du même client. Plus de trou dans la suite.'],
   ['2026-11-20','🔗 Factures : deux pré-factures pour un même bon de commande client se regroupent en une seule (pastille « même BC »). Aucune émission, annulable.'],
   ['2026-11-20','🧾 Acompte en % : les tâches et les kits sont comptés. Avant, un acompte sur une facture de tâches sortait à 0.'],
@@ -9697,12 +9698,12 @@ function propagateFactureStatusToDevis(inv){
   var st=(inv.statut||inv.status||'').toLowerCase();
   var isPaid = st==='paid' || st==='payée' || st==='payee' || st==='partial' || st==='partiel';
   if(!isPaid) return;
-  var d=_findLinkedDevisFromFacture(inv);
-  if(!d) return;
-  if(d._propagating) return;
+  // Facture regroupée : tous ses devis (cf _faDevisLies) ; sinon son devis lié.
+  var _dvs=_faDevisLies(inv).filter(function(d){ return d && !d._propagating; });
+  if(!_dvs.length) return;
   inv._propagating=true;
   try{
-    _addPhaseToDevisHistory(d, 'facture', {date:inv.dateEncaissement||inv.dateEnvoi||td()});
+    _dvs.forEach(function(d){ _addPhaseToDevisHistory(d, 'facture', {date:inv.dateEncaissement||inv.dateEnvoi||td()}); });
   } finally {
     delete inv._propagating;
   }
@@ -34845,14 +34846,19 @@ function _faGardeFou(tot){
   // 2. Ecart avec le devis lie, uniquement quand la facture doit l'egaler.
   if(_gfComparableAuDevis(f)){
     var dv=(DB.devis||[]).find(function(x){return x.id===f.devisLieId;});
-    if(dv){
-      var td=_gfTotalDevis(dv), ecart=td-calcule;
+    // (=X=) FACTURE REGROUPÉE : elle couvre PLUSIEURS devis (cf _faDevisLies), elle
+    //       doit donc égaler leur SOMME. [20/11/2026] Comparée au seul premier devis,
+    //       elle annonçait « en trop » le montant exact du second.
+    var dvs=_faDevisLies(f);
+    if(dvs.length<2) dvs=dv?[dv]:[];
+    if(dvs.length){
+      var td=dvs.reduce(function(s,x){ return s+_gfTotalDevis(x); },0), ecart=td-calcule, plusieurs=dvs.length>1;
       if(Math.abs(ecart)>1){
-        html+=_gfBandeau('red','\u26d4','Écart avec le devis lié',
-          _gfChiffre('devis '+(dv.num||'')+' :',fN(td)+' XPF')+' &nbsp;\u00b7&nbsp; '+
+        html+=_gfBandeau('red','\u26d4',plusieurs?'Écart avec les devis liés':'Écart avec le devis lié',
+          _gfChiffre('devis '+dvs.map(function(x){ return x.num||''; }).join(' + ')+' :',fN(td)+' XPF')+' &nbsp;\u00b7&nbsp; '+
           _gfChiffre('facture :',fN(calcule)+' XPF',true)+' &nbsp;\u00b7&nbsp; '+
           _gfChiffre(ecart>0?'manque :':'en trop :',fN(Math.abs(ecart))+' XPF',true)+
-          '<br><span style="color:var(--muted)">Cette facture doit couvrir la totalité du devis. '+
+          '<br><span style="color:var(--muted)">Cette facture doit couvrir la totalité '+(plusieurs?'de ses devis':'du devis')+'. '+
           'Rien ne bloque l\'enregistrement.</span>');
       }
     }
