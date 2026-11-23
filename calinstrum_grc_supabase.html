@@ -1218,7 +1218,7 @@ body.has-dashboard-bg #page-dashboard .metric{
     #page-suivicmd .sc-chip.on{border-color:var(--teal);color:var(--teal);background:rgba(45,212,191,.08)}
     #page-suivicmd .sc-lbl{color:var(--muted);font-size:10.5px;margin:0 2px 0 8px}
     #page-suivicmd .sc-note{margin:0 0 10px;padding:7px 12px;border-left:3px solid var(--purple);background:rgba(167,139,250,.07);border-radius:6px;color:var(--muted);font-size:11.5px}
-    #page-suivicmd .sc-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:10px}
+    #page-suivicmd .sc-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}
     #page-suivicmd .sc-kpi{padding:10px 13px}
     #page-suivicmd .sc-kt{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
     #page-suivicmd .sc-kv{font-size:22px;font-weight:700;margin-top:3px;color:var(--text-strong)}
@@ -7606,6 +7606,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-23','⏱ Suivi commandes : compteur et filtre « À relancer » pour les commandes plus longues que le délai moyen constaté. La livraison estimée figure sous le statut.'],
   ['2026-11-23','📎 Factures : bouton « PDF manquant ». Un clic ne montre que les factures émises sans PDF archivé, avec leur nombre.'],
   ['2026-11-23','📎 Factures : colonne « PDF ». Vert = PDF archivé (un clic l\u2019ouvre), rouge = facture émise sans PDF archivé.'],
   ['2026-11-23','📄 PDF « Suivi de vos commandes » : les lignes de légende (statuts, estimation) ne figurent plus sur le document client.'],
@@ -12006,7 +12007,12 @@ function _suiviCommandes(){
   });
   // Livraison prévue (saisie sur le PO) ou estimée (délai moyen constaté) : cf _scLivraison.
   var _dl=_scDelais(out);
-  out.forEach(function(c){ c.livraison=_scLivraison(c,_dl); });
+  out.forEach(function(c){
+    c.livraison=_scLivraison(c,_dl);
+    // (=X=) À RELANCER : la commande attend depuis plus longtemps que le délai moyen
+    //       constaté (ou que la date annoncée). Signal INTERNE : jamais sur le PDF client.
+    c.aRelancer=!!(c.livraison && c.livraison.depassee);
+  });
   return out.sort(function(x,y){return String(y.dateBC||y.pos[0].date||'').localeCompare(String(x.dateBC||x.pos[0].date||''));});
 }
 
@@ -12053,7 +12059,9 @@ function _scLivraison(c,delais){
   });
   if(!dates.length) return null;
   var d=dates.sort().pop();
-  return {date:d, type:toutSaisi?'prevue':'estimee', depassee:d<_scAuj(), jours:base?base.moy:null, mesures:base?base.n:0};
+  var premier=pos.map(function(x){ return x.date; }).filter(Boolean).sort()[0];
+  return {date:d, type:toutSaisi?'prevue':'estimee', depassee:d<_scAuj(), jours:base?base.moy:null, mesures:base?base.n:0,
+          depuis:premier?_scJours(premier,_scAuj()):null};
 }
 // Texte de la livraison. pourClient : document remis au client (aucune date dépassée).
 function _scLivraisonTexte(c,pourClient){
@@ -12250,7 +12258,7 @@ function _scSelection(tout){
   var E=_scEtat;
   return tout.filter(function(c){
     return (E.client==='Tous'||c.client===E.client) && (E.acheteur==='Tous'||c.acheteur===E.acheteur) &&
-      (E.etat==='Toutes' || (E.etat==='En attente' ? c.statut.k==='attente' : c.statut.k==='livre'));
+      (E.etat==='Toutes' || (E.etat==='À relancer' ? !!c.aRelancer : (E.etat==='En attente' ? c.statut.k==='attente' : c.statut.k==='livre')));
   });
 }
 
@@ -12272,11 +12280,12 @@ function renderSuiviCommandes(){
   var h='<div class="sc-filtres"><span class="sc-lbl">Client</span>'+['Tous'].concat(clients).map(function(v){return chip('data-sc-client','client',v);}).join('')+
     '<span class="sc-lbl">Acheteur</span><select id="scAcheteur" class="filter-sel" onchange="scSetFiltre(\'acheteur\',this.value)">'+
       ['Tous'].concat(acheteurs).map(function(v){return '<option'+(E.acheteur===v?' selected':'')+'>'+esc(v)+'</option>';}).join('')+'</select>'+
-    '<span class="sc-lbl">Commandes</span>'+['En attente','Livrées','Toutes'].map(function(v){return chip('data-sc-etat','etat',v);}).join('')+'</div>';
+    '<span class="sc-lbl">Commandes</span>'+['En attente','À relancer','Livrées','Toutes'].map(function(v){return chip('data-sc-etat','etat',v);}).join('')+'</div>';
   var kp=[
     ['Commandes en attente',perimetre.filter(function(c){return c.statut.k==='attente';}).length,'sur '+perimetre.length+' BC client'],
     ['Livrées',perimetre.filter(function(c){return c.statut.k==='livre';}).length,'facture émise ou BL livré'],
-    ['Échéance dépassée','<span style="color:var(--red)">'+perimetre.filter(function(c){return c.enRetard;}).length+'</span>','délai contractuel du devis']
+    ['Échéance dépassée','<span style="color:var(--red)">'+perimetre.filter(function(c){return c.enRetard;}).length+'</span>','délai contractuel du devis'],
+    ['À relancer','<span style="color:#fb923c" id="scKpiRelance">'+perimetre.filter(function(c){return c.aRelancer;}).length+'</span>','plus longues que le délai constaté']
   ];
   h+='<div class="sc-kpis">'+kp.map(function(k){return '<div class="card sc-kpi"><div class="sc-kt">'+k[0]+'</div><div class="sc-kv">'+k[1]+'</div><div class="sc-ks">'+k[2]+'</div></div>';}).join('')+'</div>';
   var lignes=sel.map(function(c){
@@ -12285,6 +12294,12 @@ function renderSuiviCommandes(){
     var st=c.statut.k==='livre'
       ? '<span class="sc-st ok">Livrée</span>'+(c.statut.livreeLe?'<div class="sc-tag">le '+fD(c.statut.livreeLe)+(c.statut.bl?' · '+esc(c.statut.bl):'')+'</div>':'')
       : '<span class="sc-st att">'+esc(c.statut.label)+'</span>';
+    if(c.statut.k==='attente' && c.livraison){
+      var _lv=c.livraison;
+      st+=c.aRelancer
+        ? '<div class="sc-tag sc-relance" style="color:#fb923c">⏱ '+(_lv.type==='prevue'?'prévue le '+fD(_lv.date)+', dépassée':(_lv.depuis!=null?_lv.depuis+' j depuis le PO · moyenne '+_lv.jours+' j':'estimation dépassée'))+' — à relancer</div>'
+        : '<div class="sc-tag sc-liv">🚚 '+(_lv.type==='prevue'?'prévue le ':'estimée vers le ')+fD(_lv.date)+'</div>';
+    }
     if(c.remplacementEnCours && c.remplacementEnCours.length) st+='<div class="sc-tag" style="color:#fb923c">🔁 remplacement en cours · PO '+c.remplacementEnCours.map(esc).join(', ')+(c.statut.premiereLivraison?' · 1re livraison le '+fD(c.statut.premiereLivraison):'')+'</div>';
     var ech=c.echeance ? (c.enRetard?'<span style="color:var(--red);font-weight:600">'+fD(c.echeance)+' · dépassée</span>':fD(c.echeance)) : '<span class="sc-tag">non renseignée</span>';
     var bl=c.bls.length ? c.bls.map(function(x){return esc(x.num)+'<div class="sc-tag">'+esc(x.status||'')+(x.date?' · '+fD(x.date):'')+'</div>';}).join('') : '<span class="sc-tag">—</span>';
@@ -12301,7 +12316,7 @@ function renderSuiviCommandes(){
 function suiviCmdImprimerPDF(){
   var sel=_scSelection(_suiviCommandes()), E=_scEtat;
   var titre=(E.client==='Tous'?'Tous clients':E.client)+(E.acheteur==='Tous'?'':' · à l\'attention de '+E.acheteur);
-  var etat=E.etat==='Toutes'?'toutes commandes':(E.etat==='En attente'?'commandes en attente':'commandes livrées');
+  var etat=E.etat==='Toutes'?'toutes commandes':((E.etat==='En attente'||E.etat==='À relancer')?'commandes en attente':'commandes livrées');
   // Recherche par BC client en cours : le PDF porte CES commandes, avec leur livraison.
   var avecLiv=_scRechActive();
   if(avecLiv){
