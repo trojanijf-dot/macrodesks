@@ -695,6 +695,11 @@ tr.regl-calc-on td{background:rgba(45,212,191,.09)}
 .doc-lien-fa{color:var(--teal);border-color:rgba(45,212,191,.5)}.doc-lien-fa:hover{background:rgba(45,212,191,.14)}
 .doc-lien-bc{color:#60a5fa;border-color:rgba(96,165,250,.5)}.doc-lien-bc:hover{background:rgba(96,165,250,.14)}
 .doc-lien-bl{color:#fbbf24;border-color:rgba(251,191,36,.5)}.doc-lien-bl:hover{background:rgba(251,191,36,.14)}
+th.fa-pdf,td.fa-pdf{text-align:center;white-space:nowrap}
+.fa-pdf-oui{font:700 10.5px var(--mono);color:#34d399;border:1px solid rgba(52,211,153,.55);background:transparent;border-radius:999px;padding:2px 8px;cursor:pointer}
+.fa-pdf-oui:hover{background:rgba(52,211,153,.14)}
+.fa-pdf-non{font:700 10.5px var(--mono);color:#fb7185;border:1px solid rgba(251,113,133,.55);border-radius:999px;padding:2px 8px}
+.fa-pdf-na{color:var(--muted);font-size:11px}
 .fa-regr-tag{font:600 9px var(--mono);border:1px solid rgba(251,146,60,.55);color:#fb923c;background:rgba(251,146,60,.08);border-radius:4px;padding:1px 6px;margin-left:4px;cursor:pointer;white-space:nowrap}
 .fa-regr-tag:hover{background:rgba(251,146,60,.2)}
 #mREGR .modal{display:flex;flex-direction:column}
@@ -2592,6 +2597,7 @@ function admPreviewPrint(){
       <th>Statut</th>
       <th>Délai</th>
       <th class="no-print">Actions</th>
+      <th class="no-print fa-pdf" title="PDF de la facture archivé dans le GRC">PDF</th>
     </tr></thead>
     <tbody id="tbFA"></tbody></table>
   </div>
@@ -7597,6 +7603,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-23','📎 Factures : colonne « PDF ». Vert = PDF archivé (un clic l\u2019ouvre), rouge = facture émise sans PDF archivé.'],
   ['2026-11-23','📄 PDF « Suivi de vos commandes » : les lignes de légende (statuts, estimation) ne figurent plus sur le document client.'],
   ['2026-11-23','🔎 Suivi commandes : recherche par n° de BC client (un ou plusieurs), avec tous les documents de chaque commande et leur état. Le PDF imprime ces commandes.'],
   ['2026-11-23','🚚 PO : date « Livraison prévue ». Vide, elle est estimée avec le délai moyen constaté sur les commandes déjà livrées.'],
@@ -37305,7 +37312,7 @@ function _dossierRowHtml(inv){
   if(!_dossierOuverts.has(_dossierId(inv))) return '';
   var dos=_dossierFromFacture(inv);
   if(!dos){
-    return '<tr class="dossier-row"><td colspan="11" style="padding:10px 16px;color:var(--muted);font-size:11px;font-style:italic">'+
+    return '<tr class="dossier-row"><td colspan="12" style="padding:10px 16px;color:var(--muted);font-size:11px;font-style:italic">'+
       'Aucune facture GRC derrière cette ligne (entrée Suivi historique) — pas de dossier à afficher.</td></tr>';
   }
 
@@ -37386,7 +37393,7 @@ function _dossierRowHtml(inv){
       'il rejoint le rail commun dès la pré-facture.</div>';
   }
 
-  return '<tr class="dossier-row"><td colspan="11" style="padding:0 14px 14px;background:rgba(255,255,255,.012)">'+
+  return '<tr class="dossier-row"><td colspan="12" style="padding:0 14px 14px;background:rgba(255,255,255,.012)">'+
     '<div style="border-left:2px solid rgba(45,212,191,.35);padding:10px 0 2px 12px">'+
       '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch">'+cartes.join('')+'</div>'+
       '<div style="font-size:9px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted-soft);font-weight:700;margin:12px 0 7px">'+
@@ -37605,16 +37612,16 @@ function renderFA(){
     var totalAvantFiltres=sourceWithClient.length;
     var hasFilters=s||fStatut||fType||fYear;
     if(totalAvantFiltres===0){
-      tb.innerHTML='<tr><td colspan="11" class="empty">Aucune facture</td></tr>';
+      tb.innerHTML='<tr><td colspan="12" class="empty">Aucune facture</td></tr>';
     } else if(hasFilters){
-      tb.innerHTML='<tr><td colspan="11" class="empty" style="padding:30px 20px;text-align:center">'+
+      tb.innerHTML='<tr><td colspan="12" class="empty" style="padding:30px 20px;text-align:center">'+
         '<div style="font-size:32px;margin-bottom:8px;opacity:.5">🔍</div>'+
         '<div style="font-size:13px;color:var(--text);margin-bottom:4px">Aucune facture ne correspond aux filtres</div>'+
         '<div style="font-size:11px;color:var(--muted);margin-bottom:12px">'+totalAvantFiltres+' facture(s) disponible(s) en levant les filtres</div>'+
         '<button class="btn btn-ghost btn-sm" onclick="resetFAFilters()" style="font-size:11px">↺ Réinitialiser les filtres</button>'+
         '</td></tr>';
     } else {
-      tb.innerHTML='<tr><td colspan="11" class="empty">Aucune facture dans ce client</td></tr>';
+      tb.innerHTML='<tr><td colspan="12" class="empty">Aucune facture dans ce client</td></tr>';
     }
     return;
   }
@@ -37713,7 +37720,7 @@ function renderFA(){
       delaiCell+
       '<td class="no-print" style="white-space:nowrap">'+
         prvBtn+editBtn+' '+delBtn+
-      '</td></tr>'+
+      '</td>'+_faPdfCellHtml(i)+'</tr>'+
       // renderHierarchicalRows concatène le retour de renderDataRow : on peut
       // donc rendre DEUX <tr>. La 2e n'existe que si le dossier est déplié.
       _dossierRowHtml(i);
@@ -37742,7 +37749,7 @@ function renderFA(){
   tb.innerHTML=renderHierarchicalRows({
     type:'fa',
     items:dataForHier,
-    colspan:11,
+    colspan:12,
     getValueXpf:function(x){return x.montant||0;},
     renderDataRow:renderFARow,
     emptyMsg:'Aucune facture'
@@ -42993,11 +43000,39 @@ window.devisIdsWithACTPdf=new Set();
 window.devisIdsWithPoCaliPdf=new Set();
 window.devisIdsWithBCClientPdf=new Set();
 window.devisIdsWithQuoteEmersonPdf=new Set();
+// =============================================================================
+// COLONNE « PDF » DE LA LISTE FACTURES — [23/11/2026]
+// =============================================================================
+// Le PDF d'une facture est archivé dans le même magasin que ceux des devis, sous
+// la clé « facture:<id> » (cf _facturePdfKey). Ce Set dit, sans ouvrir la fiche,
+// quelles factures en ont un. Tant qu'il n'est pas chargé, la colonne affiche « … »
+// et jamais « manquant » : on n'annonce pas une absence qu'on n'a pas vérifiée.
+window.factureIdsWithPdf=new Set();
+window._facturePdfCachePret=false;
+function _faPdfListeMaj(){
+  var pg=document.getElementById('page-factures');
+  if(pg && pg.classList.contains('active') && typeof renderFA==='function'){ try{ renderFA(); }catch(e){ console.warn('renderFA (PDF archivé):',e); } }
+}
+function _faPdfCellHtml(i){
+  var id=(typeof _dossierId==='function')?_dossierId(i):null;
+  var f=(i && i._fromGRC && id!=null)?(DB.factures||[]).find(function(x){ return x && x.id===id; }):null;
+  var c=function(h){ return '<td class="no-print fa-pdf">'+h+'</td>'; };
+  if(!f) return c('<span class="fa-pdf-na">—</span>');
+  if(!window._facturePdfCachePret) return c('<span class="fa-pdf-na" title="Vérification en cours">…</span>');
+  if(window.factureIdsWithPdf.has(String(f.id))){
+    return c('<button type="button" class="fa-pdf-oui" data-fa-pdf="'+esc(String(f.id))+'" onclick="event.stopPropagation();_openFacturePdfBlob('+JSON.stringify(f.id)+')" title="PDF archivé — cliquer pour l\'ouvrir">📎 ✓</button>');
+  }
+  // Une pré-facture ou un cadre d'acomptes n'est pas émis : rien à archiver encore.
+  var emise=!isPrebilled(f) && !_faAcomptesDeMere(f).length;
+  return c(emise?'<span class="fa-pdf-non" title="Facture émise : son PDF n\'est pas archivé">✕ manquant</span>'
+                :'<span class="fa-pdf-na" title="Pas encore émise : rien à archiver">—</span>');
+}
 function refreshDevisPdfCache(){
   return listAllDevisPdfMeta().then(function(metas){
-    var setE=new Set(),setA=new Set(),setP=new Set(),setBC=new Set(),setQE=new Set();
+    var setE=new Set(),setA=new Set(),setP=new Set(),setBC=new Set(),setQE=new Set(),setFA=new Set();
     for(var i=0;i<metas.length;i++){
       var m=metas[i];
+      if(m.kind==='signee' && String(m.devisId).indexOf('facture:')===0){ setFA.add(String(m.devisId).slice(8)); continue; }
       if(m.kind==='emerson') setE.add(m.devisId);
       else if(m.kind==='act') setA.add(m.devisId);
       else if(m.kind==='po_cali') setP.add(m.devisId);
@@ -43025,6 +43060,9 @@ function refreshDevisPdfCache(){
     window.devisIdsWithPoCaliPdf=setP;
     window.devisIdsWithBCClientPdf=setBC;
     window.devisIdsWithQuoteEmersonPdf=setQE;
+    var _avantFA=Array.from(window.factureIdsWithPdf).sort().join(), _pretAvant=window._facturePdfCachePret;
+    window.factureIdsWithPdf=setFA; window._facturePdfCachePret=true;
+    if(!_pretAvant || _avantFA!==Array.from(setFA).sort().join()) _faPdfListeMaj();
     return {emerson:setE.size,act:setA.size,po_cali:setP.size,bc_client:setBC.size,quote_emerson:setQE.size};
   }).catch(function(err){
     console.warn('refreshDevisPdfCache failed:',err);
@@ -48555,6 +48593,7 @@ function _storeFacturePdf(factureId,filename,bytes,numFacture,onLocalOk){
       var putReq=store.put(record);
       putReq.onerror=function(e){_localFail(e.target.error);};
       putReq.onsuccess=function(){
+        window.factureIdsWithPdf.add(String(factureId)); _faPdfListeMaj();
         if(typeof onLocalOk==='function')onLocalOk();
         _uploadFacturePdfToCloud(numFacture,blob,record.filename).catch(function(err){
           console.warn('[facture-pdf] Upload cloud échoué :',err);
@@ -48576,7 +48615,7 @@ function _deleteFacturePdf(factureId,onDone){
       var existing=getReq.result;
       if(existing&&existing.id){
         var delReq=store.delete(existing.id);
-        delReq.onsuccess=function(){if(typeof onDone==='function')onDone();};
+        delReq.onsuccess=function(){ window.factureIdsWithPdf.delete(String(factureId)); _faPdfListeMaj(); if(typeof onDone==='function')onDone(); };
         delReq.onerror=function(){if(typeof onDone==='function')onDone();};
       } else if(typeof onDone==='function') onDone();
     };
