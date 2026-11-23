@@ -700,6 +700,8 @@ th.fa-pdf,td.fa-pdf{text-align:center;white-space:nowrap}
 .fa-pdf-oui:hover{background:rgba(52,211,153,.14)}
 .fa-pdf-non{font:700 10.5px var(--mono);color:#fb7185;border:1px solid rgba(251,113,133,.55);border-radius:999px;padding:2px 8px}
 .fa-pdf-na{color:var(--muted);font-size:11px}
+.fa-pdf-filtre.on{color:#fb7185;border-color:rgba(251,113,133,.6);background:rgba(251,113,133,.1)}
+.fa-pdf-filtre b{color:#fb7185}
 .fa-regr-tag{font:600 9px var(--mono);border:1px solid rgba(251,146,60,.55);color:#fb923c;background:rgba(251,146,60,.08);border-radius:4px;padding:1px 6px;margin-left:4px;cursor:pointer;white-space:nowrap}
 .fa-regr-tag:hover{background:rgba(251,146,60,.2)}
 #mREGR .modal{display:flex;flex-direction:column}
@@ -2566,6 +2568,7 @@ function admPreviewPrint(){
       <option value="montant_asc">Montant ↑ (petit → gros)</option>
     </select>
     <button class="btn btn-ghost btn-sm" onclick="resetFAFilters()" title="Réinitialiser tous les filtres" style="font-size:10.5px;padding:5px 10px;color:var(--muted)">↺ Réinitialiser</button>
+    <button type="button" class="btn btn-ghost btn-sm fa-pdf-filtre" id="faBtnPdfManquant" onclick="faTogglePdfManquant()" style="font-size:10.5px;padding:5px 10px">📎 PDF manquant</button>
     <!-- Compteur de résultats à droite -->
     <div id="fa-result-count" style="margin-left:auto;font-size:11px;color:var(--muted);white-space:nowrap"></div>
   </div>
@@ -7603,6 +7606,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-23','📎 Factures : bouton « PDF manquant ». Un clic ne montre que les factures émises sans PDF archivé, avec leur nombre.'],
   ['2026-11-23','📎 Factures : colonne « PDF ». Vert = PDF archivé (un clic l\u2019ouvre), rouge = facture émise sans PDF archivé.'],
   ['2026-11-23','📄 PDF « Suivi de vos commandes » : les lignes de légende (statuts, estimation) ne figurent plus sur le document client.'],
   ['2026-11-23','🔎 Suivi commandes : recherche par n° de BC client (un ou plusieurs), avec tous les documents de chaque commande et leur état. Le PDF imprime ces commandes.'],
@@ -37487,7 +37491,10 @@ function renderFA(){
   var fCAFilter = (typeof window._faCAFilter === 'string') ? window._faCAFilter : '';
 
   // ===== Filtres combinés (ET logique) =====
+  _faPdfManquantBouton(source);
   var data=sourceWithClient.filter(function(i){
+    // Filtre « PDF manquant » : factures émises sans PDF archivé (cf _faPdfEtat).
+    if(window._faFiltrePdfManquant && _faPdfEtat(i).k!=='non') return false;
     // Recherche texte (sur le JSON complet)
     if(s && JSON.stringify(i).toLowerCase().indexOf(s)<0) return false;
     // Statut paiement (prebilled est un cas particulier)
@@ -38812,6 +38819,7 @@ function resetFAFilters(){
   if(sort) sort.value='date_desc';
   // Effacer aussi le filtre invisible par mois d'encaissement (drill-down donut)
   window._faFilterByEncMonth='';
+  window._faFiltrePdfManquant=false;
   // Effacer aussi le filtre CA potentiel (onglets Fourniture/Prestation, cf carte #fa-ca-annual-card)
   window._faCAFilter='';
   if(typeof renderFA==='function') renderFA();
@@ -43013,19 +43021,40 @@ function _faPdfListeMaj(){
   var pg=document.getElementById('page-factures');
   if(pg && pg.classList.contains('active') && typeof renderFA==='function'){ try{ renderFA(); }catch(e){ console.warn('renderFA (PDF archivé):',e); } }
 }
-function _faPdfCellHtml(i){
+// État du PDF d'une ligne de la liste : 'oui' (archivé), 'non' (facture ÉMISE sans PDF),
+// 'na' (pas une facture GRC, ou pas encore émise), 'attente' (archive pas encore lue).
+// Règle unique : la cellule, le filtre « PDF manquant » et son compteur la lisent.
+function _faPdfEtat(i){
   var id=(typeof _dossierId==='function')?_dossierId(i):null;
   var f=(i && i._fromGRC && id!=null)?(DB.factures||[]).find(function(x){ return x && x.id===id; }):null;
+  if(!f) return {k:'na', f:null};
+  if(!window._facturePdfCachePret) return {k:'attente', f:f};
+  if(window.factureIdsWithPdf.has(String(f.id))) return {k:'oui', f:f};
+  // Une pré-facture ou un cadre d'acomptes n'est pas émis : rien à archiver encore.
+  return {k:(!isPrebilled(f) && !_faAcomptesDeMere(f).length)?'non':'na', f:f};
+}
+function _faPdfCellHtml(i){
+  var e=_faPdfEtat(i), f=e.f;
   var c=function(h){ return '<td class="no-print fa-pdf">'+h+'</td>'; };
-  if(!f) return c('<span class="fa-pdf-na">—</span>');
-  if(!window._facturePdfCachePret) return c('<span class="fa-pdf-na" title="Vérification en cours">…</span>');
-  if(window.factureIdsWithPdf.has(String(f.id))){
+  if(e.k==='attente') return c('<span class="fa-pdf-na" title="Vérification en cours">…</span>');
+  if(e.k==='oui'){
     return c('<button type="button" class="fa-pdf-oui" data-fa-pdf="'+esc(String(f.id))+'" onclick="event.stopPropagation();_openFacturePdfBlob('+JSON.stringify(f.id)+')" title="PDF archivé — cliquer pour l\'ouvrir">📎 ✓</button>');
   }
-  // Une pré-facture ou un cadre d'acomptes n'est pas émis : rien à archiver encore.
-  var emise=!isPrebilled(f) && !_faAcomptesDeMere(f).length;
-  return c(emise?'<span class="fa-pdf-non" title="Facture émise : son PDF n\'est pas archivé">✕ manquant</span>'
-                :'<span class="fa-pdf-na" title="Pas encore émise : rien à archiver">—</span>');
+  if(e.k==='non') return c('<span class="fa-pdf-non" title="Facture émise : son PDF n\'est pas archivé">✕ manquant</span>');
+  return c('<span class="fa-pdf-na"'+(f?' title="Pas encore émise : rien à archiver"':'')+'>—</span>');
+}
+// Filtre « PDF manquant » de la liste Factures.
+window._faFiltrePdfManquant=false;
+function faTogglePdfManquant(){
+  window._faFiltrePdfManquant=!window._faFiltrePdfManquant;
+  if(typeof renderFA==='function') renderFA();
+}
+function _faPdfManquantBouton(source){
+  var b=document.getElementById('faBtnPdfManquant'); if(!b) return;
+  var n=window._facturePdfCachePret?(source||[]).filter(function(i){ return _faPdfEtat(i).k==='non'; }).length:null;
+  b.classList.toggle('on',!!window._faFiltrePdfManquant);
+  b.innerHTML='📎 PDF manquant'+(n==null?' …':' <b>'+n+'</b>');
+  b.title=n==null?'Lecture de l\'archive en cours':(n?n+' facture'+(n>1?'s':'')+' émise'+(n>1?'s':'')+' sans PDF archivé — cliquer pour ne voir qu\'elle'+(n>1?'s':''):'Toutes les factures émises ont leur PDF archivé');
 }
 function refreshDevisPdfCache(){
   return listAllDevisPdfMeta().then(function(metas){
