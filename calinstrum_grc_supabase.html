@@ -686,6 +686,15 @@ tr.regl-calc-on td{background:rgba(45,212,191,.09)}
 .imp-clients{border:1px solid var(--border);border-radius:8px;padding:6px 10px;max-height:170px;overflow:auto}
 .imp-case{display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)}
 .imp-case.sous{margin-left:24px;font-size:11px;color:var(--muted)}
+.doc-liens{margin:0 0 12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg3);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.doc-liens-lbl{font:600 10px var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-right:4px}
+.doc-liens-vide{color:var(--muted);font-size:11.5px}
+.doc-lien{display:inline-flex;align-items:center;gap:6px;font:600 11px var(--mono);padding:4px 9px;border-radius:999px;border:1px solid;background:transparent;cursor:pointer;white-space:nowrap}
+.doc-lien small{font-weight:400;opacity:.8}
+.doc-lien-dv{color:#a78bfa;border-color:rgba(167,139,250,.5)}.doc-lien-dv:hover{background:rgba(167,139,250,.14)}
+.doc-lien-fa{color:var(--teal);border-color:rgba(45,212,191,.5)}.doc-lien-fa:hover{background:rgba(45,212,191,.14)}
+.doc-lien-bc{color:#60a5fa;border-color:rgba(96,165,250,.5)}.doc-lien-bc:hover{background:rgba(96,165,250,.14)}
+.doc-lien-bl{color:#fbbf24;border-color:rgba(251,191,36,.5)}.doc-lien-bl:hover{background:rgba(251,191,36,.14)}
 .fa-regr-tag{font:600 9px var(--mono);border:1px solid rgba(251,146,60,.55);color:#fb923c;background:rgba(251,146,60,.08);border-radius:4px;padding:1px 6px;margin-left:4px;cursor:pointer;white-space:nowrap}
 .fa-regr-tag:hover{background:rgba(251,146,60,.2)}
 #mREGR .modal{display:flex;flex-direction:column}
@@ -5011,6 +5020,8 @@ function defDB(){
   };
 }
 function saveDB(){
+  // Une fiche qui vient d'être enregistrée n'est plus « modifiée » (cf _docInstallerSuivi).
+  if(typeof _docSaveCompteur!=='undefined') _docSaveCompteur++;
   // 1) FILET LOCAL (inchangé) — sauvegarde localStorage + backup horodaté.
   //    Garanti synchrone. Permet de continuer à travailler hors-ligne.
   try{
@@ -7570,6 +7581,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-23','🔗 Documents liés : en haut de chaque fiche (devis, facture, PO, BL), une barre ouvre les documents rattachés, dans les deux sens.'],
   ['2026-11-20','🔗 Facture regroupée : la fiche la compare à la somme de ses devis. Elle annonçait à tort un écart avec le premier devis.'],
   ['2026-11-20','🔢 Factures : un numéro libéré (regroupement, pré-facture supprimée) est repris par la prochaine facture du même client. Plus de trou dans la suite.'],
   ['2026-11-20','🔗 Factures : deux pré-factures pour un même bon de commande client se regroupent en une seule (pastille « même BC »). Aucune émission, annulable.'],
@@ -8058,6 +8070,7 @@ function _onModalOpen(modalId){
     if(map.supaTable && typeof window._supaShowAttributionFooter === 'function'){
       try { window._supaShowAttributionFooter('#'+modalId, map.supaTable, id); } catch(e){}
     }
+    try{ if(typeof _docLiensRendre==='function') _docLiensRendre(modalId,id); }catch(e){ console.warn('documents liés :',e); }
     if(id == null) return; // nouveau document (id null/undefined) : pas de surbrillance
     _activeHighlight = {modalId: modalId, openFn: map.openFn, id: id};
     _applyRowHighlight();
@@ -8109,6 +8122,239 @@ function _docRetourApresFermeture(modalId){
   }catch(e){ console.warn('retour section :',e); }
   window.scrollTo(0,r.y);
   setTimeout(function(){ window.scrollTo(0,r.y); },30);
+}
+
+// =============================================================================
+// DOCUMENTS LIÉS — passer d'un document à l'autre [23/11/2026]
+// =============================================================================
+// Depuis une fiche (devis, facture, PO, BL), une barre liste les documents
+// rattachés ; un clic ferme la fiche et ouvre l'autre. Les liens existaient déjà
+// dans les données, mais à l'écran dans un seul sens (devis → facture).
+// (=X=) UN SEUL GRAPHE, SYMÉTRIQUE PAR CONSTRUCTION : chaque lien est posé dans les
+//       deux sens, avec les règles que l'app applique déjà (_findLinkedFactures,
+//       _faDevisLies, _bcsDeFacture, _rentaFacturesDuPO, getBCsDevisIds). Aucune
+//       règle de rapprochement n'est réécrite ici.
+// (=X=) UNE SEULE FICHE OUVERTE : deux fiches l'une sur l'autre laisseraient
+//       enregistrer la première avec des valeurs devenues fausses.
+var _DOC_COLS={DV:'devis',FA:'factures',BC:'bcs',BL:'bls'};
+var _DOC_ORDRE=['DV','FA','BC','BL'];
+var _DOC_MAX_PUCES=12;
+function _docTrouver(type,id){
+  var col=DB[_DOC_COLS[type]]||[];
+  return col.find(function(x){ return x && String(x.id)===String(id); })||null;
+}
+function _docNumsTexte(v){ return String(v||'').split(/[,;+]/).map(function(x){ return x.trim(); }).filter(Boolean); }
+// Devis désigné par un numéro écrit à la main (« XXX-DV000REV1 », « XXX-DV000 REV1 »).
+function _docDevisParNumero(txt){
+  var t=String(txt||'').toUpperCase().replace(/\s+/g,''); if(!t) return null;
+  var m=/^(.*?)(REV\d+)?$/.exec(t), base=m[1], rev=m[2]||'';
+  var cle=function(d){ return String(d.num||'').toUpperCase().replace(/\s+/g,'').replace(/REV\d+$/,''); };
+  var fam=(DB.devis||[]).filter(function(d){ return d && cle(d)===base; });
+  if(!fam.length) return null;
+  if(rev){ var ex=fam.find(function(d){ return String(d.rev||'').toUpperCase().replace(/\s+/g,'')===rev; }); if(ex) return ex; }
+  return (typeof _dvRevisionActive==='function' && _dvRevisionActive(fam[0]))||fam[0];
+}
+// Devis IMPRIMÉ sur une facture : même règle que la fiche (cf openFA).
+function _docDevisImprime(f){
+  var n=String(f.dvliePrint||'').trim();
+  if(!n && typeof _faDevisEstMiroir==='function' && _faDevisEstMiroir(f.dvlie) && typeof _faDevisCadreClient==='function') n=_faDevisCadreClient(f);
+  return n?_docDevisParNumero(n):null;
+}
+// Le calcul complet coûte près d'une seconde : il est gardé tant qu'aucun
+// enregistrement n'a eu lieu (saveDB), que les listes n'ont pas changé de taille,
+// et au plus 20 secondes (une mise à jour venue du cloud ne passe pas par saveDB).
+var _docGrapheMemo=null;
+function _docGraphe(){
+  var cle=[typeof _docSaveCompteur!=='undefined'?_docSaveCompteur:0,(DB.devis||[]).length,(DB.factures||[]).length,(DB.bcs||[]).length,(DB.bls||[]).length].join('|');
+  if(_docGrapheMemo && _docGrapheMemo.cle===cle && Date.now()-_docGrapheMemo.t<20000) return _docGrapheMemo.G;
+  var G=_docGrapheCalcul();
+  _docGrapheMemo={cle:cle, t:Date.now(), G:G};
+  return G;
+}
+function _docGrapheCalcul(){
+  var G={}, FA=DB.factures||[], DV=DB.devis||[], BC=DB.bcs||[], BL=DB.bls||[];
+  var a=function(c1,c2,note){ var g=(G[c1]=G[c1]||{}); if(!(c2 in g) || (g[c2]==='imprime' && note!=='imprime')) g[c2]=note||''; };
+  var lier=function(t1,d1,t2,d2,note){
+    if(!d1 || !d2 || d1.id==null || d2.id==null) return;
+    var c1=t1+':'+d1.id, c2=t2+':'+d2.id; if(c1===c2) return;
+    a(c1,c2,note); a(c2,c1,note);
+  };
+  var parId=function(col,id){ return id==null?null:(col.find(function(x){ return x && String(x.id)===String(id); })||null); };
+  var essai=function(fn){ try{ return fn()||[]; }catch(e){ console.warn('documents liés :',e); return []; } };
+  DV.forEach(function(d){ if(!d) return;
+    // Une révision remplacée ne porte plus la facturation : c'est la révision en
+    // cours qui est liée (cf _dvIsSuperseded). Sinon le même devis sortait deux fois.
+    if(typeof _dvIsSuperseded==='function' && _dvIsSuperseded(d)) return;
+    essai(function(){ return _findLinkedFactures(d).factures; }).forEach(function(f){ lier('DV',d,'FA',f); });
+  });
+  FA.forEach(function(f){ if(!f) return;
+    essai(function(){ return _faDevisLies(f); }).forEach(function(d){ lier('FA',f,'DV',d); });
+    lier('FA',f,'FA',parId(FA,f.parentId));
+    lier('FA',f,'DV',essai(function(){ return [_docDevisImprime(f)]; })[0],'imprime');
+    essai(function(){ return _bcsDeFacture(f); }).forEach(function(b){ lier('FA',f,'BC',b); });
+    (Array.isArray(f.linkedBCs)?f.linkedBCs:[]).forEach(function(id){ lier('FA',f,'BC',parId(BC,id)); });
+    lier('FA',f,'BC',parId(BC,f._fromBC));
+    lier('FA',f,'BL',parId(BL,f._linkedBLId));
+  });
+  BC.forEach(function(b){ if(!b) return;
+    essai(function(){ return getBCsDevisIds(b); }).forEach(function(id){ lier('BC',b,'DV',parId(DV,id)); });
+    _docNumsTexte(b.linkDevis).forEach(function(n){ lier('BC',b,'DV',_docDevisParNumero(n)); });
+    essai(function(){ return typeof _rentaFacturesDuPO==='function'?_rentaFacturesDuPO(b):[]; }).forEach(function(f){ lier('BC',b,'FA',f); });
+    lier('BC',b,'FA',parId(FA,b.linkFactureId));
+    lier('BC',b,'FA',parId(FA,b.factureId));
+    if(b.remplacement && b.remplacement.remplace!=null) lier('BC',b,'BC',parId(BC,b.remplacement.remplace));
+    _docNumsTexte(b.linkBL).forEach(function(n){
+      var k=n.toUpperCase().replace(/\s+/g,'');
+      lier('BC',b,'BL',BL.find(function(l){ return l && String(l.num||'').toUpperCase().replace(/\s+/g,'')===k; })||null);
+    });
+  });
+  BL.forEach(function(l){ if(!l) return;
+    lier('BL',l,'FA',parId(FA,l._linkedFactureId));
+    lier('BL',l,'FA',parId(FA,l.factureId));
+    lier('BL',l,'BC',parId(BC,l._linkedBCCaliId));
+    (Array.isArray(l._sourceDevisIds)?l._sourceDevisIds:[]).forEach(function(id){ lier('BL',l,'DV',parId(DV,id)); });
+    _docNumsTexte(l.dvlie).forEach(function(n){ lier('BL',l,'DV',_docDevisParNumero(n)); });
+  });
+  return G;
+}
+// Un devis « Cadre » est rattaché à des dizaines de factures : on ne le traverse pas.
+function _docEstCadre(cle){
+  if(cle.slice(0,3)!=='DV:') return false;
+  var d=_docTrouver('DV',cle.slice(3));
+  return !!d && String(d.status||'').trim()==='Cadre';
+}
+// Documents rattachés : les liens directs, puis ceux du même dossier (un pas de plus).
+function _docsLies(type,id){
+  var G=_docGraphe(), depart=type+':'+id, vus={}, out=[], niveau=[depart];
+  vus[depart]=1;
+  for(var prof=1; prof<=2; prof++){
+    var suivant=[];
+    niveau.forEach(function(c){
+      if(_docEstCadre(c) && prof>1) return;
+      if(prof===2 && _docEstCadre(depart)) return;
+      Object.keys(G[c]||{}).forEach(function(v){
+        if(vus[v]) return;
+        if(prof>1 && G[c][v]==='imprime') return;
+        var t=v.slice(0,2), doc=_docTrouver(t,v.slice(3)); if(!doc) return;
+        vus[v]=1; suivant.push(v);
+        out.push({type:t, id:doc.id, num:String(doc.num||''), doc:doc, direct:prof===1, note:prof===1?(G[c][v]||''):''});
+      });
+    });
+    niveau=suivant;
+  }
+  return out.sort(function(x,y){
+    return (_DOC_ORDRE.indexOf(x.type)-_DOC_ORDRE.indexOf(y.type)) || ((y.direct?1:0)-(x.direct?1:0)) ||
+      String(y.doc.date||'').localeCompare(String(x.doc.date||'')) || x.num.localeCompare(y.num);
+  });
+}
+function _docLibelle(type,doc,note){
+  doc=doc||{}; var num=String(doc.num||''), d=[];
+  if(type==='DV'){
+    if(note==='imprime') d.push('imprimé sur la facture');
+    if(doc.status) d.push(String(doc.status));
+    return {titre:'Devis '+num+(doc.rev?' '+String(doc.rev).toUpperCase():''), detail:d.join(' · ')};
+  }
+  if(type==='FA'){
+    if(doc.acompteType==='acompte') d.push('acompte'+(doc.acomptePct?' '+doc.acomptePct+' %':''));
+    else if(doc.acompteType==='solde') d.push('solde');
+    var cadre=(typeof _faAcomptesDeMere==='function') && _faAcomptesDeMere(doc).length;
+    if(cadre) d.push('cadre');
+    else d.push((typeof isPrebilled==='function' && isPrebilled(doc))?'pré-facturée':(doc.status==='Payée'?'payée':'émise'));
+    return {titre:'Facture '+num, detail:d.join(' · ')};
+  }
+  if(type==='BC') return {titre:'PO '+num, detail:String(doc.status||'')};
+  return {titre:(/BL/i.test(num)?'':'BL ')+num, detail:String(doc.status||'')};
+}
+function _docFicheOuverte(){
+  var t=_DOC_ORDRE.find(function(k){ var e=document.getElementById(_DOC_MODALES[k]); return e && e.classList.contains('open'); });
+  if(!t) return null;
+  var m=_DOC_MODALES[t], id=null;
+  try{ id=window[_MODAL_EDIT_MAP[m].idVar]; }catch(e){}
+  return {type:t, modalId:m, id:id};
+}
+// Photo de la fiche (champs + lignes) : sert à savoir si elle a été modifiée depuis
+// son ouverture ou son dernier enregistrement.
+var _docPhotos={}, _docSaveCompteur=0, _docSuiviInstalle=false;
+function _docPhotoFiche(modalId){
+  var m=document.getElementById(modalId); if(!m) return '';
+  var v=[].map.call(m.querySelectorAll('.modal-body input, .modal-body select, .modal-body textarea'),function(e){
+    if(e.type==='file' || (e.closest && e.closest('.doc-liens'))) return '';
+    return (e.id||e.name||'')+'='+((e.type==='checkbox'||e.type==='radio')?e.checked:e.value);
+  }).join('|');
+  try{
+    var L=modalId==='mFA'?faL:modalId==='mDV'?dvL:modalId==='mBC'?bcL:modalId==='mBL'?blL:null;
+    v+='#'+JSON.stringify(L);
+  }catch(e){}
+  return v;
+}
+function _docFicheModifiee(modalId){
+  return (modalId in _docPhotos) && _docPhotos[modalId]!==_docPhotoFiche(modalId);
+}
+// Après un enregistrement réussi (saveDB appelé), la fiche est de nouveau « propre »
+// et sa barre est recalculée : un lien a pu naître.
+function _docInstallerSuivi(){
+  if(_docSuiviInstalle) return; _docSuiviInstalle=true;
+  [['saveDV','mDV'],['saveFA','mFA'],['saveBC','mBC'],['saveBL','mBL']].forEach(function(x){
+    var orig=window[x[0]]; if(typeof orig!=='function') return;
+    window[x[0]]=async function(){
+      var c=_docSaveCompteur, r=await orig.apply(this,arguments);
+      if(_docSaveCompteur!==c){
+        var e=document.getElementById(x[1]);
+        if(e && e.classList.contains('open')){
+          var id=null; try{ id=window[_MODAL_EDIT_MAP[x[1]].idVar]; }catch(err){}
+          try{ _docLiensRendre(x[1],id); }catch(err){ console.warn('documents liés :',err); }
+        }
+      }
+      return r;
+    };
+  });
+}
+function _docLiensRendre(modalId,id){
+  var type=Object.keys(_DOC_MODALES).find(function(k){ return _DOC_MODALES[k]===modalId; });
+  if(!type) return;
+  _docInstallerSuivi();
+  var m=document.getElementById(modalId), corps=m?m.querySelector('.modal-body'):null; if(!corps) return;
+  var box=corps.querySelector('.doc-liens');
+  if(!box){ box=document.createElement('div'); box.className='doc-liens'; corps.insertBefore(box,corps.firstChild); }
+  delete _docPhotos[modalId];
+  if(id==null || !_docTrouver(type,id)){ box.style.display='none'; box.innerHTML=''; return; }
+  box.innerHTML='<span class="doc-liens-lbl">🔗 Documents liés</span><span class="doc-liens-vide">…</span>'; box.style.display='';
+  setTimeout(function(){ _docLiensRemplir(modalId,type,id,box); },30);
+}
+function _docLiensRemplir(modalId,type,id,box){
+  var m=document.getElementById(modalId);
+  // La fiche a pu être fermée, ou montrer un autre document, entre-temps.
+  var idNow=null; try{ idNow=window[_MODAL_EDIT_MAP[modalId].idVar]; }catch(e){}
+  if(!m || !m.classList.contains('open') || String(idNow)!==String(id)) return;
+  var l=_docsLies(type,id), h='<span class="doc-liens-lbl">🔗 Documents liés</span>';
+  if(!l.length) h+='<span class="doc-liens-vide">Aucun document rattaché pour l\'instant.</span>';
+  l.slice(0,_DOC_MAX_PUCES).forEach(function(x){
+    var lib=_docLibelle(x.type,x.doc,x.note);
+    h+='<button type="button" class="doc-lien doc-lien-'+x.type.toLowerCase()+'" data-doc="'+x.type+':'+esc(String(x.id))+'" '+
+      'onclick="_docLienOuvrir(\''+x.type+'\',this.getAttribute(\'data-doc\').slice(3))" title="Ouvrir '+esc(lib.titre)+(x.direct?'':' (même dossier)')+'">'+
+      esc(lib.titre)+(lib.detail?' <small>'+esc(lib.detail)+'</small>':'')+'</button>';
+  });
+  if(l.length>_DOC_MAX_PUCES) h+='<span class="doc-liens-vide">+ '+(l.length-_DOC_MAX_PUCES)+' autre'+(l.length-_DOC_MAX_PUCES>1?'s':'')+'</span>';
+  box.innerHTML=h; box.style.display='';
+  // La photo attend que la fiche ait fini de se remplir.
+  setTimeout(function(){
+    var e=document.getElementById(modalId);
+    if(e && e.classList.contains('open')) _docPhotos[modalId]=_docPhotoFiche(modalId);
+  },400);
+}
+function _docLienOuvrir(type,id){
+  var doc=_docTrouver(type,id);
+  if(!doc){ alert('Document introuvable : il a peut-être été supprimé.'); return; }
+  var cur=_docFicheOuverte();
+  if(cur && _docFicheModifiee(cur.modalId)){
+    var ici=_docLibelle(cur.type,_docTrouver(cur.type,cur.id)).titre, la=_docLibelle(type,doc).titre;
+    if(!confirm('⚠ Tu as modifié « '+ici+' » sans l\'enregistrer.\n\nOuvrir « '+la+' » ferme cette fiche : tes modifications seront perdues.\n\nOK = ouvrir quand même · Annuler = rester sur la fiche')) return;
+  }
+  // On garde la section de départ : la fermeture de la fiche en cours n'y ramène pas.
+  var r=_docRetour; _docRetour=null;
+  if(cur) cm(cur.modalId);
+  _docRetour=r;
+  ouvrirDocument(type,doc.id);
 }
 
 function _onModalClose(modalId){
