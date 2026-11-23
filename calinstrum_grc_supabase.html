@@ -7626,6 +7626,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-24','🧩 Fiches : un document dont le client est écrit autrement que sa fiche garde son client dans le menu. Avant, le menu se vidait et refusait de sauvegarder.'],
   ['2026-11-23','🧾 Facture de solde : calculée comme le reste exact (la facture moins ses acomptes), ligne par ligne. Les factures déjà créées ne changent pas.'],
   ['2026-11-23','🔎 Bouton « Rechercher » en haut (ou Ctrl+K) : un numéro de BC client, de devis, de facture, de PO ou de BL mène au dossier complet.'],
   ['2026-11-23','⏱ Suivi commandes : compteur et filtre « À relancer » pour les commandes plus longues que le délai moyen constaté. La livraison estimée figure sous le statut.'],
@@ -8507,9 +8508,20 @@ function buildClientOptions(selectId, currentVal){
   var sel=document.getElementById(selectId);
   if(!sel) return;
   var opts='<option value="">-- Sélectionner --</option>';
+  var connu=false;
   DB.clients.forEach(function(c){
+    if(c.nom===currentVal) connu=true;
     opts+='<option value="'+esc(c.nom)+'"'+(c.nom===currentVal?' selected':'')+'>'+esc(c.nom)+'</option>';
   });
+  // (=X=) LE MENU NE DOIT PAS AVALER LE CLIENT DU DOCUMENT. Un document peut porter un
+  //       client écrit autrement que sa fiche (import, cascade : nom et prénom inversés).
+  //       [24/11/2026] Le menu se mettait alors sur « Sélectionner », sans rien dire, et
+  //       l'enregistrement était refusé : « N° et Client obligatoires ». La valeur du
+  //       document reste proposée et choisie, telle qu'elle est écrite. Même règle que gv().
+  var hors=String(currentVal==null?'':currentVal);
+  if(hors!=='' && !connu){
+    opts+='<option value="'+esc(hors)+'" selected data-hors-liste="1">'+esc(hors)+' · absent des fiches clients</option>';
+  }
   sel.innerHTML=opts;
 }
 
