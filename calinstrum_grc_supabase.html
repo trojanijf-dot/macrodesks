@@ -7626,6 +7626,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-23','🧾 Facture de solde : calculée comme le reste exact (la facture moins ses acomptes), ligne par ligne. Les factures déjà créées ne changent pas.'],
   ['2026-11-23','🔎 Bouton « Rechercher » en haut (ou Ctrl+K) : un numéro de BC client, de devis, de facture, de PO ou de BL mène au dossier complet.'],
   ['2026-11-23','⏱ Suivi commandes : compteur et filtre « À relancer » pour les commandes plus longues que le délai moyen constaté. La livraison estimée figure sous le statut.'],
   ['2026-11-23','📎 Factures : bouton « PDF manquant ». Un clic ne montre que les factures émises sans PDF archivé, avec leur nombre.'],
@@ -36259,7 +36260,8 @@ function onAcomptePctChange(){
   if(type==='solde'){
     var pctRestant=100-pctEmis;
     gv('ac-pct',pctRestant);
-    sv('ac-montantPreview',fN(Math.round((f.ttc||0)*pctRestant/100))+' XPF');
+    // Le solde est le RESTE réel : la mère moins les tranches déjà créées.
+    sv('ac-montantPreview',fN(Math.max(0,Math.round((f.ttc||0)-getAcomptesCumuleMontant(f.id))))+' XPF');
     gv('ac-libelle','Solde '+pctRestant+'%');
     // Suggérer F-XXX-SO
     var base=f.num.replace(/-A\d+$|-SO$/,'');
@@ -36370,6 +36372,51 @@ function _recalcAcompteLines(){
   if(totEl) totEl.textContent=fN(ttc)+' XPF';
 }
 
+// =============================================================================
+// SOLDE PAR DIFFÉRENCE — [23/11/2026]
+// =============================================================================
+// Lignes d'une facture de SOLDE = lignes de la mère, chaque prix diminué de ce que
+// les tranches déjà créées ont facturé sur la même ligne (et la même sous-ligne).
+// Ainsi : acomptes + solde = mère, exactement, sur chaque ligne et au total.
+// ⛔ Ne modifie AUCUNE facture existante : sert uniquement à bâtir un nouveau solde.
+// ⛔ Rend null (→ calcul d'avant) dès que la superposition n'est pas certaine :
+//    tranche en mode « lignes précises », nombre de lignes ou quantités différents
+//    (mère modifiée après coup), ou trop-perçu sur une ligne.
+function _faSoldeParDifference(mere,libelle){
+  if(!mere || !Array.isArray(mere.lines) || !mere.lines.length) return null;
+  var tr=_faAcomptesDeMere(mere);
+  if(!tr.length) return null;
+  var titre=function(l){ return !!l && (l.type==='header' || l.type==='section_banner'); };
+  var memeForme=function(a,b){
+    if(!a || !b) return false;
+    if(titre(a) || titre(b)) return titre(a) && titre(b) && (a.type||'')===(b.type||'');
+    if((Number(a.qte)||0)!==(Number(b.qte)||0)) return false;
+    var sa=Array.isArray(a.subLines)?a.subLines:[], sb=Array.isArray(b.subLines)?b.subLines:[];
+    if(sa.length!==sb.length) return false;
+    return sa.every(function(x,k){ return x && sb[k] && (Number(x.qte)||0)===(Number(sb[k].qte)||0); });
+  };
+  var ok=tr.every(function(t){
+    return t.acompteMethod!=='lines' && Array.isArray(t.lines) && t.lines.length===mere.lines.length &&
+      mere.lines.every(function(l,i){ return memeForme(l,t.lines[i]); });
+  });
+  if(!ok) return null;
+  var negatif=false;
+  var lignes=mere.lines.map(function(l,i){
+    var c=JSON.parse(JSON.stringify(l));
+    if(titre(l)) return c;
+    c.pu=(Number(l.pu)||0)-tr.reduce(function(sum,t){ return sum+(Number(t.lines[i].pu)||0); },0);
+    if(c.pu<0) negatif=true;
+    if(Array.isArray(c.subLines)) c.subLines.forEach(function(sl,k){
+      if(!sl) return;
+      sl.pu=(Number(l.subLines[k].pu)||0)-tr.reduce(function(sum,t){ return sum+(Number(t.lines[i].subLines[k].pu)||0); },0);
+      if(sl.pu<0) negatif=true;
+    });
+    c.designation=(l.designation||'')+' ('+libelle+')';
+    return c;
+  });
+  return negatif?null:lignes;
+}
+
 // Génère la facture d'acompte à partir des champs de la modal
 // Commande client d'une tranche : celle de sa mère, sinon celle du devis.
 // [03/11/2026] Rien n'était repris : facture de solde imprimée sans son n° de BC.
@@ -36445,6 +36492,14 @@ function generateAcompteInvoice(){
       c.designation=(l.designation||'')+' ('+libelle+')';
       return c;
     });
+    // (=X=) SOLDE = LA MÈRE MOINS CE QUI EST DÉJÀ FACTURÉ, ligne par ligne (cf
+    //       _faSoldeParDifference). Arrondi de son côté comme un acompte, il pouvait
+    //       faire dépasser le total de quelques francs. Si les tranches ne sont pas
+    //       superposables à la mère, le calcul d'avant est gardé tel quel.
+    if(type==='solde'){
+      var _parDiff=_faSoldeParDifference(parent,libelle);
+      if(_parDiff) acompteLines=_parDiff;
+    }
     // Même partage ligne / tâche que le total de la facture : cf _isTaskCarrier.
     acompteLines.forEach(function(l,idx){
       if(!l || l.type==='header' || l.type==='section_banner') return;
