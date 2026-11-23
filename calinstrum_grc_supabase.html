@@ -702,6 +702,25 @@ th.fa-pdf,td.fa-pdf{text-align:center;white-space:nowrap}
 .fa-pdf-na{color:var(--muted);font-size:11px}
 .fa-pdf-filtre.on{color:#fb7185;border-color:rgba(251,113,133,.6);background:rgba(251,113,133,.1)}
 .fa-pdf-filtre b{color:#fb7185}
+#mRECH .modal{display:flex;flex-direction:column}
+#mRECH .modal-body{overflow-y:auto}
+#mRECH .rg-titre{font:600 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+#mRECH .rg-aide{color:var(--muted);font-size:12px}
+#mRECH .rg-doc{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)}
+#mRECH .rg-fleche{color:var(--muted);font-size:12px}
+#mRECH .rg-plus{color:var(--muted);font-size:11px}
+#mRECH .sc-cmd{border:1px solid var(--border);border-radius:9px;background:var(--bg3);padding:10px 12px;margin-bottom:8px}
+#mRECH .sc-cmd-h{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;justify-content:space-between}
+#mRECH .sc-cmd-n{font:700 13.5px var(--mono);color:var(--teal)}
+#mRECH .sc-cmd-i{color:var(--muted);font-size:11.5px}
+#mRECH .sc-cmd-liv{font-size:11.5px;color:var(--text);margin-top:5px}
+#mRECH .sc-cmd-liv.dep{color:#fb923c}
+#mRECH .sc-cmd-art{font-size:11.5px;margin:6px 0 2px}
+#mRECH .sc-cmd-docs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+#mRECH .sc-st{font-size:10.5px;padding:2px 8px;border-radius:10px;border:1px solid;white-space:nowrap;font-weight:600}
+#mRECH .sc-st.ok{color:#34d399;border-color:rgba(52,211,153,.45)}
+#mRECH .sc-st.att{color:#a78bfa;border-color:rgba(167,139,250,.45)}
+#mRECH .sc-rien{border:1px dashed rgba(244,63,94,.5);border-radius:9px;padding:8px 12px;color:#fb7185;font-size:12px}
 .fa-regr-tag{font:600 9px var(--mono);border:1px solid rgba(251,146,60,.55);color:#fb923c;background:rgba(251,146,60,.08);border-radius:4px;padding:1px 6px;margin-left:4px;cursor:pointer;white-space:nowrap}
 .fa-regr-tag:hover{background:rgba(251,146,60,.2)}
 #mREGR .modal{display:flex;flex-direction:column}
@@ -1125,7 +1144,8 @@ body.has-dashboard-bg #page-dashboard .metric{
     <span id="topTitle" style="font-family:var(--display);font-size:14px;font-weight:800;color:#fff">Dashboard</span>
     <span id="topSubtitle" class="no-pm-blur" style="font-size:11px;color:var(--muted-soft);font-weight:400;display:none"></span>
   </div>
-  <button class="btn btn-ghost btn-sm no-print" id="grcBtnActualiser" onclick="grcActualiser()" style="margin-left:14px;margin-right:auto" title="Réaffiche cette page avec les données à jour, sans recharger l'application ni redemander le code"><span class="ico-classic">🔄</span><i class="ti ti-refresh ico-pro"></i> <span id="grcActualiserLib">Actualiser</span></button>
+  <button class="btn btn-ghost btn-sm no-print" id="grcBtnActualiser" onclick="grcActualiser()" style="margin-left:14px;margin-right:6px" title="Réaffiche cette page avec les données à jour, sans recharger l'application ni redemander le code"><span class="ico-classic">🔄</span><i class="ti ti-refresh ico-pro"></i> <span id="grcActualiserLib">Actualiser</span></button>
+  <button class="btn btn-ghost btn-sm no-print" id="grcBtnRecherche" onclick="ouvrirRechercheGlobale()" style="margin-right:auto" title="Rechercher un numéro : BC client, devis, facture, PO ou BL (Ctrl+K)">🔎 Rechercher</button>
   <div class="no-print" style="display:flex;gap:8px;align-items:center">
     <div id="alert-pill" class="pill pill-red" style="display:none;cursor:pointer;user-select:none" onclick="goToAlerts()" title="Cliquer pour voir les factures en retard ou à échéance proche"><div class="dot"></div><span id="alert-count">0 alertes</span></div>
     <button class="btn btn-ghost btn-sm" id="jrBtnTop" onclick="ouvrirJournal()" style="color:var(--teal);border-color:rgba(45,212,191,0.45)" title="Journal d'activité : session en cours et 5 derniers jours">🕘 Journal <span id="jrBadgeTop" style="display:none;font-size:9px;background:var(--teal);color:#06261f;border-radius:999px;padding:0 5px;font-weight:700"></span></button>
@@ -7606,6 +7626,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-23','🔎 Bouton « Rechercher » en haut (ou Ctrl+K) : un numéro de BC client, de devis, de facture, de PO ou de BL mène au dossier complet.'],
   ['2026-11-23','⏱ Suivi commandes : compteur et filtre « À relancer » pour les commandes plus longues que le délai moyen constaté. La livraison estimée figure sous le statut.'],
   ['2026-11-23','📎 Factures : bouton « PDF manquant ». Un clic ne montre que les factures émises sans PDF archivé, avec leur nombre.'],
   ['2026-11-23','📎 Factures : colonne « PDF ». Vert = PDF archivé (un clic l\u2019ouvre), rouge = facture émise sans PDF archivé.'],
@@ -12223,32 +12244,121 @@ function _scRechBarre(body){
     '<div class="sc-rech-aide">Plusieurs numéros : séparés par un espace, une virgule ou un retour à la ligne. Le numéro sans ses zéros ni son suffixe suffit. Le bouton PDF imprime alors ces commandes, avec leur livraison prévue ou estimée.</div>';
   body.parentNode.insertBefore(b,body);
 }
+// Carte d'une commande client. fnOuvrir : nom de la fonction appelée au clic sur un document.
+function _scRechCarte(g,fnOuvrir){
+  var fn=fnOuvrir||'ouvrirDocument';
+  var liv=g.commande?_scLivraisonTexte(g.commande,false):'';
+  var arts=g.articles.slice(0,6).map(function(x){ return '<b>'+fN(x.qte)+' ×</b> '+(x.code?esc(x.code)+' · ':'')+esc(x.des||x.ref); }).join(' &nbsp;·&nbsp; ')+
+    (g.articles.length>6?' &nbsp;·&nbsp; + '+(g.articles.length-6)+' autre(s)':'');
+  if(!arts && g.objets.length) arts=g.objets.map(esc).join(' &nbsp;·&nbsp; ');
+  return '<div class="sc-cmd" data-bc="'+esc(g.bc)+'"><div class="sc-cmd-h"><span><span class="sc-cmd-n">BC '+esc(g.bc)+'</span> <span class="sc-cmd-i">'+esc(g.client||'')+
+    (g.dateBC?' · reçu le '+fD(g.dateBC):'')+(g.acheteur?' · '+esc(g.acheteur):'')+'</span></span>'+
+    '<span class="sc-st '+(g.etat.k==='livre'?'ok':'att')+'">'+esc(g.etat.label)+'</span></div>'+
+    (liv && g.etat.k!=='livre'?'<div class="sc-cmd-liv'+(g.commande.livraison&&g.commande.livraison.depassee?' dep':'')+'">🚚 '+esc(liv)+'</div>':'')+
+    (arts?'<div class="sc-cmd-art">'+arts+'</div>':'')+
+    '<div class="sc-cmd-docs">'+g.docs.map(function(x){
+      var lib=_docLibelle(x.type,x.doc);
+      return '<button type="button" class="doc-lien doc-lien-'+x.type.toLowerCase()+'" data-doc="'+x.type+':'+esc(String(x.id))+'" '+
+        'onclick="'+fn+'(\''+x.type+'\',(_docTrouver(\''+x.type+'\',this.getAttribute(\'data-doc\').slice(3))||{}).id)" title="Ouvrir '+esc(lib.titre)+'">'+
+        esc(lib.titre)+(lib.detail?' <small>'+esc(lib.detail)+'</small>':'')+'</button>';
+    }).join('')+'</div></div>';
+}
 function _scRechHtml(){
   var R=_scRechercher(_scEtat.rech), nAtt=R.trouves.filter(function(g){ return g.etat.k==='attente'; }).length;
   var h='<div id="scRechBilan" class="sc-rech-bilan">'+R.demandes.length+' numéro'+(R.demandes.length>1?'s':'')+' cherché'+(R.demandes.length>1?'s':'')+
     ' · '+R.trouves.length+' commande'+(R.trouves.length>1?'s':'')+' trouvée'+(R.trouves.length>1?'s':'')+
     (R.trouves.length?' · '+nAtt+' en attente':'')+
     (R.introuvables.length?' · '+R.introuvables.length+' introuvable'+(R.introuvables.length>1?'s':''):'')+'</div><div id="scRechRes">';
-  R.trouves.forEach(function(g){
-    var liv=g.commande?_scLivraisonTexte(g.commande,false):'';
-    var arts=g.articles.slice(0,6).map(function(x){ return '<b>'+fN(x.qte)+' ×</b> '+(x.code?esc(x.code)+' · ':'')+esc(x.des||x.ref); }).join(' &nbsp;·&nbsp; ')+
-      (g.articles.length>6?' &nbsp;·&nbsp; + '+(g.articles.length-6)+' autre(s)':'');
-    if(!arts && g.objets.length) arts=g.objets.map(esc).join(' &nbsp;·&nbsp; ');
-    h+='<div class="sc-cmd" data-bc="'+esc(g.bc)+'"><div class="sc-cmd-h"><span><span class="sc-cmd-n">BC '+esc(g.bc)+'</span> <span class="sc-cmd-i">'+esc(g.client||'')+
-      (g.dateBC?' · reçu le '+fD(g.dateBC):'')+(g.acheteur?' · '+esc(g.acheteur):'')+'</span></span>'+
-      '<span class="sc-st '+(g.etat.k==='livre'?'ok':'att')+'">'+esc(g.etat.label)+'</span></div>'+
-      (liv && g.etat.k!=='livre'?'<div class="sc-cmd-liv'+(g.commande.livraison&&g.commande.livraison.depassee?' dep':'')+'">🚚 '+esc(liv)+'</div>':'')+
-      (arts?'<div class="sc-cmd-art">'+arts+'</div>':'')+
-      '<div class="sc-cmd-docs">'+g.docs.map(function(x){
-        var lib=_docLibelle(x.type,x.doc);
-        return '<button type="button" class="doc-lien doc-lien-'+x.type.toLowerCase()+'" data-doc="'+x.type+':'+esc(String(x.id))+'" '+
-          'onclick="ouvrirDocument(\''+x.type+'\',(_docTrouver(\''+x.type+'\',this.getAttribute(\'data-doc\').slice(3))||{}).id)" title="Ouvrir '+esc(lib.titre)+'">'+
-          esc(lib.titre)+(lib.detail?' <small>'+esc(lib.detail)+'</small>':'')+'</button>';
-      }).join('')+'</div></div>';
-  });
+  R.trouves.forEach(function(g){ h+=_scRechCarte(g,'ouvrirDocument'); });
   R.introuvables.forEach(function(n){ h+='<div class="sc-rien">'+esc(n)+' : aucun bon de commande client à ce numéro dans le GRC.</div>'; });
   R.courts.forEach(function(n){ h+='<div class="sc-rien">'+esc(n)+' : numéro trop court (4 caractères au moins).</div>'; });
   return h+'</div>';
+}
+
+// =============================================================================
+// RECHERCHE GÉNÉRALE — un numéro, n'importe lequel [23/11/2026]
+// =============================================================================
+// Un champ unique (bouton en haut, ou Ctrl+K) : n° de BC client, de devis, de
+// facture, de PO ou de BL. Il rend la ou les commandes client concernées (même
+// moteur que la page Suivi commandes : _scRechercher) puis les documents dont le
+// numéro contient le texte, chacun avec ses documents liés (_docsLies).
+// Lecture seule : rien n'est écrit.
+var _RECH_MAX_DOCS=25;
+function _rechCle(v){ return String(v==null?'':v).toUpperCase().replace(/\s+/g,''); }
+function _rechGlobale(texte){
+  var q=String(texte||'').trim(), k=_rechCle(q), out={q:q, court:k.length<3, commandes:[], docs:[], reste:0};
+  if(out.court) return out;
+  var pris={};
+  if(k.length>=4){
+    out.commandes=_scRechercher(q).trouves;
+    out.commandes.forEach(function(g){ g.docs.forEach(function(x){ pris[x.type+':'+x.id]=1; }); });
+  }
+  var cols={DV:DB.devis||[],FA:DB.factures||[],BC:DB.bcs||[],BL:DB.bls||[]}, l=[];
+  _DOC_ORDRE.forEach(function(t){ cols[t].forEach(function(doc){
+    if(!doc || pris[t+':'+doc.id]) return;
+    var n=_rechCle(doc.num)+(t==='DV'?_rechCle(doc.rev):'');
+    if(n.indexOf(k)<0) return;
+    // une révision de devis remplacée passe après la révision en cours
+    var vieux=(t==='DV' && typeof _dvIsSuperseded==='function' && _dvIsSuperseded(doc))?1:0;
+    l.push({type:t, id:doc.id, num:String(doc.num||''), doc:doc, exact:_rechCle(doc.num)===k?0:1, vieux:vieux});
+  }); });
+  l.sort(function(a,b){ return (a.exact-b.exact) || (a.vieux-b.vieux) || (_DOC_ORDRE.indexOf(a.type)-_DOC_ORDRE.indexOf(b.type)) ||
+    String(b.doc.date||'').localeCompare(String(a.doc.date||'')) || a.num.localeCompare(b.num); });
+  out.reste=Math.max(0,l.length-_RECH_MAX_DOCS);
+  out.docs=l.slice(0,_RECH_MAX_DOCS);
+  return out;
+}
+function _rechPuce(x,note){
+  var lib=_docLibelle(x.type,x.doc,note);
+  return '<button type="button" class="doc-lien doc-lien-'+x.type.toLowerCase()+'" data-doc="'+x.type+':'+esc(String(x.id))+'" '+
+    'onclick="_rechOuvrir(\''+x.type+'\',(_docTrouver(\''+x.type+'\',this.getAttribute(\'data-doc\').slice(3))||{}).id)" title="Ouvrir '+esc(lib.titre)+'">'+
+    esc(lib.titre)+(lib.detail?' <small>'+esc(lib.detail)+'</small>':'')+'</button>';
+}
+function _rechHtml(texte){
+  var R=_rechGlobale(texte);
+  if(!R.q) return '<div class="rg-aide">Tape un numéro : bon de commande client, devis, facture, PO ou BL. Un morceau suffit pour un document (« F113 »).</div>';
+  if(R.court) return '<div class="rg-aide">3 caractères au moins.</div>';
+  if(!R.commandes.length && !R.docs.length) return '<div class="sc-rien">Aucun document ni commande ne porte « '+esc(R.q)+' ».</div>';
+  var h='';
+  if(R.commandes.length){
+    h+='<div class="rg-titre">Commande'+(R.commandes.length>1?'s':'')+' client</div>';
+    R.commandes.forEach(function(g){ h+=_scRechCarte(g,'_rechOuvrir'); });
+  }
+  if(R.docs.length){
+    h+='<div class="rg-titre">Document'+(R.docs.length>1?'s':'')+'</div>';
+    R.docs.forEach(function(x){
+      var lies=_docsLies(x.type,x.id);
+      h+='<div class="rg-doc" data-rg="'+x.type+':'+esc(String(x.id))+'">'+_rechPuce(x)+
+        (lies.length?'<span class="rg-fleche">→</span>'+lies.slice(0,8).map(function(y){ return _rechPuce(y,y.note); }).join('')+
+          (lies.length>8?'<span class="rg-plus">+ '+(lies.length-8)+'</span>':''):'<span class="rg-plus">aucun document rattaché</span>')+'</div>';
+    });
+    if(R.reste) h+='<div class="rg-aide">+ '+R.reste+' autre'+(R.reste>1?'s':'')+' : précise le numéro.</div>';
+  }
+  return h;
+}
+function ouvrirRechercheGlobale(){
+  var ancien=document.getElementById('mRECH'); if(ancien) ancien.remove();
+  var m=document.createElement('div'); m.id='mRECH'; m.className='modal-overlay open';
+  m.innerHTML='<div class="modal" style="max-width:860px"><div class="modal-header"><h3>🔎 Rechercher un numéro</h3><button class="modal-close" onclick="_rechFermer()">✕</button></div>'+
+    '<div class="modal-body"><input type="text" class="form-input" id="rgChamp" autocomplete="off" placeholder="N° de BC client, de devis, de facture, de PO ou de BL" oninput="_rechSaisie(this.value)" style="width:100%;font-size:14px">'+
+    '<div id="rgRes" style="margin-top:12px">'+_rechHtml('')+'</div></div></div>';
+  m.addEventListener('mousedown',function(e){ if(e.target===m) _rechFermer(); });
+  document.body.appendChild(m);
+  var c=document.getElementById('rgChamp');
+  c.addEventListener('keydown',function(e){ if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); _rechFermer(); } });
+  setTimeout(function(){ try{ c.focus(); }catch(e){} },30);
+}
+function _rechFermer(){ var m=document.getElementById('mRECH'); if(m) m.remove(); }
+var _rechMinuteur=null;
+function _rechSaisie(v){
+  clearTimeout(_rechMinuteur);
+  _rechMinuteur=setTimeout(function(){ var r=document.getElementById('rgRes'); if(r) r.innerHTML=_rechHtml(v); },220);
+}
+// La fenêtre de recherche se ferme avant d'ouvrir la fiche : sinon la fiche s'ouvrirait derrière.
+function _rechOuvrir(type,id){
+  if(id==null) return;
+  _rechFermer();
+  ouvrirDocument(type,id);
 }
 
 // ----- Page -----
@@ -59023,6 +59133,12 @@ document.addEventListener('keydown',function(e){
       if(document.querySelector('.modal-overlay.active')) return;
       e.preventDefault();
       _shortcutNewInCurrentSection();
+      return;
+    }
+    if(ck==='k'){
+      // Recherche générale par numéro (cf ouvrirRechercheGlobale).
+      e.preventDefault();
+      if(typeof ouvrirRechercheGlobale==='function') ouvrirRechercheGlobale();
       return;
     }
     if(ck==='f'){
