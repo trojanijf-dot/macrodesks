@@ -1226,6 +1226,20 @@ body.has-dashboard-bg #page-dashboard .metric{
     #page-suivicmd .sc-st{font-size:10.5px;padding:2px 8px;border-radius:10px;border:1px solid;white-space:nowrap;font-weight:600}
     #page-suivicmd .sc-st.ok{color:var(--green);border-color:rgba(16,185,129,.45)}
     #page-suivicmd .sc-st.att{color:var(--purple);border-color:rgba(167,139,250,.45)}
+    #page-suivicmd .sc-rech{display:flex;gap:8px;align-items:center;border:1px solid rgba(45,212,191,.45);border-radius:9px;padding:7px 10px;background:var(--bg3)}
+    #page-suivicmd .sc-rech-lbl{font:600 10px var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--teal);white-space:nowrap}
+    #page-suivicmd .sc-rech textarea{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text-strong);font:13px var(--mono);resize:vertical;min-height:22px;max-height:120px}
+    #page-suivicmd .sc-rech-aide{color:var(--muted);font-size:11px;margin:5px 2px 10px}
+    #page-suivicmd .sc-rech-bilan{font:600 11.5px var(--mono);color:var(--teal);margin:0 2px 10px}
+    #page-suivicmd .sc-cmd{border:1px solid var(--border);border-radius:9px;background:var(--bg3);padding:10px 12px;margin-bottom:8px}
+    #page-suivicmd .sc-cmd-h{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;justify-content:space-between}
+    #page-suivicmd .sc-cmd-n{font:700 13.5px var(--mono);color:var(--teal)}
+    #page-suivicmd .sc-cmd-i{color:var(--muted);font-size:11.5px}
+    #page-suivicmd .sc-cmd-liv{font-size:11.5px;color:var(--text);margin-top:5px}
+    #page-suivicmd .sc-cmd-liv.dep{color:#fb923c}
+    #page-suivicmd .sc-cmd-art{font-size:11.5px;margin:6px 0 2px}
+    #page-suivicmd .sc-cmd-docs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+    #page-suivicmd .sc-rien{border:1px dashed rgba(244,63,94,.5);border-radius:9px;padding:8px 12px;color:#fb7185;font-size:12px;margin-bottom:8px}
     #page-suivicmd .sc-int{font-size:9px;color:var(--purple);border:1px dashed rgba(167,139,250,.5);border-radius:4px;padding:0 4px}
   </style>
   <div class="no-print" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
@@ -4029,6 +4043,8 @@ function admPreviewPrint(){
     <div class="form-row">
       <div class="form-group"><label>Statut</label>
         <select class="form-select" id="bc-status" onchange="onBCStatusChange()"><option>En attente</option><option>Confirmé</option><option>Livré</option><option>Annulé</option></select>
+        <label style="margin-top:10px">🚚 Livraison prévue <span style="color:var(--muted);font-weight:400;font-size:10px">(date annoncée ; vide = estimée d'après les délais constatés)</span></label>
+        <input type="date" class="form-input" id="bc-livraison-prevue">
       </div>
       <div class="form-group">
         <label>🔗 Devis lié(s) <span style="color:var(--muted);font-weight:400;font-size:10px">(plusieurs possibles — cas groupage Emerson : 1 PO = N devis SLN)</span></label>
@@ -5227,7 +5243,7 @@ var _BC_CHAMPS_BROUILLON={
   discount:'bc-discount', salesTax:'bc-sales-tax', otherTax:'bc-other-tax', shipping:'bc-shipping',
   linkDevis:'bc-link-devis', linkBCclient:'bc-link-bc-client', linkPOcali:'bc-link-po-cali',
   linkBL:'bc-link-bl', linkFacture:'bc-link-facture', linkEmerson:'bc-link-emerson',
-  linkCR:'bc-link-cr',
+  linkCR:'bc-link-cr', livraisonPrevue:'bc-livraison-prevue',
   // Expedition / cout de revient debarque
   tauxAUD:'bc-tauxAUD', fretAUD:'bc-fretAUD', poidsKg:'bc-poidsKg', dimsCm:'bc-dimsCm',
   fraisXPF:'bc-fraisXPF', fraisNote:'bc-fraisNote'
@@ -7581,6 +7597,8 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-23','🔎 Suivi commandes : recherche par n° de BC client (un ou plusieurs), avec tous les documents de chaque commande et leur état. Le PDF imprime ces commandes.'],
+  ['2026-11-23','🚚 PO : date « Livraison prévue ». Vide, elle est estimée avec le délai moyen constaté sur les commandes déjà livrées.'],
   ['2026-11-23','🔗 Documents liés : en haut de chaque fiche (devis, facture, PO, BL), une barre ouvre les documents rattachés, dans les deux sens.'],
   ['2026-11-20','🔗 Facture regroupée : la fiche la compare à la somme de ses devis. Elle annonçait à tort un écart avec le premier devis.'],
   ['2026-11-20','🔢 Factures : un numéro libéré (regroupement, pré-facture supprimée) est repris par la prochaine facture du même client. Plus de trou dans la suite.'],
@@ -11974,11 +11992,247 @@ function _suiviCommandes(){
       enRetard:statut.k==='attente' && !statut.remplacement && !!echeance && echeance<new Date(new Date().toDateString())
     });
   });
+  // Livraison prévue (saisie sur le PO) ou estimée (délai moyen constaté) : cf _scLivraison.
+  var _dl=_scDelais(out);
+  out.forEach(function(c){ c.livraison=_scLivraison(c,_dl); });
   return out.sort(function(x,y){return String(y.dateBC||y.pos[0].date||'').localeCompare(String(x.dateBC||x.pos[0].date||''));});
 }
 
+// =============================================================================
+// LIVRAISON PRÉVUE OU ESTIMÉE — [23/11/2026]
+// =============================================================================
+// Le client demande une date de livraison par bon de commande. Le PO porte une date
+// « Livraison prévue » quand elle est connue. Sinon elle est ESTIMÉE : date du PO +
+// délai moyen réellement constaté entre la date du PO et la livraison, sur les
+// commandes déjà livrées du même client (toutes commandes confondues s'il en a
+// moins de _SC_DELAI_MIN_MESURES). Une estimation, pas une promesse : dépassée,
+// elle s'affiche « à confirmer ».
+var _SC_DELAI_MIN_MESURES=5;
+function _scAuj(){ return (typeof window!=='undefined' && window._scDateRef) || td(); }
+function _scJours(a,b){ return Math.round((new Date(String(b).slice(0,10)+'T00:00:00Z')-new Date(String(a).slice(0,10)+'T00:00:00Z'))/86400000); }
+function _scPlusJours(d,n){ var x=new Date(String(d).slice(0,10)+'T00:00:00Z'); x.setUTCDate(x.getUTCDate()+n); return x.toISOString().slice(0,10); }
+function _scDelais(liste){
+  var par={}, tous=[];
+  (liste||[]).forEach(function(c){
+    if(!c || c.statut.k!=='livre' || !c.statut.livreeLe) return;
+    var po=c.pos.filter(function(x){ return !_bcEstRemplacement(x); }).map(function(x){ return x.date; }).filter(Boolean).sort()[0];
+    if(!po) return;
+    var j=_scJours(po,c.statut.livreeLe); if(!(j>0)) return;
+    (par[c.client]=par[c.client]||[]).push(j); tous.push(j);
+  });
+  var st=function(a){ return a.length?{n:a.length, moy:Math.round(a.reduce(function(x,y){ return x+y; },0)/a.length), min:Math.min.apply(null,a), max:Math.max.apply(null,a)}:null; };
+  var out={tous:st(tous), par:{}};
+  Object.keys(par).forEach(function(k){ out.par[k]=st(par[k]); });
+  return out;
+}
+function _scDelaiPour(client,delais){
+  var x=delais && delais.par[client];
+  return (x && x.n>=_SC_DELAI_MIN_MESURES)?x:(delais?delais.tous:null);
+}
+function _scLivraison(c,delais){
+  if(!c || c.statut.k!=='attente') return null;
+  var pos=c.pos.filter(function(x){ var s=String(x.status||''); return s!=='Livré' && s!=='Annulé'; });
+  if(!pos.length) return null;
+  var base=_scDelaiPour(c.client,delais), dates=[], toutSaisi=true;
+  pos.forEach(function(x){
+    if(x.livraisonPrevue){ dates.push(String(x.livraisonPrevue).slice(0,10)); return; }
+    toutSaisi=false;
+    if(x.date && base) dates.push(_scPlusJours(x.date,base.moy));
+  });
+  if(!dates.length) return null;
+  var d=dates.sort().pop();
+  return {date:d, type:toutSaisi?'prevue':'estimee', depassee:d<_scAuj(), jours:base?base.moy:null, mesures:base?base.n:0};
+}
+// Texte de la livraison. pourClient : document remis au client (aucune date dépassée).
+function _scLivraisonTexte(c,pourClient){
+  if(!c) return '';
+  if(c.statut && c.statut.k==='livre') return c.statut.livreeLe?'Livrée le '+fD(c.statut.livreeLe):(pourClient?'Livrée':'');
+  var l=c.livraison; if(!l) return pourClient?'à confirmer':'';
+  if(pourClient){
+    if(l.depassee) return 'à confirmer';
+    return l.type==='prevue'?fD(l.date):'vers le '+fD(l.date)+' (estimation)';
+  }
+  if(l.type==='prevue') return 'Livraison prévue le '+fD(l.date)+(l.depassee?' · dépassée':'');
+  return (l.depassee?'Estimation dépassée (vers le '+fD(l.date)+') — date à confirmer':'Livraison estimée vers le '+fD(l.date))+
+    (l.jours?' · délai moyen constaté '+l.jours+' j sur '+l.mesures+' commandes':'');
+}
+
+// =============================================================================
+// RECHERCHE PAR BON DE COMMANDE CLIENT — [23/11/2026]
+// =============================================================================
+// Un ou plusieurs numéros de BC client → pour chacun, la commande, son état et tous
+// ses documents (devis, factures, PO, BL), fourniture ou prestation.
+// (=X=) LA CLÉ est _bcNumKey (« 00701109-01 » = « 701109-1 »). Un numéro cherché
+//       correspond s'il est le numéro ENTIER ou sa racine avant le suffixe
+//       (« 701109 » retrouve « 00701109-01 »), jamais un morceau de numéro.
+function _scRechNums(texte){
+  return String(texte||'').replace(/\s*\/\s*/g,'/').split(/[\s,;]+/).map(function(x){ return x.trim(); })
+    .filter(function(x,i,a){ return x && a.indexOf(x)===i; });
+}
+function _scRechCorrespond(q,cle){
+  if(!q || q.length<4 || !cle) return false;
+  var i=cle.indexOf(q);
+  while(i>=0){
+    var av=i>0?cle.charAt(i-1):'', ap=cle.charAt(i+q.length);
+    if(!/[A-Z0-9]/.test(av) && !/[A-Z0-9]/.test(ap)) return true;
+    i=cle.indexOf(q,i+1);
+  }
+  return false;
+}
+// Numéros de BC client portés par un document (un champ peut en citer plusieurs).
+function _scNumsBC(type,doc){
+  var v=[];
+  if(type==='DV') v=[_dvBCClientNum(doc)];
+  else if(type==='FA') v=[doc.bcClientSLN,doc._importPONum,doc._bcReapproNum];
+  else if(type==='BC') v=[doc.linkBCclient,doc._bcReapproNum];
+  else if(type==='BL') v=[doc.po];
+  var out=[];
+  v.forEach(function(x){ String(x==null?'':x).replace(/\s*\/\s*/g,'/').split(/[,;+]/).forEach(function(n){
+    // « Commande d'achat n° 123 » et « 123 » sont le même bon de commande.
+    n=n.trim().replace(/^.*\bn[°o]\s*/i,'').trim();
+    if(n && out.indexOf(n)<0) out.push(n);
+  }); });
+  return out;
+}
+// Toutes les commandes client connues du GRC, rangées par clé de BC.
+function _scIndexBC(){
+  var G={}, cols={DV:DB.devis||[],FA:DB.factures||[],BC:DB.bcs||[],BL:DB.bls||[]};
+  var grp=function(num){ var k=_bcNumKey(num); if(!k) return null; return G[k]||(G[k]={cle:k, nums:[], docs:[], vus:{}, commande:null}); };
+  var ajouter=function(g,type,doc,num){
+    if(!g || !doc) return;
+    if(num && g.nums.indexOf(num)<0) g.nums.push(num);
+    var c=type+':'+doc.id; if(g.vus[c]) return; g.vus[c]=1;
+    g.docs.push({type:type, id:doc.id, num:String(doc.num||''), doc:doc});
+  };
+  _suiviCommandes().forEach(function(c){
+    _scNumsBC('FA',{bcClientSLN:c.bcClient}).forEach(function(n){
+      var g=grp(n); if(!g) return;
+      if(!g.commande) g.commande=c;
+      if(g.nums.indexOf(n)<0) g.nums.push(n);
+      c.pos.forEach(function(x){ ajouter(g,'BC',x); });
+      c.factures.forEach(function(x){ ajouter(g,'FA',x); });
+      c.bls.forEach(function(x){ ajouter(g,'BL',x); });
+    });
+  });
+  Object.keys(cols).forEach(function(t){ cols[t].forEach(function(doc){
+    if(!doc) return;
+    if(t==='DV' && typeof _dvIsSuperseded==='function' && _dvIsSuperseded(doc)) return;
+    _scNumsBC(t,doc).forEach(function(n){ ajouter(grp(n),t,doc,n); });
+  }); });
+  // Documents rattachés qui ne portent pas eux-mêmes le numéro (tranche d'acompte, BL, devis).
+  Object.keys(G).forEach(function(k){
+    var g=G[k];
+    g.docs.slice().forEach(function(d){
+      if(d.type!=='FA' && d.type!=='DV') return;
+      _docsLies(d.type,d.id).forEach(function(x){
+        if(!x.direct || x.note==='imprime') return;
+        var siens=_scNumsBC(x.type,x.doc).map(_bcNumKey).filter(Boolean);
+        if(siens.length && siens.indexOf(k)<0) return;      // il appartient à une autre commande
+        ajouter(g,x.type,x.doc);
+      });
+    });
+  });
+  return G;
+}
+function _scRechEtat(g){
+  if(g.commande){
+    var s=g.commande.statut;
+    return {k:s.k, label:s.k==='livre'?('Livrée'+(s.livreeLe?' le '+fD(s.livreeLe):'')):s.label};
+  }
+  var fas=g.docs.filter(function(d){ return d.type==='FA'; }).map(function(d){ return d.doc; });
+  var cadre=fas.find(function(f){ return _faAcomptesDeMere(f).length; });
+  var reelles=fas.filter(function(f){ return !_faAcomptesDeMere(f).length; });
+  var emises=reelles.filter(function(f){ return !isPrebilled(f); });
+  if(!fas.length){
+    var dv=g.docs.find(function(d){ return d.type==='DV'; });
+    return {k:'attente', label:dv?'Devis '+String(dv.doc.status||'').toLowerCase()+' — pas encore de facture':'Aucun document'};
+  }
+  if(cadre){
+    var solde=emises.some(function(f){ return f.acompteType==='solde'; });
+    if(solde) return {k:'livre', label:'Facturée en totalité'};
+    return {k:'attente', label:getPhase(cadre).label+(emises.length?' · '+emises.length+' facture'+(emises.length>1?'s':'')+' partielle'+(emises.length>1?'s':'')+' émise'+(emises.length>1?'s':''):'')};
+  }
+  if(reelles.length && emises.length===reelles.length) return {k:'livre', label:'Facturée'};
+  // Plusieurs pré-factures : la plus avancée dit où en est la commande.
+  var enCours=reelles.filter(function(f){ return isPrebilled(f); }).sort(function(a,b){
+    return _FA_REGROUP_PHASES.indexOf(_phaseEffective(b))-_FA_REGROUP_PHASES.indexOf(_phaseEffective(a)); })[0];
+  return {k:'attente', label:enCours?getPhase(enCours).label:'En cours'};
+}
+function _scRechercher(texte){
+  var demandes=_scRechNums(texte), G=_scIndexBC(), cles=Object.keys(G), trouves=[], vus={}, introuvables=[], courts=[];
+  demandes.forEach(function(q0){
+    var q=_bcNumKey(q0);
+    if(q.length<4){ courts.push(q0); return; }
+    var l=cles.filter(function(k){ return _scRechCorrespond(q,k); });
+    if(!l.length){ introuvables.push(q0); return; }
+    l.forEach(function(k){ if(vus[k]) return; vus[k]=1;
+      var g=G[k], c=g.commande, dv=g.docs.filter(function(d){ return d.type==='DV'; }).map(function(d){ return d.doc; }), fa=g.docs.filter(function(d){ return d.type==='FA'; }).map(function(d){ return d.doc; });
+      var src=dv[0]||fa[0]||(g.docs[0]&&g.docs[0].doc)||{};
+      var contact=String(src.client||src.clientFinal||'');
+      trouves.push({
+        cle:k, bc:g.nums.slice().sort(function(a,b){ return b.length-a.length; })[0]||q0, commande:c,
+        client:c?c.client:getClientNumPrefix(contact),
+        dateBC:c?c.dateBC:((dv[0]&&(dv[0].bcClientDate||dv[0].bcClientSLNDate))||(fa[0]&&fa[0].dateReceptionBC)||''),
+        acheteur:c?c.acheteur:(contact.split(' - ').slice(1).join(' - ').trim()||String(src.contact||'')),
+        etat:_scRechEtat(g), articles:c?c.articles:[],
+        objets:c?[]:fa.concat(dv).map(function(x){ return String(x.objet||'').trim(); }).filter(function(o,i,a){ return o && a.indexOf(o)===i; }).slice(0,3),
+        docs:g.docs.slice().sort(function(x,y){ return (_DOC_ORDRE.indexOf(x.type)-_DOC_ORDRE.indexOf(y.type)) || String(x.doc.date||'').localeCompare(String(y.doc.date||'')) || x.num.localeCompare(y.num); })
+      });
+    });
+  });
+  return {demandes:demandes, trouves:trouves, introuvables:introuvables, courts:courts};
+}
+function _scRechActive(){ return !!String(_scEtat.rech||'').trim(); }
+var _scRechMinuteur=null;
+function _scRechSaisie(v){
+  _scEtat.rech=v;
+  clearTimeout(_scRechMinuteur);
+  _scRechMinuteur=setTimeout(renderSuiviCommandes,250);
+}
+function _scRechEffacer(){
+  _scEtat.rech=''; var e=document.getElementById('scRech'); if(e) e.value='';
+  renderSuiviCommandes();
+}
+// Barre de recherche : créée une fois, hors de la zone redessinée (la saisie garde le curseur).
+function _scRechBarre(body){
+  if(document.getElementById('scRechBar')) return;
+  var b=document.createElement('div'); b.id='scRechBar'; b.className='no-print';
+  b.innerHTML='<div class="sc-rech"><span class="sc-rech-lbl">🔎 BC client</span>'+
+    '<textarea id="scRech" rows="1" placeholder="Un ou plusieurs numéros de bon de commande client (ex : 701109 701244)" oninput="_scRechSaisie(this.value)"></textarea>'+
+    '<button type="button" class="btn btn-ghost btn-sm" onclick="_scRechEffacer()">✕ Effacer</button></div>'+
+    '<div class="sc-rech-aide">Plusieurs numéros : séparés par un espace, une virgule ou un retour à la ligne. Le numéro sans ses zéros ni son suffixe suffit. Le bouton PDF imprime alors ces commandes, avec leur livraison prévue ou estimée.</div>';
+  body.parentNode.insertBefore(b,body);
+}
+function _scRechHtml(){
+  var R=_scRechercher(_scEtat.rech), nAtt=R.trouves.filter(function(g){ return g.etat.k==='attente'; }).length;
+  var h='<div id="scRechBilan" class="sc-rech-bilan">'+R.demandes.length+' numéro'+(R.demandes.length>1?'s':'')+' cherché'+(R.demandes.length>1?'s':'')+
+    ' · '+R.trouves.length+' commande'+(R.trouves.length>1?'s':'')+' trouvée'+(R.trouves.length>1?'s':'')+
+    (R.trouves.length?' · '+nAtt+' en attente':'')+
+    (R.introuvables.length?' · '+R.introuvables.length+' introuvable'+(R.introuvables.length>1?'s':''):'')+'</div><div id="scRechRes">';
+  R.trouves.forEach(function(g){
+    var liv=g.commande?_scLivraisonTexte(g.commande,false):'';
+    var arts=g.articles.slice(0,6).map(function(x){ return '<b>'+fN(x.qte)+' ×</b> '+(x.code?esc(x.code)+' · ':'')+esc(x.des||x.ref); }).join(' &nbsp;·&nbsp; ')+
+      (g.articles.length>6?' &nbsp;·&nbsp; + '+(g.articles.length-6)+' autre(s)':'');
+    if(!arts && g.objets.length) arts=g.objets.map(esc).join(' &nbsp;·&nbsp; ');
+    h+='<div class="sc-cmd" data-bc="'+esc(g.bc)+'"><div class="sc-cmd-h"><span><span class="sc-cmd-n">BC '+esc(g.bc)+'</span> <span class="sc-cmd-i">'+esc(g.client||'')+
+      (g.dateBC?' · reçu le '+fD(g.dateBC):'')+(g.acheteur?' · '+esc(g.acheteur):'')+'</span></span>'+
+      '<span class="sc-st '+(g.etat.k==='livre'?'ok':'att')+'">'+esc(g.etat.label)+'</span></div>'+
+      (liv && g.etat.k!=='livre'?'<div class="sc-cmd-liv'+(g.commande.livraison&&g.commande.livraison.depassee?' dep':'')+'">🚚 '+esc(liv)+'</div>':'')+
+      (arts?'<div class="sc-cmd-art">'+arts+'</div>':'')+
+      '<div class="sc-cmd-docs">'+g.docs.map(function(x){
+        var lib=_docLibelle(x.type,x.doc);
+        return '<button type="button" class="doc-lien doc-lien-'+x.type.toLowerCase()+'" data-doc="'+x.type+':'+esc(String(x.id))+'" '+
+          'onclick="ouvrirDocument(\''+x.type+'\',(_docTrouver(\''+x.type+'\',this.getAttribute(\'data-doc\').slice(3))||{}).id)" title="Ouvrir '+esc(lib.titre)+'">'+
+          esc(lib.titre)+(lib.detail?' <small>'+esc(lib.detail)+'</small>':'')+'</button>';
+      }).join('')+'</div></div>';
+  });
+  R.introuvables.forEach(function(n){ h+='<div class="sc-rien">'+esc(n)+' : aucun bon de commande client à ce numéro dans le GRC.</div>'; });
+  R.courts.forEach(function(n){ h+='<div class="sc-rien">'+esc(n)+' : numéro trop court (4 caractères au moins).</div>'; });
+  return h+'</div>';
+}
+
 // ----- Page -----
-var _scEtat={client:'Tous', acheteur:'Tous', etat:'En attente'};
+var _scEtat={client:'Tous', acheteur:'Tous', etat:'En attente', rech:''};
 function scSetFiltre(cle,val){ _scEtat[cle]=val; if(cle==='client') _scEtat.acheteur='Tous'; renderSuiviCommandes(); }
 function _scSelection(tout){
   var E=_scEtat;
@@ -11991,6 +12245,9 @@ function _scSelection(tout){
 function renderSuiviCommandes(){
   var body=document.getElementById('scBody');
   if(!body) return;
+  _scRechBarre(body);
+  // Recherche par BC client : les résultats remplacent le tableau (cf _scRechHtml).
+  if(_scRechActive()){ body.innerHTML=_scRechHtml(); return; }
   var tout=_suiviCommandes(), E=_scEtat;
   var clients=tout.map(function(c){return c.client;}).filter(function(v,i,a){return a.indexOf(v)===i;}).sort();
   if(E.client!=='Tous' && clients.indexOf(E.client)<0) E.client='Tous';
@@ -12033,6 +12290,17 @@ function suiviCmdImprimerPDF(){
   var sel=_scSelection(_suiviCommandes()), E=_scEtat;
   var titre=(E.client==='Tous'?'Tous clients':E.client)+(E.acheteur==='Tous'?'':' · à l\'attention de '+E.acheteur);
   var etat=E.etat==='Toutes'?'toutes commandes':(E.etat==='En attente'?'commandes en attente':'commandes livrées');
+  // Recherche par BC client en cours : le PDF porte CES commandes, avec leur livraison.
+  var avecLiv=_scRechActive();
+  if(avecLiv){
+    var _R=_scRechercher(E.rech);
+    sel=_R.trouves.map(function(g){
+      return g.commande || {bcClient:g.bc, dateBC:g.dateBC, acheteur:g.acheteur, statut:{k:g.etat.k,label:g.etat.label}, articles:[], pos:[], quotes:[], objets:g.objets, livraison:null, horsSuivi:true};
+    });
+    var _cl=_R.trouves.map(function(g){ return g.client; }).filter(function(v,i,a){ return v && a.indexOf(v)===i; });
+    titre=_cl.length?_cl.join(', '):'Commandes';
+    etat=sel.length+' commande'+(sel.length>1?'s':'');
+  }
   // Colonnes facultatives (références internes) : cochées à côté du bouton PDF, jamais par défaut.
   var avecPO=!!(document.getElementById('scPdfPO')||{}).checked, avecQuote=!!(document.getElementById('scPdfQuote')||{}).checked;
   var nCol=6+(avecPO?1:0)+(avecQuote?1:0);
@@ -12041,12 +12309,17 @@ function suiviCmdImprimerPDF(){
     rows+='<tr class="grp"><td>BC '+(esc(c.bcClient)||'—')+'</td><td>'+fD(c.dateBC)+'</td><td colspan="3">Acheteur : '+esc(c.acheteur)+'</td>'+
       '<td class="'+(c.statut.k==='livre'?'ok':'att')+'">'+esc(c.statut.label)+'</td>'+
       (avecPO?'<td class="int">'+c.pos.map(function(bc){return esc(bc.num);}).join('<br>')+'</td>':'')+
-      (avecQuote?'<td class="int">'+(c.quotes.length?c.quotes.map(esc).join('<br>'):'—')+'</td>':'')+'</tr>';
+      (avecQuote?'<td class="int">'+(c.quotes.length?c.quotes.map(esc).join('<br>'):'—')+'</td>':'')+
+      (avecLiv?'<td class="liv">'+esc(c.horsSuivi?'':_scLivraisonTexte(c,true))+'</td>':'')+'</tr>';
+    (c.objets||[]).forEach(function(o){
+      rows+='<tr><td></td><td></td><td></td><td>'+esc(o)+'</td><td class="n"></td><td></td>'+(avecPO?'<td></td>':'')+(avecQuote?'<td></td>':'')+(avecLiv?'<td></td>':'')+'</tr>';
+    });
     c.articles.forEach(function(x){
       rows+='<tr><td></td><td></td><td>'+esc(x.code)+'</td><td>'+esc(x.des||x.ref)+(x.code&&x.ref?'<div class="ref">'+esc(x.ref)+'</div>':'')+'</td><td class="n">'+fN(x.qte)+'</td><td></td>'+
-        (avecPO?'<td></td>':'')+(avecQuote?'<td></td>':'')+'</tr>';
+        (avecPO?'<td></td>':'')+(avecQuote?'<td></td>':'')+(avecLiv?'<td></td>':'')+'</tr>';
     });
   });
+  if(avecLiv) nCol++;
   var css='@page{size:A4 landscape;margin:12mm 11mm 13mm;}html,body{background:#fff;color-scheme:light}body{font-family:Calibri,Arial,sans-serif;color:#111;font-size:10.5px;margin:0}'+
     '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #e46c12;padding-bottom:8px;margin-bottom:12px}'+
     'h1{font-size:19px;color:#1b365d;margin:4px 0 2px}.sub{color:#5b6b7a;font-size:10.5px}table{width:100%;border-collapse:collapse}'+
@@ -12058,10 +12331,12 @@ function suiviCmdImprimerPDF(){
   var html='<div class="hd"><div><div style="display:inline-block;text-align:center"><img src="'+LG_PLACEHOLDER+'" style="height:38px;display:block;margin:0 auto" alt="CALINSTRUM">'+
       '<div style="font-weight:800;font-size:10px;letter-spacing:.8px;color:#1b365d">CALINSTRUM</div></div><h1>Suivi de vos commandes</h1>'+
       '<div class="sub">'+esc(titre)+' · situation au '+fD(td())+' · '+etat+'</div>'+
-      '<div class="leg">Statuts : « Commande lancée le … — en attente » tant que la marchandise n\'est pas livrée · « Livrée » une fois la livraison effectuée.</div></div>'+
+      '<div class="leg">Statuts : « Commande lancée le … — en attente » tant que la marchandise n\'est pas livrée · « Livrée » une fois la livraison effectuée.</div>'+
+      (avecLiv?'<div class="leg">Livraison : une date « vers le … (estimation) » est établie d\'après les délais constatés sur les commandes précédentes ; elle reste indicative.</div>':'')+'</div>'+
       '<div class="sub" style="text-align:right">'+esc(CI.nom)+' · '+esc(CI.adresse)+'<br>'+esc(CI.tel)+' · '+esc(CI.email)+'</div></div>'+
     '<table><thead><tr><th style="width:120px">N° BC client</th><th style="width:74px">Date BC</th><th style="width:90px">Code article</th><th>Désignation</th><th style="width:60px;text-align:right">Quantité</th><th style="width:250px">Statut</th>'+
-      (avecPO?'<th style="width:95px">PO CALINSTRUM</th>':'')+(avecQuote?'<th style="width:105px">Quote Emerson</th>':'')+'</tr></thead>'+
+      (avecPO?'<th style="width:95px">PO CALINSTRUM</th>':'')+(avecQuote?'<th style="width:105px">Quote Emerson</th>':'')+
+      (avecLiv?'<th style="width:150px">Livraison</th>':'')+'</tr></thead>'+
     '<tbody>'+(rows||'<tr><td colspan="'+nCol+'">Aucune commande.</td></tr>')+'</tbody></table>';
   var w=window.open('','_blank','');
   if(!w){alert('Veuillez autoriser les popups pour ce fichier puis réessayer.');return;}
@@ -39456,7 +39731,7 @@ function openBC(id){
     if(legacyCref && bcProps.length>0 && !bcProps[0].cref){bcProps[0].cref=legacyCref;}
     ensurePropIds();
     renderEmersonProps();
-    gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');
+    gv('bc-livraison-prevue',b.livraisonPrevue||'');gv('bc-notes',b.bcNotes||'');gv('bc-discount',b.discount||0);gv('bc-sales-tax',b.salesTax||0);gv('bc-other-tax',b.otherTax||0);gv('bc-shipping',b.shipping||0);gv('bc-link-devis',b.linkDevis||'');gv('bc-link-bc-client',b.linkBCclient||'');gv('bc-link-po-cali',b.linkPOcali||'');gv('bc-link-bl',b.linkBL||'');gv('bc-link-facture',b.linkFacture||'');gv('bc-link-emerson',b.linkEmerson||'');gv('bc-link-cr',b.linkCR||'');
     // Tracker auto-fill : si linkBCclient courant == valeur que la consolidation produirait,
     // alors c'est probablement la valeur auto → on autorisera l'écrasement au prochain
     // toggle de devis. Sinon, valeur custom → on ne touchera plus.
@@ -39477,7 +39752,7 @@ function openBC(id){
     _setBCSelectedDevisIds([]); // nouveau BC : aucun devis lié
     populateBCClientFinalSelect('');gv('bc-client-final','');gv('bc-cref2','');
     bcProps=[];renderEmersonProps();
-    gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');
+    gv('bc-livraison-prevue','');gv('bc-notes','');gv('bc-discount',0);gv('bc-sales-tax',0);gv('bc-other-tax',0);gv('bc-shipping',0);gv('bc-link-devis','');gv('bc-link-bc-client','');gv('bc-link-po-cali','');gv('bc-link-bl','');gv('bc-link-facture','');gv('bc-link-emerson','');gv('bc-link-cr','');
     _bcLinkBCclientIsAuto = true; // champ vide → on autorise l'auto-fill au 1er devis lié
     // Nouveaux champs Coût réel : vides = utiliser défauts
     gv('bc-tauxAUD','');gv('bc-fraisXPF','');gv('bc-fraisNote','');
@@ -39933,7 +40208,7 @@ function getBC(){var tot=cBCtot();var totVal=typeof tot==='object'?tot.total:tot
   // conservé en sortie = 1er ID, pour ne pas casser les anciens reads sur DB.bcs.
   var devisIdsArr = (_bcSelectedDevisIds||[]).slice();
   var devisIdLegacy = devisIdsArr.length > 0 ? String(devisIdsArr[0]) : '';
-  var _bc={id:eBCid||Date.now(),num:_numPropre(gvg('bc-num')),date:gvg('bc-date'),devise:gvg('bc-devise'),calContact:gvg('bc-cal-contact'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieIds:devisIdsArr,devisLieId:devisIdLegacy,lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),
+  var _bc={id:eBCid||Date.now(),num:_numPropre(gvg('bc-num')),date:gvg('bc-date'),devise:gvg('bc-devise'),calContact:gvg('bc-cal-contact'),vcont:gvg('bc-vcont'),vemail:gvg('bc-vemail'),vphone:gvg('bc-vphone'),vaddr:gvg('bc-vaddr'),inco:gvg('bc-inco'),fret:gvg('bc-fret'),status:gvg('bc-status'),clientFinal:gvg('bc-client-final'),cref2:gvg('bc-cref2'),props:JSON.parse(JSON.stringify(bcProps||[])),bcNotes:gvg('bc-notes'),discount:gvg('bc-discount'),salesTax:gvg('bc-sales-tax'),otherTax:gvg('bc-other-tax'),shipping:gvg('bc-shipping'),devisLieIds:devisIdsArr,devisLieId:devisIdLegacy,lines:JSON.parse(JSON.stringify(bcL)),total:totVal,totals:tot,linkDevis:gvg('bc-link-devis'),linkBCclient:gvg('bc-link-bc-client'),linkPOcali:gvg('bc-link-po-cali'),linkBL:gvg('bc-link-bl'),linkFacture:gvg('bc-link-facture'),linkEmerson:gvg('bc-link-emerson'),linkCR:gvg('bc-link-cr'),livraisonPrevue:gvg('bc-livraison-prevue'),
   tauxAUD:(tauxNum!==null&&!isNaN(tauxNum)&&tauxNum>0)?tauxNum:undefined,
   // Expedition — entrees du cout de revient debarque. `undefined` quand le champ
   // est vide : le moteur doit pouvoir distinguer « non renseigne » de « zero ».
