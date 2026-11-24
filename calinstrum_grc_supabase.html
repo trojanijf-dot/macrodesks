@@ -7627,6 +7627,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-25','🔗 Réconciliation devis et factures : une facture sans devis lié est rangée sous le devis cadre qui contient ses articles, et plus sous le premier devis cadre trouvé.'],
   ['2026-11-25','🧾 Factures de réappro : le devis cadre imprimé est celui qui contient les articles de la facture, et plus le devis cadre le plus récent du client. La fiche prévient si le devis écrit ne correspond pas.'],
   ['2026-11-24','🧩 Fiches : un document dont le client est écrit autrement que sa fiche garde son client dans le menu. Avant, le menu se vidait et refusait de sauvegarder.'],
   ['2026-11-23','🧾 Facture de solde : calculée comme le reste exact (la facture moins ses acomptes), ligne par ligne. Les factures déjà créées ne changent pas.'],
@@ -20450,13 +20451,29 @@ function _buildReconciliation(opts){
       });
       if(cadreCandidates.length===1){
         cadre=cadreCandidates[0];
-      } else if(cadreCandidates.length>1 && facYear){
-        cadre=cadreCandidates.find(function(d){
-          var dnYear=String(d.date||'').substring(0,4);
-          if(dnYear===facYear) return true;
-          if((d.num||'').indexOf(facYear)>=0) return true;
-          return false;
-        }) || cadreCandidates[0];
+      } else if(cadreCandidates.length>1){
+        // (=X=) [25/11/2026] UN DEVIS CADRE VAUT POUR SES ARTICLES, et un client en a
+        //       plusieurs. La version precedente prenait celui de l'annee, sinon LE
+        //       PREMIER TROUVE : une facture pouvait etre rangee sous un devis cadre
+        //       sans rapport avec ce qu'elle facture. Meme regle que sur le document
+        //       (_faCodesArticles) : le cadre qui contient les articles de la facture.
+        //       A egalite, celui de l'annee de la facture s'il est seul ; sinon la
+        //       facture reste sans devis, on ne devine pas.
+        var _cf=Object.keys(_faCodesArticles(f));
+        var _notes=cadreCandidates.map(function(d){
+          var c=_faCodesArticles(d);
+          return {d:d,n:_cf.filter(function(k){ return c[k]; }).length};
+        }).sort(function(a,b){ return b.n-a.n; });
+        if(_notes[0].n>0){
+          var _tete=_notes.filter(function(x){ return x.n===_notes[0].n; });
+          if(_tete.length===1) cadre=_tete[0].d;
+          else if(facYear){
+            var _an=_tete.filter(function(x){
+              return String(x.d.date||'').substring(0,4)===facYear || String(x.d.num||'').indexOf(facYear)>=0;
+            });
+            if(_an.length===1) cadre=_an[0].d;
+          }
+        }
       }
     }
     if(!cadre){ stillOrphan8.push(o); return; }
