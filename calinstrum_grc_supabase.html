@@ -6745,6 +6745,46 @@ function normalizeAllUnites(){
   if(changed>0){ console.log('[CALINSTRUM] Normalisation unités : '+changed+' ligne(s) corrigée(s)'); saveDB(); }
   return changed;
 }
+// =============================================================================
+// CLIENT D'UN DOCUMENT = LE NOM DE SA FICHE (25/11/2026)
+// =============================================================================
+// L'import d'un BC de reappro ecrivait sur le BL un client recompose a partir de
+// l'acheteur lu sur le BC : « PREFIXE - NOM PRENOM », alors que la fiche s'appelle
+// « PREFIXE - Prenom NOM ». Le document n'apparaissait plus sous l'onglet de son
+// client et son menu Client le disait « absent des fiches ».
+// (=X=) ON NE CORRIGE QUE L'EVIDENCE : meme prefixe, EXACTEMENT les memes mots
+//       (ordre, casse et accents indifferents), et UNE SEULE fiche qui repond.
+//       Deux fiches possibles, ou aucune : on ne touche a rien.
+// (=X=) JAMAIS UN DOCUMENT DEJA PARTI : BL en preparation, pre-factures, devis en
+//       brouillon. Une facture emise, un BL livre gardent ce qu'ils portent.
+// (=X=) PAS DE MARQUE « FAIT » : la regle est rejouee a chaque chargement, elle ne
+//       trouve plus rien une fois les documents corriges.
+function _ficheMemeNom(client){
+  var t=String(client||'').trim(), i=t.indexOf(' - ');
+  if(i<=0) return null;
+  var pfx=t.slice(0,i).trim().toUpperCase(), mots=_motsCles(t.slice(i+3)).sort().join(' ');
+  if(!mots) return null;
+  var l=(DB.clients||[]).filter(function(c){
+    var n=String((c&&c.nom)||'').trim(), j=n.indexOf(' - ');
+    return j>0 && n.slice(0,j).trim().toUpperCase()===pfx && _motsCles(n.slice(j+3)).sort().join(' ')===mots;
+  });
+  return l.length===1?l[0]:null;
+}
+function migrateClientNomFiche(){
+  if(!DB || !Array.isArray(DB.clients) || !DB.clients.length) return 0;
+  var noms={}; DB.clients.forEach(function(c){ if(c) noms[String(c.nom||'')]=1; });
+  var n=0;
+  var corriger=function(doc){
+    if(!doc || !doc.client || noms[doc.client]) return;
+    var f=_ficheMemeNom(doc.client);
+    if(f && f.nom && f.nom!==doc.client){ doc.client=f.nom; n++; }
+  };
+  (DB.bls||[]).forEach(function(b){ if(b && String(b.status||'En préparation').trim()==='En préparation') corriger(b); });
+  (DB.factures||[]).forEach(function(f){ if(f && typeof isPrebilled==='function' && isPrebilled(f)) corriger(f); });
+  (DB.devis||[]).forEach(function(d){ if(d && String(d.status||'').trim()==='Brouillon') corriger(d); });
+  if(n){ console.log('[CALINSTRUM] Client remis au nom de sa fiche : '+n+' document(s)'); saveDB(); }
+  return n;
+}
 // ⛔⛔ MIGRATIONS DE DONNÉES : À LANCER APRÈS LE CHARGEMENT DU CLOUD.
 // Le bloc setTimeout du démarrage tourne sur le cache LOCAL ; _loadFromSupabase
 // REMPLACE ensuite tout DB par le cloud, et aucun envoi n'est permis avant ce
@@ -6765,6 +6805,7 @@ function _migrationsApresCloud(){
   if(typeof migrateSoldeDevisFacture==='function'){ try{ n+=migrateSoldeDevisFacture(); }catch(e){ console.warn('[CALINSTRUM] migrateSoldeDevisFacture (après cloud) :',e); } }
   if(typeof migrateStatutDateEncaissement==='function'){ try{ n+=migrateStatutDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateStatutDateEncaissement (après cloud) :',e); } }
   if(typeof migrateVersementDateEncaissement==='function'){ try{ n+=migrateVersementDateEncaissement(); }catch(e){ console.warn('[CALINSTRUM] migrateVersementDateEncaissement (après cloud) :',e); } }
+  if(typeof migrateClientNomFiche==='function'){ try{ n+=migrateClientNomFiche(); }catch(e){ console.warn('[CALINSTRUM] migrateClientNomFiche (après cloud) :',e); } }
   // Verrou des factures émises : d'abord vérifier les empreintes existantes, puis
   // verrouiller les factures émises qui n'en ont pas encore.
   // Synchro Factures → Suivi : celle du démarrage tourne sur le cache local, avant le
@@ -7631,6 +7672,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-25','🧩 BL : un BL en préparation dont le client était écrit « NOM Prénom » au lieu du nom de sa fiche est remis au nom de la fiche, automatiquement. Il réapparaît sous l’onglet de son client.'],
   ['2026-11-25','📅 Factures : l’échéance suit la date de la facture. Une pré-facture émise plus tard gardait l’échéance de son ancienne date et apparaissait en retard dès son émission.'],
   ['2026-11-25','🏠 Factures : quand l’adresse d’une facture est vide, la fiche affiche celle du client (le PDF la portait déjà). L’import d’un BC de réappro remplit l’adresse et met le bon client sur le BL.'],
   ['2026-11-25','🧹 Devis : le bouton « Auto cadre » est retiré. Un devis devient cadre par son statut, dans sa fiche.'],
