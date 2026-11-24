@@ -2418,7 +2418,6 @@ function admPreviewPrint(){
       <button class="btn btn-ghost no-print" onclick="uploadExcelSyncStandard()" title="Synchronise depuis votre fichier Excel multi-clients (format unifié SLN+PRNC). Détection automatique du client via le préfixe du N° facture. Anti-doublon strict." style="border-color:rgba(34,197,94,.5);color:#22c55e;font-weight:700">📥 Excel multi-clients</button>
       <button class="btn btn-ghost no-print" onclick="uploadExcelSync()" title="Synchronise les devis ET factures du fichier Excel SLN 2026 (upload depuis votre PC). Anti-doublon strict : ignore les entrées déjà importées." style="border-color:rgba(167,139,250,.4);color:#a78bfa">📥 Excel SLN</button>
       <button class="btn btn-ghost no-print" onclick="uploadExcelSyncPRNC()" title="Synchronise les devis ET factures du fichier Excel PRNC (format spécifique PRNC). Anti-doublon strict." style="border-color:rgba(244,114,182,.4);color:#f472b6">📥 Excel PRNC</button>
-      <button class="btn btn-ghost no-print" onclick="generateCadreFromInvoices()" title="Scanne toutes les factures Fourniture déjà importées, extrait les références Emerson uniques, et génère automatiquement un devis cadre avec ces articles. Évite de retaper la grille tarifaire manuellement." style="border-color:rgba(56,189,248,.4);color:#38bdf8">🪄 Auto-générer devis cadre</button>
       <button class="btn btn-ghost btn-sm no-print" onclick="ouvrirImpression('devis')" title="Choisir les années, mois, statuts et clients à imprimer">🖨 Imprimer des devis</button>
       <button class="btn btn-teal no-print" onclick="openDV()">+ Nouveau devis</button>
     </div>
@@ -7627,6 +7626,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-25','🧹 Devis : le bouton « Auto cadre » est retiré. Un devis devient cadre par son statut, dans sa fiche.'],
   ['2026-11-25','🔗 Réconciliation devis et factures : une facture sans devis lié est rangée sous le devis cadre qui contient ses articles, et plus sous le premier devis cadre trouvé.'],
   ['2026-11-25','🧾 Factures de réappro : le devis cadre imprimé est celui qui contient les articles de la facture, et plus le devis cadre le plus récent du client. La fiche prévient si le devis écrit ne correspond pas.'],
   ['2026-11-24','🧩 Fiches : un document dont le client est écrit autrement que sa fiche garde son client dans le menu. Avant, le menu se vidait et refusait de sauvegarder.'],
@@ -23026,7 +23026,6 @@ function renderDVPro(){
   html+='<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'dv-import-file\').click()" title="Importer un ancien devis PDF"><i class="ti ti-file-import" style="font-size:13px"></i> Import PDF</button>';
   html+='<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'dv-import-emerson-file\').click()" title="Importer un devis Emerson"><i class="ti ti-cloud-download" style="font-size:13px"></i> Emerson PDF</button>';
   html+='<button class="btn btn-ghost btn-sm" onclick="uploadExcelSyncStandard()" title="Sync Excel multi-clients" style="color:#5dcaa5;border-color:rgba(93,202,165,0.3)"><i class="ti ti-table-import" style="font-size:13px"></i> Excel multi</button>';
-  html+='<button class="btn btn-ghost btn-sm" onclick="generateCadreFromInvoices()" title="Auto-générer devis cadre depuis factures" style="color:#88aae0;border-color:rgba(136,170,224,0.3)"><i class="ti ti-wand" style="font-size:13px"></i> Auto cadre</button>';
   html+='<button class="btn btn-ghost btn-sm" onclick="openDV()" style="color:#5dcaa5;border-color:rgba(93,202,165,0.4);background:rgba(93,202,165,0.06)"><i class="ti ti-plus" style="font-size:13px"></i> Nouveau devis</button>';
   html+='</div>';
   html+='</div>';
@@ -28487,6 +28486,10 @@ function findOrCreateCatalogArticle(line,parentDesignation,cadreClient){
 //   - Désignation = celle de la 1ère facture où il apparaît
 //   - Prix unitaire = montant facture / qté supposée (si plusieurs factures, prix médian)
 //   - Code SLN + ref Emerson extraits par regex
+// (=X=) [25/11/2026] PLUS AUCUN BOUTON N'APPELLE CETTE FONCTION (decision utilisateur).
+//       Un devis ne devient cadre que par son STATUT, pose par l'utilisateur une fois
+//       le devis valide et enregistre par le client. Le GRC ne fabrique pas de devis
+//       cadre a partir des factures. Ne pas rebrancher de bouton dessus.
 function generateCadreFromInvoices(){
   var fournitures=[];
   // Source 1 : invoices Suivi marquées Fourniture
