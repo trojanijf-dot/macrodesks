@@ -3500,6 +3500,7 @@ function admPreviewPrint(){
         <div class="form-group">
           <label>🖨 Devis à IMPRIMER sur le PDF <span style="color:var(--muted);font-weight:400;font-size:10px">(si différent du devis de suivi GRC ci-dessus)</span></label>
           <input class="form-input" id="fa-dvlie-print" placeholder="ex: XXX-DV000-CADRE-2026" title="Laisse vide pour imprimer le devis de suivi GRC (Devis liés, ci-dessus). Utile pour les factures REAPPRO dont le devis GRC est un devis-miroir auto-généré (SLN-DV-BCGMAO-...) : le PDF envoyé au client doit référencer le vrai devis cadre.">
+          <div id="fa-dvlie-print-avis" style="display:none;margin-top:5px;font-size:11px;line-height:1.45;color:var(--amber,#f5b942)"></div>
         </div>
       </div>
       <div class="form-row">
@@ -7626,6 +7627,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-25','🧾 Factures de réappro : le devis cadre imprimé est celui qui contient les articles de la facture, et plus le devis cadre le plus récent du client. La fiche prévient si le devis écrit ne correspond pas.'],
   ['2026-11-24','🧩 Fiches : un document dont le client est écrit autrement que sa fiche garde son client dans le menu. Avant, le menu se vidait et refusait de sauvegarder.'],
   ['2026-11-23','🧾 Facture de solde : calculée comme le reste exact (la facture moins ses acomptes), ligne par ligne. Les factures déjà créées ne changent pas.'],
   ['2026-11-23','🔎 Bouton « Rechercher » en haut (ou Ctrl+K) : un numéro de BC client, de devis, de facture, de PO ou de BL mène au dossier complet.'],
@@ -19476,16 +19478,85 @@ function _faDevisEstMiroir(num){ return /BCGMAO/i.test(String(num||'')); }
 //       dur. La version precedente testait le NOM d'un client : elle ne
 //       protegeait qu'un seul client, et c'est un interdit du projet (depot
 //       public, et le client suivant n'en beneficiait pas).
-function _faDevisCadreClient(f){
-  if(!f||!f.client) return '';
+// (=X=) UN CLIENT PEUT AVOIR PLUSIEURS DEVIS CADRES. [25/11/2026] La version
+//       precedente prenait « le plus recent » : des qu'un second devis est passe au
+//       statut Cadre, toutes les factures de reappro du client ont affiche ce
+//       devis-la, qui ne portait aucun de leurs articles. Regle ecrite sur une
+//       supposition (une seule grille par client), jamais verifiee dans les donnees.
+//       Le devis cadre d'une facture est CELUI QUI CONTIENT SES ARTICLES.
+//       Plusieurs cadres et aucun ne se detache : on n'en choisit AUCUN (chaine
+//       vide), l'utilisateur l'indique. On ne devine pas une reference contractuelle.
+function _faCadresDuClient(f){
+  if(!f||!f.client) return [];
   var c=String(f.client).trim();
-  var l=(DB.devis||[]).filter(function(d){
+  return (DB.devis||[]).filter(function(d){
     return d && String(d.status||'').trim()==='Cadre' && String(d.client||'').trim()===c;
   });
+}
+// Codes article d'un document (code client, reference, reference constructeur),
+// que ses lignes soient un tableau (facture) ou rangees par section (devis).
+function _faCodesArticles(doc){
+  var o={}, L=doc&&doc.lines;
+  var code=function(v){ v=String(v==null?'':v).replace(/[^A-Za-z0-9]/g,'').toUpperCase(); if(v.length>=4) o[v]=1; };
+  var lire=function(a){
+    (Array.isArray(a)?a:[]).forEach(function(l){
+      if(!l||l.type==='header') return;
+      code(l.codeSLN); code(l.ref); code(l.refConstructeur);
+      (Array.isArray(l.subLines)?l.subLines:[]).forEach(function(x){ if(x){ code(x.codeSLN); code(x.ref); code(x.refConstructeur); } });
+    });
+  };
+  if(Array.isArray(L)) lire(L);
+  else if(L&&typeof L==='object') Object.keys(L).forEach(function(k){ lire(L[k]); });
+  return o;
+}
+// Combien d'articles de la facture chaque devis cadre du client contient-il ?
+function _faCadresNotes(f){
+  var codes=Object.keys(_faCodesArticles(f));
+  return _faCadresDuClient(f).map(function(d){
+    var c=_faCodesArticles(d);
+    return {d:d,n:codes.filter(function(k){ return c[k]; }).length};
+  }).sort(function(a,b){ return b.n-a.n; });
+}
+function _faDevisCadreClient(f){
+  var l=_faCadresNotes(f);
   if(!l.length) return '';
-  // Le plus recent fait foi si le client en a plusieurs (grille annuelle).
-  l.sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));});
-  return String(l[0].num||'').trim();
+  if(l.length===1) return String(l[0].d.num||'').trim();
+  if(l[0].n>0 && l[0].n>l[1].n) return String(l[0].d.num||'').trim();
+  return '';
+}
+// Le devis ecrit dans « Devis a imprimer » est-il le bon devis cadre ?
+// Rend null (rien a dire), {type:'autre',propose} quand le devis ecrit est un cadre
+// du client qui ne contient aucun article de la facture alors qu'un autre les
+// contient, ou {type:'choisir'} quand le client a plusieurs cadres et que rien n'est ecrit.
+function _faCadreAvis(f,ecrit){
+  if(!f||!_faDevisEstMiroir(f.dvlie)) return null;
+  var l=_faCadresNotes(f);
+  if(l.length<2) return null;
+  var base=function(v){ return String(v||'').toUpperCase().replace(/\s+/g,'').replace(/REV\d+$/,''); };
+  var e=base(ecrit), bon=_faDevisCadreClient(f);
+  if(!e) return bon?null:{type:'choisir'};
+  if(!bon||base(bon)===e) return null;
+  var lui=l.filter(function(x){ return base(x.d.num)===e; })[0];
+  if(!lui||lui.n>0) return null;
+  return {type:'autre',propose:bon};
+}
+function _faCadreAvisRendre(f){
+  var z=document.getElementById('fa-dvlie-print-avis'), i=document.getElementById('fa-dvlie-print');
+  if(!z||!i) return;
+  var a=f?_faCadreAvis(f,i.value):null;
+  if(!a){ z.style.display='none'; z.innerHTML=''; return; }
+  z.style.display='block';
+  if(a.type==='choisir'){
+    z.innerHTML='⚠ Ce client a plusieurs devis cadres et aucun ne contient les articles de cette facture : indiquez celui à imprimer.';
+    return;
+  }
+  z.innerHTML='⚠ Ce devis cadre ne contient aucun article de cette facture. Ses articles sont dans <b>'+esc(a.propose)+'</b>. '+
+    '<button type="button" class="btn" style="padding:2px 8px;font-size:10.5px;margin-left:4px" data-cadre="'+esc(a.propose)+'" onclick="_faCadreAvisAppliquer(this)">Mettre ce devis</button>';
+}
+function _faCadreAvisAppliquer(b){
+  var i=document.getElementById('fa-dvlie-print'), z=document.getElementById('fa-dvlie-print-avis');
+  if(i&&b) i.value=b.getAttribute('data-cadre')||'';
+  if(z){ z.style.display='none'; z.innerHTML=''; }
 }
 
 function _faDevisNumAffiche(f){
@@ -34602,6 +34673,7 @@ function openFA(id,fromDV,preSelectedClient){
   _faDraftSourceDevisId=null;_faDraftBCSLN='';_faDraftBCDate='';_faPendingBcConsumption=null;_faPendingComplementDe=null;
   _setFADraftBanner(false);
   eFAid=id||null;faL=[];faVersements=[];_faDateEncPrec='';rebuildAllParamSelects();
+  _faCadreAvisRendre(null);   // l'avertissement « devis cadre » d'une fiche ne reste pas sur la suivante
   buildClientOptions('fa-client',preSelectedClient||'');
   // Peupler le datalist Devis lié et brancher les listeners pour le re-peupler
   // si le client ou le type change pendant l'édition.
@@ -34635,6 +34707,7 @@ function openFA(id,fromDV,preSelectedClient){
       // Le champ montre ce que le document imprimera : meme regle, pas une seconde
       // lecture. Vide si le client n'a pas de devis cadre.
       gv('fa-dvlie-print', f.dvliePrint || (_faDevisEstMiroir(f.dvlie) ? _faDevisCadreClient(f) : ''));
+      _faCadreAvisRendre(f);
       gv('fa-type',f.type||'Fourniture');gv('fa-status',f.status||'En attente');gv('fa-tgc-mention',f.tgcM||'506-2');
       gv('fa-delai',f.delai||'Paiement sous 30 jours à reception de la facture');
       gv('fa-notes',f.notes||'');
@@ -34718,7 +34791,7 @@ function openFA(id,fromDV,preSelectedClient){
     var faPfx=preSelectedClient?getClientNumPrefix(preSelectedClient):'SLN';
     _viderFormulaire('mFA');   // rien ne doit rester de la facture ouverte avant (14/10/2026)
     gv('fa-num',nxt('fa',faPfx));gv('fa-date',td());gv('fa-contact','');
-    gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');_faDvlieInit('');gv('fa-dvlie-print','');
+    gv('fa-adresse','');gv('fa-objet','');gv('fa-dvlie','');_faDvlieInit('');gv('fa-dvlie-print','');_faCadreAvisRendre(null);
     // Email vide → dropdown initialisé avec valeur courante = ''
     rebuildFaEmailOptions('');
     gv('fa-type','Fourniture');gv('fa-status','En attente');gv('fa-notes','');gv('fa-tgc-mention','506-2');
