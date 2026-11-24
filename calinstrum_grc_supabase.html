@@ -6263,6 +6263,11 @@ function _echeanceEstHeritee(dateIso,butoirIso){
   var a=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateIso)), b=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(butoirIso));
   if(!a||!b)return true;
   var j=Math.round((new Date(+b[1],+b[2]-1,+b[3])-new Date(+a[1],+a[2]-1,+a[3]))/86400000);
+  // (=X=) [25/11/2026] UNE ECHEANCE AVANT LA DATE DE LA FACTURE N'EST JAMAIS UN CHOIX.
+  //       Une pre-facture datee de septembre, emise fin novembre, gardait son
+  //       echeance d'octobre : hors de la fenetre 25-40 j, elle passait pour une
+  //       saisie volontaire et la facture naissait « en retard de 25 jours ».
+  if(j<0) return true;
   return j>=25&&j<=40;
 }
 function getSuiviSource(){
@@ -7626,6 +7631,8 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-25','📅 Factures : l’échéance suit la date de la facture. Une pré-facture émise plus tard gardait l’échéance de son ancienne date et apparaissait en retard dès son émission.'],
+  ['2026-11-25','🏠 Factures : quand l’adresse d’une facture est vide, la fiche affiche celle du client (le PDF la portait déjà). L’import d’un BC de réappro remplit l’adresse et met le bon client sur le BL.'],
   ['2026-11-25','🧹 Devis : le bouton « Auto cadre » est retiré. Un devis devient cadre par son statut, dans sa fiche.'],
   ['2026-11-25','🔗 Réconciliation devis et factures : une facture sans devis lié est rangée sous le devis cadre qui contient ses articles, et plus sous le premier devis cadre trouvé.'],
   ['2026-11-25','🧾 Factures de réappro : le devis cadre imprimé est celui qui contient les articles de la facture, et plus le devis cadre le plus récent du client. La fiche prévient si le devis écrit ne correspond pas.'],
@@ -16073,6 +16080,9 @@ function _validerCascadeReappro(){
   //       jamais (constaté le 09/09, six manipulations pour rien).
   var _ficheSLN=(typeof _ficheClientParPrefixe==='function')?_ficheClientParPrefixe('SLN',parsed.acheteur):null;
   var clientNom=(_ficheSLN && _ficheSLN.nom) ? _ficheSLN.nom : 'SLN';
+  // [25/11/2026] L'ADRESSE AUSSI VIENT DE LA FICHE. Le devis et la facture naissaient
+  // avec une adresse vide alors que la fiche etait deja trouvee.
+  var clientAdr=(_ficheSLN && _ficheSLN.adresse) ? String(_ficheSLN.adresse).replace(/\\n/g,'\n').trim() : '';
 
   // ===== 1. DEVIS SLN-DV-BCGMAO-{numBC} =====
   var devisId = newId();
@@ -16085,7 +16095,7 @@ function _validerCascadeReappro(){
     client: clientNom,
     contact: parsed.acheteur || '',
     email: '',
-    adresse: '',
+    adresse: clientAdr,
     objet: 'REAPPRO BC ' + parsed.num,
     // (=X=) « ACCEPTE », PAS « FACTURE ». La cascade reserve le numero de facture,
     //       elle n'emet rien : la facture nait en phase NON FACTUREE (le materiel
@@ -16136,7 +16146,7 @@ function _validerCascadeReappro(){
     client: clientNom,
     contact: parsed.acheteur || '',
     email: '',
-    adresse: '',
+    adresse: clientAdr,
     objet: 'REAPPRO BC ' + parsed.num,
     type: 'Fourniture',
     devisLieId: devisId,
@@ -16181,12 +16191,15 @@ function _validerCascadeReappro(){
     num: st.numBL,
     date: st.todayIso,
     lieu: 'NOUMEA',
-    client: 'SLN - ' + (parsed.acheteur || ''),
+    // (=X=) [25/11/2026] LE CLIENT DE LA FICHE, comme le devis et la facture. Le BL
+    //       recomposait le nom a partir de l'acheteur lu sur le BC : nom et prenom
+    //       inverses par rapport a la fiche, donc un client « absent des fiches ».
+    client: (_ficheSLN && _ficheSLN.nom) ? _ficheSLN.nom : 'SLN - ' + (parsed.acheteur || ''),
     contact: parsed.acheteur || 'CONTACT',
     // Adresse de livraison LUE SUR LA FICHE, plus ecrite en dur (donnee metier,
     // depot public). Si aucune fiche ne repond, on laisse vide : bBL passe de toute
     // facon par _cliCoords(), qui prefere la fiche a ce champ.
-    adrdest: (function(){var f=_ficheClientParPrefixe('SLN');return f&&f.adresse?String(f.adresse).trim():'';})(),
+    adrdest: clientAdr || (function(){var f=_ficheClientParPrefixe('SLN');return f&&f.adresse?String(f.adresse).trim():'';})(),
     emaildest: '',
     po: parsed.num,
     emis: 'Fabrice RIZZO',
@@ -34713,6 +34726,14 @@ function openFA(id,fromDV,preSelectedClient){
       gv('fa-num',f.num);gv('fa-date',f.date||td());
       buildClientOptions('fa-client',f.client);
       gv('fa-contact',f.contact||'');gv('fa-adresse',f.adresse||'');
+      // (=X=) [25/11/2026] ADRESSE VIDE SUR LA FACTURE -> CELLE DE LA FICHE CLIENT.
+      //       Le document imprime deja l'adresse de la fiche (_cliCoords) : le champ
+      //       restait vide alors que le PDF la portait, et l'utilisateur la retapait.
+      //       Meme regle que la fiche devis. On ne touche qu'un champ VIDE.
+      if(!String(f.adresse||'').trim()){
+        var _faFiche=getClientDetail(f.client);
+        if(_faFiche && _faFiche.adresse) gv('fa-adresse',String(_faFiche.adresse).replace(/\\n/g,'\n').trim());
+      }
       // Email comptabilité : on construit le dropdown avec la valeur stockée (qui peut être custom).
       // rebuildFaEmailOptions ajoutera l'email courant aux options s'il n'est pas dans la liste.
       rebuildFaEmailOptions(f.email||'');
@@ -35844,6 +35865,16 @@ function getFA(){
       // Échéance théorique : préservée si pas explicitement modifiée par l'utilisateur
       // (le formulaire actuel n'a pas de champ dédié, donc on garde la valeur d'origine)
       if(existing.dateButoir)preservedFlags.dateButoir=existing.dateButoir;
+      // (=X=) [25/11/2026] L'ECHEANCE AUTOMATIQUE SUIT LA DATE. Quand la date de la
+      //       facture change (pre-facture emise plus tard) et que l'ancienne echeance
+      //       etait celle du calcul automatique pour l'ANCIENNE date, on la recalcule
+      //       pour la nouvelle. Une echeance choisie a la main n'est pas touchee.
+      var _dNouv=gvg('fa-date')||'';
+      if(existing.dateButoir && existing.date && _dNouv && _dNouv!==existing.date
+         && (existing.dateButoir===_echeanceFacture(existing.date,existing.delai) || _echeanceEstHeritee(existing.date,existing.dateButoir))){
+        var _bNouv=_echeanceFacture(_dNouv,gvg('fa-delai')||existing.delai);
+        if(_bNouv) preservedFlags.dateButoir=_bNouv;
+      }
       // Flags de migration (traçabilité Suivi → Factures)
       if(existing._migratedFromInvoice)preservedFlags._migratedFromInvoice=existing._migratedFromInvoice;
       if(typeof existing._originalInvoiceId!=='undefined')preservedFlags._originalInvoiceId=existing._originalInvoiceId;
