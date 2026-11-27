@@ -7719,6 +7719,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-27','🎯 Rapports : second modèle « Étalonnage + installation ». Onglet « Étalonnage » (transmetteurs, relevés 5 points, résultat calculé à mesure, import du classeur Excel de relevés) et onglet « Chantier » (étapes avec photos). Le PDF joint un certificat de 3 pages par transmetteur. Ce qui manque est listé et reste écrit « à compléter ». Devis et factures ne sont pas modifiés.'],
   ['2026-11-27','📝 Nouvelle section « Rapports » : un rapport d’intervention se crée depuis un devis. Ses lignes deviennent des postes ; pour chacun on saisit la réalisation, l’état et des photos légendées (téléphone ou PC), puis « Produire le PDF » sort le rapport à la charte CALINSTRUM. Devis et factures ne sont pas modifiés.'],
   ['2026-11-25','🧩 BL : un BL en préparation dont le client était écrit « NOM Prénom » au lieu du nom de sa fiche est remis au nom de la fiche, automatiquement. Il réapparaît sous l’onglet de son client.'],
   ['2026-11-25','📅 Factures : l’échéance suit la date de la facture. Une pré-facture émise plus tard gardait l’échéance de son ancienne date et apparaissait en retard dès son émission.'],
@@ -61750,7 +61751,7 @@ function rpDevisRef(d){ return (String(d.num||'').trim()+' '+String(d.rev||'').t
 function rpBC(d){ return {num:String(d.bcClientRef||d.bcClientSLN||'').trim(),date:rpDateFR(d.bcClientDate||d.bcClientSLNDate)}; }
 function rpPoste(){ var r=RP.cur; if(!r) return null; return r.postes.find(function(p){ return p.id===RP.pid; })||null; }
 function rpPhoto(pid){ var p=rpPoste(); return p?(p.photos||[]).find(function(x){ return x.id===pid; })||null:null; }
-function rpNbPhotos(r){ return (r.postes||[]).reduce(function(n,p){ return n+(p.photos||[]).length; },0); }
+function rpNbPhotos(r){ return (r.postes||[]).reduce(function(n,p){ return n+(p.photos||[]).length; },0)+rePhotosEtapes(r).length; }
 function rpEtat(msg,err){ RP.msg=msg||''; var e=document.getElementById('rpEtat'); if(e){ e.textContent=RP.msg; e.style.color=err?'var(--red)':'var(--muted)'; } }
 
 // ---------- stockage en ligne ----------
@@ -61832,7 +61833,7 @@ function rpCharteModif(){ clearTimeout(RP.timerCh); RP.timerCh=setTimeout(async 
   try{ await rpPut('charte/charte.json',new Blob([JSON.stringify(RP.charte)],{type:'application/json'}),'application/json'); RP.logos['charte.json']=true; rpEtat('Coordonnées enregistrées'); }
   catch(e){ rpEtat('⚠ '+e.message,true); } },1000); }
 function rpSlots(){
-  var s=[['calinstrum','Logo CALINSTRUM'],['cachet','Cachet de signature']],vus={};
+  var s=[['calinstrum','Logo CALINSTRUM'],['cachet','Cachet de signature'],["certificat","Logo des certificats d'étalonnage"],["signature","Signature d'approbation des certificats"]],vus={};
   (RP.liste||[]).concat(RP.cur?[RP.cur]:[]).forEach(function(r){ var c=r&&r.clientCourt; if(!c||vus[c]) return; vus[c]=1;
     s.push(['client_'+rpSafe(c),'Logo du client '+c]); s.push(['groupe_'+rpSafe(c),'Logo du groupe de '+c+' (facultatif)']); });
   return s;
@@ -61888,7 +61889,7 @@ async function rpReduire(file,maxW,q){
   return await new Promise(function(ok,ko){ c.toBlob(function(b){ b?ok(b):ko(new Error('Conversion de l\'image impossible')); },'image/jpeg',q); });
 }
 async function rpAjouterPhotos(files){
-  var r=RP.cur,p=rpPoste(); if(!r||!p||!files||!files.length) return;
+  var r=RP.cur,p=RP.cible||rpPoste(); RP.cible=null; if(!r||!p||!files||!files.length) return;
   var n=0,err='';
   for(var i=0;i<files.length;i++){
     rpEtat('Envoi de la photo '+(i+1)+' / '+files.length+'…');
@@ -61980,7 +61981,7 @@ async function rpProduire(){
   try{
     await rpSauver(); r=RP.cur;
     if(!RP.charte) await rpChargerCharte();
-    var job=rpJson(r,RP.charte),py=await rpPy();
+    var et=reEtal(r),job=et?reJson(r,RP.charte):rpJson(r,RP.charte),py=await (et?rePy():rpPy());
     py.runPython("import shutil\nshutil.rmtree('/rp/job',ignore_errors=True)");
     py.FS.mkdirTree('/rp/job/photos'); py.FS.mkdirTree('/rp/job/logos');
     for(var i=0;i<job.fichiers.length;i++){
@@ -61990,7 +61991,7 @@ async function rpProduire(){
     }
     py.FS.writeFile('/rp/job/contenu.json',JSON.stringify(job.contenu));
     RP.occ='Mise en page du PDF…'; rpRendre(); await new Promise(function(ok){ setTimeout(ok,60); });
-    await py.runPythonAsync("import json, moteur_rapport\nmoteur_rapport.render(json.load(open('/rp/job/contenu.json',encoding='utf-8')),'/rp/job/rapport.pdf','/rp/job')");
+    await py.runPythonAsync("import json, "+(et?"moteur_etalonnage":"moteur_rapport")+" as M\nM.render(json.load(open('/rp/job/contenu.json',encoding='utf-8')),'/rp/job/rapport.pdf','/rp/job')");
     var blob=new Blob([py.FS.readFile('/rp/job/rapport.pdf')],{type:'application/pdf'});
     RP.pdf={url:URL.createObjectURL(blob),nom:rpNomPdf(r),archive:false};
     try{ await rpPut('pdf/'+r.id+'.pdf',blob,'application/pdf'); RP.pdf.archive=true; r.pdf={le:new Date().toISOString()}; RP.sale=true; await rpSauver(); }
@@ -62060,7 +62061,7 @@ function rpVueNouveau(){
   nv.postes.forEach(function(p,i){ h+='<tr><td><input type="checkbox" data-rp="cocher" data-i="'+i+'"'+(p.coche?' checked':'')+'></td><td><b>'+esc(p.num)+'</b></td>'+
     '<td><textarea class="form-textarea" rows="2" data-rpi="nvp.d" data-i="'+i+'">'+esc(p.designation)+'</textarea></td><td>'+esc(p.origine)+'</td></tr>'; });
   h+='</table><div class="rp-note">Dans la fiche, un poste peut être dédoublé : une ligne par capteur ou par coffret, chacune avec son état et ses photos.</div></div>'+
-    '<div class="rp-bar"><button class="btn btn-teal" data-rp="creer">Créer le rapport</button><button class="btn btn-ghost" data-rp="annuler">Annuler</button></div>';
+    reChoixHtml()+'<div class="rp-bar"><button class="btn btn-teal" data-rp="creer">Créer le rapport</button><button class="btn btn-ghost" data-rp="annuler">Annuler</button></div>';
   return h;
 }
 function rpPostesHtml(){
@@ -62122,9 +62123,10 @@ function rpVueFiche(){
     '<span id="rpEtat" class="rp-note" style="margin:0">'+esc(RP.msg)+'</span><span style="flex:1"></span>'+
     '<button class="btn btn-ghost" data-rp="emis">'+(r.etat==='emis'?'Repasser en brouillon':'Marquer « émis »')+'</button><button class="btn btn-teal" data-rp="produire">📄 Produire le PDF</button></div>';
   if(RP.pdf) h+='<div class="rp-ok">✅ PDF produit'+(RP.pdf.archive?' et archivé':'')+' : <b>'+esc(RP.pdf.nom)+'</b><button class="btn btn-teal btn-sm" data-rp="pdfOuvrir">Ouvrir</button><button class="btn btn-ghost btn-sm" data-rp="pdfTelecharger">Télécharger</button></div>';
-  h+='<div class="rp-bar">'+[['postes','Postes et photos'],['garde','Page de garde'],['textes','Textes et visa']].map(function(o){ return '<button class="rp-chip'+(RP.onglet===o[0]?' on':'')+'" data-rp="onglet" data-v="'+o[0]+'">'+o[1]+'</button>'; }).join('')+
+  if(reEtal(r)) h+=reManquesHtml(r);
+  h+='<div class="rp-bar">'+(reEtal(r)?[['postes','Postes et photos'],['etal','Étalonnage'],['chantier','Chantier'],['garde','Page de garde'],['textes','Textes et visa']]:[['postes','Postes et photos'],['garde','Page de garde'],['textes','Textes et visa']]).map(function(o){ return '<button class="rp-chip'+(RP.onglet===o[0]?' on':'')+'" data-rp="onglet" data-v="'+o[0]+'">'+o[1]+'</button>'; }).join('')+
     '<span class="rp-note" style="margin:0">Devis '+esc(r.devisRef||'')+' · '+esc(r.client||'')+'</span></div>';
-  return h+(RP.onglet==='garde'?rpOngletGarde():RP.onglet==='textes'?rpOngletTextes():rpOngletPostes());
+  var et=reEtal(r); return h+(et&&RP.onglet==='etal'?reOngletEtal():et&&RP.onglet==='chantier'?reOngletChantier():RP.onglet==='garde'?rpOngletGarde():RP.onglet==='textes'?(et?reOngletTextes():rpOngletTextes()):rpOngletPostes());
 }
 function rpVueCharte(){
   var c=RP.charte||rpCharteDefaut(),h='<div class="rp-bar"><button class="btn btn-ghost" data-rp="charteRetour">← Retour</button><b style="font-size:14px">Logos, cachet et coordonnées</b><span id="rpEtat" class="rp-note" style="margin:0"></span></div>'+
@@ -62168,13 +62170,14 @@ var RPA={
       textes:{objet:'Le présent rapport rend compte des travaux réalisés par CALINSTRUM'+(bc.num?' au titre du bon de commande **N° '+bc.num+'**':'')+', conformément au devis **'+ref+'**.',points:'',synthese:'',alerte:'',conclusion:''},
       visa:{nom:ch.signataire||'',date:auj,recu:court,cachet:true},
       postes:postes.map(function(p){ return {id:rpId('o'),num:p.num,designation:p.designation,realisation:'',etat:'',titre:'',commentaire:'',cols:0,photos:[]}; })};
+    RP.tid=null; if(nv.modele==='etalonnage') reCreer(r,d,nv);
     RP.cur=r; RP.pid=r.postes[0].id; RP.onglet='postes'; RP.vue='fiche'; RP.nv=null; RP.pdf=null; RP.tVu=Date.now(); RP.sale=true;
     rpRendre(); await rpSauver();
   },
   ouvrir:async function(ds){
     RP.occ='Ouverture du rapport…'; rpRendre();
     var r; try{ r=await rpLireJson('fiches/'+ds.id+'.json'); } finally{ RP.occ=''; }
-    RP.cur=r; RP.tVu=Date.now(); RP.sale=false; RP.pid=(r.postes[0]||{}).id||null; RP.onglet='postes'; RP.vue='fiche'; RP.pdf=null; RP.err=''; RP.msg=''; rpIndex(r); rpRendre();
+    RP.cur=r; RP.tVu=Date.now(); RP.sale=false; RP.tid=reEtal(r)?((r.etal.tx[0]||{}).id||null):null; RP.pid=(r.postes[0]||{}).id||null; RP.onglet='postes'; RP.vue='fiche'; RP.pdf=null; RP.err=''; RP.msg=''; rpIndex(r); rpRendre();
   },
   retour:async function(){ await rpSauver(); RP.cur=null; RP.pdf=null; RP.msg=''; RP.vue='liste'; rpRendre(); },
   onglet:function(ds){ RP.onglet=ds.v; rpRendre(); },
@@ -62190,20 +62193,20 @@ var RPA={
     var i=r.postes.indexOf(p); r.postes.splice(i,1); RP.pid=(r.postes[Math.min(i,r.postes.length-1)]||{}).id||null; RP.sale=true; rpRendre(); await rpSauver();
     try{ await rpRm((p.photos||[]).map(function(x){ return x.f; })); }catch(e){} },
   monter:function(){ rpDeplacer(RP.cur.postes,rpPoste(),-1); }, descendre:function(){ rpDeplacer(RP.cur.postes,rpPoste(),1); },
-  photos:function(){ document.getElementById('rpFilePhotos').click(); },
+  photos:function(){ RP.cible=null; document.getElementById('rpFilePhotos').click(); },
   photoGauche:function(ds){ var p=rpPoste(); rpDeplacer(p.photos,rpPhoto(ds.pid),-1); }, photoDroite:function(ds){ var p=rpPoste(); rpDeplacer(p.photos,rpPhoto(ds.pid),1); },
   photoSuppr:async function(ds){ var p=rpPoste(),ph=rpPhoto(ds.pid); if(!ph||!confirm('Supprimer cette photo ?')) return;
     p.photos.splice(p.photos.indexOf(ph),1); RP.sale=true; rpRendre(); await rpSauver(); try{ await rpRm([ph.f]); }catch(e){} },
   identAjout:function(ds){ var g=RP.cur.garde,k=ds.col==='G'?'identG':'identD'; (g[k]=g[k]||[]).push(['','']); rpModif(); rpRendre(); },
   identSuppr:function(ds){ RP.cur.garde[ds.col==='G'?'identG':'identD'].splice(+ds.i,1); rpModif(); rpRendre(); },
-  emis:function(){ var r=RP.cur; if(r.etat==='emis'){ r.etat='brouillon'; delete r.emisLe; } else { r.etat='emis'; r.emisLe=new Date().toISOString(); } rpModif(); rpRendre(); },
+  emis:function(){ var r=RP.cur; if(r.etat!=='emis'&&reEtal(r)&&reManques(r).length) throw new Error('Il manque encore des informations (liste en haut de la fiche) : ce rapport ne peut pas être marqué « émis ».'); if(r.etat==='emis'){ r.etat='brouillon'; delete r.emisLe; } else { r.etat='emis'; r.emisLe=new Date().toISOString(); } rpModif(); rpRendre(); },
   produire:function(){ return rpProduire(); },
   pdfOuvrir:function(){ if(RP.pdf) window.open(RP.pdf.url,'_blank'); },
   pdfTelecharger:function(){ if(!RP.pdf) return; var a=document.createElement('a'); a.href=RP.pdf.url; a.download=RP.pdf.nom; document.body.appendChild(a); a.click(); a.remove(); },
   pdfArchive:async function(ds){ var w=window.open('about:blank','_blank'); try{ var b=await rpGet('pdf/'+ds.id+'.pdf'); var u=URL.createObjectURL(b); if(w) w.location.href=u; else window.open(u,'_blank'); }catch(e){ if(w) w.close(); throw e; } },
   supprimer:async function(ds){ var r=(RP.liste||[]).find(function(x){ return x.id===ds.id; }); if(!r) return;
     if(!confirm('Supprimer définitivement ce rapport'+(r.etat==='emis'?' ÉMIS':'')+' ?\n\n'+[r.clientCourt,(r.garde||{}).bc?'BC '+r.garde.bc:'',r.devisRef].filter(Boolean).join(' · ')+'\n'+rpNbPhotos(r)+' photo(s) et le PDF archivé seront supprimés. Cette action ne peut pas être annulée.')) return;
-    var f=['fiches/'+r.id+'.json','pdf/'+r.id+'.pdf']; (r.postes||[]).forEach(function(p){ (p.photos||[]).forEach(function(x){ f.push(x.f); }); });
+    var f=['fiches/'+r.id+'.json','pdf/'+r.id+'.pdf']; (r.postes||[]).forEach(function(p){ (p.photos||[]).forEach(function(x){ f.push(x.f); }); }); rePhotosEtapes(r).forEach(function(x){ f.push(x.f); });
     await rpRm(f); RP.liste=RP.liste.filter(function(x){ return x.id!==r.id; }); rpRendre(); },
   charte:async function(){ await rpSauver(); RP.vue='charte'; rpRendre(); },
   charteRetour:function(){ RP.vue=RP.cur?'fiche':'liste'; rpRendre(); },
@@ -62223,6 +62226,7 @@ function rpSaisie(el){
   if(k==='nvp.d'){ RP.nv.postes[+el.getAttribute('data-i')].designation=v; return; }
   if(k.indexOf('charte.')===0){ RP.charte=RP.charte||rpCharteDefaut(); RP.charte[k.slice(7)]=v; rpCharteModif(); return; }
   var r=RP.cur; if(!r) return;
+  if(k.indexOf('re.')===0){ reSaisie(k,el); return; }
   if(k.indexOf('poste.')===0){ var p=rpPoste(); if(!p) return; p[k.slice(6)]=v;
     if(k==='poste.num'||k==='poste.designation'){ z=document.getElementById('rpPostes'); if(z) z.innerHTML=rpPostesHtml(); } }
   else if(k==='photo.legende'){ var ph=rpPhoto(el.getAttribute('data-pid')); if(!ph) return; ph.legende=v; }
@@ -62237,6 +62241,330 @@ function rpSaisie(el){
   document.getElementById('rpFilePhotos').addEventListener('change',function(){ var f=[].slice.call(this.files||[]); this.value=''; rpAjouterPhotos(f); });
   document.getElementById('rpFileLogo').addEventListener('change',function(){ var f=(this.files||[])[0]; this.value=''; rpChargerLogo(f); });
   window.addEventListener('pagehide',function(){ if(RP.sale) rpSauver(); });
+})();
+</script>
+
+<style>
+#page-rapports .re-g4{display:grid;grid-template-columns:repeat(4,1fr);gap:0 8px}
+#page-rapports .re-vide{border-color:var(--orange)!important;background:rgba(249,115,22,.07)}
+#page-rapports input.re-m{width:92px;padding:4px 6px}
+#page-rapports .re-choix{border:1.5px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;background:var(--bg3)}
+#page-rapports .re-choix.on{border-color:var(--teal);background:rgba(45,212,191,.08)}
+#page-rapports .re-choix small{display:block;color:var(--muted);margin-top:4px;font-size:11px}
+#page-rapports .re-manq{border:1px solid rgba(249,115,22,.45);border-left:3px solid var(--orange);border-radius:6px;padding:8px 12px;margin-bottom:10px;background:rgba(249,115,22,.06);font-size:11.5px}
+#page-rapports .re-manq summary{cursor:pointer;font-weight:700;color:var(--orange)}
+#page-rapports .re-manq ul{margin:6px 0 0;padding-left:18px;columns:2}
+@media(max-width:820px){#page-rapports .re-g4{grid-template-columns:1fr 1fr}#page-rapports .re-manq ul{columns:1}}
+</style>
+<script>
+/* ════════════════════════════════════════════════════════════════════════════════════════
+   RAPPORT « ÉTALONNAGE + INSTALLATION » — second modèle de la section « Rapports » (27/11/2026)
+   Relevés 5 points (résultat calculé à mesure), étapes du chantier avec photos, certificats
+   d'étalonnage en annexe. Même rangement que les autres rapports : stockage en ligne, rien dans DB.
+   PDF : lib/rapports/moteur_etalonnage.py (exécuté dans le navigateur, comme l'autre moteur).
+   ════════════════════════════════════════════════════════════════════════════════════════ */
+var RE_PKGS=['pypdf==5.1.0'],RE_MOTEUR_V='1',RE_PCT=[0,25,50,75,100];
+var RE_STATUTS={ok:'RÉALISÉ',attente:'EN ATTENTE',ok_attente:'RÉALISÉ — SUITE EN ATTENTE',en_cours:'EN COURS',nok:'NON RÉALISÉ'};
+function reEtal(r){ return !!r&&r.modele==='etalonnage'&&!!r.etal; }
+function reVide(x){ return !String(x==null?'':x).trim(); }
+function reNum(v){ if(v==null) return null; var s=String(v).replace(/\s/g,'').replace(',','.'); return (s===''||isNaN(s))?null:+s; }
+function reFr(n,d){ return n==null?'':n.toFixed(d).replace('.',','); }
+function reBrut(s){ return String(s==null?'':s).replace(/&/g,'+').replace(/[<>]/g,'').trim(); }
+// Date saisie jj/mm/aaaa → aaaa-mm-jj pour le moteur (autre chose : rendu tel quel).
+function reIso(s){ var m=/^\s*(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})\s*$/.exec(String(s||'')); return m?m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2):String(s||'').trim(); }
+function reTx(){ var e=RP.cur&&RP.cur.etal; return e?e.tx.find(function(t){ return t.id===RP.tid; })||null:null; }
+function reEtape(id){ return ((RP.cur&&RP.cur.etapes)||[]).find(function(s){ return s.id===id; })||null; }
+function rePhotosEtapes(r){ var L=[]; ((r&&r.etapes)||[]).forEach(function(s){ (s.photos||[]).forEach(function(p){ L.push(p); }); }); return L; }
+function reTxNeuf(e){
+  var d=String(e.dateImp||'').replace(/\D/g,'');
+  return {id:rpId('t'),cert:d.length===8?'CE'+d+'-'+('0'+(e.tx.length+1)).slice(-2):'',tag:'',service:'',emplacement:'',type:'',constructeur:'',modele:'',famille:'',serie:'',
+    unite:'',lrv:'',urv:'',sortie:'4-20 mA',date:'',temperature:'',humidite:'',pts:RE_PCT.map(function(){ return {pm:'',im:'',pd:'',id:''}; })};
+}
+// Mêmes formules que le classeur de relevés et que le moteur : nominal = 4 + 16 × (P réf − bas) / (haut − bas).
+function reCalc(t,crit){
+  var lrv=reNum(t.lrv),urv=reNum(t.urv),c=reNum(crit); if(c==null) c=0.5;
+  var o={pts:[],ok:false,tol:16*c/100,crit:c};
+  if(lrv==null||urv==null||urv===lrv){ o.pts=RE_PCT.map(function(){ return {}; }); return o; }
+  var span=urv-lrv,complet=(t.pts||[]).length===5,errMax=0,hyst=0,fail=false;
+  (t.pts||[]).forEach(function(p,i){
+    var pa=reNum(p.pm),ia=reNum(p.im),pd=reNum(p.pd),id=reNum(p.id),q={cons:lrv+span*RE_PCT[i]/100};
+    if(pa==null||ia==null||pd==null||id==null){ complet=false; o.pts.push(q); return; }
+    var ea=ia-(4+16*(pa-lrv)/span),ed=id-(4+16*(pd-lrv)/span),em=Math.abs(ea)>=Math.abs(ed)?ea:ed;
+    q.err=Math.abs(em)/16*100; q.hy=Math.abs(ia-id)/16*100; q.pass=Math.abs(em)<=o.tol;
+    if(q.err>errMax) errMax=q.err; if(q.hy>hyst) hyst=q.hy; if(!q.pass) fail=true; o.pts.push(q);
+  });
+  o.ok=complet; if(complet){ o.err=errMax; o.hyst=hyst; o.pass=!fail; }
+  return o;
+}
+function reBadge(c){ return c.ok?(c.pass?'<span class="badge b-ok">CONFORME</span>':'<span class="badge b-late">NON CONFORME</span>'):'<span class="badge b-pending">relevés incomplets</span>'; }
+
+// ---------- création : ce que ce modèle ajoute à la fiche ----------
+function reChoixHtml(){
+  var m=(RP.nv&&RP.nv.modele)||'intervention',c=function(v,t,s){ return '<div class="re-choix'+(m===v?' on':'')+'" data-rp="reModele" data-v="'+v+'"><b>'+t+'</b><small>'+s+'</small></div>'; };
+  return '<div class="card"><b>Modèle de rapport</b><div class="g2" style="margin:8px 0 0">'+c('intervention','📝 Rapport d\'intervention','Postes du devis, réalisation, état, photos.')+
+    c('etalonnage','🎯 Étalonnage + installation','Le même, plus : relevés d\'étalonnage, étapes du chantier et certificats (3 pages par transmetteur) en annexe.')+'</div></div>';
+}
+function reCreer(r,d,nv){
+  var ch=RP.charte||{},bc=rpBC(d),auj=rpAuj(),prec=(RP.liste||[]).find(reEtal);
+  r.modele='etalonnage'; r.site=nv.site||'';
+  r.etal={operateur:ch.signataire||'',approbateur:ch.signataire||'',dateImp:auj,critere:prec?prec.etal.critere:'0,5',
+    etalons:prec&&(prec.etal.etalons||[]).length?JSON.parse(JSON.stringify(prec.etal.etalons)):[{designation:'',modele:'',serie:'',echeance:'',role:''}],tx:[]};
+  r.etapes=['État avant travaux','Jour 1','Jour 2','Mise en service'].map(function(t){ return {id:rpId('s'),titre:t,texte:'',points:'',photos:[]}; });
+  r.garde.identG=[['CLIENT',r.garde.info1||''],['SITE',nv.site||''],['BON DE COMMANDE',bc.num?'BC '+bc.num+(bc.date?'  du '+bc.date:''):''],['DEVIS',r.devisRef+(d.date?'  du '+rpDateFR(d.date):'')],
+    ['PÉRIODE CHANTIER',''],['INTERVENANTS',ch.signataire||''],['DATE DU RAPPORT',auj]];
+  r.garde.identD=[];
+  r.textes.objetGarde=''; r.textes.materiel=''; r.textes.recos=''; r.textes.docs='';
+  r.textes.banc='L\'étalonnage a été réalisé avec les étalons listés ci-dessous.';
+  r.textes.protocole='Configuration du transmetteur : repère, unité, échelle basse et haute, sortie 4-20 mA.\nCycle à 5 points : 0 % — 25 % — 50 % — 75 % — 100 % de l\'échelle, en montée puis en descente.\nGrandeurs relevées : pression de référence (étalon), courant de boucle (mA), erreur d\'indication et hystérésis.';
+}
+
+// ---------- ce qui manque : listé avant le PDF, écrit « à compléter » dedans, jamais inventé ----------
+function reManques(r){
+  var e=r.etal,g=r.garde||{},m=[];
+  if(reVide(g.titre)) m.push('Page de garde : titre');
+  (g.identG||[]).concat(g.identD||[]).forEach(function(x){ if(x&&!reVide(x[0])&&reVide(x[1])) m.push('Page de garde : '+x[0]); });
+  if(reVide((r.textes||{}).objetGarde)) m.push('Textes : encadré « Objet » de la page de garde');
+  if(reVide((r.textes||{}).objet)) m.push('Textes : objet du rapport');
+  if(reVide(e.operateur)) m.push('Étalonnage : réalisé par'); if(reVide(e.approbateur)) m.push('Étalonnage : approuvé par'); if(reVide(e.dateImp)) m.push('Étalonnage : date d\'impression des certificats');
+  if(!(e.etalons||[]).some(function(x){ return !reVide(x.designation); })) m.push('Étalonnage : étalons utilisés');
+  if(!e.tx.length) m.push('Étalonnage : aucun transmetteur');
+  e.tx.forEach(function(t,i){ var n=reVide(t.tag)?'Transmetteur '+(i+1):t.tag;
+    [['tag','repère'],['serie','n° de série'],['cert','n° de certificat'],['date','date d\'étalonnage'],['unite','unité'],['constructeur','constructeur'],['modele','modèle'],['service','service'],['emplacement','emplacement']]
+      .forEach(function(k){ if(reVide(t[k[0]])) m.push(n+' : '+k[1]); });
+    if(!reCalc(t,e.critere).ok) m.push(n+' : relevés 5 points incomplets (pas de certificat)'); });
+  (r.postes||[]).forEach(function(p){ if(reVide(p.realisation)) m.push('Poste '+p.num+' : réalisation'); if(!p.etat) m.push('Poste '+p.num+' : état'); });
+  if(!RP.logos['certificat.jpg']) m.push('Logos et cachet : logo des certificats');
+  if(!RP.logos['signature.jpg']) m.push('Logos et cachet : signature d\'approbation');
+  return m;
+}
+function reManquesHtml(r){
+  var m=reManques(r); if(!m.length) return '<div class="rp-ok" id="reManq">✅ Rien ne manque : le rapport peut être produit et émis.</div>';
+  return '<details class="re-manq" id="reManq"><summary>⚠ '+m.length+' information'+(m.length>1?'s manquantes':' manquante')+' — écrite'+(m.length>1?'s':'')+' « à compléter » dans le PDF tant qu\'elle'+(m.length>1?'s ne sont pas remplies':' n\'est pas remplie')+'</summary><ul>'+
+    m.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('')+'</ul></details>';
+}
+
+// ---------- onglet « Étalonnage » ----------
+function reTxListeHtml(){
+  var e=RP.cur.etal; return e.tx.map(function(t){ var c=reCalc(t,e.critere);
+    return '<div class="rp-poste'+(t.id===RP.tid?' on':'')+'" data-rp="reTx" data-id="'+t.id+'"><b>'+esc(t.tag||'(sans repère)')+'</b> '+reBadge(c)+
+      '<small>'+esc([t.serie?'S/N '+t.serie:'',(!reVide(t.lrv)&&!reVide(t.urv))?t.lrv+' / '+t.urv+' '+(t.unite||''):'',t.cert?'Certificat '+t.cert:''].filter(Boolean).join(' · ')||'à compléter')+'</small></div>'; }).join('');
+}
+function reCell(c,n,k){ var q=c.pts[n]||{};
+  if(k==='C') return q.cons==null?'':String(+q.cons.toFixed(4)).replace('.',',');
+  if(k==='E') return q.err==null?'':reFr(q.err,2)+' %';
+  return q.err==null?'':(q.pass?'<span class="badge b-ok">PASS</span>':'<span class="badge b-late">FAIL</span>'); }
+function reResume(c){ return c.ok?'Tolérance ±'+reFr(c.tol,2)+' mA · erreur max '+reFr(c.err,2)+' % · hystérésis max '+reFr(c.hyst,2)+' % · un certificat de 3 pages sera joint en annexe.'
+  :'Relevés incomplets : pas de certificat pour ce transmetteur tant que l\'échelle et les 5 points ne sont pas saisis. Tolérance ±'+reFr(c.tol,2)+' mA.'; }
+function reMajCalc(){
+  var t=reTx(),z; if(!t) return; var c=reCalc(t,RP.cur.etal.critere);
+  RE_PCT.forEach(function(p,n){ ['C','E','R'].forEach(function(k){ z=document.getElementById('re'+k+n); if(z) z.innerHTML=reCell(c,n,k); }); });
+  z=document.getElementById('reResume'); if(z) z.textContent=reResume(c);
+  z=document.getElementById('reTxListe'); if(z) z.innerHTML=reTxListeHtml();
+}
+function reOngletEtal(){
+  var e=RP.cur.etal,t=reTx();
+  var i=function(k,lab,val,ph,facultatif){ return '<div><label class="rp-l">'+lab+'</label><input class="form-input'+(facultatif||!reVide(val)?'':' re-vide')+'" data-rpi="'+k+'" value="'+esc(val==null?'':val)+'" placeholder="'+(ph||'à compléter')+'"></div>'; };
+  var h='<div class="card"><div class="rp-bar"><b>Dossier d\'étalonnage</b><span style="flex:1"></span><button class="btn btn-ghost btn-sm" data-rp="reImport">📥 Importer le classeur Excel de relevés</button></div><div class="re-g4">'+
+    i('re.d.operateur','Réalisé par',e.operateur)+i('re.d.approbateur','Approuvé par',e.approbateur)+i('re.d.dateImp','Date d\'impression des certificats',e.dateImp,'jj/mm/aaaa')+i('re.d.critere','Critère de conformité (% de l\'étendue)',e.critere)+'</div>'+
+    '<label class="rp-l">Étalons utilisés</label><table class="rp-t"><tr><th>Désignation</th><th>Modèle</th><th>N° de série</th><th>Échéance</th><th>Rôle (facultatif)</th><th style="width:30px"></th></tr>';
+  (e.etalons||[]).forEach(function(x,n){ h+='<tr>'+['designation','modele','serie','echeance','role'].map(function(k){ return '<td><input class="form-input" data-rpi="re.e.'+n+'.'+k+'" value="'+esc(x[k]||'')+'"></td>'; }).join('')+
+    '<td><button class="btn btn-red btn-sm" data-rp="reEtalonSuppr" data-i="'+n+'" title="Retirer cet étalon">✕</button></td></tr>'; });
+  h+='</table><div class="rp-bar" style="margin:6px 0 0"><button class="btn btn-ghost btn-sm" data-rp="reEtalonAjout">＋ Ajouter un étalon</button><span class="rp-note" style="margin:0">Les étalons sont repris du dernier rapport d\'étalonnage : vous ne les ressaisissez pas à chaque fois.</span></div></div>'+
+    '<div class="rp-cols"><div><div id="reTxListe">'+reTxListeHtml()+'</div><button class="btn btn-teal btn-sm" data-rp="reTxAjout">＋ Ajouter un transmetteur</button></div>';
+  if(!t) return h+'<div class="card" style="margin:0">'+(e.tx.length?'Choisissez un transmetteur dans la liste.':'Ajoutez un transmetteur, ou importez le classeur Excel de relevés.')+'</div></div>';
+  var c=reCalc(t,e.critere);
+  h+='<div class="card" style="margin:0"><div class="rp-bar"><b style="font-size:13px">Transmetteur</b><span style="flex:1"></span><button class="btn btn-ghost btn-sm" data-rp="reTxMonter" title="Monter">▲</button><button class="btn btn-ghost btn-sm" data-rp="reTxDescendre" title="Descendre">▼</button>'+
+    '<button class="btn btn-red btn-sm" data-rp="reTxSuppr">Retirer du rapport</button></div><div class="re-g4">'+
+    i('re.t.tag','Repère (TAG)',t.tag)+i('re.t.serie','N° de série',t.serie)+i('re.t.cert','N° de certificat',t.cert)+i('re.t.date','Date d\'étalonnage',t.date,'jj/mm/aaaa')+
+    i('re.t.lrv','Échelle basse',t.lrv)+i('re.t.urv','Échelle haute',t.urv)+i('re.t.unite','Unité',t.unite,'Pa, mbar, bar…')+i('re.t.sortie','Sortie',t.sortie)+
+    i('re.t.constructeur','Constructeur',t.constructeur)+i('re.t.modele','Modèle (code complet)',t.modele)+i('re.t.famille','Famille (nom court)',t.famille,'facultatif',1)+i('re.t.type','Type',t.type,'facultatif',1)+
+    i('re.t.service','Service / grandeur mesurée',t.service)+i('re.t.emplacement','Emplacement',t.emplacement,'coffret, côté…')+i('re.t.temperature','Température',t.temperature,'ex. 25°C',1)+i('re.t.humidite','Humidité',t.humidite,'ex. 45%RH',1)+'</div>'+
+    '<table class="rp-t" style="margin-top:10px"><tr><th>%</th><th>Consigne</th><th>P réf. montée</th><th>mA montée</th><th>P réf. descente</th><th>mA descente</th><th>Erreur max</th><th></th></tr>';
+  RE_PCT.forEach(function(p,n){ var m=t.pts[n]||{};
+    h+='<tr><td>'+p+'</td><td id="reC'+n+'">'+reCell(c,n,'C')+'</td>'+['pm','im','pd','id'].map(function(k){ return '<td><input class="form-input re-m" inputmode="decimal" data-rpi="re.m.'+n+'.'+k+'" value="'+esc(m[k]||'')+'"></td>'; }).join('')+
+      '<td id="reE'+n+'">'+reCell(c,n,'E')+'</td><td id="reR'+n+'">'+reCell(c,n,'R')+'</td></tr>'; });
+  return h+'</table><div class="rp-note" id="reResume">'+esc(reResume(c))+'</div></div></div>';
+}
+
+// ---------- onglet « Chantier » ----------
+function reOngletChantier(){
+  var r=RP.cur,h='<div class="rp-note" style="margin:0 0 8px">Le déroulé du chantier, étape par étape : c\'est la partie « Interventions sur site » du rapport. ★ = photo reprise sur la page de garde (deux au plus).</div>';
+  (r.etapes||[]).forEach(function(s,n){
+    h+='<div class="card"><div class="rp-bar"><b>'+(n+1)+' ·</b><input class="form-input" style="flex:1;min-width:150px" data-rpi="re.s.'+s.id+'.titre" value="'+esc(s.titre||'')+'" placeholder="Titre de l\'étape">'+
+      '<button class="btn btn-ghost btn-sm" data-rp="reEtapeMonter" data-id="'+s.id+'" title="Monter">▲</button><button class="btn btn-ghost btn-sm" data-rp="reEtapeDescendre" data-id="'+s.id+'" title="Descendre">▼</button>'+
+      '<button class="btn btn-red btn-sm" data-rp="reEtapeSuppr" data-id="'+s.id+'">Retirer</button></div>'+
+      '<label class="rp-l">Texte</label><textarea class="form-textarea" rows="3" data-rpi="re.s.'+s.id+'.texte">'+esc(s.texte||'')+'</textarea>'+
+      '<label class="rp-l">Liste d\'opérations (une ligne = une puce, facultatif)</label><textarea class="form-textarea" rows="2" data-rpi="re.s.'+s.id+'.points">'+esc(s.points||'')+'</textarea>'+
+      '<label class="rp-l">Photos légendées</label><div class="rp-photos">';
+    (s.photos||[]).forEach(function(ph){ var a=' data-id="'+s.id+'" data-pid="'+ph.id+'"';
+      h+='<div class="rp-ph"><img data-rpf="'+esc(ph.f)+'" alt=""><textarea class="form-textarea" rows="2" placeholder="Légende" data-rpi="re.ph.'+s.id+'.'+ph.id+'">'+esc(ph.legende||'')+'</textarea>'+
+        '<div class="rp-bar"><span><button class="btn btn-ghost btn-sm" data-rp="reGarde"'+a+' title="Reprendre cette photo sur la page de garde">'+(ph.garde?'★':'☆')+'</button></span><span><button class="btn btn-ghost btn-sm" data-rp="rePhotoG"'+a+' title="Avancer">◀</button> '+
+        '<button class="btn btn-ghost btn-sm" data-rp="rePhotoD"'+a+' title="Reculer">▶</button> <button class="btn btn-red btn-sm" data-rp="rePhotoSuppr"'+a+' title="Supprimer la photo">✕</button></span></div></div>'; });
+    h+='<button class="rp-add" data-rp="rePhotos" data-id="'+s.id+'">＋ Ajouter des photos<small>appareil photo du téléphone<br>ou fichiers du PC</small></button></div></div>';
+  });
+  return h+'<div class="rp-bar"><button class="btn btn-teal" data-rp="reEtapeAjout">＋ Ajouter une étape</button><span class="rp-note" style="margin:0">Une étape sans texte ni photo n\'apparaît pas dans le PDF.</span></div>';
+}
+
+// ---------- onglet « Textes et visa » de ce modèle ----------
+function reOngletTextes(){
+  var t=RP.cur.textes,v=RP.cur.visa,ta=function(k,lab,rows,aide){ return '<label class="rp-l">'+lab+'</label><textarea class="form-textarea" rows="'+rows+'" data-rpi="textes.'+k+'">'+esc(t[k]||'')+'</textarea>'+(aide?'<div class="rp-note">'+aide+'</div>':''); };
+  return '<div class="card">'+ta('objetGarde','Encadré « Objet » de la page de garde',3,'Une ligne vide sépare deux paragraphes. Un mot entre ** et ** est écrit en gras.')+ta('objet','Objet du rapport',5)+
+    ta('materiel','Matériel associé (une ligne = une puce, facultatif)',3)+ta('banc','Étalonnage — moyens (texte proposé, à relire)',2)+
+    ta('protocole','Étalonnage — protocole (une ligne = une puce ; texte proposé, à relire)',4,'Le critère de conformité et la mention des certificats s\'ajoutent tout seuls à la suite.')+
+    ta('conclusion','Conclusions',5)+ta('recos','Recommandations (une ligne = une puce, facultatif)',3)+ta('docs','Autres documents de référence (une ligne = un document, facultatif)',2,'Le bon de commande, le devis et l\'annexe des certificats sont cités automatiquement.')+'</div>'+
+    '<div class="card"><b>Visa</b><div class="rp-kv" style="margin-top:8px"><span>Établi par (nom)</span><div><input class="form-input" data-rpi="visa.nom" value="'+esc(v.nom||'')+'"></div>'+
+    '<span>Date</span><div><input class="form-input" data-rpi="visa.date" value="'+esc(v.date||'')+'"></div>'+
+    '<span>Reçu par</span><div><input class="form-input" data-rpi="visa.recu" value="'+esc(v.recu||'')+'" placeholder="ex. Client – Site"></div></div></div>';
+}
+
+// ---------- JSON au format de lib/rapports/moteur_etalonnage.py ----------
+function reJson(r,ch){
+  ch=ch||{}; var e=r.etal,g=r.garde||{},t=r.textes||{},v=r.visa||{},bc=String(g.bc||'').trim(),court=r.clientCourt||'',ref=r.devisRef||'',F=[],S=[],n=0,fig=0,k,B;
+  var plein=function(x){ return !reVide(x); };
+  function img(ph){ F.push({dans:'photos/'+ph.id+'.jpg',de:ph.f}); return 'photos/'+ph.id+'.jpg'; }
+  function leg(ph){ fig++; return 'Figure '+fig+(reVide(ph.legende)?'':' — '+rpT(ph.legende)); }
+  function sec(titre,page,blocs){ n++; S.push({num:('0'+n).slice(-2),titre:titre,nouvelle_page:page,blocs:blocs}); }
+  function paras(s,b){ rpParas(s).forEach(function(x){ b.push({type:'p',texte:rpT(x)}); }); }
+  function puces(s,b){ var L=rpLignes(s); if(L.length) b.push({type:'puces',items:L.map(rpT)}); }
+  function photos(L,b){ L=L||[]; if(L.length===1){ b.push({type:'figure',src:img(L[0]),legende:leg(L[0]),max_w:0.9,max_h:300}); return; }
+    for(var i=0;i<L.length;i+=2){ var c=L.slice(i,i+2); if(c.length===1) b.push({type:'figure',src:img(c[0]),legende:leg(c[0]),max_w:0.9,max_h:300});
+      else b.push({type:'figures',items:c.map(function(ph){ return {src:img(ph),legende:leg(ph)}; }),h:280}); } }
+  var logos={};
+  [['calinstrum','calinstrum'],['client','client_'+rpSafe(court)],['groupe','groupe_'+rpSafe(court)],['certificat','certificat'],['signature','signature']].forEach(function(l){
+    if(!RP.logos[l[1]+'.jpg']) return; logos[l[0]]='logos/'+l[1]+'.jpg'; F.push({dans:'logos/'+l[1]+'.jpg',de:'charte/'+l[1]+'.jpg'}); });
+  var vis=[]; rePhotosEtapes(r).forEach(function(ph){ if(ph.garde&&vis.length<2) vis.push({src:img(ph),legende:rpT(ph.legende||'')}); });
+  var service=String(ch.service||'').replace(/^CALINSTRUM\s*[–—-]\s*/,'');
+  var meta={societe:'CALINSTRUM',bandeau:service?'   ·   '+service:'',pdf_title:'Rapport d\'intervention'+(g.titre?' – '+g.titre:'')+(bc?' – BC '+bc:''),
+    header_title:['Rapport d\'intervention',court,r.site].filter(plein).join('  ·  '),
+    footer:['Confidentiel '+court,bc?'BC '+bc:'',ref?'Devis '+ref:''].filter(plein).join('  ·  ')+'  ·  Page ',logos:logos,
+    garde:{titre:rpT(g.titre||''),ligne1:rpT(g.info1||''),ligne2:rpT(g.sousTitre||''),visuels:vis,
+      ident:(g.identG||[]).concat(g.identD||[]).filter(function(x){ return x&&plein(x[0]); }).map(function(x){ return [rpT(x[0]),rpT(x[1])]; }),
+      objet:rpParas(t.objetGarde).map(rpT).join('<br/>'),mentions:['Document confidentiel — usage '+rpT(court)+' / CALINSTRUM',rpT(ch.pied||'')].filter(plein)},
+    cert:{tel:ch.tel||'',email:'',client:[g.info1||court,r.site].filter(plein).join(' / '),ref:[bc?'BC '+bc:'',ref].filter(plein).join(' · '),pied1:ch.entreprise||'',pied2:ch.tel||'',
+      banc:'Banc : '+(e.etalons||[]).map(function(x){ return [x.designation,x.modele].filter(plein).join(' '); }).filter(plein).join(' + ')}};
+  var etal={dossier:{operateur:e.operateur||'',approbateur:e.approbateur||'',date_impression:reIso(e.dateImp),critere:reNum(e.critere)==null?0.5:reNum(e.critere)},
+    etalons:(e.etalons||[]).filter(function(x){ return plein(x.designation); }).map(function(x){ return {designation:reBrut(x.designation),modele:reBrut(x.modele),serie:reBrut(x.serie),echeance:reBrut(x.echeance),role:reBrut(x.role)}; }),
+    transmetteurs:[],mesures:{}},vus={};
+  e.tx.forEach(function(x,i){
+    var tag=reBrut(x.tag)||('Transmetteur '+(i+1)); if(vus[tag]) tag+=' ('+(i+1)+')'; vus[tag]=1;
+    etal.transmetteurs.push({cert:reBrut(x.cert),tag:tag,service:reBrut(x.service),constructeur:reBrut(x.constructeur),modele:reBrut(x.modele),famille:reBrut(x.famille),modele_court:reBrut(x.famille),
+      serie:reBrut(x.serie),unite:reBrut(x.unite),lrv:reNum(x.lrv),urv:reNum(x.urv),sortie:reBrut(x.sortie),mesure:reBrut(x.sortie),date:reIso(x.date),temperature:reBrut(x.temperature),humidite:reBrut(x.humidite),
+      localisation:reBrut(x.emplacement),type:reBrut(x.type)});
+    etal.mesures[tag]=RE_PCT.map(function(p,j){ var m=(x.pts||[])[j]||{}; return {pct:p,p_montee:reNum(m.pm),ma_montee:reNum(m.im),p_descente:reNum(m.pd),ma_descente:reNum(m.id)}; });
+  });
+  B=[]; paras(t.objet,B); if(!B.length) B.push({type:'p',texte:'à compléter'}); sec('Objet du rapport',true,B);
+  if(e.tx.length){
+    sec('Liste des transmetteurs concernés',false,[{type:'auto',quoi:'transmetteurs'}]);
+    B=[{type:'auto',quoi:'modeles'},{type:'auto',quoi:'series'}]; if(rpLignes(t.materiel).length){ B.push({type:'h3',texte:'Matériel associé'}); puces(t.materiel,B); } sec('Matériel concerné',true,B);
+    k=n+1; B=[{type:'h2',texte:k+'.1  Moyens d\'étalonnage'}]; paras(t.banc,B); B.push({type:'auto',quoi:'etalons'},{type:'h2',texte:k+'.2  Protocole'});
+    B.push({type:'puces',items:rpLignes(t.protocole).map(rpT).concat(['Critère de conformité : ±{tol} % de l\'étendue de mesure, soit <b>±{tol_ma} mA</b> sur la sortie 4-20 mA.','Traçabilité : certificats d\'étalonnage individuels (Annexe A).'])});
+    B.push({type:'h3',texte:'Points théoriques 4-20 mA (échelle configurée)'},{type:'small_i',texte:'Formule : I (mA) = 4 + 16 × (valeur − LRV) / (URV − LRV).'},{type:'auto',quoi:'points'},{type:'h2',texte:k+'.3  Résultats'},{type:'auto',quoi:'resultats'});
+    sec('Étalonnage',true,B);
+  }
+  var et=(r.etapes||[]).filter(function(s){ return plein(s.texte)||plein(s.points)||(s.photos||[]).length; });
+  if(et.length){ k=n+1; B=[]; et.forEach(function(s,i){ B.push({type:'h2',texte:k+'.'+(i+1)+'  '+(plein(s.titre)?rpT(s.titre):'à compléter')}); paras(s.texte,B); puces(s.points,B); photos(s.photos,B); }); sec('Interventions sur site',true,B); }
+  B=[{type:'auto',quoi:'postes'}];
+  (r.postes||[]).forEach(function(p){ if(!(p.photos||[]).length) return; B.push({type:'h3',texte:'Poste '+rpT(p.num)+(plein(p.titre)?' — '+rpT(p.titre):'')}); if(plein(p.commentaire)) B.push({type:'p',texte:rpT(p.commentaire)}); photos(p.photos,B); });
+  sec('Réalisation des postes du devis'+(ref?' '+rpT(ref):''),true,B);
+  if(e.tx.length) sec('Synthèse de l\'intervention',false,[{type:'auto',quoi:'synthese'}]);
+  B=[]; paras(t.conclusion,B); if(rpLignes(t.recos).length){ B.push({type:'h3o',texte:'Recommandations'}); puces(t.recos,B); } if(B.length) sec('Conclusions et recommandations',true,B);
+  var docs=[]; if(bc) docs.push('Bon de commande n° '+rpT(bc)+'.'); if(ref) docs.push('Devis '+rpT(ref)+'.'); docs=docs.concat(rpLignes(t.docs).map(rpT)); if(e.tx.length) docs.push('Annexe A — Certificats d\'étalonnage (pages suivantes).');
+  sec('Visa et documents de référence',false,[{type:'h3s',texte:'Documents de référence'},{type:'puces',items:docs},
+    {type:'visa',gauche:'<b>Établi par</b><br/>'+rpT(ch.service||'CALINSTRUM')+'<br/>'+(plein(v.nom)?rpT(v.nom):'Nom :')+(plein(v.date)?' — '+rpT(v.date):''),droite:'<b>Reçu par</b><br/>'+rpT(v.recu||'')+'<br/>Nom / Visa :'}]);
+  var postes=(r.postes||[]).map(function(p){ return {num:String(p.num||''),designation:rpT(p.designation),realisation:rpT(p.realisation),statut:RE_STATUTS[p.etat]||''}; });
+  var dej={},fichiers=F.filter(function(f){ if(dej[f.dans]) return false; dej[f.dans]=1; return true; });
+  return {contenu:{meta:meta,etalonnage:etal,postes:postes,sections:S,annexe:{texte:'Les certificats d\'étalonnage, signés, sont joints en pages suivantes.'}},fichiers:fichiers};
+}
+
+// ---------- moteur PDF de ce modèle (en plus de celui des rapports d'intervention) ----------
+function rePy(){
+  if(RP.pyE) return RP.pyE;
+  RP.pyE=(async function(){
+    var py=await rpPy(); await py.loadPackage(['matplotlib']);
+    await py.runPythonAsync('import micropip\nawait micropip.install('+JSON.stringify(RE_PKGS)+')');
+    var base=new URL('lib/rapports/',location.href).href,noms=['moteur_etalonnage.py','fonts/Carlito-Regular.ttf','fonts/Carlito-Bold.ttf','fonts/Carlito-Italic.ttf','fonts/Carlito-BoldItalic.ttf','fonts/DejaVuSans.ttf'];
+    py.FS.mkdirTree('/rp/fonts');
+    await Promise.all(noms.map(async function(nm){ var rep=await fetch(base+nm+'?v='+RE_MOTEUR_V); if(!rep.ok) throw new Error('Fichier du moteur PDF introuvable : '+nm); py.FS.writeFile('/rp/'+nm,new Uint8Array(await rep.arrayBuffer())); }));
+    await py.runPythonAsync('import moteur_etalonnage');
+    return py;
+  })();
+  RP.pyE.catch(function(){ RP.pyE=null; });
+  return RP.pyE;
+}
+
+// ---------- import du classeur Excel de relevés (feuilles 1-Dossier, 2-Transmetteurs, 3-Mesures) ----------
+async function reImporter(file){
+  var r=RP.cur; if(!reEtal(r)||!file) return;
+  try{
+    if(typeof XLSX==='undefined') throw new Error('Lecture Excel indisponible : rechargez la page.');
+    var wb=XLSX.read(new Uint8Array(await file.arrayBuffer()),{type:'array'});
+    var L=function(mot){ var nom=wb.SheetNames.find(function(s){ return s.toLowerCase().indexOf(mot)>=0; }); return nom?XLSX.utils.sheet_to_json(wb.Sheets[nom],{header:1,raw:true,defval:null}):[]; };
+    var D=L('dossier'),Tx=L('transmetteur'),M=L('mesure'),e=r.etal,z;
+    if(!Tx.length) throw new Error('Ce classeur n\'a pas la feuille « 2-Transmetteurs » attendue.');
+    var txt=function(v){ return v==null?'':(typeof v==='number'?String(v).replace('.',','):String(v).trim()); };
+    var dat=function(v){ if(typeof v!=='number') return txt(v); var d=XLSX.SSF.parse_date_code(v); return d?('0'+d.d).slice(-2)+'/'+('0'+d.m).slice(-2)+'/'+d.y:''; };
+    var lab={}; D.forEach(function(x){ if(x[0]!=null) lab[String(x[0]).trim()]=x[1]; });
+    var pris=function(re){ var c=Object.keys(lab).find(function(s){ return re.test(s); }); return c?lab[c]:null; };
+    if((z=pris(/^Réalisé par/i))!=null) e.operateur=txt(z); if((z=pris(/^Approuvé par/i))!=null) e.approbateur=txt(z);
+    if((z=pris(/^Date d.impression/i))!=null) e.dateImp=dat(z); if((z=pris(/^Critère/i))!=null) e.critere=txt(z);
+    var i0=D.findIndex(function(x){ return String(x[0]||'').trim()==='Désignation'; });
+    if(i0>=0){ var E=D.slice(i0+1).filter(function(x){ return !reVide(x[0]); }).map(function(x){ return {designation:txt(x[0]),modele:txt(x[1]),serie:txt(x[2]),echeance:dat(x[3]),role:''}; });
+      if(E.length){ E.forEach(function(x){ var a=(e.etalons||[]).find(function(y){ return y.designation===x.designation; }); if(a) x.role=a.role||''; }); e.etalons=E; } }
+    var pts={}; M.slice(3).forEach(function(x){ if(reVide(x[0])) return; var tag=String(x[0]).trim(),i=RE_PCT.indexOf(+x[3]); if(i<0) return; (pts[tag]=pts[tag]||{})[i]={pm:txt(x[5]),im:txt(x[6]),pd:txt(x[7]),id:txt(x[8])}; });
+    var nb=0; Tx.slice(1).forEach(function(x){
+      var tag=txt(x[1]); if(!tag) return;
+      var t=e.tx.find(function(y){ return String(y.tag||'').trim()===tag; }); if(!t){ t=reTxNeuf(e); e.tx.push(t); }
+      var maj={cert:txt(x[0]),tag:tag,service:txt(x[2]),constructeur:txt(x[3]),modele:txt(x[4]),serie:txt(x[5]),unite:txt(x[7]),lrv:txt(x[8]),urv:txt(x[9]),sortie:txt(x[10]),date:dat(x[11]),temperature:txt(x[12]),humidite:txt(x[13])};
+      Object.keys(maj).forEach(function(c){ if(maj[c]!=='') t[c]=maj[c]; });
+      if(pts[tag]) RE_PCT.forEach(function(p,i){ if(pts[tag][i]) t.pts[i]=pts[tag][i]; });
+      nb++; });
+    if(!nb) throw new Error('Aucun transmetteur trouvé dans la feuille « 2-Transmetteurs ».');
+    if(!reTx()) RP.tid=(e.tx[0]||{}).id||null;
+    RP.sale=true; rpRendre(); await rpSauver(); rpEtat(nb+' transmetteur'+(nb>1?'s importés':' importé')+' du classeur — à relire');
+  }catch(err){ RP.err='Import du classeur impossible : '+((err&&err.message)||err); rpRendre(); }
+}
+
+// ---------- saisie et actions ----------
+function reSaisie(k,el){
+  var r=RP.cur,e=r&&r.etal,s=k.split('.'),v=el.value,t,x; if(!r) return;
+  if(s[1]==='s'){ x=reEtape(s[2]); if(!x) return; x[s[3]]=v; }
+  else if(s[1]==='ph'){ x=reEtape(s[2]); x=x&&(x.photos||[]).find(function(p){ return p.id===s[3]; }); if(!x) return; x.legende=v; }
+  else if(!e) return;
+  else if(s[1]==='d'){ e[s[2]]=v; if(s[2]==='critere') reMajCalc(); }
+  else if(s[1]==='e'){ if(!e.etalons[+s[2]]) return; e.etalons[+s[2]][s[3]]=v; }
+  else if(s[1]==='t'){ t=reTx(); if(!t) return; t[s[2]]=v; reMajCalc(); }
+  else if(s[1]==='m'){ t=reTx(); if(!t||!t.pts[+s[2]]) return; t.pts[+s[2]][s[3]]=v; reMajCalc(); }
+  if(el.classList.contains('re-vide')&&!reVide(v)) el.classList.remove('re-vide');
+  rpModif();
+}
+function rePh(ds){ var s=reEtape(ds.id); return {s:s,ph:s?(s.photos||[]).find(function(p){ return p.id===ds.pid; })||null:null}; }
+Object.assign(RPA,{
+  reModele:function(ds){ RP.nv.modele=ds.v; rpRendre(); },
+  reImport:function(){ document.getElementById('reFileXlsx').click(); },
+  reEtalonAjout:function(){ RP.cur.etal.etalons.push({designation:'',modele:'',serie:'',echeance:'',role:''}); rpModif(); rpRendre(); },
+  reEtalonSuppr:function(ds){ RP.cur.etal.etalons.splice(+ds.i,1); rpModif(); rpRendre(); },
+  reTx:function(ds){ RP.tid=ds.id; rpRendre(); },
+  reTxAjout:function(){ var e=RP.cur.etal,t=reTxNeuf(e); e.tx.push(t); RP.tid=t.id; rpModif(); rpRendre(); },
+  reTxSuppr:function(){ var e=RP.cur.etal,t=reTx(); if(!t||!confirm('Retirer ce transmetteur du rapport, avec ses relevés ?')) return;
+    var i=e.tx.indexOf(t); e.tx.splice(i,1); RP.tid=(e.tx[Math.min(i,e.tx.length-1)]||{}).id||null; rpModif(); rpRendre(); },
+  reTxMonter:function(){ rpDeplacer(RP.cur.etal.tx,reTx(),-1); }, reTxDescendre:function(){ rpDeplacer(RP.cur.etal.tx,reTx(),1); },
+  reEtapeAjout:function(){ (RP.cur.etapes=RP.cur.etapes||[]).push({id:rpId('s'),titre:'',texte:'',points:'',photos:[]}); rpModif(); rpRendre(); },
+  reEtapeMonter:function(ds){ rpDeplacer(RP.cur.etapes,reEtape(ds.id),-1); }, reEtapeDescendre:function(ds){ rpDeplacer(RP.cur.etapes,reEtape(ds.id),1); },
+  reEtapeSuppr:async function(ds){ var r=RP.cur,s=reEtape(ds.id); if(!s) return; var np=(s.photos||[]).length;
+    if(!confirm('Retirer cette étape du rapport ?'+(np?'\n\nSes '+np+' photo(s) seront supprimées.':''))) return;
+    r.etapes.splice(r.etapes.indexOf(s),1); RP.sale=true; rpRendre(); await rpSauver(); try{ await rpRm((s.photos||[]).map(function(x){ return x.f; })); }catch(e){} },
+  rePhotos:function(ds){ RP.cible=reEtape(ds.id); if(RP.cible) document.getElementById('rpFilePhotos').click(); },
+  reGarde:function(ds){ var x=rePh(ds).ph; if(!x) return;
+    if(!x.garde&&rePhotosEtapes(RP.cur).filter(function(p){ return p.garde; }).length>=2) throw new Error('La page de garde reprend deux photos au plus : retirez d\'abord l\'étoile d\'une autre photo.');
+    x.garde=!x.garde; rpModif(); rpRendre(); },
+  rePhotoG:function(ds){ var x=rePh(ds); if(x.s) rpDeplacer(x.s.photos,x.ph,-1); }, rePhotoD:function(ds){ var x=rePh(ds); if(x.s) rpDeplacer(x.s.photos,x.ph,1); },
+  rePhotoSuppr:async function(ds){ var x=rePh(ds); if(!x.ph||!confirm('Supprimer cette photo ?')) return;
+    x.s.photos.splice(x.s.photos.indexOf(x.ph),1); RP.sale=true; rpRendre(); await rpSauver(); try{ await rpRm([x.ph.f]); }catch(e){} }
+});
+(function reInit(){
+  var pg=document.getElementById('page-rapports'); if(!pg) return;
+  var f=document.createElement('input'); f.type='file'; f.id='reFileXlsx'; f.accept='.xlsx,.xlsm,.xls'; f.style.display='none'; pg.appendChild(f);
+  f.addEventListener('change',function(){ var x=(this.files||[])[0]; this.value=''; reImporter(x); });
 })();
 </script>
 
