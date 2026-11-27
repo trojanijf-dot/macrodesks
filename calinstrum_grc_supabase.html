@@ -7719,6 +7719,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-27','🎯 Rapport d’étalonnage : le champ « Modèle » d’un transmetteur propose en liste déroulante les références du catalogue d’articles (code article et désignation affichés). La saisie libre reste possible.'],
   ['2026-11-27','🎯 Rapports : second modèle « Étalonnage + installation ». Onglet « Étalonnage » (transmetteurs, relevés 5 points, résultat calculé à mesure, import du classeur Excel de relevés) et onglet « Chantier » (étapes avec photos). Le PDF joint un certificat de 3 pages par transmetteur. Ce qui manque est listé et reste écrit « à compléter ». Devis et factures ne sont pas modifiés.'],
   ['2026-11-27','📝 Nouvelle section « Rapports » : un rapport d’intervention se crée depuis un devis. Ses lignes deviennent des postes ; pour chacun on saisit la réalisation, l’état et des photos légendées (téléphone ou PC), puis « Produire le PDF » sort le rapport à la charte CALINSTRUM. Devis et factures ne sont pas modifiés.'],
   ['2026-11-25','🧩 BL : un BL en préparation dont le client était écrit « NOM Prénom » au lieu du nom de sa fiche est remis au nom de la fiche, automatiquement. Il réapparaît sous l’onglet de son client.'],
@@ -62363,7 +62364,7 @@ function reMajCalc(){
 }
 function reOngletEtal(){
   var e=RP.cur.etal,t=reTx();
-  var i=function(k,lab,val,ph,facultatif){ return '<div><label class="rp-l">'+lab+'</label><input class="form-input'+(facultatif||!reVide(val)?'':' re-vide')+'" data-rpi="'+k+'" value="'+esc(val==null?'':val)+'" placeholder="'+(ph||'à compléter')+'"></div>'; };
+  var i=function(k,lab,val,ph,facultatif,liste){ return '<div><label class="rp-l">'+lab+'</label><input class="form-input'+(facultatif||!reVide(val)?'':' re-vide')+'"'+(liste?' list="'+liste+'" autocomplete="off"':'')+' data-rpi="'+k+'" value="'+esc(val==null?'':val)+'" placeholder="'+(ph||'à compléter')+'"></div>'; };
   var h='<div class="card"><div class="rp-bar"><b>Dossier d\'étalonnage</b><span style="flex:1"></span><button class="btn btn-ghost btn-sm" data-rp="reImport">📥 Importer le classeur Excel de relevés</button></div><div class="re-g4">'+
     i('re.d.operateur','Réalisé par',e.operateur)+i('re.d.approbateur','Approuvé par',e.approbateur)+i('re.d.dateImp','Date d\'impression des certificats',e.dateImp,'jj/mm/aaaa')+i('re.d.critere','Critère de conformité (% de l\'étendue)',e.critere)+'</div>'+
     '<label class="rp-l">Étalons utilisés</label><table class="rp-t"><tr><th>Désignation</th><th>Modèle</th><th>N° de série</th><th>Échéance</th><th>Rôle (facultatif)</th><th style="width:30px"></th></tr>';
@@ -62377,13 +62378,19 @@ function reOngletEtal(){
     '<button class="btn btn-red btn-sm" data-rp="reTxSuppr">Retirer du rapport</button></div><div class="re-g4">'+
     i('re.t.tag','Repère (TAG)',t.tag)+i('re.t.serie','N° de série',t.serie)+i('re.t.cert','N° de certificat',t.cert)+i('re.t.date','Date d\'étalonnage',t.date,'jj/mm/aaaa')+
     i('re.t.lrv','Échelle basse',t.lrv)+i('re.t.urv','Échelle haute',t.urv)+i('re.t.unite','Unité',t.unite,'Pa, mbar, bar…')+i('re.t.sortie','Sortie',t.sortie)+
-    i('re.t.constructeur','Constructeur',t.constructeur)+i('re.t.modele','Modèle (code complet)',t.modele)+i('re.t.famille','Famille (nom court)',t.famille,'facultatif',1)+i('re.t.type','Type',t.type,'facultatif',1)+
+    i('re.t.constructeur','Constructeur',t.constructeur)+i('re.t.modele','Modèle (liste du catalogue ou saisie libre)',t.modele,'choisir ou saisir…',0,'reModeles')+i('re.t.famille','Famille (nom court)',t.famille,'facultatif',1)+i('re.t.type','Type',t.type,'facultatif',1)+
     i('re.t.service','Service / grandeur mesurée',t.service)+i('re.t.emplacement','Emplacement',t.emplacement,'coffret, côté…')+i('re.t.temperature','Température',t.temperature,'ex. 25°C',1)+i('re.t.humidite','Humidité',t.humidite,'ex. 45%RH',1)+'</div>'+
     '<table class="rp-t" style="margin-top:10px"><tr><th>%</th><th>Consigne</th><th>P réf. montée</th><th>mA montée</th><th>P réf. descente</th><th>mA descente</th><th>Erreur max</th><th></th></tr>';
   RE_PCT.forEach(function(p,n){ var m=t.pts[n]||{};
     h+='<tr><td>'+p+'</td><td id="reC'+n+'">'+reCell(c,n,'C')+'</td>'+['pm','im','pd','id'].map(function(k){ return '<td><input class="form-input re-m" inputmode="decimal" data-rpi="re.m.'+n+'.'+k+'" value="'+esc(m[k]||'')+'"></td>'; }).join('')+
       '<td id="reE'+n+'">'+reCell(c,n,'E')+'</td><td id="reR'+n+'">'+reCell(c,n,'R')+'</td></tr>'; });
-  return h+'</table><div class="rp-note" id="reResume">'+esc(reResume(c))+'</div></div></div>';
+  return h+'</table><div class="rp-note" id="reResume">'+esc(reResume(c))+'</div>'+reModelesHtml()+'</div></div>';
+}
+// Références du catalogue d'articles, proposées dans le champ « Modèle » (lecture seule ; la saisie libre reste possible).
+function reModelesHtml(){
+  var vus={},A=(typeof DB!=='undefined'&&DB&&Array.isArray(DB.articles))?DB.articles:[];
+  return '<datalist id="reModeles">'+A.filter(function(a){ var x=String((a&&a.ref)||'').trim(); if(!x||vus[x]) return false; vus[x]=1; return true; })
+    .map(function(a){ return '<option value="'+esc(String(a.ref).trim())+'">'+esc([a.codeSLN,a.nom].filter(function(x){ return !reVide(x); }).join(' — '))+'</option>'; }).join('')+'</datalist>';
 }
 
 // ---------- onglet « Chantier » ----------
