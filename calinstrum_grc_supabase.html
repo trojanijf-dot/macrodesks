@@ -7719,6 +7719,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-27','📝 Rapports : à la création, un champ « Nom du client sur le rapport » s’ajoute à côté du site. Les deux sont repris du dernier rapport du même client, pour ne plus avoir le site collé au nom du client. Sur le modèle « Étalonnage », l’en-tête des pages et les certificats suivent les lignes « CLIENT » et « SITE » de la page de garde.'],
   ['2026-11-27','🛠 Devis : la date d’un devis déjà envoyé, accepté ou facturé n’est plus remise à la date du jour quand on ouvre sa fiche. Avant, l’enregistrer (pour saisir le bon de commande reçu, par exemple) le redatait. Seul un devis encore « Brouillon » prend la date du jour ; la date reste modifiable à la main. Aucun montant n’est touché.'],
   ['2026-11-27','📝 Rapports : bouton « Changer de devis » dans la fiche d’un rapport. Un rapport créé sur le mauvais devis se rattache au bon sans rien ressaisir : client, bon de commande, devis et objet sont remplacés ; postes, photos, relevés et textes restent en place. Ce qui avait été retouché à la main est gardé et listé « à relire ». La liste indique aussi le modèle de chaque rapport.'],
   ['2026-11-27','🎯 Rapport d’étalonnage : le champ « Modèle » d’un transmetteur propose en liste déroulante les références du catalogue d’articles (code article et désignation affichés). La saisie libre reste possible.'],
@@ -61759,6 +61760,9 @@ function rpT(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,
 function rpDevis(id){ return (DB.devis||[]).find(function(d){ return d&&String(d.id)===String(id); })||null; }
 function rpDevisRef(d){ return (String(d.num||'').trim()+' '+String(d.rev||'').trim()).trim(); }
 function rpBC(d){ return {num:String(d.bcClientRef||d.bcClientSLN||'').trim(),date:rpDateFR(d.bcClientDate||d.bcClientSLNDate)}; }
+// Nom du client et site tels qu'ils sont écrits sur un rapport : lignes « Client » et « Site » de la page de garde si elles existent.
+function rpLigneGarde(r,noms){ var g=(r&&r.garde)||{},l=(g.identG||[]).concat(g.identD||[]).find(function(x){ return x&&noms.indexOf(rpNorm(x[0]).trim())>=0; }); return l?String(l[1]==null?'':l[1]).trim():''; }
+function rpClientSite(r){ return {nom:rpLigneGarde(r,['client'])||String(((r||{}).garde||{}).info1||'').trim(),site:rpLigneGarde(r,['site','site d\'intervention'])||String((r||{}).site||'').trim()}; }
 function rpPoste(){ var r=RP.cur; if(!r) return null; return r.postes.find(function(p){ return p.id===RP.pid; })||null; }
 function rpPhoto(pid){ var p=rpPoste(); return p?(p.photos||[]).find(function(x){ return x.id===pid; })||null:null; }
 function rpNbPhotos(r){ return (r.postes||[]).reduce(function(n,p){ return n+(p.photos||[]).length; },0)+rePhotosEtapes(r).length; }
@@ -62063,7 +62067,9 @@ function rpVueNouveau(){
   h+='<div class="card"><div class="rp-bar"><b>Repris du devis</b><span class="rp-note" style="margin:0">(modifiable ensuite)</span><span style="flex:1"></span><button class="btn btn-ghost btn-sm" data-rp="changerDevis">Changer de devis</button></div>'+
     '<div class="rp-kv"><span>Client</span><div>'+esc(d.client||'')+'</div><span>Bon de commande</span><div>'+(bc.num?'N° '+esc(bc.num)+(bc.date?' du '+bc.date:''):'<span style="color:var(--amber)">aucun sur ce devis</span>')+'</div>'+
     '<span>Devis</span><div>'+esc(ref)+(d.date?' du '+rpDateFR(d.date):'')+'</div><span>Objet</span><div>'+esc(d.objet||'')+'</div>'+
+    '<span>Nom du client sur le rapport</span><div><input class="form-input" data-rpi="nv.nomClient" placeholder="société, sans le site" value="'+esc(nv.nomClient||'')+'"></div>'+
     '<span>Site d\'intervention</span><div><input class="form-input" data-rpi="nv.site" placeholder="ex. Usine – Atelier A" value="'+esc(nv.site)+'"></div></div>'+
+    (nv.repris?'<div class="rp-note">Nom du client et site repris du dernier rapport de ce client : à vérifier pour cette intervention.</div>':'')+
     (deja?'<div class="rp-note" style="color:var(--amber)">Un rapport existe déjà pour ce devis : celui-ci s\'y ajoutera.</div>':'')+'</div>';
   h+='<div class="card"><div class="rp-bar"><b>Postes proposés</b><span style="flex:1"></span>'+
     ((d.lines&&(d.lines.fourniture||[]).filter(function(l){ return l&&l.type!=='header'; }).length>1)?'<button class="btn btn-ghost btn-sm" data-rp="separer">'+(nv.sep?'Regrouper les fournitures':'Une ligne par fourniture')+'</button>':'')+'</div>'+
@@ -62159,7 +62165,11 @@ var RPA={
   filtre:function(ds){ RP.filtre=ds.v; rpRendre(); },
   nouveau:function(){ RP.nv={q:'',devisId:null,postes:[],sep:false,site:''}; RP.vue='nouveau'; rpRendre(); },
   annuler:function(){ RP.nv=null; RP.vue='liste'; rpRendre(); },
-  choisir:function(ds){ var d=rpDevis(ds.id); if(!d) return; RP.nv.devisId=d.id; RP.nv.postes=rpPostesDuDevis(d,RP.nv.sep); rpRendre(); },
+  choisir:function(ds){ var d=rpDevis(ds.id); if(!d) return; var nv=RP.nv,court=getClientPrefix(d.client||'');
+    // Nom du client et site : ceux du dernier rapport du même client (là où ils ont été corrigés), sinon la 1re ligne de l'adresse du devis.
+    var p=(RP.liste||[]).filter(function(r){ return r.clientCourt===court; }).sort(function(a,b){ return String(b.maj||'').localeCompare(String(a.maj||'')); })[0],cs=p?rpClientSite(p):{nom:'',site:''};
+    nv.devisId=d.id; nv.postes=rpPostesDuDevis(d,nv.sep); nv.nomClient=cs.nom||String(d.adresse||'').split(/\r?\n/)[0].trim()||court;
+    if(!String(nv.site||'').trim()) nv.site=cs.site; nv.repris=!!(cs.nom||cs.site); rpRendre(); },
   changerDevis:function(){ RP.nv.devisId=null; rpRendre(); },
   separer:function(){ RP.nv.sep=!RP.nv.sep; RP.nv.postes=rpPostesDuDevis(rpDevis(RP.nv.devisId),RP.nv.sep); rpRendre(); },
   cocher:function(ds,el){ RP.nv.postes[+ds.i].coche=!!el.checked; },
@@ -62168,7 +62178,7 @@ var RPA={
     var postes=nv.postes.filter(function(p){ return p.coche; }); if(!postes.length) throw new Error('Cochez au moins un poste.');
     if(!RP.charte) await rpChargerCharte();
     var ch=RP.charte,bc=rpBC(d),ref=rpDevisRef(d),court=getClientPrefix(d.client||''),auj=rpAuj(),objet=String(d.objet||'').trim();
-    var nomClient=String(d.adresse||'').split(/\r?\n/)[0].trim()||court;
+    var nomClient=String(nv.nomClient||'').trim()||String(d.adresse||'').split(/\r?\n/)[0].trim()||court;
     var defD={'Client':nomClient,'Contact client':String(d.contact||'').trim(),'Désignation':objet,'Site d\'intervention':nv.site};
     // Mêmes libellés que le dernier rapport du même client (ses rubriques propres), valeurs à compléter.
     var prec=(RP.liste||[]).find(function(r){ return r.clientCourt===court&&r.garde&&(r.garde.identD||[]).length; });
@@ -62235,6 +62245,7 @@ function rpSaisie(el){
   if(k==='nv.q'){ RP.nv.q=v; z=document.getElementById('rpNvListe'); if(z) z.innerHTML=rpCandidatsHtml(); return; }
   if(k==='ra.q'){ if(!RP.ra) return; RP.ra.q=v; z=document.getElementById('rpRaListe'); if(z) z.innerHTML=rpCandidatsHtml(v,'rattacherChoisir',RP.cur&&RP.cur.devisId); return; }
   if(k==='nv.site'){ RP.nv.site=v; return; }
+  if(k==='nv.nomClient'){ RP.nv.nomClient=v; return; }
   if(k==='nvp.d'){ RP.nv.postes[+el.getAttribute('data-i')].designation=v; return; }
   if(k.indexOf('charte.')===0){ RP.charte=RP.charte||rpCharteDefaut(); RP.charte[k.slice(7)]=v; rpCharteModif(); return; }
   var r=RP.cur; if(!r) return;
@@ -62519,14 +62530,15 @@ function reJson(r,ch){
   [['calinstrum','calinstrum'],['client','client_'+rpSafe(court)],['groupe','groupe_'+rpSafe(court)],['certificat','certificat'],['signature','signature']].forEach(function(l){
     if(!RP.logos[l[1]+'.jpg']) return; logos[l[0]]='logos/'+l[1]+'.jpg'; F.push({dans:'logos/'+l[1]+'.jpg',de:'charte/'+l[1]+'.jpg'}); });
   var vis=[]; rePhotosEtapes(r).forEach(function(ph){ if(ph.garde&&vis.length<2) vis.push({src:img(ph),legende:rpT(ph.legende||'')}); });
-  var service=String(ch.service||'').replace(/^CALINSTRUM\s*[–—-]\s*/,'');
+  // En-tête des pages et certificats : nom du client et site = lignes « CLIENT » et « SITE » de la page de garde (modifiables dans la fiche).
+  var service=String(ch.service||'').replace(/^CALINSTRUM\s*[–—-]\s*/,''),cs=rpClientSite(r);
   var meta={societe:'CALINSTRUM',bandeau:service?'   ·   '+service:'',pdf_title:'Rapport d\'intervention'+(g.titre?' – '+g.titre:'')+(bc?' – BC '+bc:''),
-    header_title:['Rapport d\'intervention',court,r.site].filter(plein).join('  ·  '),
+    header_title:['Rapport d\'intervention',court,cs.site].filter(plein).join('  ·  '),
     footer:['Confidentiel '+court,bc?'BC '+bc:'',ref?'Devis '+ref:''].filter(plein).join('  ·  ')+'  ·  Page ',logos:logos,
     garde:{titre:rpT(g.titre||''),ligne1:rpT(g.info1||''),ligne2:rpT(g.sousTitre||''),visuels:vis,
       ident:(g.identG||[]).concat(g.identD||[]).filter(function(x){ return x&&plein(x[0]); }).map(function(x){ return [rpT(x[0]),rpT(x[1])]; }),
       objet:rpParas(t.objetGarde).map(rpT).join('<br/>'),mentions:['Document confidentiel — usage '+rpT(court)+' / CALINSTRUM',rpT(ch.pied||'')].filter(plein)},
-    cert:{tel:ch.tel||'',email:'',client:[g.info1||court,r.site].filter(plein).join(' / '),ref:[bc?'BC '+bc:'',ref].filter(plein).join(' · '),pied1:ch.entreprise||'',pied2:ch.tel||'',
+    cert:{tel:ch.tel||'',email:'',client:[cs.nom||court,cs.site].filter(plein).join(' / '),ref:[bc?'BC '+bc:'',ref].filter(plein).join(' · '),pied1:ch.entreprise||'',pied2:ch.tel||'',
       banc:'Banc : '+(e.etalons||[]).map(function(x){ return [x.designation,x.modele].filter(plein).join(' '); }).filter(plein).join(' + ')}};
   var etal={dossier:{operateur:e.operateur||'',approbateur:e.approbateur||'',date_impression:reIso(e.dateImp),critere:reNum(e.critere)==null?0.5:reNum(e.critere)},
     etalons:(e.etalons||[]).filter(function(x){ return plein(x.designation); }).map(function(x){ return {designation:reBrut(x.designation),modele:reBrut(x.modele),serie:reBrut(x.serie),echeance:reBrut(x.echeance),role:reBrut(x.role)}; }),
