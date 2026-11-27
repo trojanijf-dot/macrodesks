@@ -2949,6 +2949,7 @@ function admPreviewPrint(){
 #page-rapports .rp-note{color:var(--muted);font-size:10.5px;margin-top:6px}
 #page-rapports .rp-err{background:rgba(244,63,94,.12);border:1px solid rgba(244,63,94,.4);color:var(--red);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;white-space:pre-wrap}
 #page-rapports .rp-occ{background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.35);color:var(--blue);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px}
+#page-rapports .rp-pdfvue{display:block;width:100%;height:calc(100vh - 150px);min-height:420px;border:1px solid var(--border);border-radius:8px;background:#525659}
 #page-rapports .rp-ok{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.35);color:var(--green);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 #page-rapports .rp-kv{display:grid;grid-template-columns:150px 1fr;gap:5px 8px;font-size:11px;align-items:center}
 #page-rapports .rp-kv>span{color:var(--muted)}
@@ -7719,6 +7720,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-27','📝 Rapports : le PDF s’ouvre maintenant dans le GRC, avec un bouton « Enregistrer le PDF ». Le fichier s’appelle « Rapport d’intervention BC N° … » ; avant, l’enregistrer depuis l’onglet du navigateur donnait un nom illisible.'],
   ['2026-11-27','📝 Rapports : à la création, un champ « Nom du client sur le rapport » s’ajoute à côté du site. Les deux sont repris du dernier rapport du même client, pour ne plus avoir le site collé au nom du client. Sur le modèle « Étalonnage », l’en-tête des pages et les certificats suivent les lignes « CLIENT » et « SITE » de la page de garde.'],
   ['2026-11-27','🛠 Devis : la date d’un devis déjà envoyé, accepté ou facturé n’est plus remise à la date du jour quand on ouvre sa fiche. Avant, l’enregistrer (pour saisir le bon de commande reçu, par exemple) le redatait. Seul un devis encore « Brouillon » prend la date du jour ; la date reste modifiable à la main. Aucun montant n’est touché.'],
   ['2026-11-27','📝 Rapports : bouton « Changer de devis » dans la fiche d’un rapport. Un rapport créé sur le mauvais devis se rattache au bon sans rien ressaisir : client, bon de commande, devis et objet sont remplacés ; postes, photos, relevés et textes restent en place. Ce qui avait été retouché à la main est gardé et listé « à relire ». La liste indique aussi le modèle de chaque rapport.'],
@@ -61988,7 +61990,13 @@ function rpPy(){
   RP.py.catch(function(){ RP.py=null; });
   return RP.py;
 }
-function rpNomPdf(r){ var bc=String((r.garde||{}).bc||'').trim(); return 'Rapport CALINSTRUM_'+(bc?'BC-'+rpSafe(bc):rpSafe(r.devisRef||r.id))+'.pdf'; }
+// Nom du fichier PDF : « Rapport d'intervention BC N° … » (à défaut de BC : le devis). Caractères interdits dans un nom de fichier retirés.
+function rpNomPdf(r){ var bc=String((r.garde||{}).bc||'').trim(),ref=String(r.devisRef||'').trim();
+  return ('Rapport d\'intervention '+(bc?'BC N° '+bc:ref?'Devis '+ref:'')).replace(/[\\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').trim()+'.pdf'; }
+function rpVuePdf(){ var p=RP.pdf;
+  return '<div class="rp-bar"><button class="btn btn-ghost" data-rp="pdfFermer">← Retour</button><b style="font-size:14px">'+esc(p.nom)+'</b><span style="flex:1"></span>'+
+    '<button class="btn btn-teal" data-rp="pdfTelecharger">⬇ Enregistrer le PDF</button><button class="btn btn-ghost" data-rp="pdfImprimer">🖨 Imprimer</button></div>'+
+    '<iframe id="rpPdfVue" class="rp-pdfvue" src="'+esc(p.url)+'#toolbar=0&navpanes=0&view=FitH" title="'+esc(p.nom)+'"></iframe>'; }
 async function rpProduire(){
   var r=RP.cur; if(!r) return;
   RP.err=''; RP.pdf=null; RP.occ='Préparation du PDF… (la première fois, comptez une quinzaine de secondes)'; rpRendre();
@@ -62021,7 +62029,7 @@ function rpRendre(){
   var z=document.getElementById('rpRoot'); if(!z) return; var h='<button class="btn btn-ghost btn-sm rp-menu-btn" data-rp="menu">☰ Menu</button>';
   if(RP.err) h+='<div class="rp-err">⚠ '+esc(RP.err)+' <button class="btn btn-ghost btn-sm" data-rp="fermerErr">Fermer</button></div>';
   if(RP.occ) h+='<div class="rp-occ">⏳ '+esc(RP.occ)+'</div>';
-  h+=RP.vue==='nouveau'&&RP.nv?rpVueNouveau():(RP.vue==='rattacher'&&RP.cur&&RP.ra)?rpVueRattacher():RP.vue==='charte'?rpVueCharte():(RP.vue==='fiche'&&RP.cur)?rpVueFiche():rpVueListe();
+  h+=(RP.vue==='pdf'&&RP.pdf)?rpVuePdf():RP.vue==='nouveau'&&RP.nv?rpVueNouveau():(RP.vue==='rattacher'&&RP.cur&&RP.ra)?rpVueRattacher():RP.vue==='charte'?rpVueCharte():(RP.vue==='fiche'&&RP.cur)?rpVueFiche():rpVueListe();
   z.innerHTML=h; rpImgs();
 }
 function rpBadge(r){ return r.etat==='emis'?'<span class="badge b-sent">Émis</span>':'<span class="badge b-draft">Brouillon</span>'; }
@@ -62222,9 +62230,18 @@ var RPA={
   identSuppr:function(ds){ RP.cur.garde[ds.col==='G'?'identG':'identD'].splice(+ds.i,1); rpModif(); rpRendre(); },
   emis:function(){ var r=RP.cur; if(r.etat!=='emis'&&reEtal(r)&&reManques(r).length) throw new Error('Il manque encore des informations (liste en haut de la fiche) : ce rapport ne peut pas être marqué « émis ».'); if(r.etat==='emis'){ r.etat='brouillon'; delete r.emisLe; } else { r.etat='emis'; r.emisLe=new Date().toISOString(); } rpModif(); rpRendre(); },
   produire:function(){ return rpProduire(); },
-  pdfOuvrir:function(){ if(RP.pdf) window.open(RP.pdf.url,'_blank'); },
+  // [27/11/2026] Le PDF s'affiche DANS le GRC, sans la barre du navigateur : ouvert dans un onglet, le bouton d'enregistrement
+  //   du navigateur proposait un nom de fichier illisible (identifiant interne). Ici « Enregistrer le PDF » donne toujours le bon nom.
+  //   Sans lecteur PDF intégré (téléphone) : le fichier est enregistré directement, avec son nom.
+  pdfOuvrir:function(){ if(!RP.pdf) return; if(navigator.pdfViewerEnabled===false) return RPA.pdfTelecharger(); RP.pdfRetour=RP.vue==='pdf'?RP.pdfRetour:RP.vue; RP.vue='pdf'; rpRendre(); },
+  pdfFermer:function(){ RP.vue=(RP.pdfRetour==='fiche'&&RP.cur)?'fiche':'liste'; if(RP.vue==='liste') RP.pdf=null; rpRendre(); },
+  pdfImprimer:function(){ var f=document.getElementById('rpPdfVue'); try{ f.contentWindow.focus(); f.contentWindow.print(); }catch(e){ if(RP.pdf) window.open(RP.pdf.url,'_blank'); } },
   pdfTelecharger:function(){ if(!RP.pdf) return; var a=document.createElement('a'); a.href=RP.pdf.url; a.download=RP.pdf.nom; document.body.appendChild(a); a.click(); a.remove(); },
-  pdfArchive:async function(ds){ var w=window.open('about:blank','_blank'); try{ var b=await rpGet('pdf/'+ds.id+'.pdf'); var u=URL.createObjectURL(b); if(w) w.location.href=u; else window.open(u,'_blank'); }catch(e){ if(w) w.close(); throw e; } },
+  pdfArchive:async function(ds){ var r=(RP.liste||[]).find(function(x){ return x.id===ds.id; }),b;
+    RP.occ='Ouverture du PDF…'; rpRendre(); try{ b=await rpGet('pdf/'+ds.id+'.pdf'); } finally{ RP.occ=''; }
+    RP.pdf={url:URL.createObjectURL(b),nom:r?rpNomPdf(r):'Rapport d\'intervention.pdf',archive:true}; RP.pdfRetour='liste';
+    if(navigator.pdfViewerEnabled===false){ RPA.pdfTelecharger(); RP.pdf=null; rpRendre(); return; }
+    RP.vue='pdf'; rpRendre(); },
   supprimer:async function(ds){ var r=(RP.liste||[]).find(function(x){ return x.id===ds.id; }); if(!r) return;
     if(!confirm('Supprimer définitivement ce rapport'+(r.etat==='emis'?' ÉMIS':'')+' ?\n\n'+[r.clientCourt,(r.garde||{}).bc?'BC '+r.garde.bc:'',r.devisRef].filter(Boolean).join(' · ')+'\n'+rpNbPhotos(r)+' photo(s) et le PDF archivé seront supprimés. Cette action ne peut pas être annulée.')) return;
     var f=['fiches/'+r.id+'.json','pdf/'+r.id+'.pdf']; (r.postes||[]).forEach(function(p){ (p.photos||[]).forEach(function(x){ f.push(x.f); }); }); rePhotosEtapes(r).forEach(function(x){ f.push(x.f); });
