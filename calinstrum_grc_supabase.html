@@ -7719,6 +7719,7 @@ function _jrMajBadges(){
 }
 // Versions du GRC mises en ligne (onglet « Mises à jour du GRC »), la plus récente d'abord.
 var GRC_MAJ=[
+  ['2026-11-27','📝 Rapports : bouton « Changer de devis » dans la fiche d’un rapport. Un rapport créé sur le mauvais devis se rattache au bon sans rien ressaisir : client, bon de commande, devis et objet sont remplacés ; postes, photos, relevés et textes restent en place. Ce qui avait été retouché à la main est gardé et listé « à relire ». La liste indique aussi le modèle de chaque rapport.'],
   ['2026-11-27','🎯 Rapport d’étalonnage : le champ « Modèle » d’un transmetteur propose en liste déroulante les références du catalogue d’articles (code article et désignation affichés). La saisie libre reste possible.'],
   ['2026-11-27','🎯 Rapports : second modèle « Étalonnage + installation ». Onglet « Étalonnage » (transmetteurs, relevés 5 points, résultat calculé à mesure, import du classeur Excel de relevés) et onglet « Chantier » (étapes avec photos). Le PDF joint un certificat de 3 pages par transmetteur. Ce qui manque est listé et reste écrit « à compléter ». Devis et factures ne sont pas modifiés.'],
   ['2026-11-27','📝 Nouvelle section « Rapports » : un rapport d’intervention se crée depuis un devis. Ses lignes deviennent des postes ; pour chacun on saisit la réalisation, l’état et des photos légendées (téléphone ou PC), puis « Produire le PDF » sort le rapport à la charte CALINSTRUM. Devis et factures ne sont pas modifiés.'],
@@ -62008,7 +62009,7 @@ function rpRendre(){
   var z=document.getElementById('rpRoot'); if(!z) return; var h='<button class="btn btn-ghost btn-sm rp-menu-btn" data-rp="menu">☰ Menu</button>';
   if(RP.err) h+='<div class="rp-err">⚠ '+esc(RP.err)+' <button class="btn btn-ghost btn-sm" data-rp="fermerErr">Fermer</button></div>';
   if(RP.occ) h+='<div class="rp-occ">⏳ '+esc(RP.occ)+'</div>';
-  h+=RP.vue==='nouveau'&&RP.nv?rpVueNouveau():RP.vue==='charte'?rpVueCharte():(RP.vue==='fiche'&&RP.cur)?rpVueFiche():rpVueListe();
+  h+=RP.vue==='nouveau'&&RP.nv?rpVueNouveau():(RP.vue==='rattacher'&&RP.cur&&RP.ra)?rpVueRattacher():RP.vue==='charte'?rpVueCharte():(RP.vue==='fiche'&&RP.cur)?rpVueFiche():rpVueListe();
   z.innerHTML=h; rpImgs();
 }
 function rpBadge(r){ return r.etat==='emis'?'<span class="badge b-sent">Émis</span>':'<span class="badge b-draft">Brouillon</span>'; }
@@ -62031,18 +62032,18 @@ function rpListeHtml(){
     var h='<div class="rp-aff"><b>'+esc([a.clientCourt,g.bc?'BC '+g.bc:'',a.devisRef?'Devis '+a.devisRef:''].filter(Boolean).join(' · '))+'</b><br><span>'+esc(g.titre||'')+'</span></div>'+
       '<table class="rp-t"><tr><th>Document</th><th>PDF du</th><th>État</th><th>Postes</th><th>Photos</th><th></th></tr>';
     G[k].forEach(function(r){ var n=(r.postes||[]).length,ok=(r.postes||[]).filter(function(p){ return p.etat&&String(p.realisation||'').trim(); }).length,np=rpNbPhotos(r);
-      h+='<tr><td>📝 Rapport d\'intervention</td><td>'+(r.pdf&&r.pdf.le?rpDateFR(r.pdf.le):'—')+'</td><td>'+rpBadge(r)+'</td><td>'+ok+' / '+n+' renseigné'+(ok>1?'s':'')+'</td><td>'+np+' photo'+(np>1?'s':'')+'</td>'+
+      h+='<tr><td>'+(reEtal(r)?'🎯 Étalonnage + installation':'📝 Rapport d\'intervention')+'</td><td>'+(r.pdf&&r.pdf.le?rpDateFR(r.pdf.le):'—')+'</td><td>'+rpBadge(r)+'</td><td>'+ok+' / '+n+' renseigné'+(ok>1?'s':'')+'</td><td>'+np+' photo'+(np>1?'s':'')+'</td>'+
         '<td><div class="rp-bar" style="margin:0"><button class="btn btn-teal btn-sm" data-rp="ouvrir" data-id="'+esc(r.id)+'">Ouvrir</button>'+
         (r.pdf&&r.pdf.le?'<button class="btn btn-ghost btn-sm" data-rp="pdfArchive" data-id="'+esc(r.id)+'">📄 Dernier PDF</button>':'')+
         '<button class="btn btn-red btn-sm" data-rp="supprimer" data-id="'+esc(r.id)+'">Supprimer</button></div></td></tr>'; });
     return h+'</table>'; }).join('');
 }
-function rpCandidatsHtml(){
-  var q=rpNorm(RP.nv.q),sc=function(d){ return (rpBC(d).num?2:0)+(/prestation/i.test(d.type||'')?1:0); };
-  var L=(DB.devis||[]).filter(function(d){ return d&&d.num&&['Obsolète','Refusé'].indexOf(d.status)<0&&(!q||rpNorm([d.num,d.rev,d.client,d.objet,rpBC(d).num].join(' ')).indexOf(q)>=0); })
+function rpCandidatsHtml(q0,action,sauf){   // sans argument : écran de création ; sinon « Changer de devis » (le devis actuel n'est pas proposé)
+  var q=rpNorm(q0==null?RP.nv.q:q0),sc=function(d){ return (rpBC(d).num?2:0)+(/prestation/i.test(d.type||'')?1:0); };
+  var L=(DB.devis||[]).filter(function(d){ return d&&d.num&&['Obsolète','Refusé'].indexOf(d.status)<0&&(sauf==null||String(d.id)!==String(sauf))&&(!q||rpNorm([d.num,d.rev,d.client,d.objet,rpBC(d).num].join(' ')).indexOf(q)>=0); })
     .sort(function(a,b){ return sc(b)-sc(a)||String(b.date||'').localeCompare(String(a.date||'')); }).slice(0,15);
   if(!L.length) return '<div class="rp-note">Aucun devis ne correspond.</div>';
-  return L.map(function(d){ var bc=rpBC(d).num; return '<button class="rp-cand" data-rp="choisir" data-id="'+esc(d.id)+'"><b>'+esc(rpDevisRef(d))+'</b> — '+esc(String(d.objet||'').slice(0,110))+
+  return L.map(function(d){ var bc=rpBC(d).num; return '<button class="rp-cand" data-rp="'+(action||'choisir')+'" data-id="'+esc(d.id)+'"><b>'+esc(rpDevisRef(d))+'</b> — '+esc(String(d.objet||'').slice(0,110))+
     ' <span style="color:var(--muted)">('+esc(d.status||'')+(bc?', BC '+esc(bc):'')+')</span></button>'; }).join('');
 }
 function rpVueNouveau(){
@@ -62126,7 +62127,8 @@ function rpVueFiche(){
   if(RP.pdf) h+='<div class="rp-ok">✅ PDF produit'+(RP.pdf.archive?' et archivé':'')+' : <b>'+esc(RP.pdf.nom)+'</b><button class="btn btn-teal btn-sm" data-rp="pdfOuvrir">Ouvrir</button><button class="btn btn-ghost btn-sm" data-rp="pdfTelecharger">Télécharger</button></div>';
   if(reEtal(r)) h+=reManquesHtml(r);
   h+='<div class="rp-bar">'+(reEtal(r)?[['postes','Postes et photos'],['etal','Étalonnage'],['chantier','Chantier'],['garde','Page de garde'],['textes','Textes et visa']]:[['postes','Postes et photos'],['garde','Page de garde'],['textes','Textes et visa']]).map(function(o){ return '<button class="rp-chip'+(RP.onglet===o[0]?' on':'')+'" data-rp="onglet" data-v="'+o[0]+'">'+o[1]+'</button>'; }).join('')+
-    '<span class="rp-note" style="margin:0">Devis '+esc(r.devisRef||'')+' · '+esc(r.client||'')+'</span></div>';
+    '<span class="rp-note" style="margin:0">Devis '+esc(r.devisRef||'')+' · '+esc(r.client||'')+'</span>'+
+    '<button class="btn btn-ghost btn-sm" data-rp="rattacher" title="Rapport créé sur le mauvais devis ? Le rattacher à un autre, sans rien ressaisir.">Changer de devis</button></div>';
   var et=reEtal(r); return h+(et&&RP.onglet==='etal'?reOngletEtal():et&&RP.onglet==='chantier'?reOngletChantier():RP.onglet==='garde'?rpOngletGarde():RP.onglet==='textes'?(et?reOngletTextes():rpOngletTextes()):rpOngletPostes());
 }
 function rpVueCharte(){
@@ -62223,6 +62225,7 @@ function rpSaisie(el){
   var k=el.getAttribute('data-rpi'),v=el.value,z; if(!k) return;
   if(k==='liste.q'){ RP.q=v; z=document.getElementById('rpListe'); if(z) z.innerHTML=rpListeHtml(); return; }
   if(k==='nv.q'){ RP.nv.q=v; z=document.getElementById('rpNvListe'); if(z) z.innerHTML=rpCandidatsHtml(); return; }
+  if(k==='ra.q'){ if(!RP.ra) return; RP.ra.q=v; z=document.getElementById('rpRaListe'); if(z) z.innerHTML=rpCandidatsHtml(v,'rattacherChoisir',RP.cur&&RP.cur.devisId); return; }
   if(k==='nv.site'){ RP.nv.site=v; return; }
   if(k==='nvp.d'){ RP.nv.postes[+el.getAttribute('data-i')].designation=v; return; }
   if(k.indexOf('charte.')===0){ RP.charte=RP.charte||rpCharteDefaut(); RP.charte[k.slice(7)]=v; rpCharteModif(); return; }
@@ -62235,6 +62238,74 @@ function rpSaisie(el){
   else { var s=k.split('.'); if(!r[s[0]]) return; r[s[0]][s[1]]=v; }
   rpModif();
 }
+// ---------- changer le devis d'un rapport déjà saisi (27/11/2026) ----------
+// Rapport créé sur le mauvais devis : on le rattache au bon sans rien ressaisir.
+// Ce que la création reprend d'un devis (mêmes formules que RPA.creer et reCreer) : calculé pour l'ancien devis
+// (= ce qui avait été repris) et pour le nouveau.
+function rpDuDevis(d,et){
+  var bc=rpBC(d),ref=rpDevisRef(d),court=getClientPrefix(d.client||'');
+  return {num:String(d.num||'').trim(),ref:ref,bc:bc.num,court:court,client:String(d.client||''),objet:String(d.objet||'').trim(),
+    nom:String(d.adresse||'').split(/\r?\n/)[0].trim()||court,contact:String(d.contact||'').trim(),
+    bcLigne:bc.num?(et?'BC '+bc.num+(bc.date?'  du '+bc.date:''):'N° '+bc.num+(bc.date?' du '+bc.date:'')):'',
+    refLigne:et?ref+(d.date?'  du '+rpDateFR(d.date):''):'Devis '+ref+(d.date?' du '+rpDateFR(d.date):''),
+    texte:'Le présent rapport rend compte des travaux réalisés par CALINSTRUM'+(bc.num?' au titre du bon de commande **N° '+bc.num+'**':'')+', conformément au devis **'+ref+'**.'};
+}
+// Règle : une valeur n'est remplacée que si elle est encore celle reprise de l'ancien devis (ou vide). Ce qui a été
+// retouché à la main est gardé et rendu dans `verif` (« à relire »). Postes, photos, relevés, étapes : jamais touchés.
+// essai=true : rien n'est modifié (aperçu).
+function rpRattacher(r,d,essai){
+  var x=essai?JSON.parse(JSON.stringify(r)):r,et=reEtal(x),anc=rpDevis(x.devisId),A=anc?rpDuDevis(anc,et):null,N=rpDuDevis(d,et),verif=[];
+  x.garde=x.garde||{}; x.textes=x.textes||{}; x.visa=x.visa||{};
+  var pose=function(o,k,cle,lab){ var cur=String(o[k]==null?'':o[k]); if(cur===N[cle]) return;
+    if(cur.trim()===''||(A&&cur===A[cle])) o[k]=N[cle]; else verif.push(lab+' : « '+cur.slice(0,70)+(cur.length>70?'…':'')+' »'); };
+  pose(x.garde,'bc','bc','Page de garde, n° de bon de commande'); pose(x.garde,'titre','objet','Page de garde, titre'); pose(x.garde,'info1','nom','Page de garde, ligne d\'information 1');
+  var LIB={'bon de commande':'bcLigne','references':'refLigne','devis':'refLigne','client':'nom','contact client':'contact','designation':'objet'};
+  ['identG','identD'].forEach(function(c){ (x.garde[c]||[]).forEach(function(l){ var cle=l&&LIB[rpNorm(l[0]).trim()]; if(cle) pose(l,1,cle,'Page de garde, « '+l[0]+' »'); }); });
+  pose(x.textes,'objet','texte','Textes, objet du rapport'); pose(x.visa,'recu','court','Visa, « Reçu par »');
+  // L'ancien numéro de devis ou de BC encore cité ailleurs (texte libre) : signalé, jamais réécrit.
+  if(A){
+    var cite=function(s){ s=String(s==null?'':s); return (A.num&&A.num!==N.num&&s.indexOf(A.num)>=0)||(A.bc&&A.bc!==N.bc&&s.indexOf(A.bc)>=0); };
+    var dans=function(lab,vals){ if(vals.some(cite)&&!verif.some(function(z){ return z.indexOf(lab)===0; })) verif.push(lab+' : l\'ancien devis ou l\'ancien bon de commande y est encore cité'); };
+    dans('Textes',Object.keys(x.textes).map(function(k){ return x.textes[k]; }));
+    dans('Page de garde',[x.garde.sousTitre,x.garde.info2].concat((x.garde.identG||[]).concat(x.garde.identD||[]).map(function(l){ return l&&l[1]; })));
+    var txp=[]; (x.postes||[]).forEach(function(p){ txp.push(p.designation,p.realisation,p.commentaire,p.titre); (p.photos||[]).forEach(function(f){ txp.push(f.legende); }); }); dans('Postes et photos',txp);
+    var txe=[]; (x.etapes||[]).forEach(function(s){ txe.push(s.titre,s.texte,s.points); (s.photos||[]).forEach(function(f){ txe.push(f.legende); }); }); dans('Chantier',txe);
+    var des=function(dv){ return rpPostesDuDevis(dv,false).concat(rpPostesDuDevis(dv,true)).map(function(p){ return p.designation; }); },dA=des(anc),dN=des(d);
+    var nb=(x.postes||[]).filter(function(p){ return dA.indexOf(p.designation)>=0&&dN.indexOf(p.designation)<0; }).length;
+    if(nb) verif.push('Postes : '+nb+' désignation'+(nb>1?'s reprises':' reprise')+' de l\'ancien devis, que le nouveau formule autrement');
+  }
+  x.devisId=d.id; x.devisRef=N.ref; x.client=N.client; x.clientCourt=N.court;
+  delete x.pdf;   // le PDF archivé porte l'ancien devis : il n'est plus proposé, il sera remplacé à la prochaine production
+  return {avant:A,apres:N,verif:verif};
+}
+function rpVueRattacher(){
+  var ra=RP.ra,r=RP.cur,g=r.garde||{},h='<div class="rp-bar"><b style="font-size:14px">Changer le devis du rapport</b><span style="flex:1"></span><button class="btn btn-ghost" data-rp="rattacherAnnuler">Annuler</button></div>';
+  var d=ra.devisId!=null?rpDevis(ra.devisId):null;
+  if(!d) return h+'<div class="card"><div class="rp-note" style="margin:0 0 10px">Ce rapport est rattaché au devis <b>'+esc(r.devisRef||'')+'</b> · '+esc(r.client||'')+'. Choisissez le bon devis : vos postes, textes, photos et relevés restent en place.</div>'+
+    '<label class="rp-l">Nouveau devis</label><input class="form-input" data-rpi="ra.q" placeholder="N° de devis, client, objet, n° de BC…" value="'+esc(ra.q)+'">'+
+    '<div id="rpRaListe" style="margin-top:8px">'+rpCandidatsHtml(ra.q,'rattacherChoisir',r.devisId)+'</div></div>';
+  var x=rpRattacher(r,d,true),A=x.avant,N=x.apres,l=function(t,a,n){ return '<tr><td>'+t+'</td><td>'+esc(a||'—')+'</td><td><b>'+esc(n||'—')+'</b></td></tr>'; };
+  return h+'<div class="card"><table class="rp-t"><tr><th style="width:150px"></th><th>Aujourd\'hui</th><th>Après le changement</th></tr>'+
+    l('Client',r.client,N.client)+l('Bon de commande',g.bc,N.bc)+l('Devis',r.devisRef,N.ref)+l('Objet',A?A.objet:g.titre,N.objet)+'</table>'+
+    '<div class="rp-note">Conservés tels quels : les postes (désignation, réalisation, état), les photos et leurs légendes'+(reEtal(r)?', les relevés d\'étalonnage, les étapes du chantier':'')+', les textes.</div>'+
+    (r.pdf&&r.pdf.le?'<div class="rp-note" style="color:var(--amber)">Le PDF déjà produit porte l\'ancien devis : il sera à produire de nouveau.</div>':'')+
+    (x.verif.length?'<div class="rp-note" style="color:var(--amber)"><b>À relire après le changement</b> — modifié à la main, donc laissé tel quel :<br>• '+x.verif.map(esc).join('<br>• ')+'</div>':'')+'</div>'+
+    '<div class="rp-bar"><button class="btn btn-teal" data-rp="rattacherValider">Rattacher le rapport à ce devis</button><button class="btn btn-ghost" data-rp="rattacherAutre">Choisir un autre devis</button>'+
+    '<button class="btn btn-ghost" data-rp="rattacherAnnuler">Annuler</button></div>';
+}
+Object.assign(RPA,{
+  rattacher:async function(){ var r=RP.cur; if(!r) return;
+    if(r.etat==='emis') throw new Error('Ce rapport est marqué « émis » : repassez-le en brouillon avant de changer son devis.');
+    await rpSauver(); RP.ra={q:'',devisId:null}; RP.vue='rattacher'; rpRendre(); },
+  rattacherChoisir:function(ds){ var d=rpDevis(ds.id); if(!d||!RP.ra) return; RP.ra.devisId=d.id; rpRendre(); },
+  rattacherAutre:function(){ if(RP.ra) RP.ra.devisId=null; rpRendre(); },
+  rattacherAnnuler:function(){ RP.ra=null; RP.vue=RP.cur?'fiche':'liste'; rpRendre(); },
+  rattacherValider:async function(){ var d=RP.ra&&rpDevis(RP.ra.devisId); if(!RP.cur||!d) return;
+    var x=rpRattacher(RP.cur,d,false); RP.ra=null; RP.pdf=null; RP.vue='fiche'; RP.sale=true; rpRendre(); await rpSauver();
+    // rpSauver reprend la version en ligne si le rapport a été modifié ailleurs entre-temps : le dire plutôt que laisser croire.
+    if(String(RP.cur.devisId)!==String(d.id)) throw new Error('Ce rapport a été modifié sur un autre appareil : le changement de devis n\'a pas été appliqué. Recommencez.');
+    if(!RP.sale) rpEtat('Rattaché au devis '+x.apres.ref+(x.verif.length?' — '+x.verif.length+' point'+(x.verif.length>1?'s':'')+' à relire':'')+'.'); }
+});
 (function rpInit(){
   var pg=document.getElementById('page-rapports'); if(!pg) return;
   pg.addEventListener('click',function(e){ var b=e.target.closest&&e.target.closest('[data-rp]'); if(b) rpAction(b.getAttribute('data-rp'),b.dataset,b); });
